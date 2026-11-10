@@ -1,0 +1,22 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Atlas</title>
+    <script>
+      // Apply the saved theme before the first paint (no flash). Kept in sync with src/theme.ts.
+      (function () {
+        // ?theme=gray previews a theme without saving it.
+        var t = new URLSearchParams(location.search).get('theme') || localStorage.getItem('atlas.theme');
+        if (t !== 'light' && t !== 'gray' && t !== 'dark')
+          t = window.matchMedia('(prefers-color-scheme: dark)').matches ? 'dark' : 'light';
+        document.documentElement.dataset.theme = t;
+      })();
+    </script>
+  </head>
+  <body>
+    <div id="root"></div>
+    <script type="module" src="/src/main.tsx"></script>
+  </body>
+</html>
