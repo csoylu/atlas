@@ -1,5 +1,6 @@
 {
   "name": "@atlas/ui",
+  "license": "AGPL-3.0-only",
   "private": true,
   "type": "module",
   "scripts": {
