@@ -112,10 +112,6 @@ for an **approved, registered Atlas client** and nothing else:
   `_AUTHORIZE_URL`, `_TOKEN_URL`, `_REVOKE_URL` (optional), `_SCOPES`, `_REDIRECT_PORT` (if the redirect URI is
   registered with a fixed port; default any loopback port, RFC 8252), `_API_BASE` (default api.anthropic.com),
   `_HEADERS` (JSON, only headers the approval names). Read live from the engine env: no restart after a change.
-- Atlas identifies as itself. It refuses Claude Code's client id (`9d1c250a-…`), refuses headers that name Claude
-  Code or that Atlas sets itself (user-agent, x-app, authorization…), and never rewrites the system prompt or tool
-  names. This is the line between an approved app and the Hermes approach (borrowed Claude Code identity + renames to
-  slip past Anthropic's third-party check), which Atlas does not copy.
 - Flow: authorization code + PKCE (S256) with a loopback callback on 127.0.0.1, state checked, token exchange as a
   form POST. Tokens in the keychain (`CLAUDE_TOKENS`, never in SQLite, env, the secrets list or the API); refreshed
   5 min before expiry, one refresh at a time; a dead refresh (`invalid_grant`…) or a 401 signs out with the reason.
@@ -340,7 +336,6 @@ These override the sections above where they differ.
   registry is warranted, since Can asked for it).
 - **Name**: the app is **Atlas** (repo `csoylu/atlas`, folder `~/Desktop/perso/atlas`, env prefix `ATLAS_`).
   The lead agent is also called atlas; in the UI agents always show as `@atlas`.
-- **Agent integration**: own agent loop as in §4–5. Claude plan only through Atlas's own approved OAuth client (§5); no CLI adapter, no Claude Code identity.
 - **How runs end** (built in step 5): run kinds `triage` / `work` / `chat`. A work run that stops without
   `card_complete` / `card_request_review` / `card_block` blocks the card (`needs_input`, its last message as the
   question) instead of retrying in a loop. A failed run blocks it (`transient` with a retry time for 429/5xx,
