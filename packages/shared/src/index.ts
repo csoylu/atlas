@@ -39,7 +39,7 @@ export const Card = z.object({
   updatedAt: z.string(),
   /** Model and effort chosen for this card/chat (null = the agent's model, the model's default effort). */
   modelId: z.string().nullable().default(null),
-  effort: z.enum(['none', 'low', 'medium', 'high', 'xhigh', 'max']).nullable().default(null),
+  effort: z.enum(['low', 'medium', 'high', 'xhigh', 'max']).nullable().default(null),
 });
 export type Card = z.infer<typeof Card>;
 
@@ -53,11 +53,8 @@ export const CreateCard = z.object({
 });
 export type CreateCard = z.input<typeof CreateCard>;
 
-/**
- * How hard the model thinks: Claude output_config.effort, OpenAI reasoning.effort; Ollama gets none/low/medium/high.
- * 'none' turns thinking off on local models; Claude and the ChatGPT plan have no off, they get low.
- */
-export const Effort = z.enum(['none', 'low', 'medium', 'high', 'xhigh', 'max']);
+/** How hard the model thinks: Claude output_config.effort, OpenAI reasoning.effort; Ollama gets low/medium/high. */
+export const Effort = z.enum(['low', 'medium', 'high', 'xhigh', 'max']);
 export type Effort = z.infer<typeof Effort>;
 
 export const UpdateCard = z
@@ -227,7 +224,7 @@ export interface Model {
   id: string;
   /** 'chatgpt': OpenAI models on Can's ChatGPT plan (Sign in with ChatGPT, design §5); name is the model slug. */
   /** 'anthropic': OAuth-based via the claude-code provider (Hermes CLI integration, design §5). */
-  /** 'claude_plan': Claude models on Can's Claude plan, through Atlas's own Anthropic-approved sign-in (design §5). */
+  /** 'claude_plan': Claude models billed to the signed-in Claude subscription via OAuth. */
   provider: 'anthropic' | 'openai_compat' | 'chatgpt' | 'claude_plan' | 'claude_code';
   name: string;
   baseUrl: string | null;
@@ -434,11 +431,10 @@ export interface ChatGptModel {
   slug: string;
   displayName: string;
 }
-/* ── Claude plan (design §5: Atlas's own Anthropic-approved OAuth client; details from env/keychain) ─────── */
+/* ── Claude subscription OAuth ───────────────────────────────────────────────────── */
 
 /**
- * The connection details Anthropic issues with its approval, read live from the engine env (desktop: keychain
- * entries set on the Models page; server: .env). Placeholders until Can fills them in.
+ * Optional advanced OAuth overrides. Normal subscription sign-in uses built-in defaults.
  */
 export const CLAUDE_PLAN_SETTINGS = [
   { name: 'ATLAS_CLAUDE_CLIENT_ID', label: 'Client ID', secret: false, required: true },
@@ -449,7 +445,7 @@ export const CLAUDE_PLAN_SETTINGS = [
   { name: 'ATLAS_CLAUDE_SCOPES', label: 'Scopes (space-separated)', secret: false, required: true },
   { name: 'ATLAS_CLAUDE_REDIRECT_PORT', label: 'Callback port (if the redirect URI is registered with a fixed port)', secret: false, required: false },
   { name: 'ATLAS_CLAUDE_API_BASE', label: 'API base URL (default https://api.anthropic.com)', secret: false, required: false },
-  { name: 'ATLAS_CLAUDE_HEADERS', label: 'Extra request headers named in the approval (JSON object)', secret: false, required: false },
+  { name: 'ATLAS_CLAUDE_HEADERS', label: 'Extra request headers (JSON object)', secret: false, required: false },
 ] as const;
 export type ClaudePlanSetting = (typeof CLAUDE_PLAN_SETTINGS)[number]['name'];
 

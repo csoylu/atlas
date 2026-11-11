@@ -30,8 +30,8 @@ describe('legacy Claude subscription requests', () => {
       expect(calls[0]!.url).toBe('https://example.test/v1/messages');
       const h = calls[0]!.headers;
       expect(h.get('user-agent')).toBe('claude-code/2.1.322');
-      expect(h.get('authorization')).toBe(oauth ? 'Bearer test-token' : 'Bearer test-key');
-      expect(h.get('x-api-key')).toBe(null);
+      expect(h.get('authorization')).toBe(oauth ? 'Bearer test-token' : null);
+      expect(h.get('x-api-key')).toBe(oauth ? null : 'test-key');
       expect(h.get('anthropic-beta')).toBe(oauth ? 'oauth-2025-04-20' : null);
     } finally {
       db.close();

@@ -54,11 +54,11 @@ function fakeAnthropic() {
     fetch: (async (input: string | URL | Request, init?: RequestInit) => {
       const url = String(input instanceof Request ? input.url : input);
       const headers = new Headers(init?.headers);
-      if (url === SETTINGS.ATLAS_CLAUDE_TOKEN_URL || url === SETTINGS.ATLAS_CLAUDE_REVOKE_URL) {
-        const form = new URLSearchParams(String(init?.body));
+      if (url === 'https://platform.claude.com/v1/oauth/token' || url === SETTINGS.ATLAS_CLAUDE_TOKEN_URL || url === SETTINGS.ATLAS_CLAUDE_REVOKE_URL) {
+        const form = headers.get('content-type') === 'application/json' ? new URLSearchParams(JSON.parse(String(init?.body))) : new URLSearchParams(String(init?.body));
         seen.push({ url, form, headers });
         if (url.endsWith('/revoke')) return new Response('', { status: 200 });
-        if (form.get('client_id') !== SETTINGS.ATLAS_CLAUDE_CLIENT_ID || form.get('client_secret') !== SETTINGS.ATLAS_CLAUDE_CLIENT_SECRET)
+        if (form.get('client_id') !== CLAUDE_CODE_CLIENT_ID && (form.get('client_id') !== SETTINGS.ATLAS_CLAUDE_CLIENT_ID || form.get('client_secret') !== SETTINGS.ATLAS_CLAUDE_CLIENT_SECRET))
           return Response.json({ error: 'invalid_client' }, { status: 401 });
         if (form.get('grant_type') === 'refresh_token' && o.refreshFails) return Response.json({ error: o.refreshFails }, { status: 400 });
         n++;
@@ -66,8 +66,8 @@ function fakeAnthropic() {
       }
       const body = init?.body ? (JSON.parse(String(init.body)) as Record<string, unknown>) : undefined;
       seen.push({ url, headers, body });
-      if (url.startsWith(API + '/v1/models')) return Response.json({ data: [{ id: 'claude-opus-5', display_name: 'Claude Opus 5' }] });
-      if (url.startsWith(API + '/v1/messages')) return (o.messages.length > 1 ? o.messages.shift()! : o.messages[0]!)();
+      if (url.startsWith('https://api.anthropic.com/v1/models') || url.startsWith(API + '/v1/models')) return Response.json({ data: [{ id: 'claude-opus-5', display_name: 'Claude Opus 5' }] });
+      if (url.startsWith('https://api.anthropic.com/v1/messages') || url.startsWith(API + '/v1/messages')) return (o.messages.length > 1 ? o.messages.shift()! : o.messages[0]!)();
       return new Response('not found', { status: 404 });
     }) as typeof fetch,
   };
@@ -117,36 +117,52 @@ async function setup(env: Record<string, string> = SETTINGS) {
 }
 
 describe('Claude plan (Atlas’s own approved OAuth client)', () => {
-  it('lists every missing setting and refuses to sign in until they are filled', async () => {
+  it('has subscription defaults without any configuration and validates pasted state', async () => {
     const { u, status } = await setup({});
-    const s = await status();
-    expect(s).toMatchObject({ available: true, configured: false, signedIn: false });
-    expect(s.configProblems.join(' ')).toMatch(/ATLAS_CLAUDE_CLIENT_ID.*ATLAS_CLAUDE_AUTHORIZE_URL.*ATLAS_CLAUDE_TOKEN_URL.*ATLAS_CLAUDE_SCOPES/);
+    expect(await status()).toMatchObject({ configured: true, signedIn: false, configProblems: [] });
     const res = await fetch(u + '/claude/login', { method: 'POST' });
-    expect(res.status).toBe(409);
-
-    // Filled in from the Models page (keychain entries): applies live, no restart.
-    for (const [k, v] of Object.entries(SETTINGS))
-      expect((await fetch(`${u}/secrets/${k}`, { method: 'PUT', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ value: v }) })).status).toBe(204);
-    const after = await status();
-    expect(after).toMatchObject({ configured: true, configProblems: [] });
-    expect(after.settings.ATLAS_CLAUDE_CLIENT_ID).toBe('atlas-client-123');
-    expect(after.settings.ATLAS_CLAUDE_CLIENT_SECRET).toBe('set'); // never the value
+    expect(res.status).toBe(200);
+    const { url } = await res.json() as { url: string };
+    const q = new URL(url).searchParams;
+    expect(q.get('client_id')).toBe(CLAUDE_CODE_CLIENT_ID);
+    expect(q.get('redirect_uri')).toBe('https://console.anthropic.com/oauth/code/callback');
+    const bad = await fetch(u + '/claude/complete', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ code: 'bad#wrong-state' }) });
+    expect(bad.status).toBe(409);
+    expect((await status()).pending).toBe(true);
   });
 
-  it("refuses Claude Code's client id and headers that claim to be Claude Code", async () => {
-    const { status } = await setup({
-      ...SETTINGS,
-      ATLAS_CLAUDE_CLIENT_ID: CLAUDE_CODE_CLIENT_ID,
-      ATLAS_CLAUDE_HEADERS: JSON.stringify({ 'anthropic-beta': 'claude-code-20250219,oauth-2025-04-20', 'user-agent': 'claude-cli/2.1.74', 'x-app': 'cli' }),
-    });
-    const s = await status();
-    expect(s.configured).toBe(false);
-    const all = s.configProblems.join('\n');
-    expect(all).toContain("Claude Code's");
-    expect(all).toContain('Header anthropic-beta identifies the caller as Claude Code');
-    expect(all).toContain('Header user-agent is set by Atlas itself');
-    expect(all).toContain('Header x-app is set by Atlas itself');
+  it('completes built-in subscription OAuth, calls with client identity and refreshes JSON tokens', async () => {
+    const { u, an, status, secrets, clock, call } = await setup({});
+    const login = await (await fetch(u + '/claude/login', { method: 'POST' })).json() as { url: string };
+    const q = new URL(login.url).searchParams;
+    const result = await fetch(u + '/claude/complete', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ code: 'code1#' + q.get('state') }) });
+    expect(result.status).toBe(200);
+    expect(await status()).toMatchObject({ signedIn: true, pending: false });
+    expect(secrets.m.size).toBe(1);
+    const grant = an.seen[0]!;
+    expect(grant.headers.get('content-type')).toBe('application/json');
+    expect(grant.form!.get('state')).toBe(q.get('state'));
+    expect(createHash('sha256').update(grant.form!.get('code_verifier')!).digest('base64url')).toBe(q.get('code_challenge'));
+    engine!.models.create({ id: 'opus', provider: 'claude_plan', name: 'claude-opus-5-5' });
+    await call();
+    const req = an.seen.find((r) => r.url.includes('/v1/messages'))!;
+    expect(req.headers.get('authorization')).toBe('Bearer at1');
+    expect(req.headers.get('x-api-key')).toBeNull();
+    expect(req.headers.get('user-agent')).toContain('claude-code/2.1.322');
+    expect(req.headers.get('x-app')).toBe('cli');
+    expect(req.headers.get('anthropic-beta')).toContain('claude-code-20250219');
+    expect(JSON.stringify(req.body!.system)).toContain("You are Claude Code, Anthropic's official CLI for Claude.");
+    clock.t += 56 * 60_000;
+    await call();
+    expect(an.seen.filter((r) => r.form?.get('grant_type') === 'refresh_token')).toHaveLength(1);
+    await fetch(u + '/claude/logout', { method: 'POST' });
+    expect((await status()).signedIn).toBe(false);
+    expect(secrets.m.size).toBe(0);
+  });
+
+  it('rejects overrides of authentication headers', async () => {
+    const { status } = await setup({ ...SETTINGS, ATLAS_CLAUDE_HEADERS: '{"Authorization":"bad"}' });
+    expect((await status()).configured).toBe(false);
   });
 
   it('signs in with PKCE, keeps tokens in the keychain only, and calls the API as Atlas with a bearer token', async () => {

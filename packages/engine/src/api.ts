@@ -295,6 +295,9 @@ export function createApi(deps: {
   app.post('/api/claude/login', async (_req, res) => {
     res.json(await claude.login());
   });
+  app.post('/api/claude/complete', async (req, res) => {
+    res.json(await claude.completeLogin(req.body?.code));
+  });
   app.post('/api/claude/cancel', (_req, res) => {
     claude.cancel();
     res.json(claude.status());

@@ -59,6 +59,7 @@ export const api = {
   chatgptModels: () => call<ChatGptModel[]>('GET', '/chatgpt/models'),
   claude: () => call<ClaudePlanStatus>('GET', '/claude'),
   claudeLogin: () => call<{ url: string }>('POST', '/claude/login'),
+  claudeComplete: (code: string) => call<ClaudePlanStatus>('POST', '/claude/complete', { code }),
   claudeCancel: () => call<ClaudePlanStatus>('POST', '/claude/cancel'),
   claudeLogout: () => call<ClaudePlanStatus>('POST', '/claude/logout'),
   updateClaude: (patch: UpdateClaudePlan) => call<ClaudePlanStatus>('PATCH', '/claude', patch),

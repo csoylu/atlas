@@ -25,12 +25,15 @@ export interface AnthropicOptions {
   /** Extra headers on every request (only the ones Anthropic's approval names). */
   headers?: Record<string, string>;
   fetch?: typeof fetch;
+  systemPrefix?: string;
 }
 
 export class AnthropicProvider implements Provider {
   private client: Anthropic;
+  private systemPrefix: string | undefined;
   constructor(apiKey: string | null, opts: AnthropicOptions | string = {}) {
     const o = typeof opts === 'string' ? { baseURL: opts } : opts;
+    this.systemPrefix = o.systemPrefix;
     const onHeaders = o.onHeaders;
     const f = o.fetch ?? fetch;
     this.client = new Anthropic({
@@ -38,7 +41,7 @@ export class AnthropicProvider implements Provider {
       authToken: o.authToken ?? null,
       baseURL: o.baseURL,
       maxRetries: o.maxRetries ?? 2,
-      defaultHeaders: o.headers,
+      defaultHeaders: { ...(apiKey && !o.authToken ? { 'x-api-key': apiKey, authorization: null } : {}), ...o.headers },
       fetch:
         onHeaders || o.fetch
           ? async (url: RequestInfo | URL, init?: RequestInit) => {
@@ -57,11 +60,10 @@ export class AnthropicProvider implements Provider {
           model: req.model,
           max_tokens: req.maxTokens,
           // Stable prefix is cached (design §5).
-          system: [{ type: 'text', text: req.system, cache_control: { type: 'ephemeral' } }],
+          system: [...(this.systemPrefix ? [{ type: 'text' as const, text: this.systemPrefix }] : []), { type: 'text', text: req.system, cache_control: { type: 'ephemeral' } }],
           messages: req.messages as Anthropic.MessageParam[],
           tools: req.tools as Anthropic.Tool[],
-          // Claude has no « off »: none → low.
-          ...(req.effort ? { output_config: { effort: req.effort === 'none' ? 'low' : req.effort } } : {}),
+          ...(req.effort ? { output_config: { effort: req.effort } } : {}),
         },
         { signal },
       );

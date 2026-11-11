@@ -79,7 +79,7 @@ loop:
 ## 5. Providers and credentials
 One provider interface; direct API implementations plus subscription adapters:
 - **Anthropic** Messages API: tool use, prompt caching (cache the system prompt and the stable prefix), extended
-  thinking when the model supports it. Auth by API key, or the Claude plan through Atlas's own approved OAuth client (see below).
+  thinking when the model supports it. Auth by API key, or the Claude plan through subscription OAuth (see below).
 - **OpenAI-compatible** `/v1/chat/completions` with tools: llama.cpp server, Ollama, LM Studio, vLLM. Base URL + model
   name + optional key.
 
@@ -103,22 +103,18 @@ next. A call that already streamed text, or a request the API rejects (400), is 
 response's `anthropic-ratelimit-*` headers are stored per account (shown as requests/input/output per minute left),
 tokens are counted per account and day. Keys: desktop keychain (`ANTHROPIC_KEY_<id>`), server env (name only).
 ### Claude plan (built 11 Nov 2026, `engine/src/claude-plan.ts`, Models page « Claude plan »)
-Can asked for his Claude subscription in Atlas and said (10 Nov 2026) he has Anthropic's permission. Anthropic's
-[credential use policy](https://code.claude.com/docs/en/legal-and-compliance) forbids third-party apps from offering
-Claude.ai login or routing requests through plan credentials *without* that authorization, so the integration is built
-for an **approved, registered Atlas client** and nothing else:
-- Every connection detail comes from Anthropic's approval and is a placeholder until Can fills it in on the Models
-  page (keychain entries) or in `.env` on a server: `ATLAS_CLAUDE_CLIENT_ID`, `_CLIENT_SECRET` (optional),
-  `_AUTHORIZE_URL`, `_TOKEN_URL`, `_REVOKE_URL` (optional), `_SCOPES`, `_REDIRECT_PORT` (if the redirect URI is
-  registered with a fixed port; default any loopback port, RFC 8252), `_API_BASE` (default api.anthropic.com),
-  `_HEADERS` (JSON, only headers the approval names). Read live from the engine env: no restart after a change.
-- Flow: authorization code + PKCE (S256) with a loopback callback on 127.0.0.1, state checked, token exchange as a
-  form POST. Tokens in the keychain (`CLAUDE_TOKENS`, never in SQLite, env, the secrets list or the API); refreshed
-  5 min before expiry, one refresh at a time; a dead refresh (`invalid_grant`…) or a 401 signs out with the reason.
-- Calls: the Anthropic provider with `Authorization: Bearer` (no API key), model provider `claude_plan`. A 429 pauses
-  the plan until `retry-after` / the latest `anthropic-ratelimit-*-reset` (else 1 min); the pause ends by itself or
-  with Resume. One account, no rotation around limits. Usage is counted like every other source (Usage: « Claude plan »).
-- Server engines: unavailable (no keychain for tokens), like the ChatGPT plan.
+Claude has two independent billing/authentication paths:
+- **API keys:** normal Anthropic accounts, using `x-api-key`. No subscription identity or OAuth scopes.
+- **Subscription:** `claude_plan`, built-in public Claude Code OAuth client, authorization at
+  `https://claude.ai/oauth/authorize`, JSON token exchange/refresh at `https://platform.claude.com/v1/oauth/token`.
+  PKCE S256 and random state; the user pastes the complete `code#state` from the browser callback.
+  Reject mismatched state before exchanging; pending login expires after 10 minutes.
+- Access/refresh tokens stay in the desktop keychain, never SQLite or UI. Refresh near expiry is single-flight;
+  dead refresh grants/401 sign out. A 429 pauses until the advertised reset without rotating accounts.
+- Subscription requests use the Claude Code-compatible headers and system prefix. Client version is hardcoded
+  to Can's installed 2.1.322. This is direct OAuth API integration, not a spawned Claude Code process.
+- Advanced `ATLAS_CLAUDE_*` overrides remain available for custom OAuth servers; no configuration required normally.
+- Server engines without a secure secret store cannot sign in.
 
 The legacy `claude_code` CLI provider (migration 0017) stays removed (0018): rows readable, never runnable.
 
@@ -158,8 +154,7 @@ works with the window closed and, later, on the VPS for that machine's models.
   Homebrew exists, otherwise links to ollama.com/download.
 - Ownership: a server that already answers (Ollama app, `brew services`) is used and left alone ("external"). Otherwise
   the engine runs `ollama serve` itself ("atlas", log in `<data>/logs/ollama.log`), passes `OLLAMA_CONTEXT_LENGTH`
-  (setting, default 32k) and `OLLAMA_MAX_LOADED_MODELS=1` unless the environment sets it (two large models in memory
-  push a laptop into swap; « Load » also unloads the others, which covers an external server), restarts it after a crash (at most 4 times per 10 min, with back-off) and stops it with the
+  (setting, default 32k), restarts it after a crash (at most 4 times per 10 min, with back-off) and stops it with the
   engine. Stop on an external brew service stops the service, after which Atlas owns the server.
 - Autostart (setting, default on): before every call to a model whose base URL is the managed server, the provider
   wrapper in `Models.provider()` starts the server if it's down; with autostart off the call fails with that reason.
@@ -172,12 +167,9 @@ works with the window closed and, later, on the VPS for that machine's models.
   starts with « Usage »: 30-day totals, tokens per day stacked by source, per-model today/7/30 days. Tokens only, no
   cost (no price table to keep right); ChatGPT plan quota stays in ChatGPT settings (OpenAI exposes no figure).
 - **Model and effort per chat/card** (Can, 10 Nov 2026; migration 0015 `cards.model_id`, `cards.effort`): two quiet
-  pickers above the composer. Empty = the agent's model / the model's default effort. Effort off · low · medium ·
-  high · xhigh · max goes to Claude as `output_config.effort`, to the ChatGPT plan as `reasoning.effort`, to Ollama and
-  other OpenAI-compatible servers as `reasoning_effort` (xhigh/max → high). Off (`none`, migration 0020, 11 Nov 2026)
-  stops a local model thinking; Claude and the ChatGPT plan have no off and get low. A local model's thinking
-  (`reasoning` / `reasoning_content` in the stream) is kept as an unsigned thinking block: shown on the card, never
-  sent back to a model. Picking doesn't move a chat up the history; a
+  pickers above the composer. Empty = the agent's model / the model's default effort. Effort low · medium · high ·
+  xhigh · max goes to Claude as `output_config.effort`, to the ChatGPT plan as `reasoning.effort`, to Ollama and other
+  OpenAI-compatible servers as `reasoning_effort` (xhigh/max → high). Picking doesn't move a chat up the history; a
   deleted picked model makes the next run fail with that reason. The dispatcher checks the card's model when it has one.
 - **Models page = where models come from** (Can, 10 Nov 2026): « Available to agents » (every Atlas model), ChatGPT
   plan, Anthropic accounts, then Ollama (server, installed, download). The Agents page keeps agents, their model

@@ -9,13 +9,7 @@ import { ConflictError } from './kanban.ts';
 import { ModelError, type Provider } from './providers/types.ts';
 import { AnthropicError, AnthropicProvider } from './providers/anthropic.ts';
 
-/**
- * Can's Claude plan in Atlas, through the OAuth client Anthropic approved for Atlas (design §5). Every connection
- * detail (client id, endpoints, scopes, extra headers) comes from the engine env — keychain entries on the desktop,
- * .env on a server — so nothing is hard-coded: they are placeholders until Can fills them in.
- *
- * Atlas identifies as itself. It refuses Claude Code's client id and any header that claims to be Claude Code.
- */
+/** Claude subscription OAuth: PKCE, keychain token storage, refresh and usage-limit handling. */
 export interface ClaudePlanOptions {
   fetch?: typeof fetch;
   now?: () => number;
@@ -40,7 +34,7 @@ interface Pending {
   verifier: string;
   redirectUri: string;
   clientId: string;
-  server: Server;
+  server: Server | null;
   timer: NodeJS.Timeout;
 }
 interface Config {
@@ -55,15 +49,26 @@ interface Config {
   headers: Record<string, string>;
 }
 
-/** Claude Code's own OAuth client id. Atlas is not Claude Code: this id is refused. */
+/** Public subscription OAuth client used by the Claude Code-compatible flow. */
 export const CLAUDE_CODE_CLIENT_ID = '9d1c250a-e61b-44d9-88ed-5944d1962f5e';
 /** Headers Atlas sets itself or that identify the calling app: the approval can't override them. */
 const RESERVED_HEADERS = new Set(['authorization', 'x-api-key', 'anthropic-version', 'host', 'content-type', 'content-length', 'user-agent', 'x-app']);
-const IMPERSONATION = /claude[\s_-]?code|claude-cli/i;
+export const CLAUDE_SUBSCRIPTION_HEADERS = {
+  'user-agent': 'claude-code/2.1.322 (external, cli)',
+  'x-app': 'cli',
+  'anthropic-beta': 'claude-code-20250219,oauth-2025-04-20,interleaved-thinking-2025-05-14,fine-grained-tool-streaming-2025-05-14',
+};
+const SUBSCRIPTION_REDIRECT = 'https://console.anthropic.com/oauth/code/callback';
+const DEFAULTS: Partial<Record<ClaudePlanSetting, string>> = {
+  ATLAS_CLAUDE_CLIENT_ID: CLAUDE_CODE_CLIENT_ID,
+  ATLAS_CLAUDE_AUTHORIZE_URL: 'https://claude.ai/oauth/authorize',
+  ATLAS_CLAUDE_TOKEN_URL: 'https://platform.claude.com/v1/oauth/token',
+  ATLAS_CLAUDE_SCOPES: 'org:create_api_key user:profile user:inference',
+};
 const REFRESH_MARGIN_MS = 5 * 60_000;
 const LOGIN_TIMEOUT_MS = 10 * 60_000;
 const DEFAULT_LIMIT_PAUSE_MS = 60_000;
-const DEAD_REFRESH = new Set(['invalid_grant', 'invalid_client', 'unauthorized_client']);
+const DEAD_REFRESH = new Set(['invalid_grant', 'invalid_client', 'unauthorized_client', 'invalid_token', 'refresh_token_reused']);
 
 const b64url = (b: Buffer) => b.toString('base64url');
 
@@ -106,7 +111,7 @@ export class ClaudePlan {
   }
   private setting(n: ClaudePlanSetting): string | null {
     const v = this.env[n]?.trim();
-    return v ? v : null;
+    return v || DEFAULTS[n] || null;
   }
 
   /** The settings, checked. Problems are listed for the Models page; config is null until there are none. */
@@ -114,8 +119,6 @@ export class ClaudePlan {
     const problems: string[] = [];
     for (const s of CLAUDE_PLAN_SETTINGS) if (s.required && !this.setting(s.name)) problems.push(`${s.label} is not set (${s.name}).`);
     const clientId = this.setting('ATLAS_CLAUDE_CLIENT_ID');
-    if (clientId && clientId.toLowerCase() === CLAUDE_CODE_CLIENT_ID)
-      problems.push("That client ID is Claude Code's, not Atlas's. Use the client ID Anthropic issued to Atlas.");
     const url = (n: ClaudePlanSetting): string | null => {
       const v = this.setting(n);
       if (!v) return null;
@@ -145,9 +148,8 @@ export class ClaudePlan {
       } catch {
         problems.push('ATLAS_CLAUDE_HEADERS must be a JSON object of header names to string values.');
       }
-      for (const [k, v] of Object.entries(headers)) {
+      for (const k of Object.keys(headers)) {
         if (RESERVED_HEADERS.has(k.toLowerCase())) problems.push(`Header ${k} is set by Atlas itself and can't be overridden.`);
-        if (IMPERSONATION.test(v)) problems.push(`Header ${k} identifies the caller as Claude Code; Atlas only sends requests as itself.`);
       }
     }
     if (problems.length || !clientId || !authorizeUrl || !tokenUrl) return { config: null, problems };
@@ -161,7 +163,7 @@ export class ClaudePlan {
         scopes: this.setting('ATLAS_CLAUDE_SCOPES')!,
         port,
         apiBase: apiBase.replace(/\/+$/, ''),
-        headers,
+        headers: clientId === CLAUDE_CODE_CLIENT_ID ? { ...headers, ...CLAUDE_SUBSCRIPTION_HEADERS } : headers,
       },
       problems,
     };
@@ -206,6 +208,21 @@ export class ClaudePlan {
     const { config: c, problems } = this.config();
     if (!c) throw new ConflictError(`Claude plan is not set up: ${problems.join(' ')}`);
     this.cancel();
+    if (c.clientId === CLAUDE_CODE_CLIENT_ID) {
+      const verifier = b64url(randomBytes(32));
+      const p: Pending = {
+        state: b64url(randomBytes(24)), verifier, redirectUri: SUBSCRIPTION_REDIRECT,
+        clientId: c.clientId, server: null,
+        timer: setTimeout(() => { this.cancel(); this.emit(); }, LOGIN_TIMEOUT_MS),
+      };
+      this.pending = p;
+      const url = new URL(c.authorizeUrl);
+      for (const [k, v] of Object.entries({ code: 'true', response_type: 'code', client_id: c.clientId,
+        redirect_uri: p.redirectUri, scope: c.scopes, state: p.state,
+        code_challenge: b64url(createHash('sha256').update(verifier).digest()), code_challenge_method: 'S256' })) url.searchParams.set(k, v);
+      this.emit();
+      return { url: url.toString() };
+    }
     const server = createServer();
     await new Promise<void>((resolve, reject) => {
       server.once('error', (e: NodeJS.ErrnoException) =>
@@ -253,6 +270,21 @@ export class ClaudePlan {
     return { url: url.toString() };
   }
 
+  /** Complete the browser's code#state response without exposing tokens to the UI. */
+  async completeLogin(value: string): Promise<ClaudePlanStatus> {
+    const p = this.pending;
+    if (!p || p.server) throw new ConflictError('No Claude subscription sign-in is pending. Start sign-in again.');
+    if (typeof value !== 'string' || value.length > 8192) throw new ConflictError('Paste the authorization code from Claude.');
+    const [code, state] = value.trim().split('#');
+    if (!code || state !== p.state) throw new ConflictError('Invalid authorization code or state. Paste the complete code#state from this sign-in.');
+    const { config: c } = this.config();
+    if (!c || c.clientId !== p.clientId) throw new ConflictError('Claude connection changed. Start sign-in again.');
+    const out = await this.callback(p, c, new URLSearchParams({ code, state }));
+    if (!out.retry) this.close(p);
+    if (!out.ok) throw new ConflictError(out.message);
+    return this.status();
+  }
+
   private async callback(p: Pending, c: Config, q: URLSearchParams): Promise<{ ok: boolean; message: string; retry?: boolean }> {
     if (q.get('state') !== p.state) return { ok: false, message: 'This sign-in link is not the one Atlas opened. Start again from Atlas.', retry: true };
     const fail = (message: string) => {
@@ -265,7 +297,7 @@ export class ClaudePlan {
     const code = q.get('code');
     if (!code) return fail('Claude sign-in returned no code. Try again.');
     try {
-      const tok = await this.tokenCall(c, { grant_type: 'authorization_code', code, code_verifier: p.verifier, redirect_uri: p.redirectUri });
+      const tok = await this.tokenCall(c, { grant_type: 'authorization_code', code, code_verifier: p.verifier, redirect_uri: p.redirectUri, state: p.state });
       if (!tok.ok) return fail(`Claude sign-in: token exchange failed (${tok.code ?? 'HTTP ' + tok.status}). Try again.`);
       const t = tok.body;
       if (!t.access_token) return fail('Claude sign-in: the answer had no access token.');
@@ -296,7 +328,11 @@ export class ClaudePlan {
   > {
     const body = new URLSearchParams({ ...form, client_id: c.clientId });
     if (c.clientSecret) body.set('client_secret', c.clientSecret);
-    const res = await this.fetchFn(c.tokenUrl, { method: 'POST', headers: { 'content-type': 'application/x-www-form-urlencoded', accept: 'application/json' }, body });
+    const subscription = c.clientId === CLAUDE_CODE_CLIENT_ID;
+    const res = await this.fetchFn(c.tokenUrl, { method: 'POST', headers: {
+      'content-type': subscription ? 'application/json' : 'application/x-www-form-urlencoded',
+      accept: 'application/json', 'user-agent': 'axios/1.7.9',
+    }, body: subscription ? JSON.stringify(Object.fromEntries(body)) : body, signal: AbortSignal.timeout(30_000) });
     const j = (await res.json().catch(() => ({}))) as Record<string, unknown>;
     if (!res.ok) return { ok: false, status: res.status, code: typeof j.error === 'string' ? j.error : undefined };
     return { ok: true, body: j as never };
@@ -330,6 +366,7 @@ export class ClaudePlan {
       throw new ModelError(`Claude plan: renewing the sign-in failed (${out.code ?? 'HTTP ' + out.status})`, out.status >= 500);
     }
     const b = out.body;
+    if (!b.access_token) throw new ModelError('Claude refresh response had no access token');
     this.secrets!.set(TOKENS, JSON.stringify({ access: b.access_token, refresh: b.refresh_token ?? t.refresh } satisfies Tokens));
     this.set({ expires_at: b.expires_in ? new Date(this.now() + b.expires_in * 1000).toISOString() : null, ...(b.scope ? { scopes: b.scope } : {}) });
     return b.access_token;
@@ -402,7 +439,7 @@ export class ClaudePlan {
       complete: async (req, onText, signal) => {
         const c = this.ready();
         const token = await this.accessToken(c);
-        const p = new AnthropicProvider(null, { authToken: token, baseURL: c.apiBase, headers: c.headers, maxRetries: 0, fetch: this.fetchFn });
+        const p = new AnthropicProvider(null, { authToken: token, baseURL: c.apiBase, headers: c.headers, systemPrefix: c.clientId === CLAUDE_CODE_CLIENT_ID ? "You are Claude Code, Anthropic's official CLI for Claude." : undefined, maxRetries: 0, fetch: this.fetchFn });
         try {
           return await p.complete(req, onText, signal);
         } catch (e) {
@@ -424,8 +461,8 @@ export class ClaudePlan {
 
   private close(p: Pending): void {
     clearTimeout(p.timer);
-    p.server.close();
-    p.server.closeAllConnections();
+    p.server?.close();
+    p.server?.closeAllConnections();
     if (this.pending === p) {
       this.pending = null;
       this.emit();

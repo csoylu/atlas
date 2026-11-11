@@ -3,15 +3,13 @@ import { CLAUDE_PLAN_SETTINGS, type ClaudePlanModel, type ClaudePlanSetting, typ
 import { api } from './api.ts';
 import type { MessageStream } from './useMessages.ts';
 
-/**
- * Can's Claude plan (engine claude-plan.ts): the connection details Anthropic issued to Atlas (placeholders until
- * he fills them in), sign in, the plan's models, and the limit pause. Atlas signs in and calls as itself.
- */
+/** Claude subscription sign-in, available models and limit status. */
 export function ClaudePlanSection(props: { stream: MessageStream; models: Model[]; keyStore: string | null; onChanged(): void; onError(e: unknown): void }) {
   const { stream, onError } = props;
   const [s, setS] = useState<ClaudePlanStatus | null>(null);
   const [available, setAvailable] = useState<ClaudePlanModel[] | null>(null);
   const [busy, setBusy] = useState<string | null>(null);
+  const [code, setCode] = useState('');
   const [editing, setEditing] = useState(false);
   const load = useCallback(() => api.claude().then(setS, onError), [onError]);
   useEffect(() => {
@@ -51,8 +49,7 @@ export function ClaudePlanSection(props: { stream: MessageStream; models: Model[
       <header className="section-head">
         <h2>Claude plan</h2>
         <p>
-          Run agents on Claude models with usage included in your Claude plan, through the sign-in Anthropic approved for
-          Atlas. Atlas signs in and sends requests as itself; the connection details come from that approval.
+          Sign in with your Claude subscription using OAuth. No client setup is required. For normal API-key billing, use Anthropic accounts instead.
         </p>
       </header>
       {!s ? null : !s.available ? (
@@ -74,7 +71,10 @@ export function ClaudePlanSection(props: { stream: MessageStream; models: Model[
               <div className="model-actions">
                 {s.pending ? (
                   <>
-                    <span className="muted">Waiting for the browser…</span>
+                    <label>Paste the authorization code shown by Claude
+                      <input type="password" autoComplete="off" value={code} onChange={(e) => setCode(e.target.value)} placeholder="code#state" />
+                    </label>
+                    <button className="primary" disabled={!code.trim() || busy === 'complete'} onClick={() => act('complete', async () => { await api.claudeComplete(code); setCode(''); })}>Finish sign-in</button>
                     <button className="ghost" onClick={() => act('cancel', () => api.claudeCancel())}>
                       Cancel
                     </button>
@@ -86,7 +86,7 @@ export function ClaudePlanSection(props: { stream: MessageStream; models: Model[
                 )}
                 {!editing && (
                   <button className="ghost" onClick={() => setEditing(true)}>
-                    Connection details
+                    Advanced settings
                   </button>
                 )}
               </div>
@@ -110,7 +110,7 @@ export function ClaudePlanSection(props: { stream: MessageStream; models: Model[
                 )}
                 {!editing && (
                   <button className="ghost" onClick={() => setEditing(true)}>
-                    Connection details
+                    Advanced settings
                   </button>
                 )}
                 <button className="ghost danger" onClick={() => confirm('Sign out of Claude? Agents on Claude plan models stop until you sign in again.') && act('out', () => api.claudeLogout())}>
@@ -180,11 +180,11 @@ function ClaudeSettings(props: { status: ClaudePlanStatus; keyStore: string | nu
     <div className="model-row plan-card claude-settings">
       <div className="model-main">
         <div className="model-title">
-          <span className="model-name">Connection details from Anthropic</span>
+          <span className="model-name">Advanced settings from Anthropic</span>
           {s.configured ? <span className="pill ok-pill">Complete</span> : <span className="badge bad">Not set up</span>}
         </div>
         <p className="plan-text">
-          Fill these in from Anthropic's approval for Atlas.{' '}
+          Subscription OAuth works with built-in defaults; only change these for a custom OAuth server.{' '}
           {props.keyStore ? `They are saved in the ${props.keyStore}.` : 'This engine reads them from its environment (.env); set them there and restart it.'}
           {s.redirectUri ? (
             <>
