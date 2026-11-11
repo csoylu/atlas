@@ -89,7 +89,7 @@ function ModelRow(props: { model: Model; keyStore: string | null; stored: boolea
       <span className="dot-status" title={m.lastError ?? (m.verifiedAt ? 'answered ' + ago(m.verifiedAt) : 'not tested yet')} />
       <div className="model-main">
         <div className="model-title">
-          <b>{m.id}</b> <span className="muted">{m.provider === 'claude_code' ? 'Claude subscription (removed — select another model)' : m.provider === 'anthropic' ? 'Anthropic API' : m.provider === 'chatgpt' ? 'ChatGPT plan' : m.provider === 'claude_plan' ? 'Claude plan' : 'OpenAI-compatible'}</span>
+          <b>{m.id}</b> <span className="muted">{m.provider === 'claude_code' ? 'Claude subscription' : m.provider === 'anthropic' ? 'Anthropic API' : m.provider === 'chatgpt' ? 'ChatGPT plan' : m.provider === 'claude_plan' ? 'Claude plan' : 'OpenAI-compatible'}</span>
           {props.usedBy.map((a) => (
             <span key={a} className="badge">
               @{a}

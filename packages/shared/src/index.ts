@@ -434,22 +434,27 @@ export interface ChatGptModel {
   slug: string;
   displayName: string;
 }
-/* ── Claude plan (design §5: Atlas's own Anthropic-approved OAuth client; details from env/keychain) ─────── */
+/* ── Claude plan (Claude subscription OAuth, matching Hermes agent) ─────── */
+
+export const CLAUDE_CODE_CLIENT_ID = '9d1c250a-e61b-44d9-88ed-5944d1962f5e';
+export const CLAUDE_OAUTH_AUTHORIZE_URL = 'https://claude.ai/oauth/authorize';
+export const CLAUDE_OAUTH_TOKEN_URL = 'https://platform.claude.com/v1/oauth/token';
+export const CLAUDE_OAUTH_REDIRECT_URI = 'https://console.anthropic.com/oauth/code/callback';
+export const CLAUDE_OAUTH_SCOPES = 'org:create_api_key user:profile user:inference';
 
 /**
- * The connection details Anthropic issues with its approval, read live from the engine env (desktop: keychain
- * entries set on the Models page; server: .env). Placeholders until Can fills them in.
+ * Optional connection overrides read from the engine env. Defaults match Hermes agent's Claude subscription OAuth.
  */
 export const CLAUDE_PLAN_SETTINGS = [
-  { name: 'ATLAS_CLAUDE_CLIENT_ID', label: 'Client ID', secret: false, required: true },
-  { name: 'ATLAS_CLAUDE_CLIENT_SECRET', label: 'Client secret (only if Anthropic issued one)', secret: true, required: false },
-  { name: 'ATLAS_CLAUDE_AUTHORIZE_URL', label: 'Authorization URL', secret: false, required: true },
-  { name: 'ATLAS_CLAUDE_TOKEN_URL', label: 'Token URL', secret: false, required: true },
+  { name: 'ATLAS_CLAUDE_CLIENT_ID', label: 'Client ID', secret: false, required: false },
+  { name: 'ATLAS_CLAUDE_CLIENT_SECRET', label: 'Client secret (optional)', secret: true, required: false },
+  { name: 'ATLAS_CLAUDE_AUTHORIZE_URL', label: 'Authorization URL', secret: false, required: false },
+  { name: 'ATLAS_CLAUDE_TOKEN_URL', label: 'Token URL', secret: false, required: false },
   { name: 'ATLAS_CLAUDE_REVOKE_URL', label: 'Revocation URL (optional)', secret: false, required: false },
-  { name: 'ATLAS_CLAUDE_SCOPES', label: 'Scopes (space-separated)', secret: false, required: true },
-  { name: 'ATLAS_CLAUDE_REDIRECT_PORT', label: 'Callback port (if the redirect URI is registered with a fixed port)', secret: false, required: false },
+  { name: 'ATLAS_CLAUDE_SCOPES', label: 'Scopes (space-separated)', secret: false, required: false },
+  { name: 'ATLAS_CLAUDE_REDIRECT_PORT', label: 'Callback port (if using local loopback callback)', secret: false, required: false },
   { name: 'ATLAS_CLAUDE_API_BASE', label: 'API base URL (default https://api.anthropic.com)', secret: false, required: false },
-  { name: 'ATLAS_CLAUDE_HEADERS', label: 'Extra request headers named in the approval (JSON object)', secret: false, required: false },
+  { name: 'ATLAS_CLAUDE_HEADERS', label: 'Extra request headers (JSON object)', secret: false, required: false },
 ] as const;
 export type ClaudePlanSetting = (typeof CLAUDE_PLAN_SETTINGS)[number]['name'];
 
@@ -472,9 +477,15 @@ export interface ClaudePlanStatus {
   /** Rate or usage limit: no requests until this time (or Resume). */
   pausedUntil: string | null;
   lastError: string | null;
+  /** Whether local Claude Code CLI credentials exist on disk or in keychain */
+  detectedCredentials?: { source: string; email?: string } | null;
 }
 export const UpdateClaudePlan = z.object({ welcomed: z.literal(true), resume: z.literal(true) }).partial().strict();
 export type UpdateClaudePlan = z.infer<typeof UpdateClaudePlan>;
+export const ClaudeExchangeCode = z.object({ code: z.string().trim().min(1) });
+export type ClaudeExchangeCode = z.infer<typeof ClaudeExchangeCode>;
+export const ClaudeSetToken = z.object({ token: z.string().trim().min(1), refreshToken: z.string().trim().optional() });
+export type ClaudeSetToken = z.infer<typeof ClaudeSetToken>;
 export interface ClaudePlanModel {
   id: string;
   displayName: string;

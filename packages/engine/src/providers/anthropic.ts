@@ -2,6 +2,19 @@ import Anthropic from '@anthropic-ai/sdk';
 import type { ContentBlock } from '@atlas/shared';
 import { ModelError, type ModelRequest, type ModelResponse, type Provider } from './types.ts';
 
+export const CLAUDE_CODE_SYSTEM_PREFIX = "You are Claude Code, Anthropic's official CLI for Claude.";
+export const CLAUDE_CODE_USER_AGENT = 'claude-code/2.1.0';
+export const CLAUDE_CODE_OAUTH_BETAS = ['claude-code-20250219', 'oauth-2025-04-20', 'interleaved-thinking-2025-05-14', 'fine-grained-tool-streaming-2025-05-14'];
+
+/** True for Anthropic OAuth / setup tokens (sk-ant-oat*, eyJ JWTs, cc-); False for Console API keys. */
+export function isOAuthToken(key: string | null | undefined): boolean {
+  if (!key) return false;
+  if (key.startsWith('sk-ant-api') || key.startsWith('sk-ant-usr') || key.startsWith('sk-ant-svc') || key.startsWith('sk-ant-admin')) {
+    return false;
+  }
+  return key.startsWith('sk-ant-') || key.startsWith('eyJ') || key.startsWith('cc-');
+}
+
 /** An Anthropic HTTP error with what account failover needs (status, the response headers). */
 export class AnthropicError extends ModelError {
   constructor(
@@ -22,23 +35,50 @@ export interface AnthropicOptions {
   onHeaders?: (h: Headers) => void;
   /** OAuth access token (Claude plan, claude-plan.ts): sent as `Authorization: Bearer`, no API key. */
   authToken?: string;
-  /** Extra headers on every request (only the ones Anthropic's approval names). */
+  /** Extra headers on every request. */
   headers?: Record<string, string>;
   fetch?: typeof fetch;
 }
 
 export class AnthropicProvider implements Provider {
   private client: Anthropic;
+  private isOAuth: boolean;
+
   constructor(apiKey: string | null, opts: AnthropicOptions | string = {}) {
     const o = typeof opts === 'string' ? { baseURL: opts } : opts;
     const onHeaders = o.onHeaders;
     const f = o.fetch ?? fetch;
+
+    const token = o.authToken ?? apiKey;
+    this.isOAuth = isOAuthToken(token) || !!o.authToken;
+
+    const headers: Record<string, string> = { ...(o.headers ?? {}) };
+    let actualApiKey: string | null = apiKey;
+    let actualAuthToken: string | null = o.authToken ?? null;
+
+    if (this.isOAuth && token) {
+      actualApiKey = null;
+      actualAuthToken = token;
+
+      // Inject Claude Code identity headers (matches Hermes agent adapter)
+      if (!headers['user-agent'] && !headers['User-Agent']) {
+        headers['user-agent'] = CLAUDE_CODE_USER_AGENT;
+      }
+      if (!headers['x-app'] && !headers['X-App']) {
+        headers['x-app'] = 'cli';
+      }
+
+      const existingBetas = headers['anthropic-beta'] ? headers['anthropic-beta'].split(',') : [];
+      const mergedBetas = Array.from(new Set([...existingBetas, ...CLAUDE_CODE_OAUTH_BETAS])).filter(Boolean).join(',');
+      headers['anthropic-beta'] = mergedBetas;
+    }
+
     this.client = new Anthropic({
-      apiKey,
-      authToken: o.authToken ?? null,
+      apiKey: actualApiKey,
+      authToken: actualAuthToken,
       baseURL: o.baseURL,
       maxRetries: o.maxRetries ?? 2,
-      defaultHeaders: o.headers,
+      defaultHeaders: Object.keys(headers).length ? headers : undefined,
       fetch:
         onHeaders || o.fetch
           ? async (url: RequestInfo | URL, init?: RequestInit) => {
@@ -52,12 +92,16 @@ export class AnthropicProvider implements Provider {
 
   async complete(req: ModelRequest, onText: (t: string) => void, signal: AbortSignal): Promise<ModelResponse> {
     try {
+      const systemPrompt = this.isOAuth && !req.system.startsWith(CLAUDE_CODE_SYSTEM_PREFIX)
+        ? `${CLAUDE_CODE_SYSTEM_PREFIX}\n\n${req.system}`
+        : req.system;
+
       const stream = this.client.messages.stream(
         {
           model: req.model,
           max_tokens: req.maxTokens,
           // Stable prefix is cached (design §5).
-          system: [{ type: 'text', text: req.system, cache_control: { type: 'ephemeral' } }],
+          system: [{ type: 'text', text: systemPrompt, cache_control: { type: 'ephemeral' } }],
           messages: req.messages as Anthropic.MessageParam[],
           tools: req.tools as Anthropic.Tool[],
           // Claude has no « off »: none → low.

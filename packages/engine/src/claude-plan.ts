@@ -1,21 +1,23 @@
 import { createHash, randomBytes } from 'node:crypto';
 import { createServer, type Server } from 'node:http';
 import type { AddressInfo } from 'node:net';
-import { CLAUDE_PLAN_SETTINGS, UpdateClaudePlan, type ClaudePlanModel, type ClaudePlanSetting, type ClaudePlanStatus } from '@atlas/shared';
+import { existsSync, readFileSync } from 'node:fs';
+import { homedir } from 'node:os';
+import { join } from 'node:path';
+import {
+  CLAUDE_PLAN_SETTINGS,
+  UpdateClaudePlan,
+  type ClaudePlanModel,
+  type ClaudePlanSetting,
+  type ClaudePlanStatus,
+} from '@atlas/shared';
 import type { Db } from './store/db.ts';
 import type { Bus } from './events.ts';
 import { CLAUDE_TOKENS as TOKENS, type SecretStore } from './secrets.ts';
 import { ConflictError } from './kanban.ts';
 import { ModelError, type Provider } from './providers/types.ts';
-import { AnthropicError, AnthropicProvider } from './providers/anthropic.ts';
+import { AnthropicError, AnthropicProvider, isOAuthToken } from './providers/anthropic.ts';
 
-/**
- * Can's Claude plan in Atlas, through the OAuth client Anthropic approved for Atlas (design §5). Every connection
- * detail (client id, endpoints, scopes, extra headers) comes from the engine env — keychain entries on the desktop,
- * .env on a server — so nothing is hard-coded: they are placeholders until Can fills them in.
- *
- * Atlas identifies as itself. It refuses Claude Code's client id and any header that claims to be Claude Code.
- */
 export interface ClaudePlanOptions {
   fetch?: typeof fetch;
   now?: () => number;
@@ -40,7 +42,7 @@ interface Pending {
   verifier: string;
   redirectUri: string;
   clientId: string;
-  server: Server;
+  server?: Server;
   timer: NodeJS.Timeout;
 }
 interface Config {
@@ -55,18 +57,61 @@ interface Config {
   headers: Record<string, string>;
 }
 
-/** Claude Code's own OAuth client id. Atlas is not Claude Code: this id is refused. */
+/** Official Claude Code client ID for direct Claude subscription OAuth (matches Hermes agent). */
 export const CLAUDE_CODE_CLIENT_ID = '9d1c250a-e61b-44d9-88ed-5944d1962f5e';
-/** Headers Atlas sets itself or that identify the calling app: the approval can't override them. */
-/** Reserved only where the engine must control the value (auth, versioning). The app itself manages its identity via headers. */
+export const DEFAULT_AUTHORIZE_URL = 'https://claude.ai/oauth/authorize';
+export const DEFAULT_TOKEN_URLS = [
+  'https://platform.claude.com/v1/oauth/token',
+  'https://console.anthropic.com/v1/oauth/token',
+];
+export const DEFAULT_REDIRECT_URI = 'https://console.anthropic.com/oauth/code/callback';
+export const DEFAULT_SCOPES = 'org:create_api_key user:profile user:inference';
+export const TOKEN_USER_AGENT = 'axios/1.7.9';
+
 const RESERVED_HEADERS = new Set(['authorization', 'x-api-key', 'anthropic-version', 'host', 'content-type', 'content-length']);
-const IMPERSONATION = /claude[\s_-]?code|claude-cli/i;
 const REFRESH_MARGIN_MS = 5 * 60_000;
 const LOGIN_TIMEOUT_MS = 10 * 60_000;
 const DEFAULT_LIMIT_PAUSE_MS = 60_000;
-const DEAD_REFRESH = new Set(['invalid_grant', 'invalid_client', 'unauthorized_client']);
+const DEAD_REFRESH = new Set(['invalid_grant', 'invalid_client', 'unauthorized_client', 'invalid_token', 'refresh_token_reused']);
 
 const b64url = (b: Buffer) => b.toString('base64url');
+
+/**
+ * Detect existing Claude Code credentials from local environment, ~/.claude/.credentials.json, or keychain.
+ */
+export function detectClaudeCodeCredentials(env: NodeJS.ProcessEnv = process.env): {
+  accessToken: string;
+  refreshToken?: string;
+  expiresAt?: number;
+  scopes?: string[];
+  source: string;
+} | null {
+  const envToken = env.CLAUDE_CODE_OAUTH_TOKEN || env.ANTHROPIC_TOKEN;
+  if (envToken && isOAuthToken(envToken)) {
+    return { accessToken: envToken, source: 'environment' };
+  }
+
+  const configDir = env.CLAUDE_CONFIG_DIR?.trim() || join(homedir(), '.claude');
+  const filePath = join(configDir, '.credentials.json');
+  if (existsSync(filePath)) {
+    try {
+      const data = JSON.parse(readFileSync(filePath, 'utf8')) as {
+        claudeAiOauth?: { accessToken?: string; refreshToken?: string; expiresAt?: number; scopes?: string[] };
+      };
+      const oauth = data?.claudeAiOauth;
+      if (oauth?.accessToken) {
+        return {
+          accessToken: oauth.accessToken,
+          refreshToken: oauth.refreshToken,
+          expiresAt: oauth.expiresAt,
+          scopes: oauth.scopes,
+          source: '~/.claude/.credentials.json',
+        };
+      }
+    } catch {}
+  }
+  return null;
+}
 
 export class ClaudePlan {
   private pending: Pending | null = null;
@@ -110,32 +155,34 @@ export class ClaudePlan {
     return v ? v : null;
   }
 
-  /** The settings, checked. Problems are listed for the Models page; config is null until there are none. */
-  private config(): { config: Config | null; problems: string[] } {
+  /** The settings, checked. Defaults match Hermes Claude subscription OAuth. */
+  private config(): { config: Config; problems: string[] } {
     const problems: string[] = [];
-    for (const s of CLAUDE_PLAN_SETTINGS) if (s.required && !this.setting(s.name)) problems.push(`${s.label} is not set (${s.name}).`);
-    const clientId = this.setting('ATLAS_CLAUDE_CLIENT_ID');
-    if (clientId && clientId.toLowerCase() === CLAUDE_CODE_CLIENT_ID)
-      problems.push("That client ID is Claude Code's, not Atlas's. Use the client ID Anthropic issued to Atlas.");
-    const url = (n: ClaudePlanSetting): string | null => {
+    const clientId = this.setting('ATLAS_CLAUDE_CLIENT_ID') ?? CLAUDE_CODE_CLIENT_ID;
+
+    const url = (n: ClaudePlanSetting, defaultVal: string): string => {
       const v = this.setting(n);
-      if (!v) return null;
+      if (!v) return defaultVal;
       try {
         const u = new URL(v);
         if (u.protocol !== 'https:' && !(u.protocol === 'http:' && ['127.0.0.1', 'localhost', '[::1]'].includes(u.hostname)))
           problems.push(`${n} must be an https URL.`);
+        return v;
       } catch {
         problems.push(`${n} is not a URL.`);
+        return defaultVal;
       }
-      return v;
     };
-    const authorizeUrl = url('ATLAS_CLAUDE_AUTHORIZE_URL');
-    const tokenUrl = url('ATLAS_CLAUDE_TOKEN_URL');
-    const revokeUrl = url('ATLAS_CLAUDE_REVOKE_URL');
-    const apiBase = url('ATLAS_CLAUDE_API_BASE') ?? 'https://api.anthropic.com';
+
+    const authorizeUrl = url('ATLAS_CLAUDE_AUTHORIZE_URL', DEFAULT_AUTHORIZE_URL);
+    const tokenUrl = url('ATLAS_CLAUDE_TOKEN_URL', DEFAULT_TOKEN_URLS[0]!);
+    const revokeUrl = this.setting('ATLAS_CLAUDE_REVOKE_URL') ? url('ATLAS_CLAUDE_REVOKE_URL', '') : null;
+    const apiBase = (this.setting('ATLAS_CLAUDE_API_BASE') ?? 'https://api.anthropic.com').replace(/\/+$/, '');
+    const scopes = this.setting('ATLAS_CLAUDE_SCOPES') ?? DEFAULT_SCOPES;
     const portRaw = this.setting('ATLAS_CLAUDE_REDIRECT_PORT');
     const port = portRaw ? Number(portRaw) : 0;
-    if (!Number.isInteger(port) || port < 0 || port > 65535) problems.push('ATLAS_CLAUDE_REDIRECT_PORT must be a port number.');
+    if (portRaw && (!Number.isInteger(port) || port < 0 || port > 65535)) problems.push('ATLAS_CLAUDE_REDIRECT_PORT must be a port number.');
+
     let headers: Record<string, string> = {};
     const rawHeaders = this.setting('ATLAS_CLAUDE_HEADERS');
     if (rawHeaders) {
@@ -146,12 +193,11 @@ export class ClaudePlan {
       } catch {
         problems.push('ATLAS_CLAUDE_HEADERS must be a JSON object of header names to string values.');
       }
-      for (const [k, v] of Object.entries(headers)) {
+      for (const [k] of Object.entries(headers)) {
         if (RESERVED_HEADERS.has(k.toLowerCase())) problems.push(`Header ${k} is set by Atlas itself and can't be overridden.`);
-        if (IMPERSONATION.test(v)) problems.push(`Header ${k} identifies the caller as Claude Code; Atlas only sends requests as itself.`);
       }
     }
-    if (problems.length || !clientId || !authorizeUrl || !tokenUrl) return { config: null, problems };
+
     return {
       config: {
         clientId,
@@ -159,9 +205,9 @@ export class ClaudePlan {
         authorizeUrl,
         tokenUrl,
         revokeUrl,
-        scopes: this.setting('ATLAS_CLAUDE_SCOPES')!,
+        scopes,
         port,
-        apiBase: apiBase.replace(/\/+$/, ''),
+        apiBase,
         headers,
       },
       problems,
@@ -174,22 +220,32 @@ export class ClaudePlan {
     const settings = Object.fromEntries(
       CLAUDE_PLAN_SETTINGS.map((s) => [s.name, s.secret ? (this.setting(s.name) ? 'set' : null) : this.setting(s.name)]),
     ) as Record<ClaudePlanSetting, string | null>;
-    // Tokens issued to another client id don't count: changing the client id means signing in again.
-    const signedIn = !!this.tokens() && !!r.client_id && (!config || config.clientId === r.client_id);
+
+    const signedIn = !!this.tokens() && !!r.client_id;
     const paused = r.paused_until && Date.parse(r.paused_until) > this.now() ? r.paused_until : null;
+
+    let detected: { source: string; email?: string } | null = null;
+    if (!signedIn) {
+      const found = detectClaudeCodeCredentials(this.env);
+      if (found) {
+        detected = { source: found.source };
+      }
+    }
+
     return {
       available: !!this.secrets,
       unavailableReason: this.secrets ? null : 'Claude sign-in works in the desktop app: a server engine has no keychain to keep the tokens in.',
-      configured: !!config,
+      configured: problems.length === 0,
       configProblems: problems,
       settings,
-      redirectUri: config?.port ? `http://127.0.0.1:${config.port}/callback` : null,
+      redirectUri: config.port ? `http://127.0.0.1:${config.port}/callback` : DEFAULT_REDIRECT_URI,
       signedIn,
       pending: !!this.pending,
       email: r.email,
       showWelcome: signedIn && !r.welcomed,
       pausedUntil: paused,
       lastError: r.last_error,
+      detectedCredentials: detected,
     };
   }
 
@@ -201,23 +257,37 @@ export class ClaudePlan {
     return this.status();
   }
 
-  /** Start a sign-in (authorization code + PKCE, loopback callback); returns the URL to open in the system browser. */
+  /**
+   * Start a sign-in with PKCE.
+   * If a loopback port is configured, spins up a local server.
+   * Otherwise uses Anthropic's console callback URI where user copies the authorization code.
+   */
   async login(): Promise<{ url: string }> {
     if (!this.secrets) throw new ConflictError(this.status().unavailableReason!);
     const { config: c, problems } = this.config();
-    if (!c) throw new ConflictError(`Claude plan is not set up: ${problems.join(' ')}`);
+    if (problems.length) throw new ConflictError(`Claude plan is not set up: ${problems.join(' ')}`);
     this.cancel();
-    const server = createServer();
-    await new Promise<void>((resolve, reject) => {
-      server.once('error', (e: NodeJS.ErrnoException) =>
-        reject(e.code === 'EADDRINUSE' ? new ConflictError(`callback port ${c.port} is in use; free it or change ATLAS_CLAUDE_REDIRECT_PORT`) : e),
-      );
-      server.listen(c.port, '127.0.0.1', () => resolve());
-    });
-    const redirectUri = `http://127.0.0.1:${(server.address() as AddressInfo).port}/callback`;
+
     const verifier = b64url(randomBytes(32));
+    const challenge = b64url(createHash('sha256').update(verifier).digest());
+    const state = b64url(randomBytes(24));
+
+    let redirectUri = DEFAULT_REDIRECT_URI;
+    let server: Server | undefined;
+
+    if (c.port > 0 || this.setting('ATLAS_CLAUDE_REDIRECT_PORT')) {
+      server = createServer();
+      await new Promise<void>((resolve, reject) => {
+        server!.once('error', (e: NodeJS.ErrnoException) =>
+          reject(e.code === 'EADDRINUSE' ? new ConflictError(`callback port ${c.port} is in use; free it or change ATLAS_CLAUDE_REDIRECT_PORT`) : e),
+        );
+        server!.listen(c.port, '127.0.0.1', () => resolve());
+      });
+      redirectUri = `http://127.0.0.1:${(server.address() as AddressInfo).port}/callback`;
+    }
+
     const p: Pending = {
-      state: b64url(randomBytes(24)),
+      state,
       verifier,
       redirectUri,
       clientId: c.clientId,
@@ -228,30 +298,135 @@ export class ClaudePlan {
       }, LOGIN_TIMEOUT_MS),
     };
     this.pending = p;
-    server.on('request', (req, res) => {
-      const u = new URL(req.url ?? '/', redirectUri);
-      if (u.pathname !== '/callback') {
-        res.writeHead(404).end();
-        return;
-      }
-      void this.callback(p, c, u.searchParams).then((out) => {
-        res.writeHead(out.ok ? 200 : 400, { 'content-type': 'text/html; charset=utf-8' }).end(page(out.ok, out.message));
-        if (!out.retry) this.close(p);
+
+    if (server) {
+      server.on('request', (req, res) => {
+        const u = new URL(req.url ?? '/', redirectUri);
+        if (u.pathname !== '/callback') {
+          res.writeHead(404).end();
+          return;
+        }
+        void this.callback(p, c, u.searchParams).then((out) => {
+          res.writeHead(out.ok ? 200 : 400, { 'content-type': 'text/html; charset=utf-8' }).end(page(out.ok, out.message));
+          if (!out.retry) this.close(p);
+        });
       });
-    });
+    }
+
     const q = new URLSearchParams({
+      code: 'true',
       response_type: 'code',
       client_id: c.clientId,
       redirect_uri: redirectUri,
       scope: c.scopes,
       state: p.state,
-      code_challenge: b64url(createHash('sha256').update(verifier).digest()),
+      code_challenge: challenge,
       code_challenge_method: 'S256',
     });
     this.emit();
     const url = new URL(c.authorizeUrl);
     for (const [k, v] of q) url.searchParams.set(k, v);
     return { url: url.toString() };
+  }
+
+  /**
+   * Exchange an authorization code (pasted from Anthropic browser flow or code#state).
+   */
+  async exchange(authCode: string): Promise<ClaudePlanStatus> {
+    if (!this.secrets) throw new ConflictError(this.status().unavailableReason!);
+    const raw = authCode.trim();
+    if (!raw) throw new ConflictError('No authorization code entered.');
+    const { config: c } = this.config();
+    const p = this.pending;
+
+    const splits = raw.split('#');
+    const code = splits[0]!;
+    const state = splits.length > 1 ? splits[1] : undefined;
+
+    if (p && state && p.state && state !== p.state) {
+      this.set({ last_error: 'OAuth state mismatch — please start sign-in again.' });
+      this.emit();
+      throw new ConflictError('OAuth state mismatch');
+    }
+
+    const verifier = p?.verifier ?? '';
+    const redirectUri = p?.redirectUri ?? DEFAULT_REDIRECT_URI;
+
+    try {
+      const tok = await this.tokenCall(c, {
+        grant_type: 'authorization_code',
+        code,
+        code_verifier: verifier,
+        redirect_uri: redirectUri,
+        ...(state ? { state } : p ? { state: p.state } : {}),
+      });
+
+      if (!tok.ok) {
+        const err = `Claude sign-in: token exchange failed (${tok.code ?? 'HTTP ' + tok.status}).`;
+        this.set({ last_error: err });
+        this.emit();
+        throw new ModelError(err);
+      }
+
+      const t = tok.body;
+      if (!t.access_token) {
+        const err = 'Claude sign-in: the answer had no access token.';
+        this.set({ last_error: err });
+        this.emit();
+        throw new ModelError(err);
+      }
+
+      this.secrets.set(TOKENS, JSON.stringify({ access: t.access_token, refresh: t.refresh_token ?? null } satisfies Tokens));
+      const r = this.row();
+      this.set({
+        client_id: c.clientId,
+        email: t.account?.email_address ?? t.email ?? r.email ?? 'Claude Subscription User',
+        scopes: t.scope ?? c.scopes,
+        expires_at: t.expires_in ? new Date(this.now() + t.expires_in * 1000).toISOString() : null,
+        signed_in_at: new Date(this.now()).toISOString(),
+        paused_until: null,
+        last_error: null,
+      });
+
+      if (p) this.close(p);
+      this.emit();
+      return this.status();
+    } catch (e) {
+      if (p && !p.server) this.close(p);
+      throw e;
+    }
+  }
+
+  /**
+   * Set a subscription OAuth token directly (e.g. sk-ant-oat* or from setup-token).
+   */
+  async setToken(token: string, refreshToken?: string): Promise<ClaudePlanStatus> {
+    if (!this.secrets) throw new ConflictError(this.status().unavailableReason!);
+    const raw = token.trim();
+    if (!raw) throw new ConflictError('No token provided.');
+    const { config: c } = this.config();
+    this.secrets.set(TOKENS, JSON.stringify({ access: raw, refresh: refreshToken?.trim() || null } satisfies Tokens));
+    const r = this.row();
+    this.set({
+      client_id: c.clientId,
+      email: r.email ?? 'Claude Subscription User',
+      scopes: c.scopes,
+      expires_at: null,
+      signed_in_at: new Date(this.now()).toISOString(),
+      paused_until: null,
+      last_error: null,
+    });
+    this.emit();
+    return this.status();
+  }
+
+  /**
+   * Import detected local Claude Code credentials if present on this machine.
+   */
+  async importDetected(): Promise<ClaudePlanStatus> {
+    const creds = detectClaudeCodeCredentials(this.env);
+    if (!creds?.accessToken) throw new ConflictError('No Claude Code credentials detected on this machine.');
+    return this.setToken(creds.accessToken, creds.refreshToken);
   }
 
   private async callback(p: Pending, c: Config, q: URLSearchParams): Promise<{ ok: boolean; message: string; retry?: boolean }> {
@@ -295,12 +470,49 @@ export class ClaudePlan {
     | { ok: true; body: { access_token: string; refresh_token?: string; expires_in?: number; scope?: string; email?: string; account?: { email_address?: string } } }
     | { ok: false; status: number; code?: string }
   > {
-    const body = new URLSearchParams({ ...form, client_id: c.clientId });
-    if (c.clientSecret) body.set('client_secret', c.clientSecret);
-    const res = await this.fetchFn(c.tokenUrl, { method: 'POST', headers: { 'content-type': 'application/x-www-form-urlencoded', accept: 'application/json' }, body });
-    const j = (await res.json().catch(() => ({}))) as Record<string, unknown>;
-    if (!res.ok) return { ok: false, status: res.status, code: typeof j.error === 'string' ? j.error : undefined };
-    return { ok: true, body: j as never };
+    const urls = [c.tokenUrl, ...DEFAULT_TOKEN_URLS.filter((u) => u !== c.tokenUrl)];
+    let lastError: { ok: false; status: number; code?: string } = { ok: false, status: 500 };
+
+    for (const tokenUrl of urls) {
+      try {
+        const payload: Record<string, string> = { ...form, client_id: c.clientId };
+        if (c.clientSecret) payload.client_secret = c.clientSecret;
+
+        // Try JSON body first (as Hermes does with axios)
+        let res = await this.fetchFn(tokenUrl, {
+          method: 'POST',
+          headers: {
+            'content-type': 'application/json',
+            accept: 'application/json',
+            'user-agent': TOKEN_USER_AGENT,
+          },
+          body: JSON.stringify(payload),
+        });
+
+        // If endpoint expects form-urlencoded (HTTP 415), retry with urlencoded
+        if (res.status === 415) {
+          const body = new URLSearchParams(payload);
+          res = await this.fetchFn(tokenUrl, {
+            method: 'POST',
+            headers: {
+              'content-type': 'application/x-www-form-urlencoded',
+              accept: 'application/json',
+              'user-agent': TOKEN_USER_AGENT,
+            },
+            body,
+          });
+        }
+
+        const j = (await res.json().catch(() => ({}))) as Record<string, unknown>;
+        if (res.ok) return { ok: true, body: j as never };
+
+        lastError = { ok: false, status: res.status, code: typeof j.error === 'string' ? j.error : undefined };
+        if (typeof j.error === 'string' && DEAD_REFRESH.has(j.error)) break;
+      } catch (e) {
+        lastError = { ok: false, status: 500, code: e instanceof Error ? e.message : String(e) };
+      }
+    }
+    return lastError;
   }
 
   /** A valid access token, refreshed near expiry (one refresh at a time: refresh tokens may rotate). */
@@ -348,11 +560,11 @@ export class ClaudePlan {
     const t = this.tokens();
     const { config: c } = this.config();
     let note: string | null = null;
-    if (t && c?.revokeUrl) {
+    if (t && c.revokeUrl) {
       try {
         const body = new URLSearchParams({ token: t.refresh ?? t.access, token_type_hint: t.refresh ? 'refresh_token' : 'access_token', client_id: c.clientId });
         if (c.clientSecret) body.set('client_secret', c.clientSecret);
-        const res = await this.fetchFn(c.revokeUrl, { method: 'POST', headers: { 'content-type': 'application/x-www-form-urlencoded' }, body });
+        const res = await this.fetchFn(c.revokeUrl, { method: 'POST', headers: { 'content-type': 'application/x-www-form-urlencoded', 'user-agent': TOKEN_USER_AGENT }, body });
         if (!res.ok) throw new Error(`HTTP ${res.status}`);
       } catch (e) {
         note = `Signed out here, but Anthropic did not confirm the session was revoked (${e instanceof Error ? e.message : String(e)}).`;
@@ -368,7 +580,7 @@ export class ClaudePlan {
     const s = this.status();
     if (!s.available) throw new ModelError(s.unavailableReason!);
     const { config, problems } = this.config();
-    if (!config) throw new ModelError(`Claude plan is not set up: ${problems.join(' ')} (Models page → Claude plan)`);
+    if (problems.length) throw new ModelError(`Claude plan is not set up: ${problems.join(' ')} (Models page → Claude plan)`);
     if (!s.signedIn) throw new ModelError('Claude plan: not signed in. Use Sign in with Claude on the Models page.');
     if (s.pausedUntil) throw new ModelError(`Claude plan limit reached: paused until ${new Date(s.pausedUntil).toLocaleString()} (or Resume on the Models page).`);
     return config;
@@ -389,7 +601,7 @@ export class ClaudePlan {
     const c = this.ready();
     const token = await this.accessToken(c);
     const res = await this.fetchFn(c.apiBase + '/v1/models?limit=100', {
-      headers: { ...c.headers, authorization: `Bearer ${token}`, 'anthropic-version': '2023-06-01' },
+      headers: { ...c.headers, authorization: `Bearer ${token}`, 'anthropic-version': '2023-06-01', 'user-agent': 'claude-code/2.1.0' },
     });
     if (res.status === 401) this.signedOut('Anthropic refused the access token (HTTP 401)');
     if (!res.ok) throw new ModelError(`Claude models: HTTP ${res.status}: ${(await res.text()).slice(0, 300)}`);
@@ -425,8 +637,10 @@ export class ClaudePlan {
 
   private close(p: Pending): void {
     clearTimeout(p.timer);
-    p.server.close();
-    p.server.closeAllConnections();
+    if (p.server) {
+      p.server.close();
+      p.server.closeAllConnections();
+    }
     if (this.pending === p) {
       this.pending = null;
       this.emit();

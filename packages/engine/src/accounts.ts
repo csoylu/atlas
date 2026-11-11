@@ -45,13 +45,20 @@ export class Accounts {
     this.seed();
   }
 
-  /** First start with a single key: it becomes the first account. */
+  /** First start with a single key or OAuth token: it becomes the first account. */
   private seed() {
     if (this.db.prepare('SELECT 1 FROM accounts').get()) return;
-    if (!this.env.ANTHROPIC_API_KEY) return;
+    const secret = this.env.ANTHROPIC_API_KEY
+      ? 'ANTHROPIC_API_KEY'
+      : this.env.CLAUDE_CODE_OAUTH_TOKEN
+        ? 'CLAUDE_CODE_OAUTH_TOKEN'
+        : this.env.ANTHROPIC_TOKEN
+          ? 'ANTHROPIC_TOKEN'
+          : null;
+    if (!secret) return;
     this.db
-      .prepare("INSERT INTO accounts (id, provider, label, secret, priority, created_at) VALUES (?, 'anthropic', 'Default', 'ANTHROPIC_API_KEY', 0, ?)")
-      .run('acc_' + randomUUID().slice(0, 8), new Date(this.now()).toISOString());
+      .prepare("INSERT INTO accounts (id, provider, label, secret, priority, created_at) VALUES (?, 'anthropic', 'Default', ?, 0, ?)")
+      .run('acc_' + randomUUID().slice(0, 8), secret, new Date(this.now()).toISOString());
   }
 
   private toAccount(r: Row): Account {

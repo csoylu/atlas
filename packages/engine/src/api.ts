@@ -295,6 +295,17 @@ export function createApi(deps: {
   app.post('/api/claude/login', async (_req, res) => {
     res.json(await claude.login());
   });
+  app.post('/api/claude/exchange', async (req, res) => {
+    const code = String((req.body as { code?: unknown })?.code ?? '');
+    res.json(await claude.exchange(code));
+  });
+  app.post('/api/claude/token', async (req, res) => {
+    const { token, refreshToken } = req.body as { token?: string; refreshToken?: string };
+    res.json(await claude.setToken(String(token ?? ''), refreshToken ? String(refreshToken) : undefined));
+  });
+  app.post('/api/claude/import-detected', async (_req, res) => {
+    res.json(await claude.importDetected());
+  });
   app.post('/api/claude/cancel', (_req, res) => {
     claude.cancel();
     res.json(claude.status());

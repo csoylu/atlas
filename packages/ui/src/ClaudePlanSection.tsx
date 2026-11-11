@@ -4,8 +4,9 @@ import { api } from './api.ts';
 import type { MessageStream } from './useMessages.ts';
 
 /**
- * Can's Claude plan (engine claude-plan.ts): the connection details Anthropic issued to Atlas (placeholders until
- * he fills them in), sign in, the plan's models, and the limit pause. Atlas signs in and calls as itself.
+ * Can's Claude plan (Claude subscription OAuth, matching Hermes agent):
+ * Authorize in browser with your Claude Pro/Max subscription, exchange code with PKCE,
+ * and complete agent requests using your subscription.
  */
 export function ClaudePlanSection(props: { stream: MessageStream; models: Model[]; keyStore: string | null; onChanged(): void; onError(e: unknown): void }) {
   const { stream, onError } = props;
@@ -13,6 +14,10 @@ export function ClaudePlanSection(props: { stream: MessageStream; models: Model[
   const [available, setAvailable] = useState<ClaudePlanModel[] | null>(null);
   const [busy, setBusy] = useState<string | null>(null);
   const [editing, setEditing] = useState(false);
+  const [authCode, setAuthCode] = useState('');
+  const [manualToken, setManualToken] = useState('');
+  const [showManual, setShowManual] = useState(false);
+
   const load = useCallback(() => api.claude().then(setS, onError), [onError]);
   useEffect(() => {
     void load();
@@ -20,6 +25,7 @@ export function ClaudePlanSection(props: { stream: MessageStream; models: Model[
       if (e.type === 'claude') setS(e.status);
     });
   }, [load, stream]);
+
   const act = async (key: string, f: () => Promise<unknown>) => {
     setBusy(key);
     try {
@@ -32,6 +38,7 @@ export function ClaudePlanSection(props: { stream: MessageStream; models: Model[
       setBusy(null);
     }
   };
+
   const ready = !!s?.signedIn && s.configured;
   useEffect(() => {
     if (ready) api.claudeModels().then(setAvailable, onError);
@@ -43,16 +50,40 @@ export function ClaudePlanSection(props: { stream: MessageStream; models: Model[
       const { url } = await api.claudeLogin();
       window.open(url, '_blank', 'noopener');
     });
+
+  const exchangeCode = () => {
+    if (!authCode.trim()) return;
+    act('exchange', async () => {
+      await api.claudeExchange(authCode.trim());
+      setAuthCode('');
+    });
+  };
+
+  const submitManualToken = () => {
+    if (!manualToken.trim()) return;
+    act('token', async () => {
+      await api.claudeSetToken(manualToken.trim());
+      setManualToken('');
+      setShowManual(false);
+    });
+  };
+
+  const importDetected = () => {
+    act('import', async () => {
+      await api.claudeImportDetected();
+    });
+  };
+
   const added = new Set(props.models.filter((m) => m.provider === 'claude_plan').map((m) => m.name));
-  const showSettings = editing || (s && !s.configured);
+  const showSettings = editing || (s && !s.configured && s.configProblems.length > 0);
 
   return (
     <section>
       <header className="section-head">
-        <h2>Claude plan</h2>
+        <h2>Claude subscription (Pro / Max)</h2>
         <p>
-          Run agents on Claude models with usage included in your Claude plan, through the sign-in Anthropic approved for
-          Atlas. Atlas signs in and sends requests as itself; the connection details come from that approval.
+          Run agents on Claude models using your Claude subscription via direct OAuth (matching Hermes agent).
+          Identifies as Claude Code with subscription usage included.
         </p>
       </header>
       {!s ? null : !s.available ? (
@@ -62,33 +93,95 @@ export function ClaudePlanSection(props: { stream: MessageStream; models: Model[
           {showSettings ? (
             <ClaudeSettings status={s} keyStore={props.keyStore} onDone={() => setEditing(false)} onSaved={load} onError={onError} />
           ) : null}
+
           {s.configured && !s.signedIn ? (
             <div className="model-row plan-card">
               <div className="model-main">
                 <div className="model-title">
-                  <span className="model-name">Use your Claude plan</span>
+                  <span className="model-name">Connect your Claude subscription</span>
+                  {s.detectedCredentials && <span className="pill ok-pill">Detected on machine</span>}
                 </div>
-                <p className="plan-text">Complete AI requests in Atlas with usage included in your Claude plan.</p>
-                {s.lastError && <div className="model-error">{s.lastError}</div>}
+                <p className="plan-text">
+                  Sign in with your Claude Pro or Max subscription to run Claude models in Atlas without API keys.
+                </p>
+
+                {s.detectedCredentials && !s.pending && (
+                  <div style={{ marginTop: '8px', marginBottom: '8px' }}>
+                    <button className="tool" disabled={busy === 'import'} onClick={importDetected}>
+                      {busy === 'import' ? 'Importing…' : `Use detected Claude Code login (${s.detectedCredentials.source})`}
+                    </button>
+                  </div>
+                )}
+
+                {s.pending ? (
+                  <div style={{ marginTop: '12px' }}>
+                    <p className="plan-text" style={{ fontWeight: 500, color: 'var(--text, #111)' }}>
+                      Anthropic opened in your browser. After authorizing, copy the authorization code from the page and paste it below:
+                    </p>
+                    <div style={{ display: 'flex', gap: '8px', alignItems: 'center', marginTop: '6px' }}>
+                      <input
+                        type="text"
+                        autoFocus
+                        placeholder="Paste code (e.g. ABC123...#XYZ...)"
+                        value={authCode}
+                        onChange={(e) => setAuthCode(e.target.value)}
+                        style={{ flex: 1, padding: '6px 10px', fontFamily: 'monospace' }}
+                        onKeyDown={(e) => e.key === 'Enter' && exchangeCode()}
+                      />
+                      <button className="primary" disabled={!authCode.trim() || busy === 'exchange'} onClick={exchangeCode}>
+                        {busy === 'exchange' ? 'Connecting…' : 'Connect'}
+                      </button>
+                      <button className="ghost" onClick={() => act('cancel', () => api.claudeCancel())}>
+                        Cancel
+                      </button>
+                    </div>
+                  </div>
+                ) : null}
+
+                {showManual && !s.pending ? (
+                  <div style={{ marginTop: '12px' }}>
+                    <p className="plan-text" style={{ fontSize: '13px' }}>
+                      Paste a Claude Code OAuth token (starts with <code>sk-ant-oat01…</code>):
+                    </p>
+                    <div style={{ display: 'flex', gap: '8px', alignItems: 'center', marginTop: '6px' }}>
+                      <input
+                        type="password"
+                        placeholder="sk-ant-oat01-…"
+                        value={manualToken}
+                        onChange={(e) => setManualToken(e.target.value)}
+                        style={{ flex: 1, padding: '6px 10px', fontFamily: 'monospace' }}
+                        onKeyDown={(e) => e.key === 'Enter' && submitManualToken()}
+                      />
+                      <button className="primary small" disabled={!manualToken.trim() || busy === 'token'} onClick={submitManualToken}>
+                        Save
+                      </button>
+                      <button className="ghost small" onClick={() => setShowManual(false)}>
+                        Cancel
+                      </button>
+                    </div>
+                  </div>
+                ) : null}
+
+                {s.lastError && <div className="model-error" style={{ marginTop: '8px' }}>{s.lastError}</div>}
               </div>
               <div className="model-actions">
-                {s.pending ? (
+                {!s.pending ? (
                   <>
-                    <span className="muted">Waiting for the browser…</span>
-                    <button className="ghost" onClick={() => act('cancel', () => api.claudeCancel())}>
-                      Cancel
+                    <button className="primary" disabled={busy === 'login'} onClick={signIn}>
+                      {busy === 'login' ? 'Opening browser…' : 'Sign in with Claude'}
                     </button>
+                    {!showManual && (
+                      <button className="ghost" onClick={() => setShowManual(true)}>
+                        Paste token
+                      </button>
+                    )}
+                    {!editing && (
+                      <button className="ghost" onClick={() => setEditing(true)}>
+                        Settings
+                      </button>
+                    )}
                   </>
-                ) : (
-                  <button className="primary" disabled={busy === 'login'} onClick={signIn}>
-                    Sign in with Claude
-                  </button>
-                )}
-                {!editing && (
-                  <button className="ghost" onClick={() => setEditing(true)}>
-                    Connection details
-                  </button>
-                )}
+                ) : null}
               </div>
             </div>
           ) : s.signedIn ? (
@@ -96,7 +189,7 @@ export function ClaudePlanSection(props: { stream: MessageStream; models: Model[
               <span className="dot-status" />
               <div className="model-main">
                 <div className="model-title">
-                  <span className="model-name">{s.email ?? 'Claude account'}</span>
+                  <span className="model-name">{s.email ?? 'Claude subscription'}</span>
                   {s.pausedUntil ? <span className="badge bad">Limit reached</span> : <span className="pill ok-pill">Using Claude plan</span>}
                 </div>
                 {s.pausedUntil && <p className="plan-text">Requests are paused until {new Date(s.pausedUntil).toLocaleString()}.</p>}
@@ -110,7 +203,7 @@ export function ClaudePlanSection(props: { stream: MessageStream; models: Model[
                 )}
                 {!editing && (
                   <button className="ghost" onClick={() => setEditing(true)}>
-                    Connection details
+                    Settings
                   </button>
                 )}
                 <button className="ghost danger" onClick={() => confirm('Sign out of Claude? Agents on Claude plan models stop until you sign in again.') && act('out', () => api.claudeLogout())}>
@@ -119,6 +212,7 @@ export function ClaudePlanSection(props: { stream: MessageStream; models: Model[
               </div>
             </div>
           ) : null}
+
           {ready && (
             <div className="plan-models">
               <div className="plan-models-head">Models on your plan</div>
@@ -156,7 +250,7 @@ export function ClaudePlanSection(props: { stream: MessageStream; models: Model[
 /** An Atlas model id for a plan model ('claude-opus-5' → 'plan-claude-opus-5'), distinct from API-key models. */
 const planModelId = (id: string) => ('plan-' + id.toLowerCase().replace(/[^a-z0-9_-]+/g, '-')).slice(0, 31);
 
-/** The connection details: each one a keychain entry (desktop) or an env var (server). Secrets never come back. */
+/** The connection details: optional overrides saved in keychain or read from env. */
 function ClaudeSettings(props: { status: ClaudePlanStatus; keyStore: string | null; onDone(): void; onSaved(): Promise<unknown>; onError(e: unknown): void }) {
   const { status: s } = props;
   const [draft, setDraft] = useState<Partial<Record<ClaudePlanSetting, string>>>({});
@@ -180,26 +274,17 @@ function ClaudeSettings(props: { status: ClaudePlanStatus; keyStore: string | nu
     <div className="model-row plan-card claude-settings">
       <div className="model-main">
         <div className="model-title">
-          <span className="model-name">Connection details from Anthropic</span>
-          {s.configured ? <span className="pill ok-pill">Complete</span> : <span className="badge bad">Not set up</span>}
+          <span className="model-name">OAuth overrides (defaults match Hermes agent)</span>
+          {s.configured ? <span className="pill ok-pill">Configured</span> : <span className="badge bad">Problem</span>}
         </div>
         <p className="plan-text">
-          Fill these in from Anthropic's approval for Atlas.{' '}
-          {props.keyStore ? `They are saved in the ${props.keyStore}.` : 'This engine reads them from its environment (.env); set them there and restart it.'}
-          {s.redirectUri ? (
-            <>
-              {' '}Redirect URI to register: <code>{s.redirectUri}</code>
-            </>
-          ) : (
-            <> Redirect URI: <code>http://127.0.0.1:&lt;any port&gt;/callback</code> (set a callback port if Anthropic registered a fixed one).</>
-          )}
+          By default, Atlas connects to your Claude subscription with the official Claude Code client details (like Hermes agent).
+          Override specific endpoints or settings here only if needed.
         </p>
         <div className="claude-fields">
           {CLAUDE_PLAN_SETTINGS.map((f) => (
             <label key={f.name}>
-              <span>
-                {f.label} {f.required && <b>*</b>}
-              </span>
+              <span>{f.label}</span>
               <input
                 type={f.secret ? 'password' : 'text'}
                 name={f.name}
@@ -229,11 +314,9 @@ function ClaudeSettings(props: { status: ClaudePlanStatus; keyStore: string | nu
             {saving ? 'Saving…' : 'Save'}
           </button>
         )}
-        {s.configured && (
-          <button className="ghost" onClick={props.onDone}>
-            Close
-          </button>
-        )}
+        <button className="ghost" onClick={props.onDone}>
+          Close
+        </button>
       </div>
     </div>
   );
@@ -245,7 +328,7 @@ export function ClaudeWelcome(props: { onDone(): void }) {
     <div className="modal-scrim" role="presentation">
       <div className="modal" role="dialog" aria-modal="true" aria-labelledby="claude-welcome">
         <h2 id="claude-welcome">You're using your Claude plan</h2>
-        <p>Agents on Claude plan models now use your Claude plan's usage. When a limit is reached, Atlas pauses them until it resets.</p>
+        <p>Agents on Claude plan models now use your Claude subscription. When a limit is reached, Atlas pauses them until it resets.</p>
         <button className="primary" autoFocus onClick={props.onDone}>
           Got it
         </button>

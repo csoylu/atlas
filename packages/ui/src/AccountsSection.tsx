@@ -44,9 +44,8 @@ export function AccountsSection(props: { keyStore: string | null; onChanged(): v
       <header className="section-head">
         <h2>Anthropic accounts</h2>
         <p>
-          Claude models use these API keys from top to bottom. When one hits its rate limit, runs out of credit or is
-          refused, Atlas moves to the next and comes back when Anthropic says it resets. Claude subscriptions (Pro, Max)
-          are not API keys. Direct subscription sign-in is not integrated; it requires authorized Anthropic OAuth access.
+          Claude models use these API keys or subscription OAuth tokens from top to bottom. When one hits its rate limit, runs out of credit or is
+          refused, Atlas moves to the next and comes back when Anthropic says it resets. You can also connect your Claude subscription directly in the Claude subscription section above.
         </p>
       </header>
       <div className="model-list">
@@ -196,7 +195,7 @@ function NewAccount(props: { keyStore: string | null; onCreated(): void; onError
           autoComplete="off"
           value={value}
           onChange={(e) => setValue(byKey ? e.target.value : e.target.value.toUpperCase())}
-          placeholder={byKey ? 'sk-ant-…' : 'ANTHROPIC_KEY_WORK'}
+          placeholder={byKey ? 'sk-ant-api… or sk-ant-oat…' : 'ANTHROPIC_KEY_WORK'}
           className={byKey ? 'mono' : 'mono'}
         />
       </label>
