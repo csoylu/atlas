@@ -39,7 +39,7 @@ export const Card = z.object({
   updatedAt: z.string(),
   /** Model and effort chosen for this card/chat (null = the agent's model, the model's default effort). */
   modelId: z.string().nullable().default(null),
-  effort: z.enum(['low', 'medium', 'high', 'xhigh', 'max']).nullable().default(null),
+  effort: z.enum(['none', 'low', 'medium', 'high', 'xhigh', 'max']).nullable().default(null),
 });
 export type Card = z.infer<typeof Card>;
 
@@ -53,8 +53,11 @@ export const CreateCard = z.object({
 });
 export type CreateCard = z.input<typeof CreateCard>;
 
-/** How hard the model thinks: Claude output_config.effort, OpenAI reasoning.effort; Ollama gets low/medium/high. */
-export const Effort = z.enum(['low', 'medium', 'high', 'xhigh', 'max']);
+/**
+ * How hard the model thinks: Claude output_config.effort, OpenAI reasoning.effort; Ollama gets none/low/medium/high.
+ * 'none' turns thinking off on local models; Claude and the ChatGPT plan have no off, they get low.
+ */
+export const Effort = z.enum(['none', 'low', 'medium', 'high', 'xhigh', 'max']);
 export type Effort = z.infer<typeof Effort>;
 
 export const UpdateCard = z

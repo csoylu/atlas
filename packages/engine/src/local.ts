@@ -152,7 +152,8 @@ export class Local {
     this.log.write(`\n--- ${new Date().toISOString()} starting ${bin} serve\n`);
     this.stopping = false;
     const child = spawn(bin, ['serve'], {
-      env: { ...process.env, OLLAMA_HOST: u.host, OLLAMA_CONTEXT_LENGTH: String(this.contextLength) },
+      // One model in memory at a time unless the environment says otherwise: two big ones push a laptop into swap.
+      env: { OLLAMA_MAX_LOADED_MODELS: '1', ...process.env, OLLAMA_HOST: u.host, OLLAMA_CONTEXT_LENGTH: String(this.contextLength) },
       stdio: ['ignore', 'pipe', 'pipe'],
     });
     this.child = child;
@@ -400,9 +401,17 @@ export class Local {
     this.changed();
   }
 
-  /** Load into memory and keep it there (keep_alive -1), or unload (0). */
+  /**
+   * Load into memory and keep it there (keep_alive -1), or unload (0). Loading unloads the others first: models kept
+   * forever pile up otherwise (a server Atlas didn't start ignores OLLAMA_MAX_LOADED_MODELS above).
+   */
   async load(name: string, keep: boolean): Promise<void> {
     await this.ensure();
+    if (keep) {
+      const ps = await this.api<{ models: { name: string }[] }>('/api/ps');
+      for (const m of ps.models)
+        if (m.name !== name) await this.api('/api/generate', { method: 'POST', body: JSON.stringify({ model: m.name, keep_alive: 0 }), timeout: 60_000 });
+    }
     await this.api('/api/generate', { method: 'POST', body: JSON.stringify({ model: name, keep_alive: keep ? -1 : 0 }), timeout: 180_000 });
     this.changed();
   }

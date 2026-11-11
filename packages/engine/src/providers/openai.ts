@@ -53,7 +53,7 @@ export class OpenAiCompatProvider implements Provider {
           max_tokens: req.maxTokens,
           stream: true,
           stream_options: { include_usage: true },
-          // Ollama and others know low/medium/high only.
+          // Ollama and others know none (thinking off) and low/medium/high.
           ...(req.effort ? { reasoning_effort: req.effort === 'xhigh' || req.effort === 'max' ? 'high' : req.effort } : {}),
           messages: toOpenAiMessages(req),
           tools: req.tools.map((t) => ({
@@ -75,6 +75,7 @@ export class OpenAiCompatProvider implements Provider {
     }
 
     let text = '';
+    let thinking = '';
     let finish = 'unknown';
     const usage = { input: 0, output: 0, cached: 0 };
     const calls: { id: string; name: string; args: string }[] = [];
@@ -90,7 +91,7 @@ export class OpenAiCompatProvider implements Provider {
         const data = line.slice(5).trim();
         if (data === '[DONE]') continue;
         const ev = JSON.parse(data) as {
-          choices?: { delta?: { content?: string | null; tool_calls?: { index: number; id?: string; function?: { name?: string; arguments?: string } }[] }; finish_reason?: string | null }[];
+          choices?: { delta?: { content?: string | null; reasoning?: string | null; reasoning_content?: string | null; tool_calls?: { index: number; id?: string; function?: { name?: string; arguments?: string } }[] }; finish_reason?: string | null }[];
           usage?: { prompt_tokens?: number; completion_tokens?: number; prompt_tokens_details?: { cached_tokens?: number } };
         };
         if (ev.usage) {
@@ -102,6 +103,8 @@ export class OpenAiCompatProvider implements Provider {
         if (!choice) continue;
         if (choice.finish_reason) finish = choice.finish_reason;
         const d = choice.delta;
+        // The model's thinking: Ollama streams it as `reasoning`, llama.cpp and vLLM as `reasoning_content`.
+        thinking += d?.reasoning ?? d?.reasoning_content ?? '';
         if (d?.content) {
           text += d.content;
           onText(d.content);
@@ -116,6 +119,8 @@ export class OpenAiCompatProvider implements Provider {
     }
 
     const content: ContentBlock[] = [];
+    // Kept for Can to read on the card; unsigned, so it is never sent back to a model (context.ts buildMessages).
+    if (thinking) content.push({ type: 'thinking', thinking, signature: '' });
     if (text) content.push({ type: 'text', text });
     for (const c of calls) {
       let input: unknown;

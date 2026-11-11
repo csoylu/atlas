@@ -57,6 +57,36 @@ describe('openai-compatible provider', () => {
     });
   });
 
+  it('keeps the thinking as an unsigned block and sends effort none as reasoning_effort', async () => {
+    const chunks = [
+      { choices: [{ delta: { reasoning: 'let me ' } }] },
+      { choices: [{ delta: { reasoning_content: 'think' } }] },
+      { choices: [{ delta: { content: 'Hi' }, finish_reason: 'stop' }] },
+    ];
+    const bodies: { reasoning_effort?: string }[] = [];
+    const server = createServer((req, res) => {
+      let body = '';
+      req.on('data', (d) => (body += d));
+      req.on('end', () => {
+        bodies.push(JSON.parse(body));
+        res.writeHead(200, { 'content-type': 'text/event-stream' });
+        for (const c of chunks) res.write(`data: ${JSON.stringify(c)}\n\n`);
+        res.end('data: [DONE]\n\n');
+      });
+    });
+    await new Promise<void>((r) => server.listen(0, '127.0.0.1', r));
+    const p = new OpenAiCompatProvider(`http://127.0.0.1:${(server.address() as AddressInfo).port}/v1`, undefined);
+    const req = { model: 'm', system: 's', maxTokens: 10, tools: [], messages: [{ role: 'user' as const, content: [{ type: 'text' as const, text: 'hi' }] }] };
+    let streamed = '';
+    const res = await p.complete({ ...req, effort: 'none' }, (t) => (streamed += t), new AbortController().signal);
+    await p.complete({ ...req, effort: 'max' }, () => {}, new AbortController().signal);
+    await p.complete(req, () => {}, new AbortController().signal);
+    server.close();
+    expect(streamed).toBe('Hi'); // thinking is not answer text
+    expect(res.content).toEqual([{ type: 'thinking', thinking: 'let me think', signature: '' }, { type: 'text', text: 'Hi' }]);
+    expect(bodies.map((b) => b.reasoning_effort)).toEqual(['none', 'high', undefined]);
+  });
+
   it('reports an unreachable server clearly', async () => {
     const p = new OpenAiCompatProvider('http://127.0.0.1:1/v1', undefined);
     await expect(

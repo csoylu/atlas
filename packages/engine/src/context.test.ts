@@ -16,6 +16,18 @@ const m = (role: 'user' | 'assistant', content: ContentBlock[], contextUpto: num
 const t = (text: string): ContentBlock[] => [{ type: 'text', text }];
 
 describe('buildMessages', () => {
+  it("leaves a local model's unsigned thinking out of the view, keeps Claude's signed thinking", () => {
+    const view = buildMessages([
+      m('user', t('hi')),
+      m('assistant', [{ type: 'thinking', thinking: 'local notes', signature: '' }], 1),
+      m('assistant', [{ type: 'thinking', thinking: 'signed', signature: 'sig' }, { type: 'text', text: 'hello' }], 2),
+    ]);
+    expect(view).toEqual([
+      { role: 'user', content: t('hi') },
+      { role: 'assistant', content: [{ type: 'thinking', thinking: 'signed', signature: 'sig' }, { type: 'text', text: 'hello' }] },
+    ]);
+  });
+
   it('merges consecutive roles and puts tool results first', () => {
     seq = 0;
     const view = buildMessages([

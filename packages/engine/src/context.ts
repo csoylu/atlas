@@ -21,9 +21,13 @@ export function buildMessages(messages: (Message & { contextUpto?: number | null
 
   const out: ModelRequest['messages'] = [];
   for (const m of ordered) {
+    // Unsigned thinking comes from a local model: shown on the card, never replayed (Claude rejects it, and it would
+    // only fill a small local context).
+    const content = m.content.filter((b) => !(b.type === 'thinking' && !b.signature));
+    if (!content.length) continue;
     const last = out.at(-1);
-    if (last && last.role === m.role) last.content.push(...m.content);
-    else out.push({ role: m.role, content: [...m.content] });
+    if (last && last.role === m.role) last.content.push(...content);
+    else out.push({ role: m.role, content });
   }
   for (let i = 0; i < out.length; i++) {
     const m = out[i]!;

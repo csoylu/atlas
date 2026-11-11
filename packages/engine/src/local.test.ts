@@ -24,9 +24,10 @@ http.createServer((req, res) => {
     const j = body ? JSON.parse(body) : {};
     const send = (o) => (res.setHeader('content-type', 'application/json'), res.end(JSON.stringify(o)));
     if (req.url === '/api/version') return send({ version: '9.9.9' });
+    if (req.url === '/test/env') return send({ maxLoaded: process.env.OLLAMA_MAX_LOADED_MODELS });
     if (req.url === '/api/tags') return send({ models });
     if (req.url === '/api/ps') return send({ models: loaded });
-    if (req.url === '/api/generate') { loaded = j.keep_alive === 0 ? [] : [{ name: j.model, size_vram: 6e9, context_length: ctx, expires_at: '2318-01-01T00:00:00Z' }]; return send({ done: true }); }
+    if (req.url === '/api/generate') { loaded = loaded.filter((m) => m.name !== j.model); if (j.keep_alive !== 0) loaded.push({ name: j.model, size_vram: 6e9, context_length: ctx, expires_at: '2318-01-01T00:00:00Z' }); return send({ done: true }); }
     if (req.url === '/api/delete') { const i = models.findIndex((m) => m.name === j.model); if (i < 0) { res.statusCode = 404; return res.end('{}'); } models.splice(i, 1); return send({}); }
     if (req.url === '/api/pull') {
       if (j.model.includes('missing')) { res.write(JSON.stringify({ error: 'pull model manifest: file does not exist' }) + '\\n'); return res.end(); }
@@ -115,6 +116,13 @@ describe('local model server', () => {
     expect((await api('POST', '/load', { name: 'qwen3:8b' })).status).toBe(204);
     const list = (await (await api('GET', '/models')).json()) as { models: { name: string; loaded: { contextLength: number; until: string | null } | null }[] };
     expect(list.models.find((m) => m.name === 'qwen3:8b')?.loaded).toMatchObject({ contextLength: 65536, until: null });
+
+    // One model in memory at a time: the server is told so, and loading another unloads the first.
+    expect(await (await fetch(`http://127.0.0.1:${port}/test/env`)).json()).toEqual({ maxLoaded: '1' });
+    expect((await api('POST', '/load', { name: 'other:1b' })).status).toBe(204);
+    expect((await (await fetch(`http://127.0.0.1:${port}/api/ps`)).json()) as { models: { name: string }[] }).toMatchObject({ models: [{ name: 'other:1b' }] });
+    expect((await api('POST', '/load', { name: 'qwen3:8b' })).status).toBe(204);
+    expect(((await (await fetch(`http://127.0.0.1:${port}/api/ps`)).json()) as { models: { name: string }[] }).models.map((m) => m.name)).toEqual(['qwen3:8b']);
 
     // Use it: an Atlas model pointing at the server; deleting the Ollama model is refused while it's used.
     const model = (await (await api('POST', '/use', { name: 'qwen3:8b' })).json()) as { id: string; baseUrl: string; contextWindow: number };

@@ -70,6 +70,9 @@ describe('direct chat with an agent', () => {
     expect(((await (await fetch(u + '/chats')).json()) as Card[])[0]!.id).toBe(later.id);
     expect((await fetch(u + `/cards/${chat.id}`, { method: 'PATCH', headers: json, body: JSON.stringify({ modelId: 'nope' }) })).status).toBe(409);
     expect((await fetch(u + `/cards/${chat.id}`, { method: 'PATCH', headers: json, body: JSON.stringify({ effort: 'extreme' }) })).status).toBe(400);
+    // « Off » (thinking off on local models) is stored like the others.
+    expect(await (await fetch(u + `/cards/${chat.id}`, { method: 'PATCH', headers: json, body: JSON.stringify({ effort: 'none' }) })).json()).toMatchObject({ effort: 'none' });
+    await fetch(u + `/cards/${chat.id}`, { method: 'PATCH', headers: json, body: JSON.stringify({ effort: 'high' }) });
 
     used.length = 0;
     await fetch(u + `/cards/${chat.id}/messages`, { method: 'POST', headers: json, body: JSON.stringify({ text: 'hi' }) });

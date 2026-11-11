@@ -72,6 +72,7 @@ export interface PickProps {
   onChange(patch: { modelId?: string | null; effort?: Effort | null }): void;
 }
 const EFFORTS: { value: Effort; label: string }[] = [
+  { value: 'none', label: 'Off' },
   { value: 'low', label: 'Low' },
   { value: 'medium', label: 'Medium' },
   { value: 'high', label: 'High' },
@@ -122,7 +123,7 @@ export function ModelEffort(p: PickProps) {
         <select
           className="meta-select"
           aria-label="Effort"
-          title="How hard the model thinks before answering: higher is slower and uses more tokens. Auto = the model's default. Local models get low, medium or high."
+          title="How hard the model thinks before answering: higher is slower and uses more tokens. Auto = the model's default. Off stops a local model thinking (Claude and ChatGPT get low). Local models get low, medium or high."
           value={p.effort ?? ''}
           onChange={(e) => p.onChange({ effort: (e.target.value || null) as Effort | null })}
         >
