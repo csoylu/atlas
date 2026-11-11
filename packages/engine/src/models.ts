@@ -22,9 +22,15 @@ export type ProviderFactory = (model: Model, env: NodeJS.ProcessEnv) => Provider
 /** Real providers. Missing configuration is a ModelError, never a fallback (design §5). */
 export const realProviders: ProviderFactory = (m, env) => {
   if (m.provider === 'claude_code') {
-    return new AnthropicProvider(env['CLAUDE_CODE_OAUTH_TOKEN'] ?? env['ANTHROPIC_API_KEY'], m.baseUrl, {
+    const token = env['CLAUDE_CODE_OAUTH_TOKEN']?.trim();
+    const key = env['ANTHROPIC_API_KEY']?.trim();
+    if (!token && !key) throw new ModelError(`model ${m.id} needs CLAUDE_CODE_OAUTH_TOKEN or ANTHROPIC_API_KEY in the engine's environment`);
+    // Keep the legacy adapter's hardcoded identity aligned with Can's installed Claude Code version.
+    return new AnthropicProvider(token ? null : key!, {
+      baseURL: m.baseUrl ?? undefined,
+      authToken: token,
       maxRetries: 0,
-      headers: { 'anthropic-beta': 'interleaved-thinking-2025-05-14,fine-grained-tool-streaming-2025-05-14,+context-1m-2025-08-07', 'user-agent': 'claude-code/2.1.0' },
+      headers: { 'user-agent': 'claude-code/2.1.322', ...(token ? { 'anthropic-beta': 'oauth-2025-04-20' } : {}) },
     });
   }
   if (m.provider === 'chatgpt') throw new ModelError(`model ${m.id} uses the ChatGPT plan, which this engine has no sign-in for`);
@@ -54,7 +60,7 @@ export class Models {
       baseUrl: r.base_url,
       credentialEnv: r.credential_env,
       credentialPresent:
-        r.provider === 'claude_code' ? false : r.provider === 'chatgpt'
+        r.provider === 'claude_code' ? !!(this.env['CLAUDE_CODE_OAUTH_TOKEN']?.trim() || this.env['ANTHROPIC_API_KEY']?.trim()) : r.provider === 'chatgpt'
           ? !!this.chatgpt?.status().planUsage
           : r.provider === 'claude_plan'
             ? !!this.claude?.status().signedIn

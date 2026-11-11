@@ -58,8 +58,7 @@ interface Config {
 /** Claude Code's own OAuth client id. Atlas is not Claude Code: this id is refused. */
 export const CLAUDE_CODE_CLIENT_ID = '9d1c250a-e61b-44d9-88ed-5944d1962f5e';
 /** Headers Atlas sets itself or that identify the calling app: the approval can't override them. */
-/** Reserved only where the engine must control the value (auth, versioning). The app itself manages its identity via headers. */
-const RESERVED_HEADERS = new Set(['authorization', 'x-api-key', 'anthropic-version', 'host', 'content-type', 'content-length']);
+const RESERVED_HEADERS = new Set(['authorization', 'x-api-key', 'anthropic-version', 'host', 'content-type', 'content-length', 'user-agent', 'x-app']);
 const IMPERSONATION = /claude[\s_-]?code|claude-cli/i;
 const REFRESH_MARGIN_MS = 5 * 60_000;
 const LOGIN_TIMEOUT_MS = 10 * 60_000;
