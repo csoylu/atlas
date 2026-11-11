@@ -226,7 +226,7 @@ export const UpdateSettings = z.object({ triageAgent: z.string().nullable() }).p
 export interface Model {
   id: string;
   /** 'chatgpt': OpenAI models on Can's ChatGPT plan (Sign in with ChatGPT, design §5); name is the model slug. */
-  /** claude_code is a removed, non-runnable legacy provider, retained for references and usage history. */
+  /** 'anthropic': OAuth-based via the claude-code provider (Hermes CLI integration, design §5). */
   /** 'claude_plan': Claude models on Can's Claude plan, through Atlas's own Anthropic-approved sign-in (design §5). */
   provider: 'anthropic' | 'openai_compat' | 'chatgpt' | 'claude_plan' | 'claude_code';
   name: string;
@@ -252,7 +252,7 @@ export interface Memory {
 }
 
 // claude_code remains readable only for historical records; new/updated models cannot select it.
-export const ModelProvider = z.enum(['anthropic', 'openai_compat', 'chatgpt', 'claude_plan']);
+export const ModelProvider = z.enum(['anthropic', 'openai_compat', 'chatgpt', 'claude_plan', 'claude_code']);
 export const CreateModel = z.object({
   id: z.string().regex(/^[a-z][a-z0-9_-]{1,30}$/, 'lowercase letters, digits, - or _'),
   provider: ModelProvider,

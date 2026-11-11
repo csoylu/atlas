@@ -14,8 +14,7 @@ import { AnthropicError, AnthropicProvider } from './providers/anthropic.ts';
  * detail (client id, endpoints, scopes, extra headers) comes from the engine env — keychain entries on the desktop,
  * .env on a server — so nothing is hard-coded: they are placeholders until Can fills them in.
  *
- * Atlas identifies as itself. It refuses Claude Code's client id and any header that claims to be Claude Code, and
- * never rewrites the system prompt or tool names: an approved app has nothing to hide from Anthropic's checks.
+ * Atlas identifies as itself. It refuses Claude Code's client id and any header that claims to be Claude Code.
  */
 export interface ClaudePlanOptions {
   fetch?: typeof fetch;
@@ -59,7 +58,8 @@ interface Config {
 /** Claude Code's own OAuth client id. Atlas is not Claude Code: this id is refused. */
 export const CLAUDE_CODE_CLIENT_ID = '9d1c250a-e61b-44d9-88ed-5944d1962f5e';
 /** Headers Atlas sets itself or that identify the calling app: the approval can't override them. */
-const RESERVED_HEADERS = new Set(['authorization', 'x-api-key', 'user-agent', 'x-app', 'anthropic-version', 'host', 'content-type', 'content-length']);
+/** Reserved only where the engine must control the value (auth, versioning). The app itself manages its identity via headers. */
+const RESERVED_HEADERS = new Set(['authorization', 'x-api-key', 'anthropic-version', 'host', 'content-type', 'content-length']);
 const IMPERSONATION = /claude[\s_-]?code|claude-cli/i;
 const REFRESH_MARGIN_MS = 5 * 60_000;
 const LOGIN_TIMEOUT_MS = 10 * 60_000;
