@@ -158,7 +158,8 @@ works with the window closed and, later, on the VPS for that machine's models.
   Homebrew exists, otherwise links to ollama.com/download.
 - Ownership: a server that already answers (Ollama app, `brew services`) is used and left alone ("external"). Otherwise
   the engine runs `ollama serve` itself ("atlas", log in `<data>/logs/ollama.log`), passes `OLLAMA_CONTEXT_LENGTH`
-  (setting, default 32k), restarts it after a crash (at most 4 times per 10 min, with back-off) and stops it with the
+  (setting, default 32k) and `OLLAMA_MAX_LOADED_MODELS=1` unless the environment sets it (two large models in memory
+  push a laptop into swap; « Load » also unloads the others, which covers an external server), restarts it after a crash (at most 4 times per 10 min, with back-off) and stops it with the
   engine. Stop on an external brew service stops the service, after which Atlas owns the server.
 - Autostart (setting, default on): before every call to a model whose base URL is the managed server, the provider
   wrapper in `Models.provider()` starts the server if it's down; with autostart off the call fails with that reason.
@@ -171,9 +172,12 @@ works with the window closed and, later, on the VPS for that machine's models.
   starts with « Usage »: 30-day totals, tokens per day stacked by source, per-model today/7/30 days. Tokens only, no
   cost (no price table to keep right); ChatGPT plan quota stays in ChatGPT settings (OpenAI exposes no figure).
 - **Model and effort per chat/card** (Can, 10 Nov 2026; migration 0015 `cards.model_id`, `cards.effort`): two quiet
-  pickers above the composer. Empty = the agent's model / the model's default effort. Effort low · medium · high ·
-  xhigh · max goes to Claude as `output_config.effort`, to the ChatGPT plan as `reasoning.effort`, to Ollama and other
-  OpenAI-compatible servers as `reasoning_effort` (xhigh/max → high). Picking doesn't move a chat up the history; a
+  pickers above the composer. Empty = the agent's model / the model's default effort. Effort off · low · medium ·
+  high · xhigh · max goes to Claude as `output_config.effort`, to the ChatGPT plan as `reasoning.effort`, to Ollama and
+  other OpenAI-compatible servers as `reasoning_effort` (xhigh/max → high). Off (`none`, migration 0020, 11 Nov 2026)
+  stops a local model thinking; Claude and the ChatGPT plan have no off and get low. A local model's thinking
+  (`reasoning` / `reasoning_content` in the stream) is kept as an unsigned thinking block: shown on the card, never
+  sent back to a model. Picking doesn't move a chat up the history; a
   deleted picked model makes the next run fail with that reason. The dispatcher checks the card's model when it has one.
 - **Models page = where models come from** (Can, 10 Nov 2026): « Available to agents » (every Atlas model), ChatGPT
   plan, Anthropic accounts, then Ollama (server, installed, download). The Agents page keeps agents, their model

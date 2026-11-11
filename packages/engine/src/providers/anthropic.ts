@@ -60,7 +60,8 @@ export class AnthropicProvider implements Provider {
           system: [{ type: 'text', text: req.system, cache_control: { type: 'ephemeral' } }],
           messages: req.messages as Anthropic.MessageParam[],
           tools: req.tools as Anthropic.Tool[],
-          ...(req.effort ? { output_config: { effort: req.effort } } : {}),
+          // Claude has no « off »: none → low.
+          ...(req.effort ? { output_config: { effort: req.effort === 'none' ? 'low' : req.effort } } : {}),
         },
         { signal },
       );

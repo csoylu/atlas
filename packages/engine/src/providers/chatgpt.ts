@@ -51,7 +51,8 @@ export function responsesBody(req: ModelRequest): Record<string, unknown> {
           ],
         }
       : {}),
-    ...(req.effort ? { reasoning: { effort: req.effort } } : {}),
+    // No « off » on this route: none → low.
+    ...(req.effort ? { reasoning: { effort: req.effort === 'none' ? 'low' : req.effort } } : {}),
     store: false,
     stream: true,
   };
