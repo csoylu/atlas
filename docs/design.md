@@ -1,15 +1,15 @@
 # Atlas — design
 
-Status: proposal, 9 Nov 2026. Owner: Can. Written by atlas from a week of running the Datinel team on Hermes Agent.
+Status: proposal, 9 Nov 2026. Owner: Can Soylu. Written by atlas from a week of running the Datinel team on Hermes Agent.
 
 ## 1. Goal
-One app where Can's agents work like a small team:
+One app where the user's agents work like a small team:
 - **Agents**: named (atlas, munih, paris, zurich…), each with a role prompt, a model, a tool set, a working
   directory and a memory.
 - **Kanban** board: the only task tracker. Cards are assigned to agents, run automatically, block on questions,
   go to review, finish with a handoff.
 - **Schedules**: run an agent prompt or create a card at a time or on a cron expression.
-- **Canvas**: an Excalidraw whiteboard that Can and agents both read and write (diagrams, plans, mockups).
+- **Canvas**: an Excalidraw whiteboard that the user and agents both read and write (diagrams, plans, mockups).
 - **Models**: Anthropic (cloud) and local LLMs (OpenAI-compatible server), chosen per agent and per card.
 - **Chat**: talk to any agent directly; agents message each other.
 - Runs as a Mac/Windows Electron app, or as a server on a VPS opened in a browser.
@@ -41,7 +41,8 @@ Non-goals for v1: multi-user, plugin marketplace, mobile app, voice, a skill sto
 | `agents` | id, name, role_prompt, model_ref, tools (json), workdir, enabled |
 | `models` | id, provider (`anthropic`/`openai_compat`), name, base_url, credential_ref, context_window, verified_at, last_error |
 | `credentials` | id, provider, label, kind (`api_key`/`oauth`), secret_ref (keychain key, not the secret), expires_at, cooldown_until, usage (json) |
-| `cards` | id, board, title, body, status, assignee (agent id), priority, model_override, workdir, created_by, created_at |
+| `cards` | id, board, title, body, status, assignee (agent id), priority, model_override, workdir, origin_card (direct chat it came from), created_by, created_at |
+| `card_reports` | id, chat_id, card_id, transition, message_id, at, delivered_at — report-back outbox (§16) |
 | `card_links` | parent_id, child_id |
 | `card_events` | id, card_id, at, kind, payload (json): status changes, comments, blocks, answers, handoffs |
 | `runs` | id, card_id or chat_id or schedule_id, agent_id, status (`queued`/`running`/`waiting`/`done`/`failed`/`interrupted`), lease_until, attempt, error, started_at, ended_at |
@@ -70,7 +71,8 @@ loop:
 ```
 - Streaming to the UI over WebSocket; the stored message is written once the block completes.
 - Limits per run: max turns, max tokens, max wall time. Hitting one ends the run as `waiting` with a note, never
-  silently.
+  silently. Built: the turn limit (150, `MAX_TURNS`) ends the run `done` with a `system` note « Paused after N turns:
+  reply to continue. » (a work card blocks needs_input with it); a reply resumes.
 - Independent tool calls in one response may run in parallel.
 - A card run ends only through a tool: `card_complete(summary)`, `card_block(kind, question)`,
   `card_request_review(summary)`. A run that stops without one → card back to `ready` with the last output as a
@@ -110,18 +112,23 @@ Claude has two independent billing/authentication paths:
   PKCE S256 and random state; the user pastes the complete `code#state` from the browser callback.
   Reject mismatched state before exchanging; pending login expires after 10 minutes.
 - Access/refresh tokens stay in the desktop keychain, never SQLite or UI. Refresh near expiry is single-flight;
-  dead refresh grants/401 sign out. A 429 pauses until the advertised reset without rotating accounts.
+  dead refresh grants/401 sign out. A 429 pauses that subscription until its reset and the call moves to the next
+  one (see « Plan subscriptions » below).
 - Subscription requests use the Claude Code-compatible headers and system prefix. Client version is hardcoded
-  to Can's installed 2.1.322. This is direct OAuth API integration, not a spawned Claude Code process.
+  to the user's installed 2.1.322. This is direct OAuth API integration, not a spawned Claude Code process.
 - Advanced `ATLAS_CLAUDE_*` overrides remain available for custom OAuth servers; no configuration required normally.
 - Server engines without a secure secret store cannot sign in.
+
+Thinking (12 Nov 2026): Claude 4.6+ models get `thinking: { type: 'adaptive', display: 'summarized' }`
+(their default display is « omitted »: empty thinking text, signature only); older names get no thinking parameter.
+The chat hides thinking blocks with no text.
 
 The legacy `claude_code` CLI provider (migration 0017) stays removed (0018): rows readable, never runnable.
 
 ### ChatGPT plan (built 10 Nov 2026, `engine/src/chatgpt.ts` + `providers/chatgpt.ts`, Agents page « ChatGPT plan »)
-Can asked for OpenAI usage by subscription login. OpenAI's **Sign in with ChatGPT**
+The user asked for OpenAI usage by subscription login. OpenAI's **Sign in with ChatGPT**
 lets open-source, locally hosted apps use a person's ChatGPT plan (developers.openai.com/siwc, « ChatGPT plan
-usage »; terms openai.com/policies/sign-in-with-chatgpt-terms). Atlas is free, runs on Can's machine and will be public.
+usage »; terms openai.com/policies/sign-in-with-chatgpt-terms). Atlas is free, runs on the user's machine and will be public.
 - **Own identity, no borrowed client id.** First sign-in registers Atlas dynamically (`client_id=dynamic_agent_client`,
   `agent_name_hint=Atlas`, this machine's `ext_agent_host_id` = `urn:uuid:…` made once); the callback's issued
   `oaiapp_…` id is saved and reused. (Hermes/opencode's older route logs in with Codex's client id: that would be
@@ -137,17 +144,42 @@ usage »; terms openai.com/policies/sign-in-with-chatgpt-terms). Atlas is free, 
   `max_output_tokens`/`temperature`. Success only on `response.completed`. Models from `GET /v1/models`
   (visibility « list »), added with « Give to agents » as provider `chatgpt` (migration 0013 rebuilt `models` for the
   new CHECK value; migrations starting `-- atlas: foreign_keys off` run with foreign keys off and are checked first).
-- **Terms built in**: one account, no rotation around limits; board cards and schedules use the signed-in
-  plan just like direct chats, with no separate background-use opt-in (explicitly authorized by Can, 10 Nov 2026);
-  a usage-limit error pauses
-  every plan request with « Manage usage » (chatgpt.com/settings/usage) + Resume, never a switch to other billing.
+- **Several accounts, failover (decision, 11 Nov 2026).** OpenAI's terms ask for one account and no rotation
+  around limits; the user was told and chose otherwise: several ChatGPT subscriptions can be signed in and a usage limit
+  on one moves the work to the next (« Plan subscriptions » below). Board cards and schedules use the plan just like
+  direct chats, with no separate background-use opt-in (explicitly authorized by the user, 10 Nov 2026). Never a switch to
+  other billing (API keys). Each account has its own registration (`oaiapp_…`); the host id stays per machine.
   UI per OpenAI's guidelines: « Continue with ChatGPT » button (`data-oai-siwc-button`), a one-time « You're using your
   ChatGPT plan » notice, « Using ChatGPT plan · Manage usage » by the composer. Missing: OpenAI's official logo on the
   button (add the approved asset when the repo goes public).
 
+### Plan subscriptions (built 11 Nov 2026, `engine/src/plan-accounts.ts`, Models page « Claude plan » / « ChatGPT plan »)
+The user's decisions (11 Nov 2026): several Claude **and** ChatGPT subscriptions, each with its own name (« Main »,
+« Work »…), sign-in and keychain entry; automatic failover; quotas on the Models page and in the composer.
+- **Table `plan_accounts`** (migration 0020): provider, label, position (= failover order), keychain entry name
+  (`CLAUDE_TOKENS` / `CHATGPT_TOKENS` for the first account — the single sign-in made before 0020 became « Main »
+  with its tokens untouched — `…_TOKENS_<ID>` for the others), sign-in metadata, pause, quota JSON + raw limit
+  headers. Welcome flags and ChatGPT's host id moved to `settings`; `claude_account` / `chatgpt_account` dropped.
+  One Claude/ChatGPT identity can't be signed in to two subscriptions.
+- **Models stay per provider** (`plan-claude-opus-5-5`, `gpt-…`): a call goes to the first signed-in, unpaused
+  subscription in list order. A usage limit (Claude: HTTP 429; ChatGPT: `subscription_sharing_usage_limit_exceeded`)
+  pauses that subscription until its reset (Claude: `retry-after`, else the reset of the `rejected` unified window,
+  else `anthropic-ratelimit-unified-reset`; ChatGPT: `resets_at`/`resets_in_seconds` in the error or `retry-after`,
+  else until Resume), writes a **notification** row (`notifications` table, shown as a system notification by the
+  app) and the same call goes to the next one. Text already streamed is never replayed: the run retries and lands on
+  the next one. **All paused**: the call fails transient with `retryAt` = earliest reset; the dispatcher blocks the
+  card `transient` until then (« retrying at 16:40 » / « Mon 09:00 ») and it restarts by itself.
+- **Quotas**: every Claude plan response's `anthropic-ratelimit-unified-5h-utilization` / `-5h-reset` and `-7d-…`
+  (utilization a fraction, reset unix seconds) and `-status` are stored per subscription; ChatGPT: Codex-style
+  `x-codex-primary/secondary-used-percent` / `-window-minutes` / `-reset-after-seconds` if OpenAI sends them, else
+  the Models page says it reports none and links « Manage usage ». Every limit-looking header is kept raw
+  (`quota_raw`) to check what the providers really send. `model_usage.account_id` records which subscription
+  answered; the composer strip shows that one's « ▮ 62% of 5h » (amber past 80 %, weekly added when past 80 %).
+
+
 ### Local models (built 10 Nov 2026, `engine/src/local.ts`, UI page « Models »)
-The engine manages **Ollama** on its own machine (Can's choice over bundling llama.cpp: already installed, least new
-code). Models come from the **Ollama library only**: Hugging Face search and `hf.co/…` pulls were removed (Can,
+The engine manages **Ollama** on its own machine (the user's choice over bundling llama.cpp: already installed, least new
+code). Models come from the **Ollama library only**: Hugging Face search and `hf.co/…` pulls were removed (the user,
 10 Nov 2026) and the engine refuses such names with that reason. The UI only asks; the engine acts, so it
 works with the window closed and, later, on the VPS for that machine's models.
 - Finds the binary in the usual install paths (GUI apps don't get the shell PATH); offers `brew install ollama` when
@@ -159,19 +191,19 @@ works with the window closed and, later, on the VPS for that machine's models.
 - Autostart (setting, default on): before every call to a model whose base URL is the managed server, the provider
   wrapper in `Models.provider()` starts the server if it's down; with autostart off the call fails with that reason.
 - Downloads by library name (`qwen3:8b`) stream progress over the WebSocket (`local.pull`, summed over layers).
-- **Usage** (Can, 10 Nov 2026; `engine/src/usage.ts`, migration 0014): every model call is a `model_usage` row (model,
+- **Usage** (10 Nov 2026; `engine/src/usage.ts`, migration 0014): every model call is a `model_usage` row (model,
   source, agent, card, conversation, tokens in/out/cached; no foreign keys so totals outlive deletions). `input` is the
   whole prompt: Anthropic's uncached `input_tokens` + cache reads + cache writes. Chat screens show, above the
   composer, the context fill at the latest answer (prompt / model window; amber past 50 %, red past the 70 %
   compaction point) and the chat's tokens, plus « Using ChatGPT plan · Manage usage » on the plan. The Models page
   starts with « Usage »: 30-day totals, tokens per day stacked by source, per-model today/7/30 days. Tokens only, no
   cost (no price table to keep right); ChatGPT plan quota stays in ChatGPT settings (OpenAI exposes no figure).
-- **Model and effort per chat/card** (Can, 10 Nov 2026; migration 0015 `cards.model_id`, `cards.effort`): two quiet
+- **Model and effort per chat/card** (10 Nov 2026; migration 0015 `cards.model_id`, `cards.effort`): two quiet
   pickers above the composer. Empty = the agent's model / the model's default effort. Effort low · medium · high ·
   xhigh · max goes to Claude as `output_config.effort`, to the ChatGPT plan as `reasoning.effort`, to Ollama and other
   OpenAI-compatible servers as `reasoning_effort` (xhigh/max → high). Picking doesn't move a chat up the history; a
   deleted picked model makes the next run fail with that reason. The dispatcher checks the card's model when it has one.
-- **Models page = where models come from** (Can, 10 Nov 2026): « Available to agents » (every Atlas model), ChatGPT
+- **Models page = where models come from** (10 Nov 2026): « Available to agents » (every Atlas model), ChatGPT
   plan, Anthropic accounts, then Ollama (server, installed, download). The Agents page keeps agents, their model
   pick and memory.
 - « Give to agents » creates an Atlas model (`openai_compat`, `<server>/v1`) for an installed Ollama model; a model in
@@ -191,8 +223,11 @@ works with the window closed and, later, on the VPS for that machine's models.
   restart, and check every run completes with a consistent transcript.
 
 ## 7. Kanban and dispatcher
-Statuses: `triage → todo → ready → running → (blocked | review) → done`, plus `archived`.
+Statuses: `triage → todo → ready → running → (blocked | review) → done`, plus `closed` and `archived`.
 - `todo` waits on parents; it moves to `ready` when all parents are `done`.
+- `closed` = cancelled: nothing (more) is done. The user closes from the card; agents with `card_update(status=closed)`.
+  Closing stops the card's work/triage run. Unlike `done` it doesn't satisfy parents: children stay `todo` and say
+  « parent c_x was closed ». Not a delete (the card and its chat stay); setting another status reopens it.
 - The dispatcher starts `ready` cards whose assignee has a free slot (default 1 run per agent, configurable).
 - **No hidden guards.** If a `ready` card isn't starting, the card shows why, in plain words (agent busy with t_x,
   credential cooling down until 14:05, model unreachable). Every reason is computed from the tables, not from a
@@ -204,8 +239,8 @@ Statuses: `triage → todo → ready → running → (blocked | review) → done
 - Failure limit: 2 failed attempts in a row → `blocked/capability` with both errors. Interruptions and provider
   outages don't count.
 - Comments on a running card are delivered to the agent at its next turn.
-- No automatic decomposition: only an agent or Can creates cards.
-- Notifications: only `needs_input`, `capability` blocks and cards Can subscribed to. Not every status change.
+- No automatic decomposition: only an agent or the user creates cards.
+- Notifications: only `needs_input`, `capability` blocks and cards the user subscribed to. Not every status change.
 
 ## 8. Context management
 - The full transcript is never deleted. What's sent to the model is a **view**: system prompt + memory + card + the
@@ -214,6 +249,17 @@ Statuses: `triage → todo → ready → running → (blocked | review) → done
   `conversations.summary` with `summary_upto_seq`. If the summary call fails: drop the oldest tool **outputs** first
   (replace with « output omitted, n chars, see tool_call #id »), then older assistant text; never drop user messages
   or the card. Retry the summary on the next turn.
+- Built 12 Nov 2026 (card #31): the size is the provider's real input count of the last turn (`last_input_tokens`,
+  `last_input_upto`) + chars/4 of only the messages since; chars/4 alone when there's no reading (new conversation,
+  view just changed). Past 70 % the runner first **prunes** (no model call): outside a protected tail of 25 % of the
+  window, big tool outputs/inputs become « omitted … history_search can read it (seq n) » stubs and identical outputs
+  are deduped (`prune_upto_seq`, view only). A prune breaks the prompt cache, so it happens only if it reclaims ≥ 5 % of
+  the window; if the view is then under 50 % no summary is made, else the summary runs as above.
+- Prompt caching (Anthropic): the system prompt is a stable prefix (role, rules, workspace, team, project files) with a
+  breakpoint, then a volatile tail (memory, card, date); breakpoints on the last two user messages too (3 of 4). None
+  on one-shot calls (title, summary, model test).
+- `todo_write(todos)`: the agent's full todo list each call, stored on the conversation; when its last call is folded
+  into the summary, the current list is re-injected after the summary. The UI shows the call as a checklist.
 - A tool `history_search(query)` lets the agent read omitted parts of its own transcript.
 - Memory: per-agent and shared notes, small (a few KB), always in the system prompt. Agents edit them through a tool.
 
@@ -226,9 +272,11 @@ Statuses: `triage → todo → ready → running → (blocked | review) → done
 ## 10. Tools (v1)
 | Tool | Notes |
 |---|---|
-| `read_file`, `write_file`, `edit_file`, `list_files`, `search_files` | inside the agent's workdir unless allowed outside |
-| `shell` | runs in the workdir, timeout, output capped and stored as a blob |
-| `web_fetch`, `web_search` | fetch → markdown; search through a configured API |
+| `read_file`, `write_file`, `edit_file`, `list_files` | inside the agent's workdir. read_file: `N\|text` lines, `offset`/`limit` (2000 lines), ≤100k chars cut on a line boundary with a « use offset= » footer, binary refused. Edits (edit_file, write_file over an existing file) need a read_file of the file in this conversation and refuse if it changed on disk since (mtime+size per conversation, in memory). edit_file: `replace_all`; on 0 exact hits, line-trimmed then whitespace-normalized matching (reported). Writes to one file run one at a time |
+| `grep`, `glob` | ripgrep when `rg` is installed (PATH, Homebrew), else JS; skip node_modules/.git. glob newest first |
+| `shell` | runs in the workdir, timeout; output over 30k chars: the tail + full output saved under `<data>/outputs/<agent>/` (pruned after 7 days, readable with read_file/grep by absolute path). `background: true` → id, log file, row in `background_processes` (migration 0024, leased like runs: a dead engine's processes are killed and marked `lost` at start); `shell_output(id, offset?)`, `shell_kill(id)`; when one ends by itself (or is lost) a system note with exit code + output tail is posted and the agent woken |
+| `web_fetch` | HTML → light markdown, 15k chars head+tail by default, full text saved to outputs |
+| `web_search` | provider-native only: Anthropic's server tool `web_search_20250305` (API key and Claude plan, only against api.anthropic.com); `server_tool_use` / `web_search_tool_result` blocks are stored verbatim, replayed, shown in the UI; `pause_turn` continues the answer. ChatGPT plan and local models: none offered (ChatGPT's Responses web_search not verified on the plan route) |
 | `card_*` | create, comment, block, complete, request_review, list, show |
 | `message_agent` | posts into the other agent's chat; the reply arrives as a message later |
 | `canvas_read`, `canvas_write` | read the scene as JSON; add/update/delete elements |
@@ -236,37 +284,62 @@ Statuses: `triage → todo → ready → running → (blocked | review) → done
 | `memory_edit` | |
 | `ask_user` | in chat runs only; on cards use `card_block(needs_input)` |
 
+Project instructions: `AGENTS.md` and `CLAUDE.md` at the root of the agent's workdir go in the system prompt
+(« # Project instructions », each labelled with its path, capped at 20k chars with a note), before the card and the date.
+
 MCP client support (stdio and HTTP) comes after v1, so existing servers (PlanetScale, Stripe, Cloudflare) plug in
 without new code.
 
 Permissions per agent: allowed tools, allowed paths, shell on/off, network on/off. Dangerous shell patterns
-(`rm -rf` outside the workdir, `git push --force`, writing to `~/.ssh`) require Can's approval in the UI.
+(`rm -rf` outside the workdir, `git push --force`, writing to `~/.ssh`) require the user's approval in the UI.
 
 ## 11. Canvas
 - `@excalidraw/excalidraw` React component; scene stored as JSON in `canvases`, versioned (each save bumps
   `version`; keep the last 50).
 - Live sync: the UI sends scene updates over the WebSocket; the engine broadcasts them; agents' `canvas_write`
-  goes through the same path, so Can sees agent edits appear.
+  goes through the same path, so the user sees agent edits appear.
 - Agent tools work on a simplified element format (rectangle, ellipse, arrow, text, frame with x, y, w, h, label,
   links between elements) converted to Excalidraw elements in the engine, so a model doesn't have to produce raw
   Excalidraw JSON.
 - A card can link a canvas; a canvas element can link a card.
+- A canvas is also one **document** type, the *whiteboard*: it opens in a chat's side panel like a markdown doc,
+  an html page or a diagram (§16 « Side panel »).
 
 ## 12. UI and API
 - Screens: **Chat** (agent list + conversation, streaming, tool calls collapsible), **Board** (columns, card detail with
-  events, runs, transcript link, « why not running »), **Canvas**, **Schedules**, **Agents** (prompt, model, tools,
-  memory), **Settings** (models, credentials, usage), **Logs**.
+  events, runs, transcript link, « why not running »), **Canvas**, **Schedules**, **Settings**, **Logs**.
+- Settings (restructured 12 Nov 2026): one plain « Settings » item at the bottom of the sidebar opens `#/settings/<page>`
+  (the last one visited). Inside the sheet a second navigation (200px, same nav-item style, small group titles,
+  counts on the right) lists the pages; under 900px it collapses to a select at the top. Top bar: « Settings » + page.
+  - Team: **Agents** (`agents`, count) · **Shared memory** (`memory`) · **Board & triage** (`board`, triage agent).
+  - Models: **Subscriptions** (`subscriptions`: Claude plan and ChatGPT plan accounts with quota bars; drag the grip,
+    or arrow keys on it, to set the failover order via `PUT /api/plan-accounts/order`) · **API keys** (`api-keys`,
+    Anthropic accounts) · **Local** (`local`, Ollama server, installed models, download) · **Model list**
+    (`model-list`, the models agents can pick).
+  - Insight: **Usage** (`usage`, 30 days, per model). App: **Appearance** (`appearance`, theme) · **Voice**
+    (`voice`, desktop Mac app only, shown when `About.voice`: on/off, voice + Test voice, wake sensitivity; turning on
+    downloads the models resumably into userData/voice-models and asks for the mic; `engine/src/voice.ts`,
+    `GET/PATCH /api/voice`, settings keys `voice_*`) · **About & data**
+    (`about`: version, desktop or server, data folder, from `GET /api/about`).
+  Old hashes are rewritten in place: `#/agents` → agents, `#/models` and `#/settings/models` → subscriptions,
+  `#/settings/canvas` → appearance, unknown → agents (`packages/ui/src/settingsPages.ts`). Engine error messages
+  point to « Settings → <page> ».
+- Side panel beside a direct chat (documents in tabs, §16 « Side panel »); `#/library/<id>` shows one document in the Library viewer (old `#/doc/<id>` and `#/canvas/<id>` links redirect there).
+  Documents API: `GET /api/documents[?card=]`, `GET /api/documents/:id[?version=]`, `GET …/:id/versions`,
+  `POST …/:id/restore/:version`; per chat `GET /api/chats/:id/panel`, `POST …/panel/{open,close,focus,seen}`;
+  `POST /api/cards/:id/messages` takes an optional `ref {docId, version, section}`. Events `document.updated`,
+  `panel.updated`.
 - API: REST for reads and commands (`/api/cards`, `/api/agents`, `/api/runs`…), one WebSocket for events
   (`run.delta`, `run.status`, `card.updated`, `canvas.patch`, `notification`). Types and zod schemas in
   `packages/shared`.
 - Server mode auth: one user, a passkey or a long random token set at install, cookie session; listen on
   localhost behind Caddy/Tailscale. Never expose the engine port directly.
-- Direct chat (built 10 Nov 2026, « Chat » page): Can talks to any agent without a card. One chat per agent, stored
+- Direct chat (built 10 Nov 2026, « Chat » page): the user talks to any agent without a card. One chat per agent, stored
   as a card on the `direct` board (`cards.board`, unused until then) so runs, leases, streaming and recovery are the
   card machinery unchanged; it stays `done`, never shows on the board or in `card_list`, and refuses status/assignee/
   parent changes and blocks. The agent's system prompt says it's a direct chat; work to track becomes cards via
   `card_create`. Deleting an agent archives its chat.
-- Look (built 10 Nov 2026, `packages/ui/src/styles.css`): a "framed sheet" — sidebar and 48px top bar on one tinted
+- Look (built 10 Nov 2026; **superseded by « Design refresh: Linear direction » in §16**, `packages/ui/src/styles.css`): a "framed sheet" — sidebar and 48px top bar on one tinted
   frame, the work on a sheet inset 8px with a 1px edge and 16px corners, no shadows at rest, no gradients. One accent,
   sea teal, on running work, focus and the mark; status colours only on status. IBM Plex Sans/Mono bundled with the
   app (no font CDN). Three themes — **light**, **gray** (soft neutral greys for long sessions) and **dark** (true
@@ -280,7 +353,7 @@ Telegram bot (notifications + answering `needs_input`), MCP client, browser auto
 image input, cost dashboards, export/import of agents.
 
 ## 14. Build order
-Each step ends with something Can can use.
+Each step ends with something the user can use.
 1. **Skeleton**: monorepo, engine with SQLite + migrations, UI shell, Electron wrapper, `npm run dev` and `desktop`.
 2. **One agent, chat**: Anthropic provider, agent loop, file + shell tools, streaming chat in the UI, transcript
    stored. Fake provider for tests.
@@ -307,20 +380,20 @@ prevents it:
 | A profile's default model pointed at a local model that wasn't loaded; its cards crashed with « model not found ». | Model validation at save and before runs; no silent fallback (§5). |
 | The context summarizer failed and a deterministic fallback lost most of the conversation's detail. | Transcript never deleted; summary is a view; degrade by dropping tool outputs first (§8). |
 | An automatic decomposer created child cards with odd parents. | No automatic decomposition (§7). |
-| Telegram pinged Can on every status change. | Notify only on questions, hard blocks and subscriptions (§7). |
+| Telegram pinged the user on every status change. | Notify only on questions, hard blocks and subscriptions (§7). |
 | Rate limits (429) across shared accounts stalled agents. | Credential pool with cooldowns and visible reset times (§5). |
 | ~80 state modules for sessions, locks and repairs. | Keep the store small; one transaction per change; delete code rather than add repair paths (CLAUDE.md rule 1). |
 
-## 16. Decisions from Can (9 Nov 2026)
+## 16. Decisions (9 Nov 2026)
 These override the sections above where they differ.
-- **Triage agent.** Can drops raw ideas in `triage`. A designated triage agent (setting, default atlas) picks every
+- **Triage agent.** The user drops raw ideas in `triage`. A designated triage agent (setting, default atlas) picks every
   `triage` card, rewrites title/body, splits it into cards if needed, sets assignee, priority and parents, then moves
   each to `todo` (has an open blocker/parent) or `ready`. This is the only « decomposition », and it's done by an
   agent through `card_*` tools (§7 stays true: no hidden automatic splitting).
 - **The card chat is the agent's conversation.** Each card has one `conversation`; its transcript (assistant text,
-  tool calls, results) streams live in the card panel. Can types in the same panel: the message is appended as a
+  tool calls, results) streams live in the card panel. The user types in the same panel: the message is appended as a
   `user` message and delivered at the agent's next turn (or starts a run if the card is idle). No separate
-  « comments » channel for Can.
+  « comments » channel for the user.
 - **Canvas = whiteboard + live renders, one surface.** A canvas holds nodes of pluggable kinds, each a small
   renderer module registered in the UI (`packages/ui/src/canvas/renderers/*`):
   - `drawing`: Excalidraw scene (system design, diagrams),
@@ -329,17 +402,17 @@ These override the sections above where they differ.
   - `markdown`: an explanation block.
   Nodes are placed and resized on an infinite board. Agents use `canvas_read` / `canvas_write` on the node list.
   Adding a kind = one renderer file + one entry in the shared zod union; nothing else (the one place where a
-  registry is warranted, since Can asked for it).
+  registry is warranted, since the user asked for it).
 - **Name**: the app is **Atlas** (repo `csoylu/atlas`, folder `~/Desktop/perso/atlas`, env prefix `ATLAS_`).
   The lead agent is also called atlas; in the UI agents always show as `@atlas`.
 - **How runs end** (built in step 5): run kinds `triage` / `work` / `chat`. A work run that stops without
   `card_complete` / `card_request_review` / `card_block` blocks the card (`needs_input`, its last message as the
   question) instead of retrying in a loop. A failed run blocks it (`transient` with a retry time for 429/5xx,
-  `capability` otherwise). A failed triage waits until Can writes or presses Retry. Can's message on a blocked or
+  `capability` otherwise). A failed triage waits until the user writes or presses Retry. The user's message on a blocked or
   review card puts it back to `ready`; elsewhere the agent replies in chat. Every start writes a `system` note
   in the chat saying why the agent started.
 - **Canvas details** (built in step 9): one versioned JSON document per canvas (last 50 versions, restorable).
-  The UI saves with optimistic versions and, on conflict, merges (server nodes + Can's changed nodes − his deleted
+  The UI saves with optimistic versions and, on conflict, merges (server nodes + the user's changed nodes − their deleted
   ones); agents apply node ops on the latest version (no conflicts). Drawings: agents write `sketch` elements,
   converted in the UI with Excalidraw's skeleton API (arrows laid out between the boxes they join, colours adjusted
   for the dark theme's inversion); once edited in the full-screen editor a drawing stores Excalidraw elements and
@@ -351,12 +424,12 @@ These override the sections above where they differ.
   Past 70 % the runner folds the oldest messages into `conversations.summary` with the agent's own model, cutting only
   before an assistant message so tool calls and results stay paired, folding enough to leave about half the budget
   free, a bounded chunk per call. If the summary call fails, the view drops old tool outputs, then old tool inputs,
-  then old assistant text, never Can's words or the newest two turns, and the summary is retried at the next turn
+  then old assistant text, never the user's words or the newest two turns, and the summary is retried at the next turn
   (event `compaction_failed` on the card). Agents read anything left out with `history_search` (query or `#seq`).
 - **Schedules** (built in step 7, rebuilt in 10): a schedule gives an agent a prompt on a cron (in its time zone,
   default the engine's) or once at a time. Each run either creates a new dated card (ready, assigned), or posts the
   prompt on the schedule's own card and reopens it (done/todo → ready; running: read at the next turn; blocked or in
-  review: waits for Can), so a recurring job keeps its history in one conversation. A firing claims its slot
+  review: waits for the user), so a recurring job keeps its history in one conversation. A firing claims its slot
   (compare-and-set on `next_run_at`) in the same transaction as the card it touches: no double fire across restarts;
   missed slots fire once at start with a note. A failing schedule records `last_error` and moves to its next slot.
   Agents have `schedule_list` / `schedule_create` / `schedule_delete`. UI: presets (weekdays/day/week/hour) or raw
@@ -366,11 +439,166 @@ These override the sections above where they differ.
   with a key derived from the password, cookie HttpOnly + SameSite=Strict (+ Secure behind HTTPS via the proxy).
   5 wrong passwords lock the client out for a minute, doubling. Without a password the engine refuses non-loopback
   hosts. In every mode, browser requests from another site (Origin) and non-loopback Host names (DNS rebinding) are
-  refused: localhost is reachable from any page Can opens. Desktop and `npm run dev` have no login.
+  refused: localhost is reachable from any page the user opens. Desktop and `npm run dev` have no login.
 
-- **Atlas will be public** (Can, 10 Nov 2026): the repo becomes open source. Keep secrets out of it (they already are:
-  keychain/env only) and write docs for someone who isn't Can.
+- **Design before code** (11 Nov 2026): the harness prompt tells every agent to ask the open questions, show a
+  canvas design (html mockup / drawing) and wait for the user's OK before non-trivial work. `canvas_write` takes
+  `show: [node ids]`; the chat renders those nodes inline (`ui/src/canvas/InlineCanvas.tsx`): view only, live,
+  click to expand (~80 % height), drag to pan, ctrl/⌘ + wheel to zoom, « Open canvas » for the full page.
+  The model/effort/context/tokens menu is one button on the right above the composer (`RunMenu` in `Usage.tsx`).
 
-## 17. Open questions for Can
+- **Atlas will be public** (10 Nov 2026): the repo becomes open source. Keep secrets out of it (they already are:
+  keychain/env only) and write docs for someone who isn't the original author.
+- **The user, not « Can »** (12 Nov 2026, for the open-source release): the human's id is `user` (messages, actors;
+  migration 0021 renamed `can`). First launch asks their **name** and a required one-sentence **description** (≤ 200
+  chars: age, job, background), stored in `settings` (`user_name`, `user_about`), editable in Settings → About you,
+  never by agents. Every system prompt names the user (no pronouns) and gives the description so agents adapt their
+  level. Tool descriptions say « the user ».
+- **System prompt layout** (`runner.ts systemPrompt`, 12 Nov 2026): identity and role · the user · this conversation
+  (direct chat / card chat / work / triage) · how to work · workspace · team · memory · current card · today's date
+  (date only, so the prompt stays cacheable all day).
+- **Chat names** (12 Nov 2026): a direct chat is named from the user's first message, then renamed once by its model at
+  the user's 3rd message (3-6 words, in the background; the UI shows « Generating chat name… »).
+
+- **Card lifecycle from a chat** (12 Nov 2026, mockup `mockups/workflow.html` scenarios 1–3): a card created with
+  `card_create` in a direct chat remembers it (`cards.origin_card`, migration 0022). When such a card becomes `done`,
+  `review`, `closed`, is stopped, or blocks with `needs_input` / `capability`, a `system` message is posted in that chat
+  (« ✓ Card “X” (c_x) finished: <summary> », « … closed by @atlas », « You stopped “X” », « … needs your OK: <question> »)
+  together with a `card_reports` outbox row, in the same transaction as the status change: exactly once per
+  transition, crash or not. The dispatcher starts a chat run for each pending report (the agent tells the user in its own
+  words) and marks it delivered once a run since the report has ended or the chat owes nothing; an interrupted chat run
+  resumes through §6 recovery, so there is never a second one. Transient and dependency blocks are not reported.
+  **Stop** (`POST /api/cards/:id/stop`, no confirmation) aborts the run at once: the model call and every running
+  command's process group are killed, open tool calls end `error`, and the next run gets the usual synthetic
+  « interrupted » result. A stopped work card blocks (`needs_input`, « Stopped by you ») and writing on it resumes it.
+
+- **Ticket modal** (12 Nov 2026, mockup `mockups/workflow.html` scenario 3): every card opens in one centred
+  `CardModal` (min(680px, 94vw) × min(88vh, 980px), full screen under 760px) over whatever view is showing, from the
+  Board, schedules, canvases and card ids in chat system lines. It lives in the hash (`?card=<id>` on any route), so
+  reloads keep it. Header: live status pill (« stopped by you » after Stop), assignee, origin chat (clickable), editable
+  title; body: description, parents/children, activity (tool calls as quiet lines, dangerous shell commands and
+  ssh/system-path writes in red, `cardModal.ts isDangerous`); then block/review notices, the composer, and the footer
+  ■ Stop (while running, no confirm) · Close card · Delete. Esc / scrim click close; focus is trapped inside.
+  Direct chats keep their full-height chat pane (`CardPanel`).
+
+- **Chat pins** (12 Nov 2026, same mockup, scenarios 1–3): the cards a chat created (`originCard`) are pinned at its
+  top-left (`ChatPins`, pure rules in `chatPins.ts`): status dot (pulsing while running), title, live state
+  (« running · 2:14 » from the run's start, « needs your OK », « stopped by you », « done », « closed », « deleted »).
+  Click opens the ticket modal. Done / closed / deleted pins fade out 30 s after finishing (hover or focus pauses the
+  timer); stopped / blocked / review pins stay; any non-running pin can be unpinned (×) until its card changes state.
+  Pins are UI state only: on reopening a chat, only open cards and those finished under 30 s ago are pinned. Layout: a
+  row in the chat's top band (beside the delete button) below 1240px of chat width, a floating 220px column in the left
+  gutter from 1240px (container query) — never over messages or the composer. Report-back system lines
+  (« ✓ Card “X” finished · open ») open their card when clicked.
+
+- **Side panel** (12 Nov 2026, mockup `mockups/workflow.html` scenario 4; like Claude Artifacts / ChatGPT Canvas /
+  Gemini Canvas): agents show their outputs at real size beside the chat instead of pasting long text.
+  - *Documents are files in the agent's workspace* — `docs/*.md` (markdown), `pages/*.html` (html page),
+    `diagrams/*.svg` (diagram) — plus canvases as *whiteboards*. Atlas indexes them (`documents`, migration 0023,
+    `engine/src/documents.ts`) and versions them (`document_versions`, the last 50; whiteboards use the canvas's own
+    versions). The file is the truth: after every `write_file` / `edit_file` / `shell` call the runner re-syncs the
+    agent's doc folders (and indexed files elsewhere); reading the latest version re-syncs too, so edits from outside
+    Atlas show up. Restoring an old version writes it back to the file as a new version. Title: first `# heading`, or
+    `<title>`, or the file name.
+  - *Attached to cards*: a document written or opened during a card's run gets `card_id` (first one wins); the
+    ticket modal lists them under « Documents » with « open on the right » (into the chat the card came from, else the
+    chat on screen, else full size).
+  - *Panel tabs are per direct chat* (`panel_tabs`, at most 8, oldest dropped): who opened it, the section to scroll
+    to, when focused (a newer focus wins the active tab and re-scrolls), and the version the user last saw.
+  - *Agent tools* (`engine/src/docTools.ts`): `panel_open({path | canvas, section?})` — indexes, attaches, opens in
+    the chat's panel (a card's panel = its origin chat; a card without one only indexes and attaches), scrolls to a
+    markdown heading (id or text; unknown → error listing the sections) or an html element id; `panel_close({path |
+    canvas}?)` closes a tab or the panel. The system prompt explains documents when the tools are available.
+  - *UI* (`DocPanel.tsx`, pure rules in `docPanel.ts`): tabs (green dot = changed since seen), version menu (view an
+    old version, restore it), open full, close; « Opened by @atlas · attached to card “X” » (the card opens).
+    Viewers: markdown in a 720px reading column split into sections (h1–h3); html in a sandboxed iframe at real size
+    (served from `/api/files`, old versions via `srcdoc`); svg as an image fit to the width but never with text under
+    11px (then it scrolls sideways); whiteboard = the live inline canvas.
+  - *Ask about this*: hovering a markdown section shows « Ask about this » (always visible on touch); other kinds have
+    one for the whole document. It puts a quote chip « ❝ Doc › Section » in the composer; the message is sent with
+    `ref`, and the engine stores a first text block `❝ Doc › Section` + `(path, doc id vN, section #id)` + the quoted
+    section text, so the agent knows exactly what is meant (this is all the agent sees; no markers are placed on the
+    document). The chat shows that block as a quote line that reopens the section. Sections an agent changed since
+    the user last saw the doc get a « changed » mark (click = seen).
+  - *Responsive*: side by side above 960px (the sidebar shrinks to icons at 901–1280px while the panel is open); an
+    overlay over the chat at 761–960px; full screen at ≤760px. In overlay/full, « ‹ Chat » or « Ask » returns to the
+    chat, and a « Documents · N » button brings the panel back; an agent opening a tab shows it again.
+
+- **Design refresh: Linear direction** (approved 13 Nov 2026, mockup `mockups/linear.html`, `?screen=chat|board|
+  library|inbox|palette`, `&theme=light`). Overrides « Look » in §12 and the Canvas screen of §12/§16.
+  - *Shell*: the sidebar sits on the app background, no border; the work sits on one inset panel (8px margin, 1px
+    hairline, 10px radius). No global top bar: each screen has a 44px header (breadcrumb, view tabs, its actions).
+  - *Type & colour*: Inter (bundled, no CDN) 13px, weights 450/500/600, three text greys, hairline borders as
+    rgba of the text colour. The accent stays sea teal (dark #6cc0d2 on #0b2a31 text, light #1b6c80 on white) on
+    focus, selection, primary buttons, unread and « done ». Status colours only on status icons. Themes: **dark**
+    and **light** (+ Auto); **gray is dropped** (a stored « gray » choice falls back to dark).
+  - *Status icons*: Linear-style circles, one per card status: triage dashed, todo/ready empty, running half-filled
+    yellow, blocked orange with « ! », review half-filled green, done teal with a check, failed/closed red/grey.
+    Cards keep their `#41` numbers (no prefix).
+  - *Sidebar*: workspace row (name, search, new chat) → **Inbox** (badge) · Board · Library · Schedules → **Agents**
+    (spinner while one runs; click = new chat with it) → **Chats** → footer: user, engine dot, settings.
+  - *Board*: columns with status icon + count + « + », dense cards (number, agent avatar, status icon, title,
+    labels, « why blocked » line), header tabs All cards / Needs you / Running, Filter, Display, New card (C).
+  - *Inbox*: list left (380px), detail right. « Needs you » (blocked questions, reviews) pinned on top, answered in
+    place: options as buttons (1–4, recommended highlighted), free reply (R), approve / request changes; the item
+    leaves by itself when the card moves on. « Updates »: card done, run failed (error + Retry), schedule ran,
+    system (plan limit…), unread until opened, E archives, « archive all read ». Badge = unread + needs you.
+    Built on the `notifications` table (+ an archived flag), the engine writes a row on block, review, done, fail.
+    No snooze in v1.
+  - *Library* replaces the Canvas screen: every document (md, html, svg, whiteboard) in one grouped list (pinned,
+    this week, earlier) with type tabs, filters by agent/card/chat, « New whiteboard ». Opening one uses the
+    **shared viewer**, the same component as the chat side panel and the card: tabs, then Preview / Source /
+    History. `#/canvas/<id>` redirects to the Library viewer.
+  - *Chat*: artifacts an agent opens appear as chips in the thread (click = open in panel); card references as
+    status-icon chips; composer with model pill and teal send button.
+  - *Keyboard*: ⌘K palette (artifacts, chats, cards, navigation, actions, scoped to the current screen), C new
+    card, ⌘N new chat, ⌘\ toggle panel, G then B/L/I/S to jump, J/K move in lists, E archive in Inbox.
+  - Build order (one card each, in order): tokens + shell → Board → Inbox → Library + shared viewer → ⌘K + keys.
+  - *Built, step 1 (tokens + shell, 13 Nov 2026)*: tokens and the inset panel in `styles.css` (dark / light only;
+    `theme.ts` `parseTheme` maps « gray » to dark, index.html too); Inter Variable bundled
+    (`@fontsource-variable/inter`), IBM Plex Mono kept for code. Each screen's 44px header is `ScreenHeader.tsx`
+    (App renders breadcrumb + title; a screen portals its own actions in with `<HeaderActions>`: the chat's
+    « Documents · N » and delete live there now, no longer floating over the thread, so chat pins are a plain row
+    above the messages, or the left-gutter column ≥1240px). `StatusIcon.tsx` draws the status circles (used by chat
+    card-reference chips now; Board and pins switch in step 2). Artifacts: a successful `panel_open` tool line renders
+    as a chip (`artifactOf` in `cardModal.ts` reads its result). Not yet: the sidebar's Inbox and Library entries
+    (Canvas stays until step 4), the search button (disabled until ⌘K, step 5).
+    `scripts/ui-check/check.mjs --theme dark|light` previews a theme for the responsive check.
+  - *Built, step 2 (Board, 13 Nov 2026)*: `Board.tsx` + pure helpers in `boardView.ts`. Header (via
+    `<HeaderActions>`): tabs All cards / Needs you (blocked + review) / Running with counts, Filter (agent incl.
+    unassigned, priority), Display (Board | List, « Show empty columns »), New card (C, when no field or modal has the
+    keyboard). Tab, filter and layout persist in localStorage `atlas.board.view`. Columns are 280px; an empty column
+    is a 40px rail (still a drop target), Done and Closed start folded. « + » on Triage / Todo / Ready opens the
+    New card composer (title, description, status, agent, priority → `POST /cards` with all of them). Cards: `#n`,
+    avatar, status icon, title, one « why » line (`whyLine`: block kind + first line of the question, else
+    `waiting`), labels = priority dot and « after #n » (no free labels yet). List layout = grouped rows. Drag between
+    columns (and list groups) moves the card as before. The card modal uses the same tokens: `#n`, status-icon pill,
+    avatar + assignee pill, status pill; chat pins use `StatusIcon` too.
+  - *Built, step 5 (⌘K + keys, 13 Nov 2026)*: `Palette.tsx` (palette + « ? » cheat sheet), pure rules in
+    `palette.ts` (fuzzy matcher: every query word must match, substring > letters in order within a short span;
+    `#12`/`12` jumps to the card; keywords such as path, agent and status match by substring only; sections ordered by
+    best match with a head start for the current screen's sections, `sectionOrder(view)`) and `keys.ts` (`globalKey`:
+    one place for app-wide keys; `isTyping` ignores letters in fields and on a whiteboard; ⌘K works everywhere, other
+    keys not while a modal or the palette is open). App owns one keydown listener: ⌘K, ⌘N, ⌘\ (window event
+    `atlas:toggle-panel`, the chat on screen toggles its panel; a header button hides it too), ?, C (on any screen:
+    goes to the Board and opens New card), G then B/L/I/S (1.5 s), J/K focus the next `[data-row]` in `main` (board
+    cards and list rows, Library rows; ↵ opens). The Inbox keeps its own J/K/E/R/1–4. Palette rows: artifacts (open in
+    the current chat's panel, else in the Library; the chat's own docs first), chats, cards (open the modal), Go to …,
+    Settings pages, New card / chat / chat with @agent, panel, theme, shortcuts. Hints: sidebar search « ⌘K », nav
+    items « G then … », New chat « ⌘N », panel « ⌘\ », kbd on rows. ui-check gained `palette` and `shortcuts` screens.
+- **Menu bar / tray orb** (card #54, 14 Nov 2026, `apps/desktop/src/tray/`). An Electron `Tray` (macOS menu bar,
+  Windows tray), only with the in-process engine (not in `npm run dev`). Icon drawn in code (`icons.ts`, BGRA at 1×/2×,
+  no image files): ring = voice off/starting, ring + pause = listening paused, solid orb = ready, and while awake the
+  orb is sea-teal and animated at 8 fps (halo = listening, turning arc = thinking, bars = speaking); at rest a template
+  image (macOS picks black/white) and no timer. Cards that need Master: the count as menu bar text (macOS) / an orange
+  dot on the icon (Windows). A click opens a menu rebuilt from live state (`model.ts`, pure, tested): status line,
+  Start talking (`VoiceLoop.wakeNow()`: a bare « Hi Atlas »), Voice mode ✓, Pause listening › 1 hour / until
+  tomorrow 8:00 / until I resume (or Resume), Needs you · N (rows → `#/inbox/<card>`: the question or review, max 5 +
+  « All N in the Inbox… »), Running · N (› Open = the ticket, › Stop = `runner.stop`), Open Atlas, Quit. Pause = the
+  setting `voice_paused_until` ('resume' or an ISO time; `VoiceStatus.paused`, `PATCH /api/voice {pause}`): not ready,
+  so the microphone closes and the orb hides; a timer ends a timed pause (re-armed at engine start); turning voice
+  mode on/off clears it. No CPU indicator (Master, 14 Nov 2026).
+
+## 17. Open questions
 - Import Hermes data (agents' prompts, memory, open cards) at step 6, or start clean?
 - Does the VPS run the only engine (desktop app connects to it), or does each machine run its own?

@@ -4,7 +4,7 @@ import type { Bus } from './events.ts';
 
 /**
  * Token usage of every model call (migration 0014), for the chat screens (this conversation, how full its context
- * is) and the Models page (per day, per model, per source). Counted from what each provider reports, so it covers
+ * is) and Settings → Usage (per day, per model, per source). Counted from what each provider reports, so it covers
  * Claude, the ChatGPT plan and local models alike; it is not a bill (OpenAI's plan usage lives in ChatGPT settings).
  */
 export class Usage {
@@ -19,27 +19,29 @@ export class Usage {
     agentId: string | null;
     cardId: string | null;
     conversationId: string | null;
-    kind: 'turn' | 'summary';
+    kind: 'turn' | 'summary' | 'title';
     usage: { input: number; output: number; cached?: number };
+    /** The plan subscription that answered, if any. */
+    accountId?: string | null;
   }): void {
     this.db
       .prepare(
-        `INSERT INTO model_usage (at, model_id, provider, agent_id, card_id, conversation_id, kind, input, output, cached)
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+        `INSERT INTO model_usage (at, model_id, provider, agent_id, card_id, conversation_id, kind, input, output, cached, account_id)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
       )
-      .run(this.now().toISOString(), u.model.id, u.model.provider, u.agentId, u.cardId, u.conversationId, u.kind, u.usage.input, u.usage.output, u.usage.cached ?? 0);
+      .run(this.now().toISOString(), u.model.id, u.model.provider, u.agentId, u.cardId, u.conversationId, u.kind, u.usage.input, u.usage.output, u.usage.cached ?? 0, u.accountId ?? null);
     this.bus.emit({ type: 'usage.recorded', conversationId: u.conversationId, cardId: u.cardId });
   }
 
   /** One conversation: totals, and the prompt size of its latest answer (how full the context was then). */
-  conversation(conversationId: string): Omit<ChatUsage, 'contextWindow'> {
+  conversation(conversationId: string): Omit<ChatUsage, 'contextWindow' | 'plan'> & { lastAccountId: string | null } {
     const t = this.db
       .prepare('SELECT COUNT(*) AS calls, COALESCE(SUM(input), 0) AS input, COALESCE(SUM(output), 0) AS output, COALESCE(SUM(cached), 0) AS cached FROM model_usage WHERE conversation_id = ?')
       .get(conversationId) as { calls: number; input: number; output: number; cached: number };
     const last = this.db
-      .prepare("SELECT input, model_id FROM model_usage WHERE conversation_id = ? AND kind = 'turn' ORDER BY id DESC LIMIT 1")
-      .get(conversationId) as { input: number; model_id: string } | undefined;
-    return { ...t, lastInput: last?.input ?? null, lastModelId: last?.model_id ?? null };
+      .prepare("SELECT input, model_id, account_id FROM model_usage WHERE conversation_id = ? AND kind = 'turn' ORDER BY id DESC LIMIT 1")
+      .get(conversationId) as { input: number; model_id: string; account_id: string | null } | undefined;
+    return { ...t, lastInput: last?.input ?? null, lastModelId: last?.model_id ?? null, lastAccountId: last?.account_id ?? null };
   }
 
   /** The last `days` days (local dates, today included): per day and source, per model, and totals. */

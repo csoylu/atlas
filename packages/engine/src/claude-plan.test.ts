@@ -5,7 +5,8 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import type { ClaudePlanStatus } from '@atlas/shared';
 import { startEngine, type Engine } from './index.ts';
-import { CLAUDE_CODE_CLIENT_ID, resetIn } from './claude-plan.ts';
+import { CLAUDE_CODE_CLIENT_ID } from './claude-plan.ts';
+import { claudeLimitUntil, claudeQuota } from './plan-accounts.ts';
 
 class MemoryStore {
   label = 'test keychain';
@@ -29,12 +30,12 @@ const SETTINGS = {
   ATLAS_CLAUDE_HEADERS: '{"anthropic-beta":"atlas-approved-2026-11"}',
 };
 
-const sse = (events: unknown[]) =>
+const sseWith = (extra: Record<string, string>, events: unknown[]) =>
   new Response(events.map((e) => `event: ${(e as { type: string }).type}\ndata: ${JSON.stringify(e)}\n\n`).join(''), {
-    headers: { 'content-type': 'text/event-stream' },
+    headers: { 'content-type': 'text/event-stream', ...extra },
   });
-const answer = (text: string) =>
-  sse([
+const answer = (text: string, extra: Record<string, string> = {}) =>
+  sseWith(extra, [
     { type: 'message_start', message: { id: 'm1', type: 'message', role: 'assistant', model: 'claude-x', content: [], stop_reason: null, usage: { input_tokens: 10, output_tokens: 0 } } },
     { type: 'content_block_start', index: 0, content_block: { type: 'text', text: '' } },
     { type: 'content_block_delta', index: 0, delta: { type: 'text_delta', text } },
@@ -49,7 +50,7 @@ function fakeAnthropic() {
   let n = 0;
   const o = {
     seen,
-    messages: [] as (() => Response)[],
+    messages: [] as ((h: Headers) => Response)[],
     refreshFails: null as string | null,
     fetch: (async (input: string | URL | Request, init?: RequestInit) => {
       const url = String(input instanceof Request ? input.url : input);
@@ -62,12 +63,13 @@ function fakeAnthropic() {
           return Response.json({ error: 'invalid_client' }, { status: 401 });
         if (form.get('grant_type') === 'refresh_token' && o.refreshFails) return Response.json({ error: o.refreshFails }, { status: 400 });
         n++;
-        return Response.json({ access_token: `at${n}`, refresh_token: `rt${n}`, expires_in: 3600, scope: SETTINGS.ATLAS_CLAUDE_SCOPES, account: { email_address: 'can@datinel.com' } });
+        const email = form.get('grant_type') === 'authorization_code' && n > 1 ? `user${n}@example.com` : 'user@example.com';
+        return Response.json({ access_token: `at${n}`, refresh_token: `rt${n}`, expires_in: 3600, scope: SETTINGS.ATLAS_CLAUDE_SCOPES, account: { email_address: email } });
       }
       const body = init?.body ? (JSON.parse(String(init.body)) as Record<string, unknown>) : undefined;
       seen.push({ url, headers, body });
       if (url.startsWith('https://api.anthropic.com/v1/models') || url.startsWith(API + '/v1/models')) return Response.json({ data: [{ id: 'claude-opus-5', display_name: 'Claude Opus 5' }] });
-      if (url.startsWith('https://api.anthropic.com/v1/messages') || url.startsWith(API + '/v1/messages')) return (o.messages.length > 1 ? o.messages.shift()! : o.messages[0]!)();
+      if (url.startsWith('https://api.anthropic.com/v1/messages') || url.startsWith(API + '/v1/messages')) return (o.messages.length > 1 ? o.messages.shift()! : o.messages[0]!)(headers);
       return new Response('not found', { status: 404 });
     }) as typeof fetch,
   };
@@ -80,8 +82,8 @@ afterEach(async () => {
   engine = undefined;
 });
 
-async function setup(env: Record<string, string> = SETTINGS) {
-  const clock = { t: Date.parse('2026-11-10T12:00:00Z') };
+async function setup(env: Record<string, string> = SETTINGS, o: { dispatch?: boolean; t?: number } = {}) {
+  const clock = { t: o.t ?? Date.parse('2026-11-10T12:00:00Z') };
   const an = fakeAnthropic();
   an.messages = [() => answer('Hello from the plan.')];
   const secrets = new MemoryStore();
@@ -90,7 +92,7 @@ async function setup(env: Record<string, string> = SETTINGS) {
     dataDir: mkdtempSync(join(tmpdir(), 'atlas-')),
     port: 0,
     secrets,
-    dispatch: false,
+    dispatch: o.dispatch ?? false,
     env: { ...env },
     claude: { fetch: an.fetch, now: () => clock.t },
   });
@@ -178,7 +180,7 @@ describe('Claude plan (Atlas’s own approved OAuth client)', () => {
     expect(createHash('sha256').update(grant.form!.get('code_verifier')!).digest('base64url')).toBe(q.get('code_challenge'));
     expect(grant.form!.get('redirect_uri')).toBe(q.get('redirect_uri'));
 
-    expect(await status()).toMatchObject({ signedIn: true, email: 'can@datinel.com', showWelcome: true, pending: false });
+    expect(await status()).toMatchObject({ signedIn: true, email: 'user@example.com', showWelcome: true, pending: false });
     expect(JSON.parse(secrets.get('CLAUDE_TOKENS')!)).toEqual({ access: 'at1', refresh: 'rt1' });
     // Tokens never leave the keychain: not in the secrets list, not in the engine env.
     expect(((await (await fetch(u + '/secrets')).json()) as { names: string[] }).names).not.toContain('CLAUDE_TOKENS');
@@ -214,10 +216,12 @@ describe('Claude plan (Atlas’s own approved OAuth client)', () => {
     expect(JSON.parse(secrets.get('CLAUDE_TOKENS')!)).toEqual({ access: 'at2', refresh: 'rt2' });
 
     an.messages = [() => Response.json({ type: 'error', error: { type: 'rate_limit_error', message: 'limit' } }, { status: 429, headers: { 'retry-after': '120' } })];
-    await expect(call()).rejects.toThrow(/limit reached/);
+    const err = (await call().then(() => null, (e: unknown) => e)) as { message: string; transient: boolean; retryAt?: string };
+    expect(err.message).toMatch(/every Claude subscription reached its usage limit/);
+    expect(err).toMatchObject({ transient: true, retryAt: new Date(clock.t + 120_000).toISOString() });
     const paused = await status();
     expect(Date.parse(paused.pausedUntil!)).toBe(clock.t + 120_000);
-    expect(() => engine!.models.provider('opus')).toThrow(/paused until/);
+    expect(() => engine!.models.provider('opus')).toThrow(/work waits until/);
     clock.t += 121_000; // the pause ends by itself
     expect((await status()).pausedUntil).toBeNull();
 
@@ -252,10 +256,147 @@ describe('Claude plan (Atlas’s own approved OAuth client)', () => {
     expect(await status()).toMatchObject({ signedIn: false, pending: false, lastError: 'Claude sign-in was declined.' });
   });
 
-  it('pause length: retry-after, else the latest reset header, else a minute', () => {
+  it('pause length: retry-after, else the rejected unified window, else the latest reset header, else a minute', () => {
     const now = Date.parse('2026-11-10T12:00:00Z');
-    expect(resetIn(new Headers({ 'retry-after': '30' }), now)).toBe(30_000);
-    expect(resetIn(new Headers({ 'anthropic-ratelimit-tokens-reset': '2026-11-10T12:05:00Z', 'anthropic-ratelimit-requests-reset': '2026-11-10T12:01:00Z' }), now)).toBe(300_000);
-    expect(resetIn(null, now)).toBe(60_000);
+    const s = (iso: string) => String(Date.parse(iso) / 1000);
+    expect(claudeLimitUntil(new Headers({ 'retry-after': '30' }), now) - now).toBe(30_000);
+    expect(claudeLimitUntil(new Headers({ 'anthropic-ratelimit-tokens-reset': '2026-11-10T12:05:00Z', 'anthropic-ratelimit-requests-reset': '2026-11-10T12:01:00Z' }), now) - now).toBe(300_000);
+    // 5 h window rejected, the weekly one not: pause until the 5 h reset, not the week's.
+    const h = new Headers({
+      'anthropic-ratelimit-unified-5h-status': 'rejected',
+      'anthropic-ratelimit-unified-5h-reset': s('2026-11-10T14:00:00Z'),
+      'anthropic-ratelimit-unified-7d-status': 'allowed',
+      'anthropic-ratelimit-unified-7d-reset': s('2026-11-16T09:00:00Z'),
+    });
+    expect(new Date(claudeLimitUntil(h, now)).toISOString()).toBe('2026-11-10T14:00:00.000Z');
+    expect(claudeLimitUntil(null, now) - now).toBe(60_000);
+  });
+
+  it('reads the 5-hour and weekly windows from the unified headers', () => {
+    const now = Date.parse('2026-11-10T12:00:00Z');
+    const q = claudeQuota(
+      new Headers({
+        'anthropic-ratelimit-unified-status': 'allowed',
+        'anthropic-ratelimit-unified-5h-utilization': '0.62',
+        'anthropic-ratelimit-unified-5h-reset': String(Date.parse('2026-11-10T16:40:00Z') / 1000),
+        'anthropic-ratelimit-unified-7d-utilization': '0.81',
+        'anthropic-ratelimit-unified-7d-reset': String(Date.parse('2026-11-16T09:00:00Z') / 1000),
+      }),
+      now,
+    );
+    expect(q).toEqual({
+      fiveHour: { usedPct: 62, resetsAt: '2026-11-10T16:40:00.000Z' },
+      week: { usedPct: 81, resetsAt: '2026-11-16T09:00:00.000Z' },
+      status: 'allowed',
+      at: '2026-11-10T12:00:00.000Z',
+    });
+    expect(claudeQuota(new Headers({ 'content-type': 'text/event-stream' }), now)).toBeNull();
+  });
+
+  it('fails over to the next subscription on a usage limit, notifies the user, and waits for the earliest reset when all are out', async () => {
+    const t0 = Math.floor(Date.now() / 1000) * 1000;
+    const { an, u, status, clock } = await setup({}, { dispatch: true, t: t0 });
+    const j = { 'content-type': 'application/json' };
+    const complete = async (accountId?: string) => {
+      const { url } = (await (await fetch(u + '/claude/login', { method: 'POST', headers: j, body: JSON.stringify({ accountId }) })).json()) as { url: string };
+      const state = new URL(url).searchParams.get('state');
+      const res = await fetch(u + '/claude/complete', { method: 'POST', headers: j, body: JSON.stringify({ code: 'c#' + state }) });
+      expect(res.status).toBe(200);
+    };
+    await complete(); // the first sign-in makes « Main »
+    const created = (await (await fetch(u + '/plan-accounts', { method: 'POST', headers: j, body: JSON.stringify({ provider: 'claude_plan', label: 'Work' }) })).json()) as ClaudePlanStatus;
+    const work = created.accounts.find((a) => a.label === 'Work')!;
+    await complete(work.id);
+    const s0 = await status();
+    expect(s0.accounts.map((a) => [a.label, a.signedIn, a.email])).toEqual([
+      ['Main', true, 'user@example.com'],
+      ['Work', true, 'user2@example.com'],
+    ]);
+    const main = s0.accounts[0]!;
+    engine!.models.create({ id: 'opus', provider: 'claude_plan', name: 'claude-opus-5' });
+    engine!.agents.update('atlas', { modelId: 'opus' });
+
+    const secs = (ms: number) => String(Math.floor(ms / 1000));
+    const mainReset = clock.t + 2 * 3600_000;
+    const limited = (reset: number) => () =>
+      Response.json({ type: 'error', error: { type: 'rate_limit_error', message: 'usage limit' } }, {
+        status: 429,
+        headers: {
+          'anthropic-ratelimit-unified-status': 'rejected',
+          'anthropic-ratelimit-unified-5h-status': 'rejected',
+          'anthropic-ratelimit-unified-5h-utilization': '1.0',
+          'anthropic-ratelimit-unified-5h-reset': secs(reset),
+          'anthropic-ratelimit-unified-7d-utilization': '0.4',
+          'anthropic-ratelimit-unified-7d-reset': secs(clock.t + 5 * 86_400_000),
+        },
+      });
+    // Main (token at1) is out; Work (at2) answers and reports its windows.
+    an.messages = [
+      (h) =>
+        h.get('authorization') === 'Bearer at1'
+          ? limited(mainReset)()
+          : answer('From Work.', {
+              'anthropic-ratelimit-unified-status': 'allowed',
+              'anthropic-ratelimit-unified-5h-utilization': '0.62',
+              'anthropic-ratelimit-unified-5h-reset': secs(clock.t + 3600_000),
+              'anthropic-ratelimit-unified-7d-utilization': '0.81',
+              'anthropic-ratelimit-unified-7d-reset': secs(clock.t + 4 * 86_400_000),
+            }),
+    ];
+    const chat = (await (await fetch(u + '/agents/atlas/chats', { method: 'POST' })).json()) as { id: string };
+    await fetch(u + `/cards/${chat.id}/messages`, { method: 'POST', headers: j, body: JSON.stringify({ text: 'hi' }) });
+    await expect.poll(() => engine!.kanban.messages(chat.id).find((m) => m.author === 'atlas')?.content, { timeout: 5000 }).toEqual([{ type: 'text', text: 'From Work.' }]);
+    const auths = an.seen.filter((r) => r.url.includes('/v1/messages')).map((r) => r.headers.get('authorization'));
+    expect(auths).toEqual(['Bearer at1', 'Bearer at2']);
+
+    expect(engine!.notifications.list()).toMatchObject([{ kind: 'plan.switched', title: 'Claude · Main reached its usage limit', body: expect.stringContaining('Work moved to Work') }]);
+    const s1 = await status();
+    expect(s1.accounts[0]).toMatchObject({ id: main.id, paused: true, pausedUntil: new Date(mainReset).toISOString(), quota: { fiveHour: { usedPct: 100 }, status: 'rejected' } });
+    expect(s1.accounts[1]).toMatchObject({ paused: false, quota: { fiveHour: { usedPct: 62 }, week: { usedPct: 81 }, status: 'allowed' } });
+    expect(s1.pausedUntil).toBeNull();
+    // The composer's gauge: the subscription that answered this chat, with its windows.
+    const usage = (await (await fetch(u + `/cards/${chat.id}/usage`)).json()) as { plan: { label: string; quota: { fiveHour: { usedPct: number } } } };
+    expect(usage.plan).toMatchObject({ label: 'Work', quota: { fiveHour: { usedPct: 62 } } });
+
+    // Work runs out too: the card waits until the earliest reset (Work's, before Main's) and shows the time.
+    const workReset = clock.t + 3600_000;
+    an.messages = [limited(workReset)];
+    const card = engine!.kanban.create({ title: 'Board work', status: 'ready', assignee: 'atlas' }, 'user');
+    await expect.poll(() => engine!.kanban.get(card.id).status, { timeout: 5000 }).toBe('blocked');
+    const blocked = engine!.kanban.get(card.id);
+    expect(blocked.block).toMatchObject({ kind: 'transient', until: new Date(workReset).toISOString() });
+    expect(blocked.block!.reason).toMatch(/every Claude subscription reached its usage limit \(Main, Work\); work waits until/);
+    expect(blocked.waiting).toMatch(/^retrying at /);
+    expect(engine!.notifications.list()[0]).toMatchObject({ kind: 'plan.exhausted' });
+    expect((await status()).pausedUntil).toBe(new Date(workReset).toISOString());
+    // Only Work was tried: Main is still paused.
+    expect(an.seen.filter((r) => r.url.includes('/v1/messages')).map((r) => r.headers.get('authorization')).slice(2)).toEqual(['Bearer at2']);
+  });
+
+  it('keeps several subscriptions apart: own keychain entry, order, rename, remove; one account cannot be signed in twice', async () => {
+    const { u, status, secrets } = await setup({});
+    const j = { 'content-type': 'application/json' };
+    const signIn = async (accountId?: string) => {
+      const { url } = (await (await fetch(u + '/claude/login', { method: 'POST', headers: j, body: JSON.stringify({ accountId }) })).json()) as { url: string };
+      return fetch(u + '/claude/complete', { method: 'POST', headers: j, body: JSON.stringify({ code: 'c#' + new URL(url).searchParams.get('state') }) });
+    };
+    await signIn();
+    const add = async (label: string) =>
+      ((await (await fetch(u + '/plan-accounts', { method: 'POST', headers: j, body: JSON.stringify({ provider: 'claude_plan', label }) })).json()) as ClaudePlanStatus).accounts.find((a) => a.label === label)!;
+    const work = await add('Work');
+    expect((await fetch(u + '/plan-accounts', { method: 'POST', headers: j, body: JSON.stringify({ provider: 'claude_plan', label: 'work' }) })).status).toBe(409);
+    expect((await signIn(work.id)).status).toBe(200);
+    expect([...secrets.m.keys()].sort()).toEqual(['CLAUDE_TOKENS', 'CLAUDE_TOKENS_' + work.id.slice(3).toUpperCase()]);
+    // Token entries stay hidden from the key list.
+    expect(((await (await fetch(u + '/secrets')).json()) as { names: string[] }).names).toEqual([]);
+
+    const [main] = (await status()).accounts;
+    await fetch(u + '/plan-accounts/order', { method: 'PUT', headers: j, body: JSON.stringify({ provider: 'claude_plan', ids: [work.id, main!.id] }) });
+    await fetch(u + `/plan-accounts/${main!.id}`, { method: 'PATCH', headers: j, body: JSON.stringify({ label: 'Personal' }) });
+    expect((await status()).accounts.map((a) => a.label)).toEqual(['Work', 'Personal']);
+
+    await fetch(u + `/plan-accounts/${work.id}`, { method: 'DELETE' });
+    expect((await status()).accounts.map((a) => a.label)).toEqual(['Personal']);
+    expect([...secrets.m.keys()]).toEqual(['CLAUDE_TOKENS']);
   });
 });

@@ -1,5 +1,6 @@
 import type { Renderer } from './types.ts';
 import { SANDBOX } from './html.tsx';
+import { isImageUrl } from '../imageUrl.ts';
 
 /**
  * A running app or a served file. Same-origin URLs (agent workspace files under /api/files) stay in an opaque-origin
@@ -20,7 +21,11 @@ export const url: Renderer<'url'> = {
   icon: '⧉',
   size: [960, 640],
   create: () => ({ url: 'http://localhost:5174' }),
-  View: ({ node, interactive }) => (
+  View: ({ node, interactive }) =>
+    isImageUrl(node.url) ? (
+      // An image fits its frame (an iframe would show it at natural size: retina shots looked zoomed in).
+      <img className="node-img" src={node.url} alt={node.title || node.url} draggable={false} />
+    ) : (
     <iframe
       className="node-frame"
       title={node.title || node.url}
@@ -28,7 +33,7 @@ export const url: Renderer<'url'> = {
       src={node.url}
       style={{ pointerEvents: interactive ? 'auto' : 'none' }}
     />
-  ),
+    ),
   Editor: ({ node, onChange }) => (
     <div className="node-url-edit">
       <label>URL of a running app, a page, or /api/files/&lt;agent&gt;/&lt;path&gt;</label>

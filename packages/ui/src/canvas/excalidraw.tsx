@@ -63,7 +63,7 @@ export function DrawingEditor(props: { title: string; scene: DrawingScene; onClo
     scrollToContent: true,
   }));
   return (
-    <div className="drawing-modal">
+    <div className="drawing-modal" role="dialog" aria-modal="true" aria-label={props.title || 'Drawing'}>
       <div className="drawing-bar">
         <span>{props.title || 'Drawing'}</span>
         <button className="ghost" onClick={() => props.onClose(null)}>

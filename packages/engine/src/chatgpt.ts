@@ -4,18 +4,19 @@ type JsonWebKey = import('node:crypto').JsonWebKeyInput['key'];
 import { createServer, type Server } from 'node:http';
 import type { AddressInfo } from 'node:net';
 import { UpdateChatGpt, type ChatGptModel, type ChatGptStatus } from '@atlas/shared';
-import type { Db } from './store/db.ts';
 import type { Bus } from './events.ts';
-import { CHATGPT_TOKENS as TOKENS, type SecretStore } from './secrets.ts';
+import type { SecretStore } from './secrets.ts';
+import { chatgptQuota, rawLimitHeaders, type PlanAccounts, type PlanRow } from './plan-accounts.ts';
 import { ConflictError } from './kanban.ts';
 import { ModelError, type Provider } from './providers/types.ts';
 import { ChatGptProvider, type PlanAccess } from './providers/chatgpt.ts';
 
 /**
- * Can's ChatGPT plan in Atlas, through OpenAI's « Sign in with ChatGPT » for open-source, locally hosted apps
+ * The user's ChatGPT plan in Atlas, through OpenAI's « Sign in with ChatGPT » for open-source, locally hosted apps
  * (developers.openai.com/siwc, design §5). Atlas registers itself under its own name (dynamic registration, no
- * borrowed client id), keeps the tokens in the keychain, and follows the terms: one account (no rotating around
- * limits); a usage limit pauses requests instead of switching billing.
+ * borrowed client id) and keeps the tokens in the keychain. Several ChatGPT subscriptions can be signed in; a usage
+ * limit pauses one and the work moves to the next (plan-accounts.ts). The user chose this knowing OpenAI's terms ask for
+ * one account without rotation around limits (11 Nov 2026, design §5).
  */
 export interface ChatGptOptions {
   authBase?: string;
@@ -26,24 +27,13 @@ export interface ChatGptOptions {
   now?: () => number;
 }
 
-interface Row {
-  host_id: string;
-  client_id: string | null;
-  subject: string | null;
-  email: string | null;
-  scopes: string | null;
-  expires_at: string | null;
-  signed_in_at: string | null;
-  welcomed: number;
-  paused_at: string | null;
-  last_error: string | null;
-}
 interface Tokens {
   access: string;
   refresh: string;
   idToken: string;
 }
 interface Pending {
+  accountId: string;
   state: string;
   nonce: string;
   verifier: string;
@@ -73,7 +63,7 @@ const b64url = (b: Buffer) => b.toString('base64url');
 
 export class ChatGpt {
   private pending: Pending | null = null;
-  private refreshing: Promise<string> | null = null;
+  private refreshing = new Map<string, Promise<string>>();
   private oidc: OidcConfig | null = null;
   private readonly authBase: string;
   private readonly apiBase: string;
@@ -81,55 +71,63 @@ export class ChatGpt {
   private readonly now: () => number;
 
   constructor(
-    private db: Db,
     private bus: Bus,
     private secrets: SecretStore | undefined,
+    private plans: PlanAccounts,
     private o: ChatGptOptions = {},
   ) {
     this.authBase = o.authBase ?? 'https://auth.openai.com';
     this.apiBase = o.apiBase ?? RESOURCE;
     this.fetchFn = o.fetch ?? fetch;
     this.now = o.now ?? Date.now;
+    plans.onChange.chatgpt = () => this.emit();
   }
 
-  /** The account row; made on first use with this machine's host id (kept for the machine's lifetime). */
-  private row(): Row {
-    this.db.prepare('INSERT OR IGNORE INTO chatgpt_account (id, host_id) VALUES (1, ?)').run('urn:uuid:' + randomUUID());
-    return this.db.prepare('SELECT * FROM chatgpt_account WHERE id = 1').get() as Row;
+  /** This machine's opaque host id: made once, kept across sign-outs and for every account. */
+  private hostId(): string {
+    return this.plans.setting('chatgpt_host_id', () => 'urn:uuid:' + randomUUID());
   }
-  private set(cols: Partial<Row>): void {
-    const keys = Object.keys(cols);
-    if (keys.length) this.db.prepare(`UPDATE chatgpt_account SET ${keys.map((k) => `${k} = @${k}`).join(', ')} WHERE id = 1`).run(cols);
+  private rows(): PlanRow[] {
+    return this.plans.rows('chatgpt');
   }
-  private tokens(): Tokens | null {
-    const raw = this.secrets?.get(TOKENS);
-    return raw ? (JSON.parse(raw) as Tokens) : null;
+  private tokens(r: PlanRow): Tokens | null {
+    return this.plans.tokens<Tokens>(r);
+  }
+  private signedIn(r: PlanRow): boolean {
+    return !!this.tokens(r) && !!r.client_id;
+  }
+  private planUsage(r: PlanRow): boolean {
+    return this.signedIn(r) && (r.scopes ?? '').split(' ').includes(PLAN_SCOPE);
   }
   private emit(): void {
     this.bus.emit({ type: 'chatgpt.updated', status: this.status() });
   }
 
   status(): ChatGptStatus {
-    const r = this.row();
-    const signedIn = !!this.tokens() && !!r.client_id;
-    const planUsage = signedIn && (r.scopes ?? '').split(' ').includes(PLAN_SCOPE);
+    const rows = this.rows();
+    const accounts = rows.map((r) => this.plans.view(r, this.signedIn(r), this.planUsage(r)));
+    const live = accounts.filter((a) => a.signedIn);
+    const planUsage = live.some((a) => a.planUsage);
+    const all = this.plans.allPausedUntil('chatgpt', (r) => this.planUsage(r));
     return {
       available: !!this.secrets,
       unavailableReason: this.secrets ? null : 'ChatGPT sign-in works in the desktop app: a server engine has no keychain to keep the tokens in.',
-      signedIn,
+      signedIn: live.length > 0,
       pending: !!this.pending,
-      email: r.email,
+      pendingAccountId: this.pending?.accountId ?? null,
+      email: live[0]?.email ?? accounts[0]?.email ?? null,
       planUsage,
-      showWelcome: planUsage && !r.welcomed,
-      pausedAt: r.paused_at,
-      lastError: r.last_error,
+      showWelcome: planUsage && !this.plans.welcomed('chatgpt'),
+      pausedAt: all.paused ? all.since : null,
+      lastError: (live.length ? live : accounts).find((a) => a.lastError)?.lastError ?? null,
+      accounts,
     };
   }
 
   update(patch: UpdateChatGpt): ChatGptStatus {
     const p = UpdateChatGpt.parse(patch);
-    if (p.welcomed) this.set({ welcomed: 1 });
-    if (p.resume) this.set({ paused_at: null, last_error: null });
+    if (p.welcomed) this.plans.setWelcomed('chatgpt');
+    if (p.resume) for (const r of this.rows()) this.plans.set(r.id, { paused_at: null, paused_until: null, last_error: null });
     this.emit();
     return this.status();
   }
@@ -144,17 +142,23 @@ export class ChatGpt {
   /**
    * Start a sign-in: a loopback listener for the callback, then the URL to open in the system browser. A saved
    * registration (issued client id) is reused; the first one registers Atlas under its own name.
+
+  /**
+   * Start a sign-in for one subscription (default: the first, made when there is none): a loopback listener for the
+   * callback, then the URL to open in the system browser. The account's registration (issued client id) is reused;
+   * its first sign-in registers Atlas under its own name.
    */
-  async login(): Promise<{ url: string }> {
+  async login(accountId?: string | null): Promise<{ url: string }> {
     if (!this.secrets) throw new ConflictError(this.status().unavailableReason!);
     this.cancel();
-    const r = this.row();
+    const r = this.plans.forLogin('chatgpt', accountId);
     const server = createServer();
     await listen(server, this.o.port ?? 1455);
     const port = (server.address() as AddressInfo).port;
     const redirectUri = `http://127.0.0.1:${port}/auth/callback`;
     const verifier = b64url(randomBytes(32));
     const p: Pending = {
+      accountId: r.id,
       state: b64url(randomBytes(24)),
       nonce: b64url(randomBytes(24)),
       verifier,
@@ -190,12 +194,12 @@ export class ChatGpt {
       nonce: p.nonce,
       code_challenge: b64url(createHash('sha256').update(verifier).digest()),
       code_challenge_method: 'S256',
-      ext_agent_host_id: r.host_id,
+      ext_agent_host_id: this.hostId(),
     });
     if (!r.client_id) q.set('agent_name_hint', APP_NAME);
     else {
       if (r.email) q.set('login_hint', r.email);
-      const t = this.tokens();
+      const t = this.tokens(r);
       if (t?.idToken) q.set('id_token_hint', t.idToken);
       // Signed in without plan usage and asking again: show the consent screen again.
       if (t && !(r.scopes ?? '').split(' ').includes(PLAN_SCOPE)) q.set('prompt', 'consent');
@@ -208,7 +212,7 @@ export class ChatGpt {
   private async callback(p: Pending, q: URLSearchParams): Promise<{ ok: boolean; message: string; retry?: boolean }> {
     if (q.get('state') !== p.state) return { ok: false, message: 'This sign-in link is not the one Atlas opened. Start again from Atlas.', retry: true };
     const fail = (message: string) => {
-      this.set({ last_error: message });
+      this.plans.set(p.accountId, { last_error: message });
       this.emit();
       return { ok: false, message };
     };
@@ -226,11 +230,13 @@ export class ChatGpt {
       const t = tok.body;
       if (!t.id_token || !t.refresh_token) return fail('ChatGPT sign-in: the answer had no ID token or refresh token.');
       const id = await this.verifyIdToken(t.id_token, clientId, p.nonce);
-      const r = this.row();
-      if (r.subject && r.client_id === clientId && r.subject !== id.sub) return fail('That is another ChatGPT account than the one Atlas is registered with; nothing was changed.');
-      this.secrets!.set(TOKENS, JSON.stringify({ access: t.access_token, refresh: t.refresh_token, idToken: t.id_token } satisfies Tokens));
+      const r = this.plans.row(p.accountId);
+      if (r.subject && r.client_id === clientId && r.subject !== id.sub) return fail('That is another ChatGPT account than the one this subscription is registered with; nothing was changed. Add it as a new subscription.');
+      const twin = this.rows().find((o) => o.id !== r.id && o.subject === id.sub && this.tokens(o));
+      if (twin) return fail(`That ChatGPT account is already signed in as « ${twin.label} »; sign in with another one.`);
+      this.plans.setTokens(r, { access: t.access_token, refresh: t.refresh_token, idToken: t.id_token } satisfies Tokens);
       const scopes = t.scope ?? '';
-      this.set({
+      this.plans.set(r.id, {
         client_id: clientId,
         subject: id.sub,
         email: id.email ?? r.email,
@@ -284,15 +290,21 @@ export class ChatGpt {
   }
 
   /** A valid access token, refreshed near expiry (one refresh at a time: the refresh token rotates). */
-  private async accessToken(): Promise<string> {
-    const t = this.tokens();
-    const r = this.row();
-    if (!t || !r.client_id) throw new ModelError('ChatGPT: not signed in. Use Continue with ChatGPT on the Models page.');
+
+  /** A valid access token for one account, refreshed near expiry (one refresh at a time: the refresh token rotates). */
+  private async accessToken(id: string): Promise<string> {
+    const r = this.plans.row(id);
+    const t = this.tokens(r);
+    if (!t || !r.client_id) throw new ModelError(`ChatGPT « ${r.label} »: not signed in. Use Continue with ChatGPT in Settings → Subscriptions.`);
     if (r.expires_at && Date.parse(r.expires_at) - this.now() > REFRESH_MARGIN_MS) return t.access;
-    return (this.refreshing ??= this.refresh(t, r.client_id).finally(() => (this.refreshing = null)));
+    const running = this.refreshing.get(id);
+    if (running) return running;
+    const next = this.refresh(r, t, r.client_id).finally(() => this.refreshing.delete(id));
+    this.refreshing.set(id, next);
+    return next;
   }
 
-  private async refresh(t: Tokens, clientId: string): Promise<string> {
+  private async refresh(r: PlanRow, t: Tokens, clientId: string): Promise<string> {
     let out;
     try {
       out = await this.tokenCall({ grant_type: 'refresh_token', client_id: clientId, refresh_token: t.refresh });
@@ -301,33 +313,34 @@ export class ChatGpt {
     }
     if (!out.ok) {
       if (out.code && DEAD_REFRESH.has(out.code)) {
-        this.signedOut(`ChatGPT sign-in expired (${out.code})`);
-        throw new ModelError(`ChatGPT sign-in expired (${out.code}): sign in again on the Models page`);
+        this.signedOut(r, `ChatGPT sign-in expired (${out.code})`);
+        throw new ModelError(`ChatGPT sign-in « ${r.label} » expired (${out.code}): sign in again in Settings → Subscriptions`);
       }
       if (out.status >= 500) throw new ModelError(`ChatGPT: renewing the sign-in failed (HTTP ${out.status}); will retry`, true);
       throw new ModelError(`ChatGPT: renewing the sign-in failed (${out.code ?? 'HTTP ' + out.status})`);
     }
     const b = out.body;
-    this.secrets!.set(TOKENS, JSON.stringify({ access: b.access_token, refresh: b.refresh_token ?? t.refresh, idToken: b.id_token ?? t.idToken } satisfies Tokens));
-    this.set({
+    this.plans.setTokens(r, { access: b.access_token, refresh: b.refresh_token ?? t.refresh, idToken: b.id_token ?? t.idToken } satisfies Tokens);
+    this.plans.set(r.id, {
       expires_at: new Date(this.now() + (b.expires_in ?? 3600) * 1000).toISOString(),
       ...(b.scope ? { scopes: b.scope } : {}),
     });
     return b.access_token;
   }
 
-  /** Tokens are dead (refused or expired): forget them, keep the registration and host id for the next sign-in. */
-  private signedOut(reason: string): void {
-    this.secrets?.delete(TOKENS);
-    this.set({ scopes: null, expires_at: null, last_error: reason + ': sign in again.' });
+  /** Tokens are dead (refused or expired): forget them, keep the registration for the next sign-in. */
+  private signedOut(r: PlanRow, reason: string): void {
+    this.plans.dropTokens(r);
+    this.plans.set(r.id, { scopes: null, expires_at: null, last_error: reason + ': sign in again.' });
     this.emit();
   }
 
-  /** Sign out: revoke the renewable session at OpenAI, then clear the tokens (the registration is kept). */
-  async logout(): Promise<ChatGptStatus> {
-    this.cancel();
-    const t = this.tokens();
-    const r = this.row();
+  /** Sign one account out (default: the first): revoke the renewable session at OpenAI, then clear the tokens. */
+  async logout(accountId?: string | null): Promise<ChatGptStatus> {
+    const r = accountId ? this.plans.row(accountId) : this.rows()[0];
+    if (!r) return this.status();
+    if (this.pending?.accountId === r.id) this.cancel();
+    const t = this.tokens(r);
     let note: string | null = null;
     if (t && r.client_id) {
       try {
@@ -343,43 +356,64 @@ export class ChatGpt {
         note = `Signed out here, but OpenAI did not confirm the session was revoked (${e instanceof Error ? e.message : String(e)}). You can disconnect Atlas in ChatGPT settings.`;
       }
     }
-    this.secrets?.delete(TOKENS);
-    this.set({ scopes: null, expires_at: null, paused_at: null, last_error: note });
+    this.plans.dropTokens(r);
+    this.plans.set(r.id, { scopes: null, expires_at: null, paused_at: null, paused_until: null, last_error: note });
     this.emit();
     return this.status();
   }
 
-  /** Models this account can use, for the model picker. */
+  /** Sign out and forget a subscription. */
+  async remove(accountId: string): Promise<ChatGptStatus> {
+    await this.logout(accountId);
+    this.plans.remove(accountId);
+    return this.status();
+  }
+
+  /** Models the first usable account can use, for the model picker. */
   async models(): Promise<ChatGptModel[]> {
-    const token = await this.accessToken();
+    const live = this.rows().filter((r) => this.planUsage(r));
+    const r = live.find((x) => !this.plans.paused(x)) ?? live[0] ?? this.rows().find((x) => this.signedIn(x));
+    if (!r) throw new ModelError('ChatGPT: not signed in. Use Continue with ChatGPT in Settings → Subscriptions.');
+    const token = await this.accessToken(r.id);
     const res = await this.fetchFn(this.apiBase + '/models', { headers: { authorization: `Bearer ${token}` } });
     if (!res.ok) throw new ModelError(`ChatGPT models: HTTP ${res.status}: ${(await res.text()).slice(0, 300)}`);
     const j = (await res.json()) as { models?: { slug: string; display_name?: string; visibility?: string }[] };
     return (j.models ?? []).filter((m) => m.visibility === 'list').map((m) => ({ slug: m.slug, displayName: m.display_name ?? m.slug }));
   }
 
-  /** Why the signed-in plan can't be used, or null (same protections for every request). */
+  /** Why the plan can't be used, or null (same protections for every request). */
   problem(): string | null {
     const s = this.status();
     if (!s.available) return s.unavailableReason;
-    if (!s.signedIn) return 'ChatGPT: not signed in. Use Continue with ChatGPT on the Models page.';
-    if (!s.planUsage) return 'ChatGPT: using your plan was not allowed at sign-in. Allow it on the Models page.';
-    if (s.pausedAt) return s.lastError ?? 'ChatGPT plan usage limit reached: Resume on the Models page.';
+    if (!s.signedIn) return 'ChatGPT: not signed in. Use Continue with ChatGPT in Settings → Subscriptions.';
+    if (!s.planUsage) return 'ChatGPT: using your plan was not allowed at sign-in. Allow it in Settings → Subscriptions.';
+    if (s.pausedAt) return this.plans.exhausted('chatgpt', this.rows().filter((r) => this.planUsage(r))).message;
     return null;
   }
 
+  /** Calls go to the subscriptions that allowed plan use, in order; a usage limit moves the call to the next one. */
   provider(): Provider {
     const bad = this.problem();
-    if (bad) throw new ModelError(bad);
-    const access: PlanAccess = {
-      token: () => this.accessToken(),
-      limitReached: () => {
-        this.set({ paused_at: new Date(this.now()).toISOString(), last_error: 'ChatGPT plan usage limit reached. Review it in ChatGPT settings, then Resume.' });
-        this.emit();
-      },
-      signedOut: (reason) => this.signedOut(reason),
+    if (bad) {
+      const s = this.status();
+      throw s.pausedAt ? this.plans.exhausted('chatgpt', this.rows().filter((r) => this.planUsage(r))) : new ModelError(bad);
+    }
+    return {
+      complete: (req, onText, signal) =>
+        this.plans.call(
+          'chatgpt',
+          (r) => this.planUsage(r),
+          (r, onStream) => {
+            const access: PlanAccess = {
+              token: () => this.accessToken(r.id),
+              signedOut: (reason) => this.signedOut(this.plans.row(r.id), reason),
+              onHeaders: (h) => this.plans.recordQuota(r.id, chatgptQuota(h, this.now()), rawLimitHeaders(h)),
+              now: this.now,
+            };
+            return new ChatGptProvider(access, this.apiBase, this.fetchFn).complete(req, (t) => (onStream(), onText(t)), signal);
+          },
+        ),
     };
-    return new ChatGptProvider(access, this.apiBase, this.fetchFn);
   }
 
   private close(p: Pending): void {

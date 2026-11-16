@@ -1,8 +1,8 @@
 # Atlas — instructions for Claude
 
 A personal agent harness: several named agents, each with its own model, tools and memory, working off a shared
-kanban board, on a schedule, with a shared canvas. One user (Can). It replaces Hermes Agent for his Datinel team
-(lead atlas, engineers munih and paris, QA zurich). Full design: `docs/design.md`. Read it before any structural change.
+kanban board, on a schedule, with a shared canvas. One human user, who gives their name and a short description on
+first launch (Settings → About you). Full design: `docs/design.md`. Read it before any structural change.
 
 ## Stack (decided)
 - TypeScript everywhere, strict mode, ESM. Node 24+.
@@ -45,8 +45,24 @@ npm run dev          # engine + UI with hot reload, opens http://localhost:5173
 npm run desktop      # Electron app in dev
 npm run typecheck && npm test
 npm -w @atlas/desktop run install:mac   # build the Mac app and install it in /Applications (quits the running one)
+npm run ui:check     # responsive check of the real UI (below)
+node scripts/orb-check/check.mjs   # voice orb overlay: screenshots of every state, frame times, CPU, Esc, click-through, drag (→ shots/orb)
 ```
 
+**Responsive check** (`scripts/ui-check/check.mjs`, macOS: needs Google Chrome and Xcode's `swiftc`). Opens the running
+Atlas app's UI in headless Chrome at 1440 / 1100 / 900 / 390 px (390 = phone, touch) on every main screen: chat with
+pins, ticket modal, side panel, board, inbox, Library (list, a doc, a whiteboard), schedules, every settings page. It reports page-wide horizontal overflow (and
+the phone zoom-out it causes), text under 12px, text off-screen outside a scroller, pins or chat buttons covering
+messages or the composer, the modal or panel off-screen, uncaught page errors, and key labels that Apple Vision OCR
+(`ocr.swift`) can't read at confidence ≥ 0.5. Exit code 1 on any issue; screenshots + `report.json` in
+`/tmp/…/atlas-ui-check` (`--out DIR`).
+- The engine port is read from the running app (`lsof`; it changes on every start), or `--port N`.
+- Read-only: the harness refuses every API write from the page. Pins and the panel come from fixtures added to the
+  responses the page sees (4 cards in every pin state, a real document in a panel tab); nothing is stored.
+- `--ui packages/ui/dist` tests a local build (`npm -w @atlas/ui run build`) against the same engine, before reinstalling.
+- `--widths 390`, `--only chat,modal` (screen-name prefixes) to narrow a run; a full run takes ~75 s.
+- Run it after any UI layout change; the acceptance bar is « no issues » at all widths.
+
 **After every change that ships** (pushed to main and touching the engine, UI or desktop app): run
-`npm -w @atlas/desktop run install:mac` so Can's /Applications/Atlas.app is always the latest. Can asked for this
-(10 Nov 2026). It quits a running Atlas; say so in the report.
+`npm -w @atlas/desktop run install:mac` so the maintainer's /Applications/Atlas.app is always the latest (asked
+10 Nov 2026). It quits a running Atlas; say so in the report.

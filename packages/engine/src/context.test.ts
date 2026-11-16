@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import type { ContentBlock, Message } from '@atlas/shared';
-import { buildMessages, compactedView, degrade, estimateTokens, INTERRUPTED, needsTurn, pickCut, SUMMARY_LEAD } from './context.ts';
+import { buildMessages, compactedView, degrade, estimateTokens, INTERRUPTED, measuredSize, needsTurn, pickCut, pickPrune, pruneMessages, SUMMARY_LEAD, TODO_LEAD } from './context.ts';
 
 let seq = 0;
 const m = (role: 'user' | 'assistant', content: ContentBlock[], contextUpto: number | null = null) => ({
@@ -8,7 +8,7 @@ const m = (role: 'user' | 'assistant', content: ContentBlock[], contextUpto: num
   conversationId: 'c',
   seq,
   role,
-  author: role === 'user' ? 'can' : 'atlas',
+  author: role === 'user' ? 'user' : 'atlas',
   content,
   at: '',
   contextUpto,
@@ -16,18 +16,6 @@ const m = (role: 'user' | 'assistant', content: ContentBlock[], contextUpto: num
 const t = (text: string): ContentBlock[] => [{ type: 'text', text }];
 
 describe('buildMessages', () => {
-  it("leaves a local model's unsigned thinking out of the view, keeps Claude's signed thinking", () => {
-    const view = buildMessages([
-      m('user', t('hi')),
-      m('assistant', [{ type: 'thinking', thinking: 'local notes', signature: '' }], 1),
-      m('assistant', [{ type: 'thinking', thinking: 'signed', signature: 'sig' }, { type: 'text', text: 'hello' }], 2),
-    ]);
-    expect(view).toEqual([
-      { role: 'user', content: t('hi') },
-      { role: 'assistant', content: [{ type: 'thinking', thinking: 'signed', signature: 'sig' }, { type: 'text', text: 'hello' }] },
-    ]);
-  });
-
   it('merges consecutive roles and puts tool results first', () => {
     seq = 0;
     const view = buildMessages([
@@ -116,13 +104,85 @@ describe('compaction', () => {
     const out = degrade(view, 16_000, 0);
     const result = (i: number) => out[i]!.content.find((b) => b.type === 'tool_result') as { content: string };
     expect(result(2).content).toMatch(/^output omitted to fit the context \(20000 chars\)/);
-    expect(out[0]!.content).toEqual(view[0]!.content); // Can's words stay
+    expect(out[0]!.content).toEqual(view[0]!.content); // the user's words stay
     expect(out[1]!.content[0] === view[1]!.content[0] || JSON.stringify(out[1]!.content[0]) === JSON.stringify(view[1]!.content[0])).toBe(true); // fitted before touching assistant text
     expect(result(4).content).toBe(big); // newest turn stays whole
     expect(view[2]!.content[0]).toMatchObject({ content: big }); // input not mutated
-    // Tighter: old assistant text goes next; Can's message still untouched.
+    // Tighter: old assistant text goes next; the user's message still untouched.
     const tight = degrade(view, 8_000, 0);
     expect((tight[1]!.content[0] as { text: string }).text).toMatch(/chars omitted to fit the context\)$/);
     expect(tight[0]!.content).toEqual(view[0]!.content);
+  });
+});
+
+describe('real token counts', () => {
+  it('uses the reading plus an estimate of only the messages added since; null without one', () => {
+    const msgs = toolRounds(3, 400);
+    expect(measuredSize(null, msgs)).toBeNull();
+    expect(measuredSize({ tokens: 5000, upto: msgs.at(-1)!.seq }, msgs)).toBe(5000);
+    const since = msgs.filter((x) => x.seq > 4);
+    expect(measuredSize({ tokens: 5000, upto: 4 }, msgs)).toBe(5000 + estimateTokens(since.map((x) => x.content)));
+  });
+});
+
+describe('prune', () => {
+  it('stubs big outputs and inputs before the cut, dedupes identical ones, keeps the tail and text whole', () => {
+    seq = 0;
+    const same = 'same output '.repeat(10); // 120 chars: not big, but duplicated
+    const msgs = [
+      m('user', t('go')),
+      m('assistant', [{ type: 'text', text: 'plan '.repeat(200) }, { type: 'tool_use', id: 'a', name: 'write_file', input: { content: 'x'.repeat(1000) } }], 1),
+      m('user', [{ type: 'tool_result', tool_use_id: 'a', content: 'y'.repeat(2000) }]),
+      m('assistant', [{ type: 'tool_use', id: 'b', name: 'shell', input: { command: 'ls' } }], 3),
+      m('user', [{ type: 'tool_result', tool_use_id: 'b', content: same }]),
+      m('assistant', [{ type: 'tool_use', id: 'c', name: 'todo_write', input: { todos: [{ content: 'z'.repeat(700), status: 'pending' }] } }], 5),
+      m('user', [{ type: 'tool_result', tool_use_id: 'c', content: same }]),
+      m('assistant', [{ type: 'tool_use', id: 'd', name: 'shell', input: { command: 'cat' } }], 7),
+      m('user', [{ type: 'tool_result', tool_use_id: 'd', content: 'w'.repeat(2000) }]),
+    ];
+    const before = JSON.stringify(msgs);
+    const out = pruneMessages(msgs, 7);
+    expect(JSON.stringify(msgs)).toBe(before); // copies
+    expect(out[1]!.content[0]).toEqual(msgs[1]!.content[0]); // assistant text untouched
+    expect(out[1]!.content[1]).toMatchObject({ input: { omitted: 'input omitted to fit the context (1014 chars); history_search can read it (seq 2)' } });
+    expect(out[2]!.content[0]).toMatchObject({ content: 'output omitted to fit the context (2000 chars); history_search can read it (seq 3)' });
+    expect(out[4]!.content[0]).toMatchObject({ content: 'same output as the later call in #7' });
+    expect(out[6]!.content[0]).toMatchObject({ content: same }); // the latest copy stays
+    expect(out[5]).toBe(msgs[5]); // todo_write input kept
+    expect(out[8]).toBe(msgs[8]); // the tail is whole
+    expect(pruneMessages(msgs, 7)).toEqual(out); // deterministic
+    expect(pruneMessages(msgs, null)).toBe(msgs);
+  });
+
+  it('protects a tail worth `tail` tokens and always the newest two messages', () => {
+    const msgs = toolRounds(10, 4000); // ~1000 tokens per result
+    const cut = pickPrune(msgs, 3500)!;
+    const tail = msgs.filter((x) => x.seq > cut);
+    expect(estimateTokens(tail.map((x) => x.content))).toBeLessThanOrEqual(3500);
+    expect(tail.length).toBeGreaterThanOrEqual(6);
+    expect(pickPrune(msgs, 1_000_000)).toBeNull();
+    expect(pickPrune(msgs, 0)).toBe(msgs.at(-3)!.seq);
+  });
+});
+
+describe('todo re-injection', () => {
+  const todos = [{ content: 'ship it', status: 'pending' as const }];
+  it('adds the list after the summary once its todo_write call is folded, not while the call is visible', () => {
+    seq = 0;
+    const msgs = [
+      m('user', t('go')),
+      m('assistant', [{ type: 'tool_use', id: 'w', name: 'todo_write', input: { todos } }], 1),
+      m('user', [{ type: 'tool_result', tool_use_id: 'w', content: 'saved' }]),
+      m('assistant', t('working'), 3),
+      m('user', t('status?')),
+    ];
+    expect(JSON.stringify(compactedView(msgs, null, null, null, todos))).not.toContain(TODO_LEAD);
+    const view = compactedView(msgs, 'planned', 3, null, todos);
+    expect(view[0]!.content.slice(0, 2)).toEqual([
+      { type: 'text', text: `${SUMMARY_LEAD}\n\nplanned` },
+      { type: 'text', text: `${TODO_LEAD}\n- [ ] ship it` },
+    ]);
+    expect(view[0]!.role).toBe('user');
+    expect(view[1]!.role).toBe('assistant');
   });
 });

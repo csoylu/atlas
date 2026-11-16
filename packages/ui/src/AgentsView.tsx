@@ -1,7 +1,7 @@
 import { tint } from './agentTint.ts';
 import { useCallback, useEffect, useState } from 'react';
 import { MEMORY_LIMIT, type Agent, type Model, type ModelTest, type Settings } from '@atlas/shared';
-import { api } from './api.ts';
+import { api, ApiError } from './api.ts';
 
 export function AgentsView(props: {
   settings: Settings | null;
@@ -23,13 +23,13 @@ export function AgentsView(props: {
   };
 
   return (
-    <div className="agents-view">
-      <section>
+    <section>
         <header className="section-head">
           <h2>Agents</h2>
           <p>
-            Each agent has a role, a model, a working folder and a memory it keeps itself. Models, the ChatGPT plan and
-            Anthropic accounts are on the <a href="#/models">Models</a> page.
+            Each agent has a role, a model, a working folder and a memory it keeps itself. Models and their accounts
+            are under <a href="#/settings/subscriptions">Models</a>; what every agent knows is in{' '}
+            <a href="#/settings/memory">Shared memory</a>.
           </p>
         </header>
         <div className="agent-grid">
@@ -38,9 +38,7 @@ export function AgentsView(props: {
           ))}
           <NewAgent models={models} onCreated={changed} onError={onError} />
         </div>
-        <SharedMemory onError={onError} />
-      </section>
-    </div>
+    </section>
   );
 }
 
@@ -56,6 +54,15 @@ function AgentCard(props: { agent: Agent; models: Model[]; triage: boolean; onCh
       setMemDraft(m.text);
     }, onError);
   }, [a.id, onError]);
+  const [confirming, setConfirming] = useState(false);
+  /** Why the engine refused to delete (open cards, triage agent): shown in the card, not a far-away banner. */
+  const [refusal, setRefusal] = useState<string | null>(null);
+  const remove = () =>
+    api.deleteAgent(a.id).then(props.onChanged, (e: unknown) => {
+      setConfirming(false);
+      if (e instanceof ApiError && e.status === 409) setRefusal(e.message);
+      else onError(e);
+    });
   const dirty = JSON.stringify(draft) !== JSON.stringify(a);
   const model = props.models.find((m) => m.id === draft.modelId);
   return (
@@ -116,12 +123,46 @@ function AgentCard(props: { agent: Agent; models: Model[]; triage: boolean; onCh
             </button>
           </>
         )}
-        {!dirty && (
-          <button className="ghost danger" onClick={() => confirm(`Delete @${a.id}?`) && api.deleteAgent(a.id).then(props.onChanged, onError)}>
+        {!dirty && !confirming && (
+          <button
+            className="ghost danger"
+            onClick={() => {
+              setRefusal(null);
+              setConfirming(true);
+            }}
+          >
             Delete
           </button>
         )}
+        {!dirty && confirming && (
+          <>
+            <span className="confirm-text">Its schedules go with it; its chat is archived.</span>
+            <button className="ghost" onClick={() => setConfirming(false)}>
+              Cancel
+            </button>
+            <button className="primary small danger" onClick={remove}>
+              Delete @{a.id}
+            </button>
+          </>
+        )}
       </div>
+      {refusal && (
+        <p className="agent-refusal" role="alert">
+          {refusal}
+          {/triage agent/.test(refusal) && (
+            <>
+              {' '}
+              <a href="#/settings/board">Open Board settings</a>
+            </>
+          )}
+          {/open cards/.test(refusal) && (
+            <>
+              {' '}
+              <a href="#/board">Open the board</a>
+            </>
+          )}
+        </p>
+      )}
       <details className="memory">
         <summary>
           Memory <span className="count">{memory === null ? '…' : `${memory.length}/${MEMORY_LIMIT}`}</span>
@@ -137,7 +178,8 @@ function AgentCard(props: { agent: Agent; models: Model[]; triage: boolean; onCh
   );
 }
 
-function SharedMemory({ onError }: { onError(e: unknown): void }) {
+/** Settings → Shared memory: the text in every agent's instructions (agents edit it with memory_edit scope shared). */
+export function SharedMemory({ onError }: { onError(e: unknown): void }) {
   const [text, setText] = useState<string | null>(null);
   const [draft, setDraft] = useState('');
   useEffect(() => {
@@ -147,17 +189,31 @@ function SharedMemory({ onError }: { onError(e: unknown): void }) {
     }, onError);
   }, [onError]);
   return (
-    <details className="memory shared">
-      <summary>
-        Shared memory, in every agent's instructions <span className="count">{text === null ? '…' : `${text.length}/${MEMORY_LIMIT}`}</span>
-      </summary>
-      <textarea rows={5} value={draft} maxLength={MEMORY_LIMIT} onChange={(e) => setDraft(e.target.value)} placeholder="Team conventions, where things live, Can's preferences…" />
-      {draft !== text && (
-        <button className="primary small" onClick={() => api.setMemory('shared', draft).then((m) => setText(m.text), onError)}>
-          Save shared memory
-        </button>
-      )}
-    </details>
+    <section>
+      <header className="section-head">
+        <h2>Shared memory</h2>
+        <p>
+          In every agent's instructions: team conventions, where things live, your preferences. Agents add to it
+          themselves; durable facts only.
+        </p>
+      </header>
+      <div className="shared-memory">
+        <textarea rows={14} value={draft} maxLength={MEMORY_LIMIT} disabled={text === null} onChange={(e) => setDraft(e.target.value)} placeholder="Team conventions, where things live, the user's preferences…" />
+        <div className="actions">
+          <span className="count">{text === null ? '…' : `${draft.length}/${MEMORY_LIMIT}`}</span>
+          {text !== null && draft !== text && (
+            <>
+              <button className="ghost" onClick={() => setDraft(text)}>
+                Cancel
+              </button>
+              <button className="primary small" onClick={() => api.setMemory('shared', draft).then((m) => setText(m.text), onError)}>
+                Save
+              </button>
+            </>
+          )}
+        </div>
+      </div>
+    </section>
   );
 }
 

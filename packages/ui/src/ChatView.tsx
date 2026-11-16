@@ -6,13 +6,17 @@ import type { MessageStream } from './useMessages.ts';
 import { tint } from './agentTint.ts';
 import { submitOnEnter } from './composerKeys.ts';
 import { ComposerMeta } from './Usage.tsx';
+import { clearDraft, draftKey, useDraft } from './drafts.ts';
+import { DocPanel, usePanelMode, usePanelTabs, type Quote } from './DocPanel.tsx';
 
 const LAST_AGENT = 'atlas.chat.agent';
+/** Window event: show / hide the documents panel of the chat on screen (⌘\, the palette). */
+export const TOGGLE_PANEL = 'atlas:toggle-panel';
 
 /**
  * Direct chats: talk to any agent without making a card first. The history lives in the sidebar (App); this pane
  * shows one chat (#/chat/<cardId>) or a new one (#/chat/new, or #/chat/<agentId> to start with that agent).
- * A new chat is only created when Can sends its first message, so "New chat" clicks leave no empty chats behind.
+ * A new chat is only created when the user sends its first message, so "New chat" clicks leave no empty chats behind.
  */
 export function ChatView(props: {
   agents: Agent[];
@@ -23,9 +27,10 @@ export function ChatView(props: {
   target: string | null;
   stream: MessageStream;
   cards: Card[];
-  /** Agents whose model runs on Can's ChatGPT plan. */
+  /** Agents whose model runs on the user's ChatGPT plan. */
   planAgents: Set<string>;
   models: Model[];
+  userName: string | null;
   onOpenChat(cardId: string | null): void;
   onOpenCard(id: string): void;
   onError(e: unknown): void;
@@ -33,24 +38,7 @@ export function ChatView(props: {
   const { agents, onError } = props;
   const chat = props.chats.find((c) => c.id === props.target);
   if (!agents.length) return <div className="empty-note chat-empty">No agents yet. Add one on the Agents page.</div>;
-  if (chat)
-    return (
-      <div className="chat-view">
-        <CardPanel
-          key={chat.id}
-          chat
-          plan={chat.modelId ? props.models.find((m) => m.id === chat.modelId)?.provider === 'chatgpt' : props.planAgents.has(chat.assignee ?? '')}
-          models={props.models}
-          card={chat}
-          cards={props.cards}
-          onOpen={props.onOpenCard}
-          agents={agents}
-          stream={props.stream}
-          onClose={() => props.onOpenChat(null)}
-          onError={onError}
-        />
-      </div>
-    );
+  if (chat) return <ChatWithPanel key={chat.id} {...props} chat={chat} />;
   if (props.target?.startsWith('c_') && !props.loaded) return <div className="chat-pane loading" />;
   const start = agents.some((a) => a.id === props.target) ? props.target : null;
   return <NewChat key={start ?? 'new'} agents={agents} planAgents={props.planAgents} models={props.models} start={start} onCreated={props.onOpenChat} onError={onError} />;
@@ -63,7 +51,7 @@ function NewChat(props: { agents: Agent[]; planAgents: Set<string>; models: Mode
   const [agentId, setAgentId] = useState(
     props.start ?? (enabled.some((a) => a.id === remembered) ? remembered! : (enabled[0] ?? props.agents[0])!.id),
   );
-  const [text, setText] = useState('');
+  const [text, setText] = useDraft(draftKey('new'));
   const [sending, setSending] = useState(false);
   const [pick, setPick] = useState<{ modelId: string | null; effort: Effort | null }>({ modelId: null, effort: null });
   const input = useRef<HTMLTextAreaElement>(null);
@@ -81,6 +69,8 @@ function NewChat(props: { agents: Agent[]; planAgents: Set<string>; models: Mode
       if (pick.modelId || pick.effort) await api.updateCard(card.id, pick);
       await api.postMessage(card.id, t);
       localStorage.setItem(LAST_AGENT, agentId);
+      setText('');
+      clearDraft(draftKey('new'));
       props.onCreated(card.id);
     } catch (e) {
       setSending(false);
@@ -114,17 +104,6 @@ function NewChat(props: { agents: Agent[]; planAgents: Set<string>; models: Mode
             {agent?.rolePrompt.split('\n')[0] || `Ask @${agentId} anything.`} For work to track, it creates cards on the board.
           </p>
         </div>
-        <ComposerMeta
-          usage={null}
-          plan={pick.modelId ? props.models.find((m) => m.id === pick.modelId)?.provider === 'chatgpt' : props.planAgents.has(agentId)}
-          pick={{
-            models: props.models,
-            agentModelId: agent?.modelId ?? null,
-            modelId: pick.modelId,
-            effort: pick.effort,
-            onChange: (p) => setPick((cur) => ({ ...cur, ...p })),
-          }}
-        />
         <form
           className="composer"
           onSubmit={(e) => {
@@ -139,8 +118,85 @@ function NewChat(props: { agents: Agent[]; planAgents: Set<string>; models: Mode
             onChange={(e) => setText(e.target.value)}
             onKeyDown={submitOnEnter}
           />
+          <ComposerMeta
+            usage={null}
+            send={{ disabled: !text.trim() || sending }}
+            plan={pick.modelId ? props.models.find((m) => m.id === pick.modelId)?.provider === 'chatgpt' : props.planAgents.has(agentId)}
+            pick={{
+              models: props.models,
+              agentModelId: agent?.modelId ?? null,
+              modelId: pick.modelId,
+              effort: pick.effort,
+              onChange: (p) => setPick((cur) => ({ ...cur, ...p })),
+            }}
+          />
         </form>
       </aside>
+    </div>
+  );
+}
+
+/**
+ * A direct chat and its side panel (documents the agent opened, design §16): side by side above 960px, an overlay
+ * below, full screen on phones. « Ask about this » puts a quote chip in the composer; over the chat it hides the panel.
+ */
+function ChatWithPanel(props: Parameters<typeof ChatView>[0] & { chat: Card }) {
+  const { chat, stream, onError } = props;
+  const tabs = usePanelTabs(chat.id, stream, onError);
+  const mode = usePanelMode();
+  const [quote, setQuote] = useState<Quote | null>(null);
+  const [hidden, setHidden] = useState(false);
+  // An agent opening or focusing a tab shows the panel again.
+  const lastFocus = tabs.reduce((m, t) => (t.focusedAt > m ? t.focusedAt : m), '');
+  useEffect(() => setHidden(false), [lastFocus]);
+  const show = tabs.length > 0 && !hidden;
+  // ⌘\ (App) and the palette toggle the panel of the chat on screen.
+  const hasTabs = tabs.length > 0;
+  useEffect(() => {
+    const toggle = () => hasTabs && setHidden((h) => !h);
+    window.addEventListener(TOGGLE_PANEL, toggle);
+    return () => window.removeEventListener(TOGGLE_PANEL, toggle);
+  }, [hasTabs]);
+  const focusComposer = () => setTimeout(() => document.querySelector<HTMLTextAreaElement>('.chat-pane .composer textarea')?.focus(), 0);
+  return (
+    <div className={'chat-view' + (show ? ' with-doc ' + mode : '')}>
+      <CardPanel
+        plan={chat.modelId ? props.models.find((m) => m.id === chat.modelId)?.provider === 'chatgpt' : props.planAgents.has(chat.assignee ?? '')}
+        models={props.models}
+        card={chat}
+        onOpen={props.onOpenCard}
+        agents={props.agents}
+        stream={stream}
+        onClose={() => props.onOpenChat(null)}
+        onError={onError}
+        userName={props.userName}
+        cards={props.cards}
+        quote={quote}
+        onQuoteClear={() => setQuote(null)}
+        hiddenDocs={hidden ? tabs.length : 0}
+        onShowDocs={() => setHidden(false)}
+        onHideDocs={show ? () => setHidden(true) : undefined}
+        onOpenRef={(r) => {
+          api.panelOpen(chat.id, r.docId, r.section).then(() => setHidden(false), onError);
+        }}
+      />
+      {show && (
+        <DocPanel
+          chatId={chat.id}
+          tabs={tabs}
+          mode={mode}
+          userName={props.userName}
+          stream={stream}
+          onOpenCard={props.onOpenCard}
+          onHide={() => setHidden(true)}
+          onError={onError}
+          onAsk={(q) => {
+            setQuote(q);
+            if (mode !== 'side') setHidden(true);
+            focusComposer();
+          }}
+        />
+      )}
     </div>
   );
 }

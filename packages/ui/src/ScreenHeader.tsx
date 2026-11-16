@@ -1,0 +1,52 @@
+import { createContext, useContext, type ReactNode } from 'react';
+import { createPortal } from 'react-dom';
+
+/**
+ * Each screen's 44px header (design §16): App draws the breadcrumb; a screen puts its own actions on the right with
+ * <HeaderActions>, portalled into the header's slot, so the header stays one row whatever the screen.
+ */
+export const HeaderSlot = createContext<HTMLElement | null>(null);
+
+export function HeaderActions({ children }: { children: ReactNode }) {
+  const slot = useContext(HeaderSlot);
+  return slot ? createPortal(children, slot) : null;
+}
+
+const svg = (d: ReactNode, size = 16) => () => (
+  <svg className="icon" viewBox="0 0 16 16" width={size} height={size} fill="none" stroke="currentColor" strokeWidth="1.4" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+    {d}
+  </svg>
+);
+
+/** The shell's line icons (16px grid, 1.4 stroke, as in the mockup). */
+export const Icon = {
+  inbox: svg(<><path d="M2 9.5 3.5 3h9L14 9.5V13H2z" /><path d="M2 9.5h3.5l1 1.5h3l1-1.5H14" /></>),
+  dots: svg(<><circle cx="3.5" cy="8" r=".6" /><circle cx="8" cy="8" r=".6" /><circle cx="12.5" cy="8" r=".6" /></>, 14),
+  back: svg(<path d="m10 4-4 4 4 4" />, 14),
+  board: svg(<><rect x="2" y="2.5" width="3.5" height="11" rx="1" /><rect x="6.25" y="2.5" width="3.5" height="7" rx="1" /><rect x="10.5" y="2.5" width="3.5" height="9" rx="1" /></>),
+  library: svg(<><path d="M3 2.5h3v11H3zM7 2.5h3v11H7z" /><path d="m11 3.2 2.6-.6 1.4 10.6-2.6.5z" /></>),
+  pin: svg(<><path d="M6 2.5h4l-.6 4 2.1 2H4.5l2.1-2z" /><path d="M8 8.5v5" /></>, 14),
+  ext: svg(<path d="M9 2.5h4.5V7M13.5 2.5 7.5 8.5M12 9.5v4H2.5V4h4" />, 14),
+  canvas: svg(<><rect x="2" y="2.5" width="12" height="9" rx="1" /><path d="M5 14l3-2.5 3 2.5M5 6.5h3M5 8.5h6" /></>),
+  clock: svg(<><circle cx="8" cy="8" r="5.5" /><path d="M8 5v3l2 1.5" /></>),
+  search: svg(<><circle cx="7" cy="7" r="4.5" /><path d="M10.5 10.5 14 14" /></>, 14),
+  edit: svg(<path d="M10.5 2.5 13.5 5.5 6 13H3v-3z" />, 14),
+  plus: svg(<path d="M8 3v10M3 8h10" />, 14),
+  gear: svg(<><path d="M6.63 3.51 6.87 1.6A6.5 6.5 0 0 1 9.13 1.6l.24 1.91A4.7 4.7 0 0 1 11.21 4.56l1.77-.74A6.5 6.5 0 0 1 14.11 5.78L12.58 6.94A4.7 4.7 0 0 1 12.58 9.06l1.53 1.16A6.5 6.5 0 0 1 12.98 12.18L11.21 11.44A4.7 4.7 0 0 1 9.37 12.49L9.13 14.4A6.5 6.5 0 0 1 6.87 14.4L6.63 12.49A4.7 4.7 0 0 1 4.79 11.44L3.02 12.18A6.5 6.5 0 0 1 1.89 10.22L3.42 9.06A4.7 4.7 0 0 1 3.42 6.94L1.89 5.78A6.5 6.5 0 0 1 3.02 3.82L4.79 4.56A4.7 4.7 0 0 1 6.63 3.51z" /><circle cx="8" cy="8" r="1.9" /></>),
+  sun: svg(<><circle cx="8" cy="8" r="2.6" /><path d="M8 1.5v1.3M8 13.2v1.3M1.5 8h1.3M13.2 8h1.3M3.4 3.4l.9.9M11.7 11.7l.9.9M3.4 12.6l.9-.9M11.7 4.3l.9-.9" /></>),
+  moon: svg(<path d="M13.2 9.6A5.5 5.5 0 1 1 6.4 2.8a5 5 0 0 0 6.8 6.8z" />),
+  chev: svg(<path d="m6 4 4 4-4 4" />, 14),
+  menu: svg(<path d="M2.5 4.5h11M2.5 8h11M2.5 11.5h11" />),
+  trash: svg(<path d="M2.8 4.4h10.4M6.4 2.4h3.2l.8 2H5.6zM4.4 4.4l.6 8.8h6l.6-8.8M6.8 6.8v4M9.2 6.8v4" />, 15),
+  doc: svg(<><path d="M3.5 2.5h6l3 3v8h-9z" /><path d="M9.5 2.5v3h3" /></>),
+  filter: svg(<path d="M2.5 4h11M4.5 8h7M6.5 12h3" />, 14),
+  list: svg(<path d="M5.5 4h8M5.5 8h8M5.5 12h8M2.5 4h.01M2.5 8h.01M2.5 12h.01" />, 14),
+  x: svg(<path d="M4 4l8 8M12 4l-8 8" />, 14),
+  panel: svg(<><rect x="2" y="2.5" width="12" height="11" rx="1.5" /><path d="M9.5 2.5v11" /></>, 14),
+  logout: svg(<path d="M6 2.5H3v11h3M10.5 5l3 3-3 3M13.5 8H6.5" />, 14),
+  up: () => (
+    <svg className="icon" viewBox="0 0 16 16" width="14" height="14" fill="none" stroke="currentColor" strokeWidth="1.7" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+      <path d="M8 13V3M4 7l4-4 4 4" />
+    </svg>
+  ),
+};

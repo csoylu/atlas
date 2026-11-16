@@ -13,7 +13,7 @@ ALTER TABLE cards ADD COLUMN block_until TEXT;   -- transient blocks: when the d
 
 ALTER TABLE agents ADD COLUMN max_runs INTEGER NOT NULL DEFAULT 1;
 
--- 'chat': answering Can; 'work': a ready card started by the dispatcher; 'triage': shaping a triage card.
+-- 'chat': answering the user; 'work': a ready card started by the dispatcher; 'triage': shaping a triage card.
 ALTER TABLE runs ADD COLUMN kind TEXT NOT NULL DEFAULT 'chat' CHECK (kind IN ('chat', 'work', 'triage'));
 
 CREATE TABLE settings (key TEXT PRIMARY KEY, value TEXT NOT NULL);

@@ -1,14 +1,15 @@
 import { describe, expect, it } from 'vitest';
-import { forDarkTheme, sketchToSkeletons } from './sketch.ts';
+import { STROKE, sketchToSkeletons } from './sketch.ts';
 
 describe('sketch', () => {
-  it('flips lightness, keeps hue, leaves non-hex colours alone', () => {
-    expect(forDarkTheme('#ffffff')).toBe('#000000');
-    expect(forDarkTheme('#000')).toBe('#ffffff');
-    expect(forDarkTheme('#808080')).toBe('#7f7f7f');
-    expect(forDarkTheme('#1a1d2b')).toBe('#d4d7e5'); // dark navy fill → light, so the theme shows it dark again
-    expect(forDarkTheme('transparent')).toBe('transparent');
-    expect(forDarkTheme(undefined)).toBeUndefined();
+  it('passes colours through unchanged (the dark theme adapts them), default ink otherwise', () => {
+    const [box, plain] = sketchToSkeletons([
+      { id: 'a', type: 'rectangle', x: 0, y: 0, color: '#c92a2a', background: '#ffc9c9', label: 'A' },
+      { id: 'b', type: 'rectangle', x: 200, y: 0 },
+    ]) as { strokeColor: string; backgroundColor?: string; label?: { strokeColor: string } }[];
+    expect(box).toMatchObject({ strokeColor: '#c92a2a', backgroundColor: '#ffc9c9', label: { strokeColor: '#c92a2a' } });
+    expect(plain!.strokeColor).toBe(STROKE);
+    expect(plain!.backgroundColor).toBeUndefined();
   });
 
   it('lays out connected arrows between box edges, whatever coordinates the model gave', () => {

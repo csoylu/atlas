@@ -61,11 +61,12 @@ export function ChatHistory({ chats, selected, onSelect, onDelete }: {
 
   return <div className="chat-history">
     {chats.map(c => <button key={c.id}
-      className={'chat-hist-item' + (selected === c.id ? ' active' : '')}
+      className={'chat-hist-item' + (selected === c.id ? ' active' : '') + (c.working ? ' running' : '')}
       aria-current={selected === c.id ? 'page' : undefined}
+      aria-busy={c.working || undefined}
       aria-haspopup="menu" aria-expanded={menu?.chat.id === c.id}
       aria-controls={menu?.chat.id === c.id ? 'chat-history-menu' : undefined}
-      title={`${c.title} · @${c.assignee} · Right-click or Shift+F10 for actions`}
+      title={`${c.title} · @${c.assignee}${c.working ? ' · working…' : ''} · Right-click or Shift+F10 for actions`}
       onClick={() => { close(); onSelect(c.id); }}
       onContextMenu={e => {
         e.preventDefault();
@@ -77,8 +78,8 @@ export function ChatHistory({ chats, selected, onSelect, onDelete }: {
         const rect = e.currentTarget.getBoundingClientRect();
         setMenu({ chat: c, x: rect.left + 12, y: rect.bottom, trigger: e.currentTarget });
       }}>
-      <span className="dot-avatar" style={tint(c.assignee ?? '')}>{(c.assignee ?? '?').slice(0, 1).toUpperCase()}</span>
-      <span className="chat-hist-title">{c.title}</span>
+      <span className="dot-avatar" aria-hidden="true" style={tint(c.assignee ?? '')}>{(c.assignee ?? '?').slice(0, 1).toUpperCase()}</span>
+      <span className="chat-hist-title">{c.naming ? <span className="chat-naming">Generating chat name…</span> : c.title}</span>
       <span className="chat-hist-when">{ago(c.updatedAt)}</span>
     </button>)}
     {menu && createPortal(<div ref={popup} id="chat-history-menu" className="chat-history-menu" role="menu"

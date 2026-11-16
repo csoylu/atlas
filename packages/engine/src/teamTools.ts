@@ -1,5 +1,6 @@
 import { z } from 'zod';
-import { MEMORY_LIMIT } from '@atlas/shared';
+import { MEMORY_LIMIT, TODO_LIMIT, TodoItem } from '@atlas/shared';
+import { renderTodos } from './context.ts';
 import type { Kanban } from './kanban.ts';
 import type { Memories } from './memory.ts';
 import { describeWhen, type Schedules } from './schedules.ts';
@@ -24,10 +25,23 @@ interface TeamTool<S extends z.ZodType> {
 const tool = <S extends z.ZodType>(t: TeamTool<S>) => t;
 
 export const TEAM_TOOLS = {
+  todo_write: tool({
+    description:
+      'Your todo list for this conversation: plan multi-step work and track it. Send the FULL list each call (it replaces ' +
+      'the previous one): items {content, status: pending | in_progress | completed}, one in_progress at a time. Mark ' +
+      'items completed as you finish them. It survives context compaction. Skip it for small, one-step tasks.',
+    input: z.object({ todos: z.array(TodoItem).max(TODO_LIMIT) }),
+    run: ({ todos }, { kanban, cardId }) => {
+      kanban.setTodos(cardId, todos);
+      if (!todos.length) return 'todo list cleared';
+      const done = todos.filter((t) => t.status === 'completed').length;
+      return `todo list saved (${done}/${todos.length} done):\n${renderTodos(todos)}`;
+    },
+  }),
   memory_edit: tool({
     description:
       `Edit your memory (always in your instructions, max ${MEMORY_LIMIT} chars) or the memory shared by all agents. ` +
-      'Keep durable facts only: conventions, Can\'s preferences, where things are. Not progress or logs. ' +
+      'Keep durable facts only: conventions, the user\'s preferences, where things are. Not progress or logs. ' +
       'mode replace rewrites it whole (use it to prune), append adds a line.',
     input: z.object({
       scope: z.enum(['self', 'shared']).default('self'),
@@ -46,18 +60,19 @@ export const TEAM_TOOLS = {
     description:
       'Write in another card\'s chat (e.g. to ask the agent working on it a question or hand over information). ' +
       'Its agent reads it and replies there; the reply does not come back to you automatically.',
-    input: z.object({ id: z.string(), text: z.string().min(1) }),
-    run: ({ id, text }, ctx) => {
+    input: z.object({ id: z.union([z.string(), z.number().int()]).transform(String).describe('card number (#12 or 12) or id'), text: z.string().min(1) }),
+    run: ({ id: ref, text }, ctx) => {
+      const id = ctx.kanban.resolve(ref);
       if (id === ctx.cardId) throw new Error('that is your own card: just answer here');
-      ctx.kanban.appendMessage(id, 'user', ctx.agentId, [{ type: 'text', text: `[from @${ctx.agentId}, card ${ctx.cardId}] ${text}` }]);
+      ctx.kanban.appendMessage(id, 'user', ctx.agentId, [{ type: 'text', text: `[from @${ctx.agentId}, card ${ctx.kanban.ref(ctx.cardId)}] ${text}` }]);
       ctx.deliver(id);
-      return `message posted on ${id}`;
+      return `message posted on ${ctx.kanban.ref(id)}`;
     },
   }),
   schedule_list: tool({
     description: 'List schedules: what runs when, for which agent, and the card each one last posted on.',
     input: z.object({}),
-    run: (_i, { schedules }) => {
+    run: (_i, { schedules, kanban }) => {
       const all = schedules.list();
       if (!all.length) return '(no schedules)';
       return all
@@ -65,7 +80,7 @@ export const TEAM_TOOLS = {
           [
             `${s.id} @${s.agentId} "${s.title}": ${describeWhen(s)}`,
             s.enabled ? `next ${s.nextRunAt}` : 'disabled',
-            s.createCard ? 'new card each time' : `own card ${s.chatCardId ?? '(created on first run)'}`,
+            s.createCard ? 'new card each time' : `own card ${s.chatCardId ? kanban.ref(s.chatCardId) : '(created on first run)'}`,
             s.lastError ? `LAST RUN FAILED: ${s.lastError}` : '',
           ]
             .filter(Boolean)
@@ -79,7 +94,7 @@ export const TEAM_TOOLS = {
       'Schedule a prompt for an agent (yourself by default): cron for repeating (5 fields, e.g. "0 9 * * 1-5" = ' +
       'weekdays 09:00, in timezone; default the engine\'s zone) or at for once (ISO time with offset). ' +
       'new_card_each_time: true = a fresh card per run; false (default) = one card for the schedule, reopened each run, ' +
-      'so the agent sees what earlier runs did. Tell Can what you scheduled.',
+      'so the agent sees what earlier runs did. Tell the user what you scheduled.',
     input: z.object({
       prompt: z.string().min(1),
       title: z.string().max(200).optional(),

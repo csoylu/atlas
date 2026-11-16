@@ -1,25 +1,10 @@
 import type { SketchElement } from '@atlas/shared';
 
-// Dark mode inverts colours, so draw in Excalidraw's default dark ink; it renders light on the dark theme.
-export const STROKE = '#1e1e1e';
-
 /**
- * The dark theme renders with invert + hue-rotate, which keeps hue but flips lightness. Agents pick colours for how
- * they should look on dark, so flip their lightness first: after the theme's inversion they come out as intended.
+ * Colours are passed through as written, in Excalidraw's light palette (what models know). The light theme shows them
+ * as is; Excalidraw's dark theme derives the dark version itself (invert + hue-rotate), like any Excalidraw drawing.
  */
-export function forDarkTheme(color: string | undefined): string | undefined {
-  const m = color?.match(/^#([0-9a-f]{6}|[0-9a-f]{3})$/i);
-  if (!m) return color;
-  const hex = m[1]!.length === 3 ? [...m[1]!].map((c) => c + c).join('') : m[1]!;
-  const [r, g, b] = [0, 2, 4].map((i) => parseInt(hex.slice(i, i + 2), 16) / 255) as [number, number, number];
-  const max = Math.max(r, g, b), min = Math.min(r, g, b), l = (max + min) / 2, d = max - min;
-  const s = d === 0 ? 0 : d / (1 - Math.abs(2 * l - 1));
-  const h = d === 0 ? 0 : max === r ? ((g - b) / d) % 6 : max === g ? (b - r) / d + 2 : (r - g) / d + 4;
-  const L = 1 - l;
-  const c = (1 - Math.abs(2 * L - 1)) * s, x = c * (1 - Math.abs((h % 2) - 1)), o = L - c / 2;
-  const [R, G, B] = h < 1 ? [c, x, 0] : h < 2 ? [x, c, 0] : h < 3 ? [0, c, x] : h < 4 ? [0, x, c] : h < 5 ? [x, 0, c] : [c, 0, x];
-  return '#' + [R, G, B].map((v) => Math.round(((v ?? 0) + o) * 255).toString(16).padStart(2, '0')).join('');
-}
+export const STROKE = '#1e1e1e';
 
 type Box = { x: number; y: number; w: number; h: number };
 
@@ -38,8 +23,8 @@ export function sketchToSkeletons(sketch: SketchElement[]) {
   for (const e of sketch)
     if (e.id && e.type !== 'arrow' && e.type !== 'line') boxes.set(e.id, { x: e.x, y: e.y, w: e.width ?? 160, h: e.height ?? 80 });
   return sketch.map((e) => {
-    const stroke = forDarkTheme(e.color) ?? STROKE;
-    const common = { id: e.id, x: e.x, y: e.y, strokeColor: stroke, backgroundColor: forDarkTheme(e.background) };
+    const stroke = e.color ?? STROKE;
+    const common = { id: e.id, x: e.x, y: e.y, strokeColor: stroke, backgroundColor: e.background };
     switch (e.type) {
       case 'text':
         return { ...common, type: 'text' as const, text: e.label ?? '' };

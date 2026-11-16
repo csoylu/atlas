@@ -1,5 +1,5 @@
 -- atlas: foreign_keys off
--- Claude plan (design §5): Claude models on Can's plan through Atlas's own Anthropic-approved OAuth client. A new
+-- Claude plan (design §5): Claude models on the user's plan through Atlas's own Anthropic-approved OAuth client. A new
 -- provider value, so the models table is rebuilt (SQLite can't change a CHECK); agents keep their model_id.
 CREATE TABLE models_new (
   id             TEXT PRIMARY KEY,

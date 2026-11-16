@@ -1,16 +1,12 @@
 import { useCallback, useEffect, useState } from 'react';
-import type { Agent, ChatGptStatus, Model, ModelTest } from '@atlas/shared';
+import type { Agent, Model, ModelTest } from '@atlas/shared';
 import { api } from './api.ts';
-import { AccountsSection } from './AccountsSection.tsx';
-import { ChatGptSection } from './ChatGptSection.tsx';
-import { ClaudePlanSection } from './ClaudePlanSection.tsx';
-import type { MessageStream } from './useMessages.ts';
 
 /**
- * Where agents' models come from (Models page, above the local Ollama sections): the models agents can pick, the
- * ChatGPT plan and the Anthropic accounts. `tick` changes when the page made a model elsewhere (« Give to agents »).
+ * Settings → Model list: the models agents can pick (Claude, ChatGPT plan models, OpenAI-compatible servers, local
+ * models given to agents), each with its test, edit and key.
  */
-export function ModelSections(props: { stream: MessageStream; chatgpt: ChatGptStatus | null; tick: number; onChanged(): void; onError(e: unknown): void }) {
+export function ModelListSection(props: { onChanged(): void; onError(e: unknown): void }) {
   const { onError } = props;
   const [agents, setAgents] = useState<Agent[]>([]);
   const [models, setModels] = useState<Model[]>([]);
@@ -20,44 +16,39 @@ export function ModelSections(props: { stream: MessageStream; chatgpt: ChatGptSt
     api.models().then(setModels, onError);
     api.secrets().then(setSecrets, onError);
   }, [onError]);
-  useEffect(reload, [reload, props.tick, props.chatgpt]);
+  useEffect(reload, [reload]);
   const changed = () => {
     reload();
     props.onChanged();
   };
 
   return (
-    <>
-      <section>
-        <header className="section-head">
-          <h2>Available to agents</h2>
-          <p>
-            The models an agent can pick on the <a href="#/agents">Agents</a> page: Claude, ChatGPT plan models, any
-            OpenAI-compatible server, and the models on this machine (« Give to agents » below).{' '}
-            {secrets.store
-              ? `Keys are encrypted with the ${secrets.store}; they never come back to this screen.`
-              : "Keys come from the engine's environment (.env on a dev machine or server); only the variable name is stored here."}
-          </p>
-        </header>
-        <div className="model-list">
-          {models.map((m) => (
-            <ModelRow
-              key={m.id}
-              model={m}
-              keyStore={secrets.store}
-              stored={!!m.credentialEnv && secrets.names.includes(m.credentialEnv)}
-              usedBy={agents.filter((a) => a.modelId === m.id).map((a) => a.id)}
-              onChanged={changed}
-              onError={onError}
-            />
-          ))}
-          <NewModel onCreated={changed} onError={onError} />
-        </div>
-      </section>
-      <ClaudePlanSection stream={props.stream} models={models} keyStore={secrets.store} onChanged={changed} onError={onError} />
-      <ChatGptSection status={props.chatgpt} models={models} onChanged={changed} onError={onError} />
-      <AccountsSection keyStore={secrets.store} onChanged={changed} onError={onError} />
-    </>
+    <section>
+      <header className="section-head">
+        <h2>Available to agents</h2>
+        <p>
+          The models an agent can pick on the <a href="#/settings/agents">Agents</a> page: Claude, ChatGPT plan models, any
+          OpenAI-compatible server, and the models on this machine (« Give to agents » on the <a href="#/settings/local">Local</a> page).{' '}
+          {secrets.store
+            ? `Keys are encrypted with the ${secrets.store}; they never come back to this screen.`
+            : "Keys come from the engine's environment (.env on a dev machine or server); only the variable name is stored here."}
+        </p>
+      </header>
+      <div className="model-list">
+        {models.map((m) => (
+          <ModelRow
+            key={m.id}
+            model={m}
+            keyStore={secrets.store}
+            stored={!!m.credentialEnv && secrets.names.includes(m.credentialEnv)}
+            usedBy={agents.filter((a) => a.modelId === m.id).map((a) => a.id)}
+            onChanged={changed}
+            onError={onError}
+          />
+        ))}
+        <NewModel onCreated={changed} onError={onError} />
+      </div>
+    </section>
   );
 }
 

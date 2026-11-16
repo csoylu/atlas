@@ -31,11 +31,11 @@ CREATE TABLE chatgpt_account (
   scopes       TEXT,
   expires_at   TEXT,
   signed_in_at TEXT,
-  -- Can's express consent for background use (board cards, schedules). Direct chats are his own activity.
+  -- The user's express consent for background use (board cards, schedules). Direct chats are the user's own activity.
   background   INTEGER NOT NULL DEFAULT 0,
   -- The one-time « You're using your ChatGPT plan » notice was dismissed.
   welcomed     INTEGER NOT NULL DEFAULT 0,
-  -- Usage limit reached: no new requests until Can resumes (OpenAI gives no reset time).
+  -- Usage limit reached: no new requests until the user resumes (OpenAI gives no reset time).
   paused_at    TEXT,
   last_error   TEXT
 );

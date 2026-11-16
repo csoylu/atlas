@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useState } from 'react';
 import { CLAUDE_PLAN_SETTINGS, type ClaudePlanModel, type ClaudePlanSetting, type ClaudePlanStatus, type Model } from '@atlas/shared';
 import { api } from './api.ts';
+import { PlanAccountList } from './PlanAccounts.tsx';
 import type { MessageStream } from './useMessages.ts';
 
 /** Claude subscription sign-in, available models and limit status. */
@@ -36,20 +37,31 @@ export function ClaudePlanSection(props: { stream: MessageStream; models: Model[
     else setAvailable(null);
   }, [ready, onError]);
 
-  const signIn = () =>
+  const signIn = (accountId?: string) =>
     act('login', async () => {
-      const { url } = await api.claudeLogin();
+      const { url } = await api.claudeLogin(accountId);
       window.open(url, '_blank', 'noopener');
     });
   const added = new Set(props.models.filter((m) => m.provider === 'claude_plan').map((m) => m.name));
   const showSettings = editing || (s && !s.configured);
+  const pasteCode = (
+    <>
+      <label>Paste the authorization code shown by Claude
+        <input type="password" autoComplete="off" value={code} onChange={(e) => setCode(e.target.value)} placeholder="code#state" />
+      </label>
+      <button className="primary" disabled={!code.trim() || busy === 'complete'} onClick={() => act('complete', async () => { await api.claudeComplete(code); setCode(''); })}>Finish sign-in</button>
+      <button className="ghost" onClick={() => act('cancel', () => api.claudeCancel())}>
+        Cancel
+      </button>
+    </>
+  );
 
   return (
     <section>
       <header className="section-head">
         <h2>Claude plan</h2>
         <p>
-          Sign in with your Claude subscription using OAuth. No client setup is required. For normal API-key billing, use Anthropic accounts instead.
+          Sign in with one or more Claude subscriptions using OAuth. No client setup is required. For normal API-key billing, use Anthropic accounts instead.
         </p>
       </header>
       {!s ? null : !s.available ? (
@@ -59,7 +71,7 @@ export function ClaudePlanSection(props: { stream: MessageStream; models: Model[
           {showSettings ? (
             <ClaudeSettings status={s} keyStore={props.keyStore} onDone={() => setEditing(false)} onSaved={load} onError={onError} />
           ) : null}
-          {s.configured && !s.signedIn ? (
+          {s.configured && s.accounts.length === 0 ? (
             <div className="model-row plan-card">
               <div className="model-main">
                 <div className="model-title">
@@ -69,56 +81,38 @@ export function ClaudePlanSection(props: { stream: MessageStream; models: Model[
                 {s.lastError && <div className="model-error">{s.lastError}</div>}
               </div>
               <div className="model-actions">
-                {s.pending ? (
-                  <>
-                    <label>Paste the authorization code shown by Claude
-                      <input type="password" autoComplete="off" value={code} onChange={(e) => setCode(e.target.value)} placeholder="code#state" />
-                    </label>
-                    <button className="primary" disabled={!code.trim() || busy === 'complete'} onClick={() => act('complete', async () => { await api.claudeComplete(code); setCode(''); })}>Finish sign-in</button>
-                    <button className="ghost" onClick={() => act('cancel', () => api.claudeCancel())}>
-                      Cancel
-                    </button>
-                  </>
-                ) : (
-                  <button className="primary" disabled={busy === 'login'} onClick={signIn}>
+                {s.pending ? pasteCode : (
+                  <button className="primary" disabled={busy === 'login'} onClick={() => signIn()}>
                     Sign in with Claude
                   </button>
                 )}
-                {!editing && (
-                  <button className="ghost" onClick={() => setEditing(true)}>
-                    Advanced settings
-                  </button>
-                )}
               </div>
             </div>
-          ) : s.signedIn ? (
-            <div className={'model-row plan-card ' + (s.pausedUntil ? 'bad' : 'ok')}>
-              <span className="dot-status" />
-              <div className="model-main">
-                <div className="model-title">
-                  <span className="model-name">{s.email ?? 'Claude account'}</span>
-                  {s.pausedUntil ? <span className="badge bad">Limit reached</span> : <span className="pill ok-pill">Using Claude plan</span>}
-                </div>
-                {s.pausedUntil && <p className="plan-text">Requests are paused until {new Date(s.pausedUntil).toLocaleString()}.</p>}
-                {s.lastError && !s.pausedUntil && <div className="model-error">{s.lastError}</div>}
-              </div>
-              <div className="model-actions">
-                {s.pausedUntil && (
-                  <button className="ghost" onClick={() => act('resume', () => api.updateClaude({ resume: true }))}>
-                    Resume
+          ) : s.configured ? (
+            <PlanAccountList
+              provider="claude_plan"
+              accounts={s.accounts}
+              quotaNone={<span className="muted">No usage reported yet: it shows after the next answer.</span>}
+              signIn={(a) =>
+                s.pending && s.pendingAccountId === a.id ? pasteCode : (
+                  <button className="primary" disabled={busy === 'login' || s.pending} onClick={() => signIn(a.id)}>
+                    Sign in with Claude
                   </button>
-                )}
-                {!editing && (
-                  <button className="ghost" onClick={() => setEditing(true)}>
-                    Advanced settings
-                  </button>
-                )}
-                <button className="ghost danger" onClick={() => confirm('Sign out of Claude? Agents on Claude plan models stop until you sign in again.') && act('out', () => api.claudeLogout())}>
-                  Sign out
-                </button>
-              </div>
-            </div>
+                )
+              }
+              signOut={(a) => api.claudeLogout(a.id)}
+              badge={() => <span className="pill ok-pill">Using Claude plan</span>}
+              onChanged={() => void load().then(props.onChanged)}
+              onError={onError}
+            />
           ) : null}
+          {s.configured && !editing && (
+            <div className="plan-add">
+              <button className="ghost small" onClick={() => setEditing(true)}>
+                Advanced settings
+              </button>
+            </div>
+          )}
           {ready && (
             <div className="plan-models">
               <div className="plan-models-head">Models on your plan</div>
@@ -245,7 +239,7 @@ export function ClaudeWelcome(props: { onDone(): void }) {
     <div className="modal-scrim" role="presentation">
       <div className="modal" role="dialog" aria-modal="true" aria-labelledby="claude-welcome">
         <h2 id="claude-welcome">You're using your Claude plan</h2>
-        <p>Agents on Claude plan models now use your Claude plan's usage. When a limit is reached, Atlas pauses them until it resets.</p>
+        <p>Agents on Claude plan models now use your Claude plan's usage. When a subscription reaches its limit, work moves to your next one; when all are out, Atlas waits until the first resets.</p>
         <button className="primary" autoFocus onClick={props.onDone}>
           Got it
         </button>

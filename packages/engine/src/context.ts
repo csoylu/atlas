@@ -1,4 +1,4 @@
-import type { ContentBlock, Message } from '@atlas/shared';
+import type { ContentBlock, Message, TodoItem } from '@atlas/shared';
 import type { ModelRequest } from './providers/types.ts';
 
 export const INTERRUPTED = 'interrupted by a restart or a stop before this tool finished; re-run it if still needed';
@@ -21,13 +21,9 @@ export function buildMessages(messages: (Message & { contextUpto?: number | null
 
   const out: ModelRequest['messages'] = [];
   for (const m of ordered) {
-    // Unsigned thinking comes from a local model: shown on the card, never replayed (Claude rejects it, and it would
-    // only fill a small local context).
-    const content = m.content.filter((b) => !(b.type === 'thinking' && !b.signature));
-    if (!content.length) continue;
     const last = out.at(-1);
-    if (last && last.role === m.role) last.content.push(...content);
-    else out.push({ role: m.role, content });
+    if (last && last.role === m.role) last.content.push(...m.content);
+    else out.push({ role: m.role, content: [...m.content] });
   }
   for (let i = 0; i < out.length; i++) {
     const m = out[i]!;
@@ -62,19 +58,115 @@ type Msg = Message & { contextUpto?: number | null };
 
 /** Fraction of the context window the view may use; the rest is left for the answer. */
 export const COMPACT_AT = 0.7;
+/** After a compaction the view should be under this fraction (hysteresis: it doesn't happen again every turn). */
+export const COMPACT_TO = 0.5;
+/** Pruning keeps the newest messages worth this fraction of the window whole. */
+export const PRUNE_TAIL = 0.25;
+/** A prune breaks the prompt cache: it is done only if it reclaims at least this fraction of the window. */
+export const PRUNE_MIN = 0.05;
 export const SUMMARY_LEAD = 'Summary of the earlier part of this conversation (written when it got too long for the context):';
-const OMITTED_TOOL = (n: number) => `output omitted to fit the context (${n} chars); history_search can read it`;
+export const TODO_LEAD = 'Your todo list (todo_write), as last written; the call itself was summarized:';
+const OMITTED_TOOL = (n: number, seq?: number) => `output omitted to fit the context (${n} chars); history_search can read it${seq ? ` (seq ${seq})` : ''}`;
+const OMITTED_INPUT = (n: number, seq?: number) => `input omitted to fit the context (${n} chars)${seq ? `; history_search can read it (seq ${seq})` : ''}`;
+/** Tool outputs and inputs above these sizes are replaced by a stub when pruned or degraded. */
+const BIG_RESULT = 300;
+const BIG_INPUT = 600;
+/** Identical tool outputs at least this long are deduplicated when pruned. */
+const DEDUPE_MIN = 80;
 
 /** Rough token count (~4 characters per token), on the JSON the provider sends. Errs high for prose, fine here. */
 export const estimateTokens = (x: unknown): number => Math.ceil((typeof x === 'string' ? x.length : JSON.stringify(x).length) / 4);
 
-/** The view: summary (if any) + the messages after the seq it covers. */
-export function compactedView(transcript: Msg[], summary: string | null, uptoSeq: number | null): Turn[] {
-  const view = buildMessages(uptoSeq == null ? transcript : transcript.filter((m) => m.seq > uptoSeq));
-  if (!summary) return view;
-  const lead: ContentBlock = { type: 'text', text: `${SUMMARY_LEAD}\n\n${summary}` };
-  if (view[0]?.role === 'user') return [{ role: 'user', content: [lead, ...view[0].content] }, ...view.slice(1)];
-  return [{ role: 'user', content: [lead] }, ...view];
+/** The last real prompt size the provider reported for the conversation, and the seq of the last message it included. */
+export interface Reading {
+  tokens: number;
+  upto: number;
+}
+
+/**
+ * The view's size for the compaction decision: the provider's real count of the last turn + an estimate of only the
+ * messages added since. Null without a reading (new conversation, or the view changed since: summary, prune).
+ */
+export function measuredSize(reading: Reading | null, transcript: Msg[]): number | null {
+  if (!reading) return null;
+  const added = transcript.filter((m) => m.seq > reading.upto);
+  return reading.tokens + (added.length ? estimateTokens(added.map((m) => m.content)) : 0);
+}
+
+/**
+ * The view: summary (if any) + the messages after the seq it covers, those up to `pruneUpto` pruned (pruneMessages).
+ * If the latest todo_write call was folded into the summary, the current list is re-injected after it.
+ */
+export function compactedView(
+  transcript: Msg[],
+  summary: string | null,
+  uptoSeq: number | null,
+  pruneUpto: number | null = null,
+  todos: TodoItem[] | null = null,
+): Turn[] {
+  const rest = uptoSeq == null ? transcript : transcript.filter((m) => m.seq > uptoSeq);
+  const view = buildMessages(pruneMessages(rest, pruneUpto));
+  const lead: ContentBlock[] = [];
+  if (summary) lead.push({ type: 'text', text: `${SUMMARY_LEAD}\n\n${summary}` });
+  const todoVisible = rest.some((m) => m.content.some((b) => b.type === 'tool_use' && b.name === 'todo_write'));
+  if (todos?.length && !todoVisible) lead.push({ type: 'text', text: `${TODO_LEAD}\n${renderTodos(todos)}` });
+  if (!lead.length) return view;
+  if (view[0]?.role === 'user') return [{ role: 'user', content: [...lead, ...view[0].content] }, ...view.slice(1)];
+  return [{ role: 'user', content: lead }, ...view];
+}
+
+/** A todo list as text: one line per item, [x] done, [>] in progress, [ ] pending. */
+export function renderTodos(todos: TodoItem[]): string {
+  const mark = { completed: '[x]', in_progress: '[>]', pending: '[ ]' } as const;
+  return todos.map((t) => `- ${mark[t.status]} ${t.content}`).join('\n');
+}
+
+/**
+ * Prune (Hermes "proactive prune"): in the messages up to `upto`, deterministically (the same transcript gives the same
+ * view, so the prompt cache holds between prunes):
+ * - a tool output identical to a later one in the region becomes a pointer to it,
+ * - big tool outputs and big tool inputs become « omitted … history_search can read it » stubs (todo_write inputs stay:
+ *   the list is small and the agent needs it),
+ * - provider web searches become one line of text.
+ * The messages after `upto` (the protected recent tail) and user / assistant text stay whole. Returns copies.
+ */
+export function pruneMessages(messages: Msg[], upto: number | null): Msg[] {
+  if (upto == null) return messages;
+  const latest = new Map<string, string>(); // output → where its latest copy in the region is ("seq:index")
+  for (const m of messages)
+    if (m.seq <= upto) m.content.forEach((b, i) => b.type === 'tool_result' && b.content.length >= DEDUPE_MIN && latest.set(b.content, `${m.seq}:${i}`));
+  return messages.map((m) => {
+    if (m.seq > upto) return m;
+    const content = m.content.map((b, i): ContentBlock => {
+      if (b.type === 'tool_result') {
+        const at = latest.get(b.content);
+        if (b.content.length > BIG_RESULT) return { ...b, content: OMITTED_TOOL(b.content.length, m.seq) };
+        if (at && at !== `${m.seq}:${i}`) return { ...b, content: `same output as the later call in #${at.split(':')[0]}` };
+        return b;
+      }
+      if (b.type === 'tool_use' && b.name !== 'todo_write') {
+        const n = JSON.stringify(b.input).length;
+        return n > BIG_INPUT ? { ...b, input: { omitted: OMITTED_INPUT(n, m.seq) } } : b;
+      }
+      if (b.type === 'server_tool_use') return { type: 'text', text: `(searched the web: ${JSON.stringify(b.input)})` };
+      if (b.type === 'web_search_tool_result') return { type: 'text', text: `(${searchSummary(b.content)}; results omitted to fit the context)` };
+      return b;
+    });
+    return content.every((b, i) => b === m.content[i]) ? m : { ...m, content };
+  });
+}
+
+/**
+ * Where to prune: every message up to the returned seq, keeping whole the newest messages worth `tail` tokens (and
+ * always the newest two). Null if the whole conversation fits in the tail.
+ */
+export function pickPrune(messages: Msg[], tail: number): number | null {
+  let acc = 0;
+  for (let i = messages.length - 1; i >= 0; i--) {
+    acc += estimateTokens(messages[i]!.content);
+    if (acc > tail && i < messages.length - 2) return messages[i]!.seq;
+  }
+  return null;
 }
 
 /** One message as plain text for the summarizer: tool inputs and outputs shortened. */
@@ -86,11 +178,20 @@ export function renderForSummary(messages: Msg[]): string {
         if (b.type === 'text') return [b.text];
         if (b.type === 'tool_use') return [`→ ${b.name} ${cap(JSON.stringify(b.input), 400)}`];
         if (b.type === 'tool_result') return [`← ${b.is_error ? 'error: ' : ''}${cap(b.content, 1200)}`];
+        if (b.type === 'server_tool_use') return [`→ ${b.name} (run by the provider) ${cap(JSON.stringify(b.input), 400)}`];
+        if (b.type === 'web_search_tool_result') return [`← ${searchSummary(b.content)}`];
         return []; // thinking: the model's private notes, not part of the record
       });
       return `#${m.seq} ${m.author}:\n${parts.join('\n')}`;
     })
     .join('\n\n');
+}
+
+/** One line for a web search result: the pages found, or its error. */
+export function searchSummary(content: unknown): string {
+  if (!Array.isArray(content)) return `web search failed: ${(content as { error_code?: string } | null)?.error_code ?? 'unknown error'}`;
+  const pages = content.flatMap((r: { title?: string; url?: string }) => (r?.url ? [`${r.title ?? ''} <${r.url}>`] : []));
+  return `web search: ${pages.length} results${pages.length ? ': ' + pages.slice(0, 8).join('; ') : ''}`;
 }
 
 /**
@@ -125,11 +226,18 @@ export function degrade(view: Turn[], budget: number, overhead: number): Turn[] 
   const size = () => overhead + estimateTokens(out);
   const older = out.slice(0, Math.max(0, out.length - 2));
   const passes: ((b: ContentBlock, t: Turn) => ContentBlock | null)[] = [
-    (b) => (b.type === 'tool_result' && b.content.length > 300 ? { ...b, content: OMITTED_TOOL(b.content.length) } : null),
+    (b) => (b.type === 'tool_result' && b.content.length > BIG_RESULT ? { ...b, content: OMITTED_TOOL(b.content.length) } : null),
+    // Provider web searches: the pair becomes plain text (their results can't be shortened, only dropped).
+    (b) =>
+      b.type === 'server_tool_use'
+        ? { type: 'text', text: `(searched the web: ${JSON.stringify(b.input)})` }
+        : b.type === 'web_search_tool_result'
+          ? { type: 'text', text: `(${searchSummary(b.content)}; results omitted to fit the context)` }
+          : null,
     (b) => {
       if (b.type !== 'tool_use') return null;
       const n = JSON.stringify(b.input).length;
-      return n > 600 ? { ...b, input: { omitted: `input omitted to fit the context (${n} chars)` } } : null;
+      return n > BIG_INPUT ? { ...b, input: { omitted: OMITTED_INPUT(n) } } : null;
     },
     (b, t) =>
       t.role === 'assistant' && b.type === 'text' && b.text.length > 400

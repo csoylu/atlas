@@ -13,16 +13,15 @@ export interface SecretStore {
 }
 
 export const SECRET_NAME = /^[A-Z][A-Z0-9_]{1,63}$/;
-/** The ChatGPT sign-in's tokens (chatgpt.ts): Atlas's own entry, never in the engine env, the key list or the API. */
-export const CHATGPT_TOKENS = 'CHATGPT_TOKENS';
-/** The Claude plan sign-in's tokens (claude-plan.ts): same rules as CHATGPT_TOKENS. */
-export const CLAUDE_TOKENS = 'CLAUDE_TOKENS';
-/** Token entries: never in the engine env, the key list or the API. */
-export const TOKEN_ENTRIES = new Set([CHATGPT_TOKENS, CLAUDE_TOKENS]);
+/**
+ * Plan sign-in tokens (plan-accounts.ts): CLAUDE_TOKENS / CHATGPT_TOKENS for each provider's first subscription,
+ * CLAUDE_TOKENS_<ID> / CHATGPT_TOKENS_<ID> for the others. Never in the engine env, the key list or the API.
+ */
+export const isTokenEntry = (name: string) => /^(CLAUDE|CHATGPT)_TOKENS(_[A-Z0-9]+)?$/.test(name);
 
 /** Engine env = process env + stored secrets; setting a secret updates it live (models read it at each call). */
 export function envWithSecrets(base: NodeJS.ProcessEnv, store?: SecretStore): NodeJS.ProcessEnv {
   const env = { ...base };
-  for (const n of store?.names() ?? []) if (!TOKEN_ENTRIES.has(n)) env[n] = store!.get(n);
+  for (const n of store?.names() ?? []) if (!isTokenEntry(n)) env[n] = store!.get(n);
   return env;
 }

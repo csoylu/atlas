@@ -4,16 +4,19 @@ import { existsSync } from 'node:fs';
 import { join } from 'node:path';
 import { WebSocketServer } from 'ws';
 import { ZodError } from 'zod';
-import { isTimeZone, PostMessage, ScheduleWhen } from '@atlas/shared';
+import { isTimeZone, PostMessage, RewindRequest, ScheduleWhen, UpdateVoice } from '@atlas/shared';
 import type { Agents } from './agents.ts';
 import type { Models } from './models.ts';
 import type { Runner } from './runner.ts';
+import type { Rewinds } from './rewind.ts';
 import type { Dispatcher } from './dispatcher.ts';
 import type { Settings } from './settings.ts';
 import type { Memories } from './memory.ts';
 import { localTimeZone, upcoming, type Schedules } from './schedules.ts';
-import { TOKEN_ENTRIES, SECRET_NAME, type SecretStore } from './secrets.ts';
+import { isTokenEntry, SECRET_NAME, type SecretStore } from './secrets.ts';
 import { StaleVersionError, type Canvases } from './canvas.ts';
+import type { Documents } from './documents.ts';
+import { findSection, formatDocRef, splitSections } from '@atlas/shared';
 import { workdirOf } from './agents.ts';
 import { inside } from './tools.ts';
 import { statSync } from 'node:fs';
@@ -23,11 +26,14 @@ import type { Local } from './local.ts';
 import type { Accounts } from './accounts.ts';
 import type { ChatGpt } from './chatgpt.ts';
 import type { ClaudePlan } from './claude-plan.ts';
+import type { PlanAccounts } from './plan-accounts.ts';
+import type { Notifications } from './notifications.ts';
 import type { Usage } from './usage.ts';
-import { DEFAULT_CONTEXT_WINDOW } from '@atlas/shared';
+import type { Voice } from './voice.ts';
+import { DEFAULT_CONTEXT_WINDOW, type About, type Timeline } from '@atlas/shared';
 
 /** Who the UI acts as. One user (design §1). */
-const USER = 'can';
+const USER = 'user';
 
 import { Auth, SESSION_COOKIE } from './auth.ts';
 
@@ -36,25 +42,32 @@ export function createApi(deps: {
   agents: Agents;
   models: Models;
   runner: Runner;
+  rewinds: Rewinds;
   dispatcher: Dispatcher;
   settings: Settings;
   canvases: Canvases;
+  documents: Documents;
   memories: Memories;
   schedules: Schedules;
   local: Local;
   accounts: Accounts;
   chatgpt: ChatGpt;
   claude: ClaudePlan;
+  plans: PlanAccounts;
+  notifications: Notifications;
   usage: Usage;
+  /** Desktop only; null elsewhere (the /api/voice routes answer 404). */
+  voice: Voice | null;
   bus: Bus;
   dataDir: string;
+  version: string;
   uiDir?: string;
   secrets?: SecretStore;
   env: NodeJS.ProcessEnv;
   /** Login and cross-site checks (auth.ts). */
   auth: Auth;
 }): Server {
-  const { kanban, agents, models, runner, dispatcher, settings, canvases, memories, schedules, local, accounts, chatgpt, claude, usage, bus, auth } = deps;
+  const { kanban, agents, models, runner, rewinds, dispatcher, settings, canvases, documents, memories, schedules, local, accounts, chatgpt, claude, plans, notifications, usage, bus, auth } = deps;
   const app = express();
   // Behind Caddy on the same machine: trust its X-Forwarded-Proto so session cookies get the Secure flag over HTTPS.
   app.set('trust proxy', 'loopback');
@@ -96,6 +109,13 @@ export function createApi(deps: {
 
   // ── Protected API routes ────────────────────────────────────────────
 
+  // ── About (Settings → About & data) ──────────────────────────────────
+  app.get('/api/about', (_req, res) => {
+    const about: About = { version: deps.version, dataDir: deps.dataDir, server: auth.enabled, voice: !!deps.voice };
+    res.json(about);
+  });
+
+
   app.get('/api/cards', (_req, res) => {
     res.json(kanban.list());
   });
@@ -115,15 +135,39 @@ export function createApi(deps: {
   app.get('/api/cards/:id/messages', (req, res) => {
     res.json(kanban.messages(req.params.id));
   });
-  app.post('/api/cards/:id/messages', (req, res) => {
-    const { text } = PostMessage.parse(req.body);
-    const message = kanban.appendMessage(req.params.id, 'user', USER, [{ type: 'text', text }]);
+  app.post('/api/cards/:id/messages', async (req, res) => {
+    const { text, ref } = PostMessage.parse(req.body);
+    kanban.get(req.params.id);
+    // The card's state before this message: « Rewind to here » / Stop go back to it (rewind.ts).
+    const snapshot = rewinds.beforeUserMessage(req.params.id);
+    // « Ask about this »: the quoted document part goes first, so the agent knows exactly what is meant.
+    let quote: string | null = null;
+    if (ref) {
+      const versions = documents.versions(ref.docId);
+      // The version the user was looking at, or the latest if it is no longer kept.
+      const { doc, content } = documents.content(ref.docId, versions.some((v) => v.version === ref.version) ? ref.version : undefined);
+      const section = ref.section !== null && doc.kind === 'markdown' ? (findSection(splitSections(content), ref.section) ?? null) : null;
+      quote = formatDocRef(doc, ref.version, section);
+    }
+    const message = kanban.appendMessage(req.params.id, 'user', USER, [...(quote ? [{ type: 'text' as const, text: quote }] : []), { type: 'text', text }]);
+    rewinds.record(req.params.id, message.seq, snapshot);
     dispatcher.onUserMessage(req.params.id); // unblocks, resumes review, or gets a chat reply
+    runner.nameChat(req.params.id); // direct chats: the user's 3rd message has the model title the chat
     res.status(201).json(message);
   });
   app.get('/api/cards/:id/runs', (req, res) => {
     kanban.get(req.params.id);
     res.json(runner.runs(req.params.id));
+  });
+  app.get('/api/cards/:id/tool-calls', (req, res) => {
+    kanban.get(req.params.id);
+    res.json(runner.toolCalls(req.params.id));
+  });
+  /** What the chat shows between messages (#66): unfinished runs, rewinds in effect, where the context summary ends. */
+  app.get('/api/cards/:id/timeline', (req, res) => {
+    const id = req.params.id;
+    const timeline: Timeline = { runs: runner.endedRuns(id), rewinds: rewinds.events(id), summary: runner.summaryOf(id) };
+    res.json(timeline);
   });
   app.post('/api/cards/:id/retry', async (req, res) => {
     await dispatcher.retry(req.params.id);
@@ -131,6 +175,22 @@ export function createApi(deps: {
   });
   app.post('/api/cards/:id/stop', (req, res) => {
     res.json({ stopped: runner.stop(req.params.id) });
+  });
+  /** Rewind (rewind.ts): to the user message `seq`, or without it (Stop/Esc) the turn being answered; null = just stopped. */
+  app.get('/api/cards/:id/rewind', async (req, res) => {
+    const seq = Number(req.query.seq);
+    if (!Number.isInteger(seq) || seq < 1) throw new InvalidError('seq: the number of a message');
+    res.json(await rewinds.preview(req.params.id, seq));
+  });
+  app.post('/api/cards/:id/rewind', async (req, res) => {
+    const { seq } = RewindRequest.parse(req.body ?? {});
+    res.json(await rewinds.rewind(req.params.id, seq));
+  });
+  app.post('/api/rewinds/:id/undo', async (req, res) => {
+    const r = await rewinds.undo(req.params.id);
+    // The undone rewind had cut the agent off mid-turn: it picks up where it stopped, as if the user had written.
+    if (r.resume) dispatcher.onUserMessage(r.cardId);
+    res.json(r);
   });
 
   /** Direct chats (Kanban.newChat), latest first; the card id is used with the card message/stop/retry/delete routes. */
@@ -207,6 +267,48 @@ export function createApi(deps: {
     res.json(canvases.restore(req.params.id, Number(req.params.version), USER));
   });
 
+  // ── Documents and side panels (design §16) ───────────────────────────
+  app.get('/api/documents', (req, res) => {
+    // Without a card: the Library, every document re-synced (files changed outside Atlas, canvases as whiteboards).
+    res.json(typeof req.query.card === 'string' ? documents.list({ cardId: req.query.card }) : documents.library());
+  });
+  app.post('/api/documents/:id/pin', (req, res) => {
+    const pinned = (req.body as { pinned?: unknown }).pinned;
+    if (typeof pinned !== 'boolean') throw new InvalidError('pinned must be true or false');
+    res.json(documents.pin(req.params.id, pinned));
+  });
+  /** The whiteboard document of a canvas (created on first use): #/canvas/<id> links and « New whiteboard ». */
+  app.post('/api/canvases/:id/document', (req, res) => {
+    res.json(documents.whiteboard(req.params.id, USER));
+  });
+  app.get('/api/documents/:id', (req, res) => {
+    const v = req.query.version;
+    res.json(documents.content(req.params.id, typeof v === 'string' ? Number(v) : undefined));
+  });
+  app.get('/api/documents/:id/versions', (req, res) => {
+    res.json(documents.versions(req.params.id));
+  });
+  app.post('/api/documents/:id/restore/:version', (req, res) => {
+    res.json(documents.restore(req.params.id, Number(req.params.version), USER));
+  });
+  app.get('/api/chats/:id/panel', (req, res) => {
+    res.json(documents.tabs(req.params.id));
+  });
+  app.post('/api/chats/:id/panel/open', (req, res) => {
+    const b = req.body as { docId?: unknown; section?: unknown };
+    res.json(documents.open(req.params.id, String(b.docId ?? ''), USER, typeof b.section === 'string' ? b.section : null));
+  });
+  app.post('/api/chats/:id/panel/close', (req, res) => {
+    const b = req.body as { docId?: unknown };
+    res.json(documents.close(req.params.id, typeof b.docId === 'string' ? b.docId : null));
+  });
+  app.post('/api/chats/:id/panel/focus', (req, res) => {
+    res.json(documents.focus(req.params.id, String((req.body as { docId?: unknown }).docId ?? '')));
+  });
+  app.post('/api/chats/:id/panel/seen', (req, res) => {
+    res.json(documents.seen(req.params.id, String((req.body as { docId?: unknown }).docId ?? '')));
+  });
+
   // Files in an agent's workspace, for url nodes (built apps, pages, images). Served with a CSP sandbox so a page
   // never runs with the app's origin, even if opened directly in a tab.
   app.get('/api/files/:agent/{*path}', (req, res, next) => {
@@ -227,13 +329,13 @@ export function createApi(deps: {
 
   // Model keys. Names and presence only; values go in, never out.
   app.get('/api/secrets', (_req, res) => {
-    res.json({ store: deps.secrets?.label ?? null, names: (deps.secrets?.names() ?? []).filter((n) => !TOKEN_ENTRIES.has(n)) });
+    res.json({ store: deps.secrets?.label ?? null, names: (deps.secrets?.names() ?? []).filter((n) => !isTokenEntry(n)) });
   });
   app.put('/api/secrets/:name', (req, res) => {
     const name = req.params.name;
     if (!deps.secrets) throw new ConflictError(`this engine reads keys from its environment: set ${name} there and restart it`);
     if (!SECRET_NAME.test(name)) throw new ConflictError(`${name} is not a valid variable name (A-Z, 0-9, _)`);
-    if (TOKEN_ENTRIES.has(name)) throw new ConflictError(`${name} belongs to a sign-in (ChatGPT or Claude plan)`);
+    if (isTokenEntry(name)) throw new ConflictError(`${name} belongs to a sign-in (ChatGPT or Claude plan)`);
     const value = String((req.body as { value?: unknown }).value ?? '').trim();
     if (!value) throw new ConflictError('the value is empty');
     deps.secrets.set(name, value);
@@ -244,7 +346,7 @@ export function createApi(deps: {
   });
   app.delete('/api/secrets/:name', (req, res) => {
     if (!deps.secrets) throw new ConflictError('this engine reads keys from its environment');
-    if (TOKEN_ENTRIES.has(req.params.name)) throw new ConflictError('sign out instead (Models page)');
+    if (isTokenEntry(req.params.name)) throw new ConflictError('sign out instead (Settings → Subscriptions)');
     deps.secrets.delete(req.params.name);
     delete deps.env[req.params.name];
     if (req.params.name.startsWith('ATLAS_CLAUDE_')) claude.notify();
@@ -268,22 +370,68 @@ export function createApi(deps: {
   app.get('/api/cards/:id/usage', (req, res) => {
     const u = usage.conversation(kanban.get(req.params.id).conversationId);
     const m = u.lastModelId ? models.list().find((x) => x.id === u.lastModelId) : undefined;
-    res.json({ ...u, contextWindow: m?.contextWindow ?? null });
+    const { lastAccountId, ...rest } = u;
+    const acc = lastAccountId ? plans.find(lastAccountId) : null;
+    res.json({ ...rest, contextWindow: m?.contextWindow ?? null, plan: acc ? { provider: acc.provider, label: acc.label, quota: acc.quota } : null });
+  });
+
+  // ── Plan subscriptions (plan-accounts.ts): several Claude / ChatGPT sign-ins, in failover order ──
+  const planOf = (provider: string) => (provider === 'chatgpt' ? chatgpt : claude);
+  app.post('/api/plan-accounts', (req, res) => {
+    const r = plans.create(req.body);
+    res.status(201).json(planOf(r.provider).status());
+  });
+  app.patch('/api/plan-accounts/:id', (req, res) => {
+    const r = plans.update(req.params.id, req.body);
+    res.json(planOf(r.provider).status());
+  });
+  app.put('/api/plan-accounts/order', (req, res) => {
+    const b = req.body as { provider?: string; ids?: string[] };
+    const provider = b.provider === 'chatgpt' ? 'chatgpt' : 'claude_plan';
+    plans.reorder(provider, b.ids ?? []);
+    res.json(planOf(provider).status());
+  });
+  app.delete('/api/plan-accounts/:id', async (req, res) => {
+    const r = plans.row(req.params.id);
+    res.json(await planOf(r.provider).remove(r.id));
+  });
+  app.get('/api/notifications', (_req, res) => {
+    res.json(notifications.list());
+  });
+  // ── Inbox (design §16): needs you + updates; read, archive, archive all read ──
+  app.get('/api/inbox', (_req, res) => {
+    res.json(notifications.inbox());
+  });
+  const notificationId = (raw: string) => {
+    const id = Number(raw);
+    if (!Number.isInteger(id) || id < 1) throw new InvalidError('id: the number of a notification');
+    return id;
+  };
+  app.post('/api/notifications/archive-read', (_req, res) => {
+    res.json({ archived: notifications.archiveRead() });
+  });
+  app.post('/api/notifications/:id/read', (req, res) => {
+    notifications.read(notificationId(req.params.id));
+    res.status(204).end();
+  });
+  app.post('/api/notifications/:id/archive', (req, res) => {
+    notifications.archive(notificationId(req.params.id));
+    res.status(204).end();
   });
 
   // ── ChatGPT plan (chatgpt.ts): the status and actions, never a token ──
   app.get('/api/chatgpt', (_req, res) => {
     res.json(chatgpt.status());
   });
-  app.post('/api/chatgpt/login', async (_req, res) => {
-    res.json(await chatgpt.login());
+  app.post('/api/chatgpt/login', async (req, res) => {
+    res.json(await chatgpt.login(req.body?.accountId));
   });
   app.post('/api/chatgpt/cancel', (_req, res) => {
     chatgpt.cancel();
     res.json(chatgpt.status());
   });
-  app.post('/api/chatgpt/logout', async (_req, res) => {
-    res.json(await chatgpt.logout());
+  app.post('/api/chatgpt/logout', async (req, res) => {
+    res.json(await chatgpt.logout(req.body?.accountId));
   });
   app.patch('/api/chatgpt', (req, res) => {
     res.json(chatgpt.update(req.body));
@@ -292,8 +440,8 @@ export function createApi(deps: {
   app.get('/api/claude', (_req, res) => {
     res.json(claude.status());
   });
-  app.post('/api/claude/login', async (_req, res) => {
-    res.json(await claude.login());
+  app.post('/api/claude/login', async (req, res) => {
+    res.json(await claude.login(req.body?.accountId));
   });
   app.post('/api/claude/complete', async (req, res) => {
     res.json(await claude.completeLogin(req.body?.code));
@@ -302,8 +450,8 @@ export function createApi(deps: {
     claude.cancel();
     res.json(claude.status());
   });
-  app.post('/api/claude/logout', async (_req, res) => {
-    res.json(await claude.logout());
+  app.post('/api/claude/logout', async (req, res) => {
+    res.json(await claude.logout(req.body?.accountId));
   });
   app.patch('/api/claude', (req, res) => {
     res.json(claude.update(req.body));
@@ -336,6 +484,28 @@ export function createApi(deps: {
   });
   app.post('/api/accounts/:id/test', async (req, res) => {
     res.json(await accounts.test(req.params.id));
+  });
+
+  // ── Voice mode (voice.ts, desktop only) ───────────────────────────────
+  const voice = () => {
+    if (!deps.voice) throw new NotFoundError('voice mode is only available in the desktop app');
+    return deps.voice;
+  };
+  app.get('/api/voice', (_req, res) => {
+    res.json(voice().status());
+  });
+  app.patch('/api/voice', async (req, res) => {
+    res.json(await voice().update(req.body));
+  });
+  /** Retry a failed model download. */
+  app.post('/api/voice/download', (_req, res) => {
+    void voice().ensureModels();
+    res.json(voice().status());
+  });
+  app.post('/api/voice/test', async (req, res) => {
+    const v = voice();
+    const name = UpdateVoice.shape.voice.unwrap().parse((req.body as { voice?: unknown }).voice ?? v.status().voice);
+    res.type('audio/wav').send(await v.test(name, settings.user().name));
   });
 
   // ── Local model server (local.ts) ────────────────────────────────────
@@ -414,7 +584,7 @@ export function createApi(deps: {
     res.json(schedules.get(req.params.id));
   });
   app.post('/api/schedules', (req, res) => {
-    res.status(201).json(schedules.create(req.body, 'can'));
+    res.status(201).json(schedules.create(req.body, 'user'));
   });
   app.patch('/api/schedules/:id', (req, res) => {
     res.json(schedules.update(req.params.id, req.body));

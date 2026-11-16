@@ -13,6 +13,26 @@ afterEach(async () => {
 });
 
 describe('api', () => {
+  it('serves the Library: canvases as whiteboards, pin, and the whiteboard of a canvas', async () => {
+    engine = await startEngine({ dbFile: ':memory:', dataDir: mkdtempSync(join(tmpdir(), 'atlas-')), port: 0, dispatch: false });
+    const post = (path: string, body: unknown) =>
+      fetch(engine!.url + path, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify(body) });
+    const canvas = (await (await post('/api/canvases', { name: 'Sketch' })).json()) as { id: string };
+    const doc = (await (await post(`/api/canvases/${canvas.id}/document`, {})).json()) as { id: string; kind: string; agentId: string };
+    expect(doc).toMatchObject({ kind: 'whiteboard', agentId: 'user' });
+    const lib = (await (await fetch(engine.url + '/api/documents')).json()) as { id: string }[];
+    expect(lib.map((d) => d.id)).toEqual([doc.id]);
+    expect(await (await post(`/api/documents/${doc.id}/pin`, { pinned: true })).json()).toMatchObject({ id: doc.id, pinned: true });
+    expect((await post(`/api/documents/${doc.id}/pin`, { pinned: 'yes' })).status).toBe(400);
+    expect((await post('/api/documents/doc_none/pin', { pinned: true })).status).toBe(404);
+  });
+
+  it('reports the version and data folder for Settings → About', async () => {
+    const dataDir = mkdtempSync(join(tmpdir(), 'atlas-'));
+    engine = await startEngine({ dbFile: ':memory:', dataDir, port: 0, version: '1.2.3' });
+    expect(await (await fetch(engine.url + '/api/about')).json()).toEqual({ version: '1.2.3', dataDir, server: false, voice: false });
+  });
+
   it('serves cards over REST and pushes events over the WebSocket', async () => {
     engine = await startEngine({ dbFile: ':memory:', dataDir: mkdtempSync(join(tmpdir(), 'atlas-')), port: 0 });
     const ws = new WebSocket(engine.url.replace('http', 'ws') + '/api/events');

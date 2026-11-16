@@ -1,5 +1,5 @@
 import { lazy, Suspense, useCallback, useEffect, useMemo, useRef, useState, type PointerEvent as RPointerEvent } from 'react';
-import type { Canvas, CanvasNode, CanvasNodeKind, DrawingScene } from '@atlas/shared';
+import { USER, type Canvas, type CanvasNode, type CanvasNodeKind, type DrawingScene } from '@atlas/shared';
 import { api, ApiError } from '../api.ts';
 import type { MessageStream } from '../useMessages.ts';
 import { KINDS, RENDERERS } from './renderers/index.ts';
@@ -7,7 +7,6 @@ import type { Renderer } from './renderers/types.ts';
 
 const DrawingEditor = lazy(() => import('./excalidraw.tsx').then((m) => ({ default: m.DrawingEditor })));
 
-type Meta = Omit<Canvas, 'nodes'>;
 interface View {
   x: number;
   y: number;
@@ -17,69 +16,11 @@ interface View {
 const rendererOf = (kind: CanvasNodeKind) => RENDERERS[kind] as unknown as Renderer;
 const newId = () => 'n_' + Math.random().toString(36).slice(2, 9);
 
-export function CanvasView(props: {
-  canvasId: string | null;
-  stream: MessageStream;
-  onSelect(id: string | null): void;
-  onOpenCard(id: string): void;
-  onError(e: unknown): void;
-}) {
-  const { stream, onError, onSelect } = props;
-  const [list, setList] = useState<Meta[] | null>(null);
-  const reload = useCallback(() => api.canvases().then(setList, onError), [onError]);
-
-  useEffect(() => {
-    void reload();
-    return stream.listen('canvases', () => void reload());
-  }, [reload, stream]);
-
-  // Open the most recent canvas when none is selected.
-  useEffect(() => {
-    if (!props.canvasId && list?.length) onSelect(list[0]!.id);
-  }, [props.canvasId, list, onSelect]);
-
-  const create = async () => {
-    const name = prompt('Canvas name', 'System design');
-    if (!name?.trim()) return;
-    const c = await api.createCanvas(name.trim()).catch(onError);
-    if (c) onSelect(c.id);
-  };
-
-  return (
-    <div className="canvas-view">
-      <aside className="canvas-list">
-        <div className="canvas-list-head">
-          Canvases
-          <button className="ghost" onClick={create} title="New canvas">
-            +
-          </button>
-        </div>
-        {list?.map((c) => (
-          <button key={c.id} className={'canvas-item' + (c.id === props.canvasId ? ' active' : '')} onClick={() => onSelect(c.id)}>
-            <span className="name">{c.name}</span>
-            <span className="meta">
-              v{c.version} · {c.updatedBy}
-            </span>
-          </button>
-        ))}
-        {list && list.length === 0 && <p className="hint">No canvas yet.</p>}
-      </aside>
-      {props.canvasId ? (
-        <CanvasBoard key={props.canvasId} id={props.canvasId} stream={stream} onOpenCard={props.onOpenCard} onError={onError} onDeleted={() => onSelect(null)} />
-      ) : (
-        <div className="canvas-empty">
-          <h2>One surface for diagrams, mockups and live apps</h2>
-          <p>Draw system designs, render HTML components, embed a running app, write explanations. Agents write here too.</p>
-          <button className="primary" onClick={create}>
-            Create a canvas
-          </button>
-        </div>
-      )}
-    </div>
-  );
-}
-
-function CanvasBoard(props: { id: string; stream: MessageStream; onOpenCard(id: string): void; onError(e: unknown): void; onDeleted(): void }) {
+/**
+ * A whiteboard (a canvas) in its editor: the Library's Preview of a whiteboard document (design §16). Nodes move,
+ * resize and edit in place; saves are debounced and merged with agents' edits.
+ */
+export function CanvasBoard(props: { id: string; stream: MessageStream; onOpenCard(id: string): void; onError(e: unknown): void; onDeleted(): void }) {
   const { id, stream, onError } = props;
   const [canvas, setCanvas] = useState<Canvas | null>(null);
   const [nodes, setNodes] = useState<CanvasNode[]>([]);
@@ -111,7 +52,7 @@ function CanvasBoard(props: { id: string; stream: MessageStream; onOpenCard(id: 
       const d = dirty.current;
       if (d.changed.size || d.deleted.size) return; // the pending save will merge
       adopt(e.canvas);
-      if (e.canvas.updatedBy !== 'can') flash(`Updated by @${e.canvas.updatedBy}`);
+      if (e.canvas.updatedBy !== USER) flash(`Updated by @${e.canvas.updatedBy}`);
     });
   }, [id, stream, adopt, onError]);
 
@@ -122,7 +63,7 @@ function CanvasBoard(props: { id: string; stream: MessageStream; onOpenCard(id: 
     setTimeout(() => setNotice((n) => (n === text ? null : n)), 2500);
   };
 
-  // Debounced save with merge on conflict: server nodes + Can's changed nodes − Can's deleted nodes.
+  // Debounced save with merge on conflict: server nodes + the user's changed nodes − the user's deleted nodes.
   const saveTimer = useRef<ReturnType<typeof setTimeout> | undefined>(undefined);
   const save = useCallback(() => {
     clearTimeout(saveTimer.current);

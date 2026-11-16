@@ -2,34 +2,28 @@ import { createHash, randomBytes } from 'node:crypto';
 import { createServer, type Server } from 'node:http';
 import type { AddressInfo } from 'node:net';
 import { CLAUDE_PLAN_SETTINGS, UpdateClaudePlan, type ClaudePlanModel, type ClaudePlanSetting, type ClaudePlanStatus } from '@atlas/shared';
-import type { Db } from './store/db.ts';
 import type { Bus } from './events.ts';
-import { CLAUDE_TOKENS as TOKENS, type SecretStore } from './secrets.ts';
+import type { SecretStore } from './secrets.ts';
 import { ConflictError } from './kanban.ts';
 import { ModelError, type Provider } from './providers/types.ts';
 import { AnthropicError, AnthropicProvider } from './providers/anthropic.ts';
+import { claudeLimitUntil, claudeQuota, PlanLimitError, rawLimitHeaders, type PlanAccounts, type PlanRow } from './plan-accounts.ts';
 
-/** Claude subscription OAuth: PKCE, keychain token storage, refresh and usage-limit handling. */
+/**
+ * Claude subscription OAuth: PKCE, keychain token storage, refresh and usage-limit handling, for every Claude
+ * subscription (plan-accounts.ts: several sign-ins, failover in list order, quotas from each response).
+ */
 export interface ClaudePlanOptions {
   fetch?: typeof fetch;
   now?: () => number;
 }
 
-interface Row {
-  client_id: string | null;
-  email: string | null;
-  scopes: string | null;
-  expires_at: string | null;
-  signed_in_at: string | null;
-  welcomed: number;
-  paused_until: string | null;
-  last_error: string | null;
-}
 interface Tokens {
   access: string;
   refresh: string | null;
 }
 interface Pending {
+  accountId: string;
   state: string;
   verifier: string;
   redirectUri: string;
@@ -67,40 +61,38 @@ const DEFAULTS: Partial<Record<ClaudePlanSetting, string>> = {
 };
 const REFRESH_MARGIN_MS = 5 * 60_000;
 const LOGIN_TIMEOUT_MS = 10 * 60_000;
-const DEFAULT_LIMIT_PAUSE_MS = 60_000;
 const DEAD_REFRESH = new Set(['invalid_grant', 'invalid_client', 'unauthorized_client', 'invalid_token', 'refresh_token_reused']);
 
 const b64url = (b: Buffer) => b.toString('base64url');
 
 export class ClaudePlan {
   private pending: Pending | null = null;
-  private refreshing: Promise<string> | null = null;
+  private refreshing = new Map<string, Promise<string>>();
   private readonly fetchFn: typeof fetch;
   private readonly now: () => number;
 
   constructor(
-    private db: Db,
     private bus: Bus,
     private secrets: SecretStore | undefined,
     /** The engine env (process env + keychain entries), read at every use so new settings apply without restart. */
     private env: NodeJS.ProcessEnv,
+    private plans: PlanAccounts,
     o: ClaudePlanOptions = {},
   ) {
     this.fetchFn = o.fetch ?? fetch;
     this.now = o.now ?? Date.now;
+    plans.onChange.claude_plan = () => this.emit();
   }
 
-  private row(): Row {
-    this.db.prepare('INSERT OR IGNORE INTO claude_account (id) VALUES (1)').run();
-    return this.db.prepare('SELECT * FROM claude_account WHERE id = 1').get() as Row;
+  private rows(): PlanRow[] {
+    return this.plans.rows('claude_plan');
   }
-  private set(cols: Partial<Row>): void {
-    const keys = Object.keys(cols);
-    if (keys.length) this.db.prepare(`UPDATE claude_account SET ${keys.map((k) => `${k} = @${k}`).join(', ')} WHERE id = 1`).run(cols);
+  private tokens(r: PlanRow): Tokens | null {
+    return this.plans.tokens<Tokens>(r);
   }
-  private tokens(): Tokens | null {
-    const raw = this.secrets?.get(TOKENS);
-    return raw ? (JSON.parse(raw) as Tokens) : null;
+  /** Tokens issued to another client id don't count: changing the client id means signing in again. */
+  private signedIn(r: PlanRow, config = this.config().config): boolean {
+    return !!this.tokens(r) && !!r.client_id && (!config || config.clientId === r.client_id);
   }
   private emit(): void {
     this.bus.emit({ type: 'claude.updated', status: this.status() });
@@ -114,7 +106,7 @@ export class ClaudePlan {
     return v || DEFAULTS[n] || null;
   }
 
-  /** The settings, checked. Problems are listed for the Models page; config is null until there are none. */
+  /** The settings, checked. Problems are listed for Settings → Subscriptions; config is null until there are none. */
   private config(): { config: Config | null; problems: string[] } {
     const problems: string[] = [];
     for (const s of CLAUDE_PLAN_SETTINGS) if (s.required && !this.setting(s.name)) problems.push(`${s.label} is not set (${s.name}).`);
@@ -169,15 +161,17 @@ export class ClaudePlan {
     };
   }
 
+
   status(): ClaudePlanStatus {
-    const r = this.row();
     const { config, problems } = this.config();
     const settings = Object.fromEntries(
       CLAUDE_PLAN_SETTINGS.map((s) => [s.name, s.secret ? (this.setting(s.name) ? 'set' : null) : this.setting(s.name)]),
     ) as Record<ClaudePlanSetting, string | null>;
-    // Tokens issued to another client id don't count: changing the client id means signing in again.
-    const signedIn = !!this.tokens() && !!r.client_id && (!config || config.clientId === r.client_id);
-    const paused = r.paused_until && Date.parse(r.paused_until) > this.now() ? r.paused_until : null;
+    const rows = this.rows();
+    const accounts = rows.map((r) => this.plans.view(r, this.signedIn(r, config)));
+    const live = accounts.filter((a) => a.signedIn);
+    const signedIn = live.length > 0;
+    const all = this.plans.allPausedUntil('claude_plan', (r) => this.signedIn(r, config));
     return {
       available: !!this.secrets,
       unavailableReason: this.secrets ? null : 'Claude sign-in works in the desktop app: a server engine has no keychain to keep the tokens in.',
@@ -187,30 +181,37 @@ export class ClaudePlan {
       redirectUri: config?.port ? `http://127.0.0.1:${config.port}/callback` : null,
       signedIn,
       pending: !!this.pending,
-      email: r.email,
-      showWelcome: signedIn && !r.welcomed,
-      pausedUntil: paused,
-      lastError: r.last_error,
+      pendingAccountId: this.pending?.accountId ?? null,
+      email: live[0]?.email ?? accounts[0]?.email ?? null,
+      showWelcome: signedIn && !this.plans.welcomed('claude_plan'),
+      pausedUntil: all.until,
+      lastError: (live.length ? live : accounts).find((a) => a.lastError)?.lastError ?? null,
+      accounts,
     };
   }
 
   update(patch: UpdateClaudePlan): ClaudePlanStatus {
     const p = UpdateClaudePlan.parse(patch);
-    if (p.welcomed) this.set({ welcomed: 1 });
-    if (p.resume) this.set({ paused_until: null, last_error: null });
+    if (p.welcomed) this.plans.setWelcomed('claude_plan');
+    if (p.resume) for (const r of this.rows()) this.plans.set(r.id, { paused_at: null, paused_until: null, last_error: null });
     this.emit();
     return this.status();
   }
 
-  /** Start a sign-in (authorization code + PKCE, loopback callback); returns the URL to open in the system browser. */
-  async login(): Promise<{ url: string }> {
+  /**
+   * Start a sign-in for one subscription (default: the first, made when there is none) — authorization code + PKCE;
+   * returns the URL to open in the system browser.
+   */
+  async login(accountId?: string | null): Promise<{ url: string }> {
     if (!this.secrets) throw new ConflictError(this.status().unavailableReason!);
     const { config: c, problems } = this.config();
     if (!c) throw new ConflictError(`Claude plan is not set up: ${problems.join(' ')}`);
     this.cancel();
+    const account = this.plans.forLogin('claude_plan', accountId);
     if (c.clientId === CLAUDE_CODE_CLIENT_ID) {
       const verifier = b64url(randomBytes(32));
       const p: Pending = {
+        accountId: account.id,
         state: b64url(randomBytes(24)), verifier, redirectUri: SUBSCRIPTION_REDIRECT,
         clientId: c.clientId, server: null,
         timer: setTimeout(() => { this.cancel(); this.emit(); }, LOGIN_TIMEOUT_MS),
@@ -233,6 +234,7 @@ export class ClaudePlan {
     const redirectUri = `http://127.0.0.1:${(server.address() as AddressInfo).port}/callback`;
     const verifier = b64url(randomBytes(32));
     const p: Pending = {
+      accountId: account.id,
       state: b64url(randomBytes(24)),
       verifier,
       redirectUri,
@@ -288,7 +290,7 @@ export class ClaudePlan {
   private async callback(p: Pending, c: Config, q: URLSearchParams): Promise<{ ok: boolean; message: string; retry?: boolean }> {
     if (q.get('state') !== p.state) return { ok: false, message: 'This sign-in link is not the one Atlas opened. Start again from Atlas.', retry: true };
     const fail = (message: string) => {
-      this.set({ last_error: message });
+      this.plans.set(p.accountId, { last_error: message });
       this.emit();
       return { ok: false, message };
     };
@@ -301,14 +303,18 @@ export class ClaudePlan {
       if (!tok.ok) return fail(`Claude sign-in: token exchange failed (${tok.code ?? 'HTTP ' + tok.status}). Try again.`);
       const t = tok.body;
       if (!t.access_token) return fail('Claude sign-in: the answer had no access token.');
-      this.secrets!.set(TOKENS, JSON.stringify({ access: t.access_token, refresh: t.refresh_token ?? null } satisfies Tokens));
-      const r = this.row();
-      this.set({
+      const r = this.plans.row(p.accountId);
+      const email = t.account?.email_address ?? t.email ?? null;
+      const twin = email && this.rows().find((o) => o.id !== r.id && o.email === email && this.tokens(o));
+      if (twin) return fail(`${email} is already signed in as « ${twin.label} »; sign in with another Claude account.`);
+      this.plans.setTokens(r, { access: t.access_token, refresh: t.refresh_token ?? null } satisfies Tokens);
+      this.plans.set(r.id, {
         client_id: p.clientId,
-        email: t.account?.email_address ?? t.email ?? r.email,
+        email: email ?? r.email,
         scopes: t.scope ?? c.scopes,
         expires_at: t.expires_in ? new Date(this.now() + t.expires_in * 1000).toISOString() : null,
         signed_in_at: new Date(this.now()).toISOString(),
+        paused_at: null,
         paused_until: null,
         last_error: null,
       });
@@ -338,20 +344,24 @@ export class ClaudePlan {
     return { ok: true, body: j as never };
   }
 
-  /** A valid access token, refreshed near expiry (one refresh at a time: refresh tokens may rotate). */
-  private async accessToken(c: Config): Promise<string> {
-    const t = this.tokens();
-    const r = this.row();
-    if (!t || !r.client_id) throw new ModelError('Claude plan: not signed in. Use Sign in with Claude on the Models page.');
+  /** A valid access token for one account, refreshed near expiry (one refresh at a time: refresh tokens may rotate). */
+  private async accessToken(c: Config, id: string): Promise<string> {
+    const r = this.plans.row(id);
+    const t = this.tokens(r);
+    if (!t || !r.client_id) throw new ModelError(`Claude plan « ${r.label} »: not signed in. Use Sign in with Claude in Settings → Subscriptions.`);
     if (!r.expires_at || Date.parse(r.expires_at) - this.now() > REFRESH_MARGIN_MS) return t.access;
     if (!t.refresh) {
-      this.signedOut('Claude sign-in expired (no refresh token)');
-      throw new ModelError('Claude sign-in expired: sign in again on the Models page');
+      this.signedOut(r, 'Claude sign-in expired (no refresh token)');
+      throw new ModelError(`Claude sign-in « ${r.label} » expired: sign in again in Settings → Subscriptions`);
     }
-    return (this.refreshing ??= this.refresh(c, t).finally(() => (this.refreshing = null)));
+    const running = this.refreshing.get(id);
+    if (running) return running;
+    const next = this.refresh(c, r, t).finally(() => this.refreshing.delete(id));
+    this.refreshing.set(id, next);
+    return next;
   }
 
-  private async refresh(c: Config, t: Tokens): Promise<string> {
+  private async refresh(c: Config, r: PlanRow, t: Tokens): Promise<string> {
     let out;
     try {
       out = await this.tokenCall(c, { grant_type: 'refresh_token', refresh_token: t.refresh! });
@@ -360,28 +370,30 @@ export class ClaudePlan {
     }
     if (!out.ok) {
       if (out.code && DEAD_REFRESH.has(out.code)) {
-        this.signedOut(`Claude sign-in expired (${out.code})`);
-        throw new ModelError(`Claude sign-in expired (${out.code}): sign in again on the Models page`);
+        this.signedOut(r, `Claude sign-in expired (${out.code})`);
+        throw new ModelError(`Claude sign-in « ${r.label} » expired (${out.code}): sign in again in Settings → Subscriptions`);
       }
       throw new ModelError(`Claude plan: renewing the sign-in failed (${out.code ?? 'HTTP ' + out.status})`, out.status >= 500);
     }
     const b = out.body;
     if (!b.access_token) throw new ModelError('Claude refresh response had no access token');
-    this.secrets!.set(TOKENS, JSON.stringify({ access: b.access_token, refresh: b.refresh_token ?? t.refresh } satisfies Tokens));
-    this.set({ expires_at: b.expires_in ? new Date(this.now() + b.expires_in * 1000).toISOString() : null, ...(b.scope ? { scopes: b.scope } : {}) });
+    this.plans.setTokens(r, { access: b.access_token, refresh: b.refresh_token ?? t.refresh } satisfies Tokens);
+    this.plans.set(r.id, { expires_at: b.expires_in ? new Date(this.now() + b.expires_in * 1000).toISOString() : null, ...(b.scope ? { scopes: b.scope } : {}) });
     return b.access_token;
   }
 
-  private signedOut(reason: string): void {
-    this.secrets?.delete(TOKENS);
-    this.set({ expires_at: null, last_error: reason + ': sign in again.' });
+  private signedOut(r: PlanRow, reason: string): void {
+    this.plans.dropTokens(r);
+    this.plans.set(r.id, { expires_at: null, last_error: reason + ': sign in again.' });
     this.emit();
   }
 
-  /** Sign out: revoke at Anthropic when a revocation URL is set, then forget the tokens. */
-  async logout(): Promise<ClaudePlanStatus> {
-    this.cancel();
-    const t = this.tokens();
+  /** Sign one account out (default: the first): revoke at Anthropic when a revocation URL is set, then forget the tokens. */
+  async logout(accountId?: string | null): Promise<ClaudePlanStatus> {
+    const r = accountId ? this.plans.row(accountId) : this.rows()[0];
+    if (!r) return this.status();
+    if (this.pending?.accountId === r.id) this.cancel();
+    const t = this.tokens(r);
     const { config: c } = this.config();
     let note: string | null = null;
     if (t && c?.revokeUrl) {
@@ -394,9 +406,16 @@ export class ClaudePlan {
         note = `Signed out here, but Anthropic did not confirm the session was revoked (${e instanceof Error ? e.message : String(e)}).`;
       }
     }
-    this.secrets?.delete(TOKENS);
-    this.set({ client_id: null, scopes: null, expires_at: null, paused_until: null, last_error: note });
+    this.plans.dropTokens(r);
+    this.plans.set(r.id, { client_id: null, scopes: null, expires_at: null, paused_at: null, paused_until: null, last_error: note });
     this.emit();
+    return this.status();
+  }
+
+  /** Sign out and forget a subscription. */
+  async remove(accountId: string): Promise<ClaudePlanStatus> {
+    await this.logout(accountId);
+    this.plans.remove(accountId);
     return this.status();
   }
 
@@ -404,9 +423,10 @@ export class ClaudePlan {
     const s = this.status();
     if (!s.available) throw new ModelError(s.unavailableReason!);
     const { config, problems } = this.config();
-    if (!config) throw new ModelError(`Claude plan is not set up: ${problems.join(' ')} (Models page → Claude plan)`);
-    if (!s.signedIn) throw new ModelError('Claude plan: not signed in. Use Sign in with Claude on the Models page.');
-    if (s.pausedUntil) throw new ModelError(`Claude plan limit reached: paused until ${new Date(s.pausedUntil).toLocaleString()} (or Resume on the Models page).`);
+    if (!config) throw new ModelError(`Claude plan is not set up: ${problems.join(' ')} (Settings → Subscriptions)`);
+    if (!s.signedIn) throw new ModelError('Claude plan: not signed in. Use Sign in with Claude in Settings → Subscriptions.');
+    if (s.accounts.filter((a) => a.signedIn).every((a) => a.paused))
+      throw this.plans.exhausted('claude_plan', this.rows().filter((r) => this.signedIn(r, config)));
     return config;
   }
 
@@ -420,41 +440,56 @@ export class ClaudePlan {
     }
   }
 
-  /** Models this account can use (Anthropic's GET /v1/models with the plan's token). */
+  /** Models the first usable account can use (Anthropic's GET /v1/models with its token). */
   async models(): Promise<ClaudePlanModel[]> {
     const c = this.ready();
-    const token = await this.accessToken(c);
+    const live = this.rows().filter((r) => this.signedIn(r, c));
+    const r = live.find((x) => !this.plans.paused(x)) ?? live[0]!;
+    const token = await this.accessToken(c, r.id);
     const res = await this.fetchFn(c.apiBase + '/v1/models?limit=100', {
       headers: { ...c.headers, authorization: `Bearer ${token}`, 'anthropic-version': '2023-06-01' },
     });
-    if (res.status === 401) this.signedOut('Anthropic refused the access token (HTTP 401)');
+    if (res.status === 401) this.signedOut(r, 'Anthropic refused the access token (HTTP 401)');
     if (!res.ok) throw new ModelError(`Claude models: HTTP ${res.status}: ${(await res.text()).slice(0, 300)}`);
     const j = (await res.json()) as { data?: { id: string; display_name?: string }[] };
     return (j.data ?? []).map((m) => ({ id: m.id, displayName: m.display_name ?? m.id }));
   }
 
+  /** Calls go to the signed-in subscriptions in order; a usage limit moves the call to the next one. */
   provider(): Provider {
     this.ready();
     return {
       complete: async (req, onText, signal) => {
         const c = this.ready();
-        const token = await this.accessToken(c);
-        const p = new AnthropicProvider(null, { authToken: token, baseURL: c.apiBase, headers: c.headers, systemPrefix: c.clientId === CLAUDE_CODE_CLIENT_ID ? "You are Claude Code, Anthropic's official CLI for Claude." : undefined, maxRetries: 0, fetch: this.fetchFn });
-        try {
-          return await p.complete(req, onText, signal);
-        } catch (e) {
-          if (e instanceof AnthropicError && e.status === 401) {
-            this.signedOut('Anthropic refused the access token (HTTP 401)');
-            throw new ModelError('Claude plan: Anthropic refused the sign-in (HTTP 401): sign in again on the Models page');
-          }
-          if (e instanceof AnthropicError && e.status === 429) {
-            const until = new Date(this.now() + resetIn(e.headers, this.now()));
-            this.set({ paused_until: until.toISOString(), last_error: `Claude plan limit reached (HTTP 429). Requests resume at ${until.toLocaleString()}.` });
-            this.emit();
-            throw new ModelError(`Claude plan limit reached: paused until ${until.toLocaleString()}`, true);
-          }
-          throw e;
-        }
+        return this.plans.call(
+          'claude_plan',
+          (r) => this.signedIn(r, c),
+          async (r, onStream) => {
+            const token = await this.accessToken(c, r.id);
+            const p = new AnthropicProvider(null, {
+              authToken: token,
+              baseURL: c.apiBase,
+              headers: c.headers,
+              systemPrefix: c.clientId === CLAUDE_CODE_CLIENT_ID ? "You are Claude Code, Anthropic's official CLI for Claude." : undefined,
+              maxRetries: 0,
+              fetch: this.fetchFn,
+              onHeaders: (h) => this.plans.recordQuota(r.id, claudeQuota(h, this.now()), rawLimitHeaders(h)),
+            });
+            try {
+              return await p.complete(req, (t) => (onStream(), onText(t)), signal);
+            } catch (e) {
+              if (e instanceof AnthropicError && e.status === 401) {
+                this.signedOut(r, 'Anthropic refused the access token (HTTP 401)');
+                throw new ModelError(`Claude plan « ${r.label} »: Anthropic refused the sign-in (HTTP 401): sign in again in Settings → Subscriptions`);
+              }
+              if (e instanceof AnthropicError && e.status === 429) {
+                const until = claudeLimitUntil(e.headers, this.now());
+                throw new PlanLimitError(`Claude plan limit reached (HTTP 429). Requests resume at ${new Date(until).toLocaleString()}.`, until);
+              }
+              throw e;
+            }
+          },
+        );
       },
     };
   }
@@ -474,19 +509,6 @@ export class ClaudePlan {
   stop(): void {
     this.cancel();
   }
-}
-
-/** How long a 429 pauses the plan: retry-after, else the latest *-reset header Anthropic sent, else a minute. */
-export function resetIn(h: Headers | null, now: number): number {
-  const retry = Number(h?.get('retry-after'));
-  if (retry > 0) return retry * 1000;
-  let latest = 0;
-  h?.forEach((v, k) => {
-    if (!k.startsWith('anthropic-ratelimit-') || !k.endsWith('-reset')) return;
-    const t = /^\d+$/.test(v) ? Number(v) * 1000 : Date.parse(v);
-    if (t > latest) latest = t;
-  });
-  return latest > now ? latest - now : DEFAULT_LIMIT_PAUSE_MS;
 }
 
 const esc = (s: string) => s.replace(/[&<>"]/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' })[c]!);

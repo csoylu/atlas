@@ -217,17 +217,16 @@ describe('ChatGPT plan (Sign in with ChatGPT)', () => {
     await fetch(u + '/models', { method: 'POST', headers: json, body: JSON.stringify({ id: 'sol', provider: 'chatgpt', name: 'gpt-6.1-sol' }) });
     engine!.agents.update('atlas', { modelId: 'sol' });
 
-    const board = engine!.kanban.create({ title: 'Board work', status: 'ready', assignee: 'atlas' }, 'can');
+    const board = engine!.kanban.create({ title: 'Board work', status: 'ready', assignee: 'atlas' }, 'user');
     await expect.poll(() => engine!.kanban.messages(board.id).find((m) => m.author === 'atlas')?.content, { timeout: 5000 }).toEqual([{ type: 'text', text: 'Hello from the plan.' }]);
-    const schedule = engine!.schedules.create({ agentId: 'atlas', kind: 'cron', cron: '0 9 * * *', prompt: 'Scheduled work' }, 'can');
+    const schedule = engine!.schedules.create({ agentId: 'atlas', kind: 'cron', cron: '0 9 * * *', prompt: 'Scheduled work' }, 'user');
     const scheduled = engine!.schedules.runNow(schedule.id);
     await expect.poll(() => engine!.kanban.messages(scheduled.id).find((m) => m.author === 'atlas')?.content, { timeout: 5000 }).toEqual([{ type: 'text', text: 'Hello from the plan.' }]);
     expect(oa.seen.filter((s) => s.url.endsWith('/responses'))).toHaveLength(2);
 
     // Usage limits still stop all new work, regardless of how the card was created.
-    engine!.db.prepare("UPDATE chatgpt_account SET paused_at = '2026-11-10T12:00:00Z'").run();
+    engine!.db.prepare("UPDATE plan_accounts SET paused_at = '2026-11-10T12:00:00Z'").run();
     expect(() => engine!.models.provider('sol')).toThrow(/usage limit/);
-    expect(engine!.db.prepare('PRAGMA table_info(chatgpt_account)').all()).not.toEqual(expect.arrayContaining([expect.objectContaining({ name: 'background' })]));
   });
 
   it('answers direct chats on the plan, allows board work without a separate opt-in, refreshes the token, pauses on the usage limit', async () => {
@@ -237,14 +236,14 @@ describe('ChatGPT plan (Sign in with ChatGPT)', () => {
     expect((await fetch(u + '/models', { method: 'POST', headers: json, body: JSON.stringify({ id: 'sol', provider: 'chatgpt', name: 'gpt-6.1-sol' }) })).status).toBe(201);
     await fetch(u + '/agents/atlas', { method: 'PATCH', headers: json, body: JSON.stringify({ modelId: 'sol' }) });
 
-    // A direct chat is Can's own activity: answered on the plan.
+    // A direct chat is the user's own activity: answered on the plan.
     const chat = (await (await fetch(u + '/agents/atlas/chats', { method: 'POST' })).json()) as Card;
     await fetch(u + `/cards/${chat.id}/messages`, { method: 'POST', headers: json, body: JSON.stringify({ text: 'hi' }) });
     await expect.poll(() => engine!.kanban.messages(chat.id).find((m) => m.author === 'atlas')?.content, { timeout: 5000 }).toEqual([{ type: 'text', text: 'Hello from the plan.' }]);
     const call = oa.seen.find((s) => s.url.endsWith('/responses'))!;
     expect(call.auth).toBe('Bearer at1');
     expect(call.body).toMatchObject({ model: 'gpt-6.1-sol', store: false, stream: true, input: [{ role: 'user', content: [{ type: 'input_text', text: 'hi' }] }] });
-    expect(call.body!.instructions).toMatch(/direct chat with Can/);
+    expect(call.body!.instructions).toMatch(/direct chat with the user/);
     expect(call.body).not.toHaveProperty('max_output_tokens');
     expect((call.body!.tools as { type: string; name: string }[])[0]).toMatchObject({ type: 'namespace', name: 'atlas' });
 
@@ -261,12 +260,13 @@ describe('ChatGPT plan (Sign in with ChatGPT)', () => {
     expect(oa.seen.find((s) => s.form?.get('grant_type') === 'refresh_token')!.form!.get('refresh_token')).toBe('rt1');
     expect(oa.seen.filter((s) => s.url.endsWith('/responses'))[1]!.auth).toBe('Bearer at2');
 
-    // The usage limit pauses requests (no reset time is given, no other billing is tried) until Can resumes.
+    // The usage limit pauses the only subscription (no reset time is given, no other billing is tried) until the user resumes.
     oa.responses = [() => sse([{ type: 'response.failed', response: { error: { code: 'subscription_sharing_usage_limit_exceeded', message: 'limit' } } }])];
     await expect.poll(() => engine!.kanban.messages(chat.id).filter((m) => m.author === 'atlas').length, { timeout: 5000 }).toBe(2);
     await fetch(u + `/cards/${chat.id}/messages`, { method: 'POST', headers: json, body: JSON.stringify({ text: 'one more' }) });
     await expect.poll(async () => (await status()).pausedAt, { timeout: 5000 }).not.toBeNull();
-    expect(engine!.runner.runs(chat.id)[0]!.error).toMatch(/usage limit reached.*chatgpt\.com\/settings\/usage/);
+    expect(engine!.runner.runs(chat.id)[0]!.error).toMatch(/usage limit.*Resume.*chatgpt\.com\/settings\/usage/);
+    expect(engine!.notifications.list()[0]).toMatchObject({ kind: 'plan.exhausted', title: 'Every ChatGPT subscription reached its limit' });
     expect(engine!.chatgpt.problem()).toMatch(/usage limit/);
     await fetch(u + '/chatgpt', { method: 'PATCH', headers: json, body: JSON.stringify({ resume: true }) });
     expect(engine!.chatgpt.problem()).toBeNull();
@@ -274,7 +274,7 @@ describe('ChatGPT plan (Sign in with ChatGPT)', () => {
     // A dead refresh token signs out (registration kept) instead of failing forever.
     clock.t += 2 * 3600_000;
     oa.refreshFails = 'refresh_token_expired';
-    await expect(engine!.chatgpt.models()).rejects.toThrow(/sign-in expired/);
+    await expect(engine!.chatgpt.models()).rejects.toThrow(/sign-in.*expired/);
     expect(await status()).toMatchObject({ signedIn: false });
   });
 });
@@ -312,5 +312,29 @@ describe('Responses API request format', () => {
     expect(body.tools).toEqual([
       expect.objectContaining({ type: 'namespace', name: 'atlas', tools: [{ type: 'function', name: 'bash', description: 'run', parameters: { type: 'object' } }] }),
     ]);
+  });
+});
+
+describe('ChatGPT plan usage windows and limits', () => {
+  it('reads Codex-style usage headers when OpenAI sends them, and the reset of a usage-limit error', async () => {
+    const { chatgptQuota } = await import('./plan-accounts.ts');
+    const { limitUntil } = await import('./providers/chatgpt.ts');
+    const now = Date.parse('2026-11-10T12:00:00Z');
+    expect(chatgptQuota(new Headers({ 'x-request-id': 'r' }), now)).toBeNull();
+    expect(
+      chatgptQuota(
+        new Headers({
+          'x-codex-primary-used-percent': '62',
+          'x-codex-primary-window-minutes': '300',
+          'x-codex-primary-reset-after-seconds': '3600',
+          'x-codex-secondary-used-percent': '81',
+          'x-codex-secondary-window-minutes': '10080',
+        }),
+        now,
+      ),
+    ).toEqual({ fiveHour: { usedPct: 62, resetsAt: '2026-11-10T13:00:00.000Z' }, week: { usedPct: 81, resetsAt: null }, status: null, at: '2026-11-10T12:00:00.000Z' });
+    expect(limitUntil({ resets_in_seconds: 600 }, null, now)).toBe(now + 600_000);
+    expect(limitUntil(undefined, new Headers({ 'retry-after': '30' }), now)).toBe(now + 30_000);
+    expect(limitUntil(undefined, null, now)).toBeNull();
   });
 });

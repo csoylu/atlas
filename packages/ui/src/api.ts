@@ -1,4 +1,4 @@
-import type { ChatUsage, UsageSummary, ChatGptModel, ChatGptStatus, UpdateChatGpt, ClaudePlanModel, ClaudePlanStatus, UpdateClaudePlan, Account, CreateAccount, UpdateAccount, LocalModel, LocalPull, LocalStatus, UpdateLocal, Agent, Canvas, CanvasNode, Card, CardStatus, CreateAgent, CreateModel, CreateSchedule, Memory, Message, Model, ModelTest, Run, Schedule, ServerEvent, Settings, UpdateAgent, UpdateModel, UpdateSchedule } from '@atlas/shared';
+import type { Inbox, FileChange, RewindPreview, RewindResult, Doc, DocContent, DocRef, DocVersion, PanelTab, About, CreatePlanAccount, Notification, PlanProvider, UpdatePlanAccount, ChatUsage, UsageSummary, ChatGptModel, ChatGptStatus, UpdateChatGpt, ClaudePlanModel, ClaudePlanStatus, UpdateClaudePlan, Account, CreateAccount, UpdateAccount, LocalModel, LocalPull, LocalStatus, UpdateLocal, Agent, Canvas, CanvasNode, Card, CardStatus, CreateAgent, CreateCard, CreateModel, CreateSchedule, Memory, Message, Model, ModelTest, Run, Schedule, Timeline, ToolCallTiming, ServerEvent, Settings, UpdateVoice, VoiceName, VoiceStatus, UpdateAgent, UpdateModel, UpdateSchedule } from '@atlas/shared';
 
 /** HTTP error with the parsed body (e.g. 409 carries the current canvas). */
 export class ApiError extends Error {
@@ -36,15 +36,35 @@ export type AuthState = { authenticated: boolean; enabled: boolean };
 
 export const api = {
   cards: () => call<Card[]>('GET', '/cards'),
-  createCard: (title: string, body = '') => call<Card>('POST', '/cards', { title, body }),
+  createCard: (card: CreateCard) => call<Card>('POST', '/cards', card),
   updateCard: (id: string, patch: Partial<Pick<Card, 'title' | 'body' | 'status' | 'assignee' | 'priority' | 'parents' | 'modelId' | 'effort'>>) =>
     call<Card>('PATCH', `/cards/${id}`, patch),
   moveCard: (id: string, status: CardStatus) => call<Card>('PATCH', `/cards/${id}`, { status }),
   deleteCard: (id: string) => call<void>('DELETE', `/cards/${id}`),
   messages: (id: string) => call<Message[]>('GET', `/cards/${id}/messages`),
-  postMessage: (id: string, text: string) => call<Message>('POST', `/cards/${id}/messages`, { text }),
+  postMessage: (id: string, text: string, ref?: DocRef) => call<Message>('POST', `/cards/${id}/messages`, ref ? { text, ref } : { text }),
+  // ── Documents and the side panel ──
+  documents: (cardId?: string) => call<Doc[]>('GET', '/documents' + (cardId ? `?card=${encodeURIComponent(cardId)}` : '')),
+  document: (id: string, version?: number) => call<DocContent>('GET', `/documents/${id}` + (version === undefined ? '' : `?version=${version}`)),
+  docVersions: (id: string) => call<DocVersion[]>('GET', `/documents/${id}/versions`),
+  restoreDoc: (id: string, version: number) => call<Doc>('POST', `/documents/${id}/restore/${version}`),
+  pinDoc: (id: string, pinned: boolean) => call<Doc>('POST', `/documents/${id}/pin`, { pinned }),
+  /** The whiteboard document of a canvas (created on first use). */
+  whiteboardDoc: (canvasId: string) => call<Doc>('POST', `/canvases/${canvasId}/document`, {}),
+  panel: (chatId: string) => call<PanelTab[]>('GET', `/chats/${chatId}/panel`),
+  panelOpen: (chatId: string, docId: string, section: string | null = null) => call<PanelTab[]>('POST', `/chats/${chatId}/panel/open`, { docId, section }),
+  panelClose: (chatId: string, docId: string | null) => call<PanelTab[]>('POST', `/chats/${chatId}/panel/close`, { docId }),
+  panelFocus: (chatId: string, docId: string) => call<PanelTab[]>('POST', `/chats/${chatId}/panel/focus`, { docId }),
+  panelSeen: (chatId: string, docId: string) => call<PanelTab[]>('POST', `/chats/${chatId}/panel/seen`, { docId }),
   runs: (id: string) => call<Run[]>('GET', `/cards/${id}/runs`),
+  toolCalls: (id: string) => call<ToolCallTiming[]>('GET', `/cards/${id}/tool-calls`),
+  /** What the chat shows between messages (#66): unfinished runs, rewinds, the context summary point. */
+  timeline: (id: string) => call<Timeline>('GET', `/cards/${id}/timeline`),
   stop: (id: string) => call<{ stopped: boolean }>('POST', `/cards/${id}/stop`),
+  /** Rewind to your message `seq`, or (no seq) the turn the running run answers; null = the run was just stopped. */
+  rewind: (id: string, seq?: number) => call<RewindResult | null>('POST', `/cards/${id}/rewind`, seq ? { seq } : {}),
+  rewindPreview: (id: string, seq: number) => call<RewindPreview>('GET', `/cards/${id}/rewind?seq=${seq}`),
+  undoRewind: (rewindId: string) => call<{ files: FileChange[]; filesError: string | null }>('POST', `/rewinds/${rewindId}/undo`),
   retry: (id: string) => call<Card>('POST', `/cards/${id}/retry`),
   agents: () => call<Agent[]>('GET', '/agents'),
   chats: () => call<Card[]>('GET', '/chats'),
@@ -52,18 +72,29 @@ export const api = {
   usage: (days = 30) => call<UsageSummary>('GET', `/usage?days=${days}`),
   cardUsage: (id: string) => call<ChatUsage>('GET', `/cards/${id}/usage`),
   chatgpt: () => call<ChatGptStatus>('GET', '/chatgpt'),
-  chatgptLogin: () => call<{ url: string }>('POST', '/chatgpt/login'),
+  chatgptLogin: (accountId?: string) => call<{ url: string }>('POST', '/chatgpt/login', { accountId }),
   chatgptCancel: () => call<ChatGptStatus>('POST', '/chatgpt/cancel'),
-  chatgptLogout: () => call<ChatGptStatus>('POST', '/chatgpt/logout'),
+  chatgptLogout: (accountId?: string) => call<ChatGptStatus>('POST', '/chatgpt/logout', { accountId }),
   updateChatgpt: (patch: UpdateChatGpt) => call<ChatGptStatus>('PATCH', '/chatgpt', patch),
   chatgptModels: () => call<ChatGptModel[]>('GET', '/chatgpt/models'),
   claude: () => call<ClaudePlanStatus>('GET', '/claude'),
-  claudeLogin: () => call<{ url: string }>('POST', '/claude/login'),
+  claudeLogin: (accountId?: string) => call<{ url: string }>('POST', '/claude/login', { accountId }),
   claudeComplete: (code: string) => call<ClaudePlanStatus>('POST', '/claude/complete', { code }),
   claudeCancel: () => call<ClaudePlanStatus>('POST', '/claude/cancel'),
-  claudeLogout: () => call<ClaudePlanStatus>('POST', '/claude/logout'),
+  claudeLogout: (accountId?: string) => call<ClaudePlanStatus>('POST', '/claude/logout', { accountId }),
   updateClaude: (patch: UpdateClaudePlan) => call<ClaudePlanStatus>('PATCH', '/claude', patch),
   claudeModels: () => call<ClaudePlanModel[]>('GET', '/claude/models'),
+  // ── Plan subscriptions (several per provider, failover in list order) ──
+  createPlanAccount: (a: CreatePlanAccount) => call<ClaudePlanStatus | ChatGptStatus>('POST', '/plan-accounts', a),
+  updatePlanAccount: (id: string, patch: UpdatePlanAccount) => call<ClaudePlanStatus | ChatGptStatus>('PATCH', `/plan-accounts/${id}`, patch),
+  reorderPlanAccounts: (provider: PlanProvider, ids: string[]) => call<ClaudePlanStatus | ChatGptStatus>('PUT', '/plan-accounts/order', { provider, ids }),
+  deletePlanAccount: (id: string) => call<ClaudePlanStatus | ChatGptStatus>('DELETE', `/plan-accounts/${id}`),
+  notifications: () => call<Notification[]>('GET', '/notifications'),
+  // ── Inbox (design §16) ──
+  inbox: () => call<Inbox>('GET', '/inbox'),
+  readNotification: (id: number) => call<void>('POST', `/notifications/${id}/read`),
+  archiveNotification: (id: number) => call<void>('POST', `/notifications/${id}/archive`),
+  archiveRead: () => call<{ archived: number }>('POST', '/notifications/archive-read'),
   createAgent: (a: CreateAgent) => call<Agent>('POST', '/agents', a),
   updateAgent: (id: string, patch: UpdateAgent) => call<Agent>('PATCH', `/agents/${id}`, patch),
   deleteAgent: (id: string) => call<void>('DELETE', `/agents/${id}`),
@@ -78,6 +109,17 @@ export const api = {
   setSecret: (name: string, value: string) => call<void>('PUT', `/secrets/${name}`, { value }),
   deleteSecret: (name: string) => call<void>('DELETE', `/secrets/${name}`),
   settings: () => call<Settings>('GET', '/settings'),
+  about: () => call<About>('GET', '/about'),
+  // ── Voice mode (desktop only) ──
+  voice: () => call<VoiceStatus>('GET', '/voice'),
+  updateVoice: (patch: UpdateVoice) => call<VoiceStatus>('PATCH', '/voice', patch),
+  retryVoiceDownload: () => call<VoiceStatus>('POST', '/voice/download'),
+  /** One spoken sentence in that voice, as a WAV blob. */
+  testVoice: async (voice: VoiceName) => {
+    const res = await fetch('/api/voice/test', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ voice }), credentials: 'include' });
+    if (!res.ok) throw new ApiError(((await res.json().catch(() => ({}))) as { error?: string }).error ?? `HTTP ${res.status}`, res.status, {});
+    return res.blob();
+  },
   canvases: () => call<Omit<Canvas, 'nodes'>[]>('GET', '/canvases'),
   canvas: (id: string) => call<Canvas>('GET', `/canvases/${id}`),
   createCanvas: (name: string) => call<Canvas>('POST', '/canvases', { name }),

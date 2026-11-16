@@ -48,7 +48,7 @@ const toSchedule = (r: Row): Schedule => ({
 
 type When = Pick<Schedule, 'kind' | 'cron' | 'at' | 'timezone'>;
 
-/** The engine machine's time zone: the default for schedules made without one (Can's Mac: Europe/Paris). */
+/** The engine machine's time zone: the default for schedules made without one (e.g. Europe/Paris). */
 export const localTimeZone = () => Intl.DateTimeFormat().resolvedOptions().timeZone;
 
 /** The next `n` firings strictly after `from` (fewer for a one-shot). Throws InvalidError on a bad cron expression. */
@@ -203,7 +203,7 @@ export class Schedules {
         card = this.ownCard(s, by);
         if (card.assignee !== s.agentId) card = this.kanban.update(card.id, { assignee: s.agentId }, by);
         this.kanban.appendMessage(card.id, 'user', 'schedule', [{ type: 'text', text: `${s.prompt}\n\n— ${why}` }]);
-        // Reopen a finished card. Running: the agent reads it at its next turn. Blocked or in review: it waits for Can.
+        // Reopen a finished card. Running: the agent reads it at its next turn. Blocked or in review: it waits for the user.
         if (card.status === 'done' || card.status === 'todo') this.kanban.update(card.id, { status: 'ready' }, by);
       }
       this.db
@@ -215,7 +215,7 @@ export class Schedules {
     return cardId;
   }
 
-  /** The schedule's own card, created on first use (again if Can deleted or archived it). */
+  /** The schedule's own card, created on first use (again if the user deleted or archived it). */
   private ownCard(s: Schedule, by: string): Card {
     if (s.chatCardId) {
       const row = this.db.prepare("SELECT 1 FROM cards WHERE id = ? AND status != 'archived'").get(s.chatCardId);

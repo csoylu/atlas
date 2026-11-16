@@ -1,17 +1,23 @@
 import { useMemo } from 'react';
-import type { Canvas, ClaudePlanStatus, LocalPull, LocalStatus, Message, Run } from '@atlas/shared';
+import type { Doc, PanelTab, Canvas, ClaudePlanStatus, LocalPull, LocalStatus, Message, Run, ToolCallTiming, VoiceStatus } from '@atlas/shared';
 
 /** Fan-out of live chat events to whichever card panel is listening. */
 export type LiveEvent =
   | { type: 'message'; message: Message }
   | { type: 'delta'; runId: string; text: string }
   | { type: 'run'; run: Run }
+  | { type: 'toolcall'; call: ToolCallTiming }
+  /** A rewind hid messages, or its undo brought them back: reload the conversation. */
+  | { type: 'rewound' }
   | { type: 'canvas'; canvas: Canvas }
   | { type: 'canvases' }
   | { type: 'local'; status: LocalStatus }
   | { type: 'pull'; pull: LocalPull }
   | { type: 'usage' }
-  | { type: 'claude'; status: ClaudePlanStatus };
+  | { type: 'claude'; status: ClaudePlanStatus }
+  | { type: 'doc'; doc: Doc }
+  | { type: 'panel'; tabs: PanelTab[] }
+  | { type: 'voice'; status: VoiceStatus };
 
 export interface MessageStream {
   push(conversationOrCard: string, e: LiveEvent): void;

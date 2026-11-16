@@ -1,0 +1,100 @@
+[
+  {
+    "name": "wake-daniel-one-breath",
+    "samples": 80265,
+    "wakeEnd": 23188,
+    "speechEnd": 48265
+  },
+  {
+    "name": "wake-samantha-pause",
+    "samples": 103915,
+    "wakeEnd": 21288,
+    "speechEnd": 71915
+  },
+  {
+    "name": "wake-eddy",
+    "samples": 84577,
+    "wakeEnd": 22842,
+    "speechEnd": 52577
+  },
+  {
+    "name": "silence",
+    "samples": 80000
+  },
+  {
+    "name": "unrelated-speech",
+    "samples": 98643
+  },
+  {
+    "name": "near-miss-atlas",
+    "samples": 80134
+  },
+  {
+    "name": "follow-up",
+    "samples": 50524,
+    "speechEnd": 26524
+  },
+  {
+    "name": "barge-atlas",
+    "samples": 49027,
+    "speechEnd": 25027
+  },
+  {
+    "name": "follow-up-pause",
+    "samples": 104168,
+    "pauseAt": 39427,
+    "speechEnd": 72168
+  },
+  {
+    "name": "wake-pause-mid-command",
+    "samples": 105857,
+    "wakeEnd": 23188,
+    "pauseAt": 40812,
+    "speechEnd": 73857
+  },
+  {
+    "name": "barge-stop-en",
+    "samples": 37259,
+    "speechEnd": 13259
+  },
+  {
+    "name": "barge-wait-en",
+    "samples": 36769,
+    "speechEnd": 12769
+  },
+  {
+    "name": "barge-no-command-en",
+    "samples": 54586,
+    "speechEnd": 30586
+  },
+  {
+    "name": "barge-hayir-tr",
+    "samples": 37622,
+    "speechEnd": 13622
+  },
+  {
+    "name": "barge-dur-tr",
+    "samples": 35562,
+    "speechEnd": 11562
+  },
+  {
+    "name": "barge-bekle-tr",
+    "samples": 36895,
+    "speechEnd": 12895
+  },
+  {
+    "name": "barge-sus-tr",
+    "samples": 36334,
+    "speechEnd": 12334
+  },
+  {
+    "name": "barge-yeter-tr",
+    "samples": 39917,
+    "speechEnd": 15917
+  },
+  {
+    "name": "barge-hayir-command-tr",
+    "samples": 66838,
+    "speechEnd": 42838
+  }
+]

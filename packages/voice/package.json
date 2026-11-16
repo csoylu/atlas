@@ -1,0 +1,13 @@
+{
+  "name": "@atlas/voice",
+  "license": "AGPL-3.0-only",
+  "private": true,
+  "type": "module",
+  "exports": {
+    ".": "./src/index.ts",
+    "./models": "./src/models.ts"
+  },
+  "dependencies": {
+    "sherpa-onnx-node": "^2.0.1"
+  }
+}

@@ -16,7 +16,12 @@ const built = join(here, 'release', arch() === 'arm64' ? 'mac-arm64' : 'mac', 'A
 if (!existsSync(built)) throw new Error(`no build at ${built}`);
 const target = '/Applications/Atlas.app';
 
-// Quit the running app and wait for it to exit (up to 15 s).
+// Quit the running app and wait for it to exit (up to 15 s); reopen it at the end if it was running.
+let wasRunning = false;
+try {
+  execFileSync('pgrep', ['-f', `${target}/Contents/MacOS/Atlas`]);
+  wasRunning = true;
+} catch {}
 try {
   execFileSync('osascript', ['-e', 'if application "Atlas" is running then tell application "Atlas" to quit']);
 } catch {}
@@ -40,3 +45,10 @@ console.log(`installed ${target} (${version}, ${arch()})`);
 
 // electron-builder rebuilt better-sqlite3 for Electron; put the Node build back so `npm test` keeps working.
 run('npm', ['rebuild', 'better-sqlite3'], { cwd: root, stdio: 'ignore' });
+
+// Reopen last: `open` launches through launchd, so the new app doesn't depend on this script (which may have been
+// started by the app's own engine and is an orphan once it quit).
+if (wasRunning || process.env.ATLAS_REOPEN === '1') {
+  run('open', [target]);
+  console.log('reopened Atlas');
+}

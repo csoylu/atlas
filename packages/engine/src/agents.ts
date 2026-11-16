@@ -1,5 +1,5 @@
 import { join, resolve } from 'node:path';
-import { CreateAgent, UpdateAgent, type Agent } from '@atlas/shared';
+import { cardRef, CreateAgent, UpdateAgent, type Agent } from '@atlas/shared';
 import type { Db } from './store/db.ts';
 import { ConflictError, NotFoundError } from './kanban.ts';
 
@@ -48,13 +48,17 @@ export class Agents {
     return this.get(c.id);
   }
 
-  /** Delete an agent. Refused while open cards are assigned to it, or it triages (reassign first). */
+  /** Delete an agent. Refused while open cards are assigned to it (a running one included: no implicit kill), or it
+   * triages (reassign first). Done, closed (cancelled) and archived cards don't count. */
   remove(id: string): void {
     this.get(id);
-    const cards = this.db.prepare("SELECT id FROM cards WHERE assignee = ? AND status NOT IN ('done', 'archived')").all(id) as { id: string }[];
-    if (cards.length) throw new ConflictError(`@${id} still has open cards: ${cards.map((c) => c.id).join(', ')}`);
+    const cards = this.db
+      .prepare("SELECT id, number FROM cards WHERE assignee = ? AND status NOT IN ('done', 'closed', 'archived') ORDER BY number")
+      .all(id) as { id: string; number: number | null }[];
+    if (cards.length)
+      throw new ConflictError(`@${id} still has open cards: ${cards.map(cardRef).join(', ')}. Reassign, finish or close them first.`);
     if (this.db.prepare("SELECT 1 FROM settings WHERE key = 'triage_agent' AND value = ?").get(id))
-      throw new ConflictError(`@${id} is the triage agent: pick another one first`);
+      throw new ConflictError(`@${id} is the triage agent: pick another one in Settings → Board first.`);
     this.db.transaction(() => {
       // Their direct chat goes with them (kept in the database, archived).
       this.db.prepare("UPDATE cards SET status = 'archived' WHERE board = 'direct' AND assignee = ?").run(id);

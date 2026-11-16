@@ -1,13 +1,19 @@
 import type { AddressInfo } from 'node:net';
+import { join } from 'node:path';
 import { openDb, type Db } from './store/db.ts';
 import { Bus } from './events.ts';
 import { Kanban } from './kanban.ts';
 import { Agents } from './agents.ts';
 import { Models, realProviders, type ProviderFactory } from './models.ts';
 import { Runner } from './runner.ts';
+import { Rewinds } from './rewind.ts';
+import { FileLog } from './fileLog.ts';
+import { Snapshots } from './snapshots.ts';
 import { Dispatcher } from './dispatcher.ts';
 import { Settings } from './settings.ts';
 import { Canvases } from './canvas.ts';
+import { Documents } from './documents.ts';
+import { workdirOf } from './agents.ts';
 import { Memories } from './memory.ts';
 import { envWithSecrets, type SecretStore } from './secrets.ts';
 import { createApi } from './api.ts';
@@ -18,6 +24,10 @@ import { Accounts } from './accounts.ts';
 import { ChatGpt, type ChatGptOptions } from './chatgpt.ts';
 import { ClaudePlan, type ClaudePlanOptions } from './claude-plan.ts';
 import { Usage } from './usage.ts';
+import { PlanAccounts } from './plan-accounts.ts';
+import { Notifications } from './notifications.ts';
+import { Voice, type VoiceHost } from './voice.ts';
+import { VoiceChat } from './voiceChat.ts';
 
 export interface EngineOptions {
   /** SQLite file, or ':memory:'. */
@@ -33,6 +43,8 @@ export interface EngineOptions {
   env?: NodeJS.ProcessEnv;
   /** Run lease length (tests shorten it). */
   leaseMs?: number;
+  /** Turns per run before it pauses (tests lower it; default MAX_TURNS). */
+  maxTurns?: number;
   /** Start the dispatcher (default true). Runner-only tests turn it off. */
   dispatch?: boolean;
   /** Desktop: keys kept in the OS keychain, editable from Settings. */
@@ -48,6 +60,10 @@ export interface EngineOptions {
    * answers on a loopback host; it refuses to listen elsewhere.
    */
   password?: string | null;
+  /** App version shown in Settings → About & data (the desktop app passes its own; dev and server: package version). */
+  version?: string;
+  /** Desktop app on a Mac: voice mode (Settings → Voice). Absent in server mode and dev: the page is hidden. */
+  voice?: VoiceHost;
 }
 
 export interface Engine {
@@ -56,9 +72,11 @@ export interface Engine {
   kanban: Kanban;
   agents: Agents;
   runner: Runner;
+  rewinds: Rewinds;
   dispatcher: Dispatcher;
   settings: Settings;
   canvases: Canvases;
+  documents: Documents;
   memories: Memories;
   models: Models;
   schedules: Schedules;
@@ -66,7 +84,12 @@ export interface Engine {
   accounts: Accounts;
   chatgpt: ChatGpt;
   claude: ClaudePlan;
+  plans: PlanAccounts;
+  notifications: Notifications;
   usage: Usage;
+  voice: Voice | null;
+  /** The « Voice » chat the desktop voice loop talks through (desktop on a Mac only). */
+  voiceChat: VoiceChat | null;
   url: string;
   stop(): Promise<void>;
 }
@@ -86,34 +109,48 @@ export async function startEngine(opts: EngineOptions): Promise<Engine> {
   models.setLocal(local);
   const accounts = new Accounts(db, env, opts.secrets);
   models.setAccounts(accounts);
-  const chatgpt = new ChatGpt(db, bus, opts.secrets, opts.chatgpt);
+  const notifications = new Notifications(db, bus, kanban);
+  const plans = new PlanAccounts(db, bus, opts.secrets, notifications, opts.claude?.now ?? opts.chatgpt?.now);
+  const chatgpt = new ChatGpt(bus, opts.secrets, plans, opts.chatgpt);
   models.setChatGpt(chatgpt);
-  const claude = new ClaudePlan(db, bus, opts.secrets, env, opts.claude);
+  const claude = new ClaudePlan(bus, opts.secrets, env, plans, opts.claude);
   models.setClaude(claude);
   const usage = new Usage(db, bus);
   const canvases = new Canvases(db, bus);
   const memories = new Memories(db);
   const schedules = new Schedules(db, bus, kanban);
-  const runner = new Runner(db, bus, kanban, agents, models, canvases, memories, schedules, { dataDir: opts.dataDir, leaseMs: opts.leaseMs, usage });
   const settings = new Settings(db);
+  const voice = opts.voice ? new Voice(db, bus, opts.voice) : null;
+  let url = '';
+  const voiceChat = opts.voice ? new VoiceChat(db, bus, kanban, agents, () => url) : null;
+  const documents = new Documents(db, bus, kanban, canvases, (id) => workdirOf(agents.get(id), opts.dataDir));
+  const fileLog = new FileLog(db, new Snapshots(join(opts.dataDir, 'checkpoints')));
+  const runner = new Runner(db, bus, kanban, agents, models, canvases, memories, schedules, { fileLog, dataDir: opts.dataDir, leaseMs: opts.leaseMs, maxTurns: opts.maxTurns, usage, user: () => settings.user(), documents, isVoiceChat: voiceChat ? (id) => voiceChat.isVoiceChat(id) : undefined });
+  const rewinds = new Rewinds(db, bus, kanban, agents, runner, opts.dataDir, fileLog);
   const dispatcher = new Dispatcher(bus, kanban, agents, models, settings, runner);
   const server = createApi({
     kanban,
     agents,
     models,
     runner,
+    rewinds,
     dispatcher,
     settings,
     canvases,
+    documents,
     memories,
     schedules,
     local,
     accounts,
     chatgpt,
     claude,
+    plans,
+    notifications,
     usage,
+    voice,
     bus,
     dataDir: opts.dataDir,
+    version: opts.version ?? 'dev',
     uiDir: opts.uiDir,
     secrets: opts.secrets,
     env,
@@ -123,6 +160,8 @@ export async function startEngine(opts: EngineOptions): Promise<Engine> {
     server.once('error', reject);
     server.listen(opts.port, host, () => resolve());
   });
+  // Finish a rewind a stopped engine left half done, before any run resumes and touches the files (rule 2).
+  await rewinds.recover().catch((e: unknown) => console.error('rewind recovery failed', e));
   runner.start();
   // Watch/autostart the local server; off by default for in-memory (test) engines so they never touch a real Ollama.
   if (opts.manageLocal ?? (opts.dispatch !== false && opts.dbFile !== ':memory:')) void local.startWatching();
@@ -130,16 +169,20 @@ export async function startEngine(opts: EngineOptions): Promise<Engine> {
     dispatcher.start();
     schedules.start();
   }
+  voice?.start();
   const { port } = server.address() as AddressInfo;
+  url = `http://127.0.0.1:${port}`;
   return {
     db,
     bus,
     kanban,
     agents,
     runner,
+    rewinds,
     dispatcher,
     settings,
     canvases,
+    documents,
     memories,
     models,
     schedules,
@@ -147,12 +190,18 @@ export async function startEngine(opts: EngineOptions): Promise<Engine> {
     accounts,
     chatgpt,
     claude,
+    plans,
+    notifications,
     usage,
-    url: `http://127.0.0.1:${port}`,
+    voice,
+    voiceChat,
+    url,
     stop: async () => {
       schedules.stop();
+      voice?.stop();
       dispatcher.stop();
       await runner.shutdown();
+      await rewinds.shutdown();
       await local.shutdown();
       chatgpt.stop();
       claude.stop();
@@ -168,3 +217,6 @@ export async function startEngine(opts: EngineOptions): Promise<Engine> {
 export { Kanban } from './kanban.ts';
 export { openDb } from './store/db.ts';
 export type { SecretStore } from './secrets.ts';
+export type { VoiceHost } from './voice.ts';
+export type { VoiceChat } from './voiceChat.ts';
+export type { OrbPosition } from './settings.ts';

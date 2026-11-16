@@ -1,6 +1,7 @@
 import type { ContentBlock } from '@atlas/shared';
 import { CHATGPT_USAGE_URL } from '@atlas/shared';
-import { ModelError, type ModelRequest, type ModelResponse, type Provider } from './types.ts';
+import { ModelError, toolInput, type ModelRequest, type ModelResponse, type Provider } from './types.ts';
+import { PlanLimitError } from '../plan-accounts.ts';
 
 /** Atlas's tools go to the model as one namespace (ChatGPT plan usage accepts function tools only inside one). */
 export const NAMESPACE = 'atlas';
@@ -51,8 +52,7 @@ export function responsesBody(req: ModelRequest): Record<string, unknown> {
           ],
         }
       : {}),
-    // No « off » on this route: none → low.
-    ...(req.effort ? { reasoning: { effort: req.effort === 'none' ? 'low' : req.effort } } : {}),
+    ...(req.effort ? { reasoning: { effort: req.effort } } : {}),
     store: false,
     stream: true,
   };
@@ -62,20 +62,32 @@ export function responsesBody(req: ModelRequest): Record<string, unknown> {
 export interface PlanAccess {
   /** A valid access token (refreshed when near expiry); throws a ModelError when signed out or not allowed. */
   token(): Promise<string>;
-  /** The usage limit was reached: pause new requests until Can resumes. */
-  limitReached(): void;
   /** The token was refused: the sign-in must be done again. */
   signedOut(reason: string): void;
+  /** Sees every response's headers (plan usage windows, when OpenAI sends them). */
+  onHeaders?(h: Headers): void;
+  now?(): number;
 }
 
-const LIMIT = `ChatGPT plan usage limit reached (your plan's or Atlas's own app limit). Requests are paused: review it at ${CHATGPT_USAGE_URL}, then Resume on the Models page.`;
+const LIMIT = `ChatGPT plan usage limit reached (your plan's or Atlas's own app limit). Review it at ${CHATGPT_USAGE_URL}.`;
 
-/** One error code → what Can reads on the card, whether it may clear by itself, and its side effect. */
-function planError(code: string | undefined, status: number, message: string, access: PlanAccess): ModelError {
+/** When a usage limit ends, if OpenAI says: resets_at / resets_in_seconds in the error, or a retry-after header. */
+export function limitUntil(err: { resets_at?: unknown; resets_in_seconds?: unknown } | undefined, h: Headers | null, now: number): number | null {
+  const at = Number(err?.resets_at);
+  if (at > 0) return at < 1e12 ? at * 1000 : at;
+  const inS = Number(err?.resets_in_seconds);
+  if (inS > 0) return now + inS * 1000;
+  const retry = Number(h?.get('retry-after'));
+  if (retry > 0) return now + retry * 1000;
+  return null;
+}
+
+/** One error code → what the user reads on the card, whether it may clear by itself, and its side effect. */
+function planError(code: string | undefined, status: number, message: string, access: PlanAccess, until: number | null = null): ModelError {
   switch (code) {
     case 'subscription_sharing_usage_limit_exceeded':
-      access.limitReached();
-      return new ModelError(LIMIT);
+    case 'usage_limit_reached':
+      return new PlanLimitError(LIMIT, until);
     case 'subscription_sharing_usage_unavailable':
     case 'subscription_sharing_user_unavailable':
       return new ModelError(`ChatGPT plan: usage could not be checked right now (${code}); try again later`, true);
@@ -83,18 +95,18 @@ function planError(code: string | undefined, status: number, message: string, ac
       return new ModelError('ChatGPT plan usage is not available for this account or workspace (subscription_sharing_user_not_eligible)');
     case 'subscription_sharing_invalid_user':
       access.signedOut('ChatGPT refused the sign-in (subscription_sharing_invalid_user)');
-      return new ModelError('ChatGPT refused the sign-in: sign in again on the Models page');
+      return new ModelError('ChatGPT refused the sign-in: sign in again in Settings → Subscriptions');
     case 'subscription_sharing_unsupported_capability':
       return new ModelError(`ChatGPT plan: unsupported request part (${message})`);
   }
   if (status === 401) {
     access.signedOut(`ChatGPT refused the access token (HTTP 401: ${message})`);
-    return new ModelError(`ChatGPT refused the access token (HTTP 401: ${message}): sign in again on the Models page`);
+    return new ModelError(`ChatGPT refused the access token (HTTP 401: ${message}): sign in again in Settings → Subscriptions`);
   }
   return new ModelError(`ChatGPT plan: HTTP ${status}${code ? ` ${code}` : ''}: ${message}`, status === 429 || status >= 500);
 }
 
-/** OpenAI models on Can's ChatGPT plan: POST /v1/responses with the OAuth access token (design §5). */
+/** OpenAI models on the user's ChatGPT plan: POST /v1/responses with the OAuth access token (design §5). */
 export class ChatGptProvider implements Provider {
   constructor(
     private access: PlanAccess,
@@ -117,22 +129,26 @@ export class ChatGptProvider implements Provider {
       const cause = e instanceof Error && e.cause instanceof Error ? e.cause.message : String(e);
       throw new ModelError(`ChatGPT is not reachable: ${cause}`, true);
     }
+    this.access.onHeaders?.(res.headers);
+    const now = this.access.now?.() ?? Date.now();
     if (!res.ok || !res.body) {
       // Admission errors may be {detail} instead of the API's {error: {code, message}}.
       const raw = await res.text();
       let code: string | undefined;
       let message = raw.slice(0, 400);
+      let until: number | null = limitUntil(undefined, res.headers, now);
       try {
-        const j = JSON.parse(raw) as { error?: { code?: string; message?: string; param?: string }; detail?: unknown };
+        const j = JSON.parse(raw) as { error?: { code?: string; type?: string; message?: string; param?: string; resets_at?: unknown; resets_in_seconds?: unknown }; detail?: unknown };
         if (j.error) {
-          code = j.error.code ?? undefined;
+          code = j.error.code ?? j.error.type ?? undefined;
+          until = limitUntil(j.error, res.headers, now);
           message = [j.error.message, j.error.param && `param ${j.error.param}`].filter(Boolean).join(', ') || message;
         } else if (j.detail) message = typeof j.detail === 'string' ? j.detail : JSON.stringify(j.detail);
       } catch {
         // not JSON: keep the raw text
       }
       const rid = res.headers.get('x-request-id');
-      throw planError(code, res.status, message + (rid ? ` (request ${rid})` : ''), this.access);
+      throw planError(code, res.status, message + (rid ? ` (request ${rid})` : ''), this.access, until);
     }
 
     let text = '';
@@ -146,7 +162,7 @@ export class ChatGptProvider implements Provider {
       type?: string;
       delta?: string;
       item?: { type?: string; call_id?: string; name?: string; arguments?: string };
-      response?: { usage?: { input_tokens?: number; output_tokens?: number; input_tokens_details?: { cached_tokens?: number } }; error?: { code?: string; message?: string }; incomplete_details?: { reason?: string } };
+      response?: { usage?: { input_tokens?: number; output_tokens?: number; input_tokens_details?: { cached_tokens?: number } }; error?: { code?: string; message?: string; resets_at?: unknown; resets_in_seconds?: unknown }; incomplete_details?: { reason?: string } };
       code?: string;
       message?: string;
     }) => {
@@ -170,7 +186,7 @@ export class ChatGptProvider implements Provider {
           break;
         case 'response.failed': {
           const err = ev.response?.error;
-          throw planError(err?.code, 200, err?.message ?? 'response failed', this.access);
+          throw planError(err?.code, 200, err?.message ?? 'response failed', this.access, limitUntil(err, null, now));
         }
         case 'error':
           throw planError(ev.code, 200, ev.message ?? 'stream error', this.access);
@@ -194,13 +210,7 @@ export class ChatGptProvider implements Provider {
     const content: ContentBlock[] = [];
     if (text) content.push({ type: 'text', text });
     for (const c of calls) {
-      let input: unknown;
-      try {
-        input = c.args ? JSON.parse(c.args) : {};
-      } catch {
-        input = { _invalid_json: c.args };
-      }
-      content.push({ type: 'tool_use', id: c.id, name: c.name, input });
+      content.push({ type: 'tool_use', id: c.id, name: c.name, input: toolInput(c.args) });
     }
     const stopReason = calls.length ? 'tool_use' : done === 'incomplete' ? `incomplete: ${incomplete || 'unknown'}` : 'end_turn';
     return { content, stopReason, usage };

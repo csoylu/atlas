@@ -1,3 +1,4 @@
+import { cardRef } from '@atlas/shared';
 import { afterEach, describe, expect, it } from 'vitest';
 import { mkdtempSync } from 'node:fs';
 import { tmpdir } from 'node:os';
@@ -7,6 +8,7 @@ import { startEngine, type Engine } from './index.ts';
 import { FakeProvider } from './providers/fake.ts';
 import { realProviders } from './models.ts';
 import { TRIAGE_KICK, WORK_KICK } from './dispatcher.ts';
+import { pausedNote } from './runner.ts';
 import { ModelError } from './providers/types.ts';
 
 let engine: Engine | undefined;
@@ -15,8 +17,9 @@ afterEach(async () => {
   engine = undefined;
 });
 
-async function setup(fake: FakeProvider | null) {
+async function setup(fake: FakeProvider | null, maxTurns?: number) {
   engine = await startEngine({
+    maxTurns,
     dbFile: ':memory:',
     dataDir: mkdtempSync(join(tmpdir(), 'atlas-')),
     port: 0,
@@ -46,7 +49,7 @@ describe('dispatcher', () => {
       [use('card_complete', { summary: 'Hero built and checked.' })],
     ]);
     const e = await setup(fake);
-    cardId = e.kanban.create({ title: 'landing hero thing' }, 'can').id;
+    cardId = e.kanban.create({ title: 'landing hero thing' }, 'user').id;
 
     await until(() => e.kanban.get(cardId).status === 'done', 'card done');
     const card = e.kanban.get(cardId);
@@ -57,19 +60,19 @@ describe('dispatcher', () => {
     ]);
     const system = e.kanban.messages(cardId).filter((m) => m.author === 'system');
     expect(system.map((m) => (m.content[0] as { text: string }).text)).toEqual([TRIAGE_KICK, WORK_KICK]);
-    expect(fake.calls[0]!.system).toContain('TASK: triage this card');
-    expect(fake.calls[2]!.system).toContain('TASK: do this card');
+    expect(fake.calls[0]!.system).toContain('Your task: triage the card below');
+    expect(fake.calls[2]!.system).toContain('Your task: do the card below');
   });
 
   it('keeps a child in todo until its parent is done', async () => {
     const fake = new FakeProvider([[use('card_complete', { summary: 'parent done' })], [use('card_complete', { summary: 'child done' })]]);
     const e = await setup(fake);
     e.dispatcher.stop(); // set up both cards before anything runs
-    const parent = e.kanban.create({ title: 'API', status: 'ready', assignee: 'atlas' }, 'can');
-    const child = e.kanban.create({ title: 'UI', status: 'ready', assignee: 'atlas', parents: [parent.id] }, 'can');
+    const parent = e.kanban.create({ title: 'API', status: 'ready', assignee: 'atlas' }, 'user');
+    const child = e.kanban.create({ title: 'UI', status: 'ready', assignee: 'atlas', parents: [parent.id] }, 'user');
     expect(e.kanban.get(child.id).status).toBe('todo');
-    expect(e.kanban.get(child.id).waiting).toBe(`waiting on ${parent.id} (ready)`);
-    expect(() => e.kanban.update(parent.id, { parents: [child.id] }, 'can')).toThrow(/cycle/);
+    expect(e.kanban.get(child.id).waiting).toBe(`waiting on ${cardRef(parent)} (ready)`);
+    expect(() => e.kanban.update(parent.id, { parents: [child.id] }, 'user')).toThrow(/cycle/);
 
     e.dispatcher.start(20);
     await until(() => e.kanban.get(child.id).status === 'done', 'child done');
@@ -77,24 +80,39 @@ describe('dispatcher', () => {
   });
 
   it('blocks with the last message when an agent stops without finishing, and resumes on answer', async () => {
-    const fake = new FakeProvider([text('Which colour do you want, blue or green?'), [use('card_complete', { summary: 'blue it is' })]]);
+    // A long status update with a table: kept whole, never cut (it was cut at 600 chars + « … »).
+    const question = 'Here is where it stands.\n\n| Option | Cost |\n|---|---|\n' + '| blue | 1 |\n'.repeat(80) + '\nWhich colour do you want, blue or green?';
+    const fake = new FakeProvider([text(question), [use('card_complete', { summary: 'blue it is' })]]);
     const e = await setup(fake);
-    const card = e.kanban.create({ title: 'Button', status: 'ready', assignee: 'atlas' }, 'can');
+    const card = e.kanban.create({ title: 'Button', status: 'ready', assignee: 'atlas' }, 'user');
     await until(() => e.kanban.get(card.id).status === 'blocked', 'blocked');
-    expect(e.kanban.get(card.id).block).toMatchObject({ kind: 'needs_input', reason: 'Which colour do you want, blue or green?' });
+    expect(e.kanban.get(card.id).block).toMatchObject({ kind: 'needs_input', reason: question });
 
-    e.kanban.appendMessage(card.id, 'user', 'can', text('blue'));
+    e.kanban.appendMessage(card.id, 'user', 'user', text('blue'));
     e.dispatcher.onUserMessage(card.id);
     await until(() => e.kanban.get(card.id).status === 'done', 'done after answer');
     expect(e.kanban.get(card.id).block).toBeNull();
     expect(fake.calls[1]!.messages.at(-1)!.content).toEqual(text('blue'));
   });
 
+  it('a work run reaching the turn limit pauses (asks to reply, not failed) and the reply resumes it', async () => {
+    const fake = new FakeProvider([[use('shell', { command: 'echo 1' })], [use('shell', { command: 'echo 2' })], [use('card_complete', { summary: 'finished after the pause' })]]);
+    const e = await setup(fake, 2);
+    const card = e.kanban.create({ title: 'Long', status: 'ready', assignee: 'atlas' }, 'user');
+    await until(() => e.kanban.get(card.id).status === 'blocked', 'paused');
+    expect(e.kanban.get(card.id).block).toMatchObject({ kind: 'needs_input', reason: pausedNote(2) });
+    expect(e.runner.runs(card.id)[0]).toMatchObject({ status: 'done', error: null });
+
+    e.kanban.appendMessage(card.id, 'user', 'user', text('continue'));
+    e.dispatcher.onUserMessage(card.id);
+    await until(() => e.kanban.get(card.id).status === 'done', 'done after reply');
+  });
+
   it('blocks a card whose model cannot be used, without retrying in a loop', async () => {
     const e = await setup(null); // real providers, no ANTHROPIC_API_KEY
-    const triage = e.kanban.create({ title: 'idea' }, 'can');
+    const triage = e.kanban.create({ title: 'idea' }, 'user');
     expect(e.kanban.get(triage.id).waiting).toMatch(/no Anthropic account/);
-    const card = e.kanban.create({ title: 'work', status: 'ready', assignee: 'atlas' }, 'can');
+    const card = e.kanban.create({ title: 'work', status: 'ready', assignee: 'atlas' }, 'user');
     await new Promise((r) => setTimeout(r, 200));
     expect(e.kanban.get(card.id).status).toBe('ready');
     expect(e.kanban.get(card.id).waiting).toMatch(/no Anthropic account/);
@@ -102,7 +120,7 @@ describe('dispatcher', () => {
     expect(e.runner.runs(triage.id)).toEqual([]);
   });
 
-  it('waits for Can after a failed triage run, and retries when he writes', async () => {
+  it('waits for the user after a failed triage run, and retries when the user writes', async () => {
     const fake = new FakeProvider([text('pong'), text('Shaped it.')]); // the re-test, then the triage
     let fail = true;
     const complete = fake.complete.bind(fake);
@@ -111,7 +129,7 @@ describe('dispatcher', () => {
       return complete(req, onText, signal);
     };
     const e = await setup(fake);
-    const card = e.kanban.create({ title: 'idea' }, 'can');
+    const card = e.kanban.create({ title: 'idea' }, 'user');
     await until(() => e.runner.runs(card.id)[0]?.status === 'failed', 'failed triage');
     await new Promise((r) => setTimeout(r, 100));
     expect(e.runner.runs(card.id)).toHaveLength(1); // no retry loop
@@ -120,8 +138,8 @@ describe('dispatcher', () => {
     );
     expect(e.models.get('sonnet').lastError).toMatch(/not reachable/);
     fail = false;
-    await new Promise((r) => setTimeout(r, 5)); // Can's message must be later than the failed run
-    e.kanban.appendMessage(card.id, 'user', 'can', text('server is up now'));
+    await new Promise((r) => setTimeout(r, 5)); // the user's message must be later than the failed run
+    e.kanban.appendMessage(card.id, 'user', 'user', text('server is up now'));
     e.dispatcher.onUserMessage(card.id);
     await until(() => e.runner.runs(card.id)[0]?.status === 'done', 'retried triage');
     expect(e.models.get('sonnet').lastError).toBeNull();
@@ -134,18 +152,18 @@ describe('dispatcher', () => {
     const order: string[] = [];
     const fake = new FakeProvider([]);
     fake.complete = async (req) => {
-      order.push(req.system.match(/Current card: (c_\w+)/)![1]!);
+      order.push(req.system.match(/# Current card\n(#\d+)/)![1]!);
       await gate;
       return { content: [use('card_complete', { summary: 'ok' })], stopReason: 'tool_use', usage: { input: 1, output: 1 } };
     };
     const e = await setup(fake);
     e.dispatcher.stop();
-    const low = e.kanban.create({ title: 'low', status: 'ready', assignee: 'atlas', priority: 0 }, 'can');
-    const high = e.kanban.create({ title: 'high', status: 'ready', assignee: 'atlas', priority: 3 }, 'can');
+    const low = e.kanban.create({ title: 'low', status: 'ready', assignee: 'atlas', priority: 0 }, 'user');
+    const high = e.kanban.create({ title: 'high', status: 'ready', assignee: 'atlas', priority: 3 }, 'user');
     e.dispatcher.start(20);
     await until(() => order.length === 1, 'first run');
-    expect(order).toEqual([high.id]);
-    await until(() => e.kanban.get(low.id).waiting === `@atlas is busy with ${high.id}`, 'busy reason');
+    expect(order).toEqual([cardRef(high)]);
+    await until(() => e.kanban.get(low.id).waiting === `@atlas is busy with ${cardRef(high)}`, 'busy reason');
     release();
     await until(() => e.kanban.get(low.id).status === 'done', 'low done');
   });
@@ -153,7 +171,7 @@ describe('dispatcher', () => {
   it('retries a transient block when its time comes', async () => {
     const fake = new FakeProvider([[use('card_complete', { summary: 'ok' })]]);
     const e = await setup(fake);
-    const card = e.kanban.create({ title: 'x', status: 'triage', assignee: 'atlas' }, 'can');
+    const card = e.kanban.create({ title: 'x', status: 'triage', assignee: 'atlas' }, 'user');
     e.settings.update({ triageAgent: null });
     e.kanban.block(card.id, { kind: 'transient', reason: 'rate limited', until: new Date(Date.now() - 1).toISOString() }, 'atlas');
     e.dispatcher.tick();

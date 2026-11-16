@@ -1,21 +1,26 @@
 import { useEffect, useState } from 'react';
 
 /**
- * Three looks: light (white sheet on a blue-grey frame), gray (soft neutral greys, easy on the eyes all day) and
- * dark (true black). "system" follows the OS between light and dark. The choice lives in localStorage; index.html
- * applies it before the first paint so a reload never flashes the wrong theme.
+ * Two looks (design §16, Linear direction): dark and light. "system" follows the OS between them. The choice lives in
+ * localStorage; index.html applies it before the first paint so a reload never flashes the wrong theme.
+ * The old « gray » theme is gone: a stored « gray » reads as dark.
  */
-export const THEMES = ['system', 'light', 'gray', 'dark'] as const;
+export const THEMES = ['system', 'light', 'dark'] as const;
 export type ThemeChoice = (typeof THEMES)[number];
 export type Theme = Exclude<ThemeChoice, 'system'>;
 
 const KEY = 'atlas.theme';
 const media = () => window.matchMedia('(prefers-color-scheme: dark)');
 
-export function storedTheme(): ThemeChoice {
-  // ?theme=gray previews a theme without saving it (also how the screenshots of each theme are taken).
-  const v = new URLSearchParams(location.search).get('theme') ?? localStorage.getItem(KEY);
+/** A stored or ?theme= value → a choice: « gray » (dropped 13 Nov 2026) is dark, anything unknown is Auto. */
+export function parseTheme(v: string | null): ThemeChoice {
+  if (v === 'gray') return 'dark';
   return (THEMES as readonly string[]).includes(v ?? '') ? (v as ThemeChoice) : 'system';
+}
+
+export function storedTheme(): ThemeChoice {
+  // ?theme=light previews a theme without saving it (also how the screenshots of each theme are taken).
+  return parseTheme(new URLSearchParams(location.search).get('theme') ?? localStorage.getItem(KEY));
 }
 
 export function resolveTheme(choice: ThemeChoice): Theme {
@@ -58,7 +63,7 @@ export function useTheme(): [ThemeChoice, Theme, (t: ThemeChoice) => void] {
   ];
 }
 
-/** Excalidraw has only light and dark: gray and dark both draw dark. Re-renders when the theme changes. */
+/** Excalidraw follows the theme (light or dark). Re-renders when the theme changes. */
 export function useExcalidrawTheme(): 'light' | 'dark' {
   const read = () => (document.documentElement.dataset.theme === 'light' ? 'light' : 'dark');
   const [t, setT] = useState<'light' | 'dark'>(read);

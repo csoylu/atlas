@@ -96,7 +96,7 @@ describe('auth (design §12)', () => {
     // The Vite dev server (another localhost port) and the app's own origin are fine.
     expect((await raw(u + '/api/cards', { headers: { origin: 'http://localhost:5173' } })).status).toBe(200);
     expect((await raw(u + '/api/cards', { headers: { origin: u } })).status).toBe(200);
-    // A web page Can opens can't drive his agents.
+    // A web page the user opens can't drive their agents.
     const csrf = await raw(u + '/api/cards', { method: 'POST', headers: { origin: 'https://evil.example', 'content-type': 'text/plain' }, body: '{}' });
     expect(csrf.status).toBe(403);
     expect((await raw(u + '/api/cards', { headers: { origin: 'null' } })).status).toBe(403);
@@ -117,6 +117,6 @@ describe('auth (design §12)', () => {
     engine = await start(null);
     const res = await raw(engine.url + '/api/settings', { method: 'PATCH', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ serverPasswordHash: 'x' }) });
     expect(res.status).toBe(400);
-    expect(Object.keys(JSON.parse((await raw(engine.url + '/api/settings')).body))).toEqual(['triageAgent']);
+    expect(Object.keys(JSON.parse((await raw(engine.url + '/api/settings')).body))).toEqual(['triageAgent', 'userName', 'userAbout']);
   });
 });

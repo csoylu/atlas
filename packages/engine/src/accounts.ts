@@ -130,7 +130,7 @@ export class Accounts {
   remove(id: string): void {
     const a = this.get(id);
     this.db.prepare('DELETE FROM accounts WHERE id = ?').run(id);
-    // Our own keychain entry goes with it; an env var named by Can is his.
+    // Our own keychain entry goes with it; an env var named by the user is theirs.
     if (a.secret.startsWith('ANTHROPIC_KEY_') && this.secrets?.names().includes(a.secret)) {
       this.secrets.delete(a.secret);
       delete this.env[a.secret];
@@ -158,7 +158,7 @@ export class Accounts {
   /** Enabled accounts; throws the reason when none has a key (the dispatcher checks this before starting a run). */
   ready(): Account[] {
     const all = this.list().filter((a) => a.enabled);
-    if (!all.length) throw new ModelError('no Anthropic account: add one on the Models page (Anthropic accounts), or set ANTHROPIC_API_KEY');
+    if (!all.length) throw new ModelError('no Anthropic account: add one in Settings → API keys, or set ANTHROPIC_API_KEY');
     if (!all.some((a) => this.env[a.secret])) throw new ModelError(`no key for any Anthropic account (${all.map((a) => a.secret).join(', ')} missing)`);
     return all;
   }

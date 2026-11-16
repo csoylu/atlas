@@ -1,0 +1,48 @@
+<!doctype html>
+<html>
+<head>
+<meta charset="utf-8" />
+<meta http-equiv="Content-Security-Policy" content="default-src 'none'; script-src 'self'; style-src 'self' 'unsafe-inline'" />
+<title>Atlas orb</title>
+<style>
+  html, body { margin: 0; height: 100%; overflow: hidden; background: transparent; user-select: none; -webkit-user-select: none;
+    font-family: -apple-system, BlinkMacSystemFont, "SF Pro Text", sans-serif; color: #fff; }
+  body.grab { cursor: grab; }
+  body.grabbing { cursor: grabbing; }
+  canvas { position: absolute; left: 0; top: 0; will-change: transform; }
+  /* At rest the canvas loop stops; this ember is a compositor-only animation (no script, no repaint of the canvas). */
+  #ember { position: absolute; left: 0; top: 0; width: 36px; height: 36px; margin: -18px 0 0 -18px; border-radius: 50%;
+    background: radial-gradient(circle, rgba(140,212,226,.8) 0%, rgba(108,192,210,.38) 45%, rgba(108,192,210,0) 72%);
+    opacity: 0; transition: opacity .8s ease; pointer-events: none; }
+  /* same beat as the app's running pulse (.cm-pill.running .dot: 1.4 s ease-in-out). Placed with `translate` (renderer place()), so `scale` stays centred on it */
+  #ember.on { opacity: 1; animation: ember 1.4s ease-in-out infinite; }
+  /* wake word off, microphone closed (card #57): a dim, still dot, no animation at all */
+  #ember.closed { opacity: .32; scale: .55; }
+  @keyframes ember { 0%, 100% { opacity: .8; scale: 1 } 50% { opacity: .36; scale: .8 } }
+  #bubble { position: absolute; max-width: 340px; padding: 14px 16px; border-radius: 18px 18px 4px 18px;
+    background: rgba(18,18,24,.62); backdrop-filter: blur(18px) saturate(1.4); -webkit-backdrop-filter: blur(18px) saturate(1.4);
+    border: 1px solid rgba(108,192,210,.25); box-shadow: 0 10px 40px rgba(0,0,0,.45), inset 0 1px 0 rgba(255,255,255,.06);
+    font-size: 15px; line-height: 1.45; opacity: 0; transform: translateY(8px) scale(.98);
+    transition: opacity .35s cubic-bezier(.2,.9,.3,1.2), transform .35s cubic-bezier(.2,.9,.3,1.2); pointer-events: none;
+    text-shadow: 0 1px 2px rgba(0,0,0,.35); }
+  #bubble.right { border-radius: 18px 18px 18px 4px; }
+  #bubble.show { opacity: 1; transform: none; }
+  #you { color: #6cc0d2; font-size: 12px; margin-bottom: 6px; letter-spacing: .2px; }
+  #you:empty { display: none; }
+  #err { color: #ffb3b3; font-size: 13px; }
+  #err:empty { display: none; }
+  #caret { display: inline-block; width: 7px; height: 15px; margin-left: 2px; vertical-align: -2px; background: #6cc0d2;
+    border-radius: 2px; animation: blink 1s steps(1) infinite; }
+  @keyframes blink { 50% { opacity: 0 } }
+  #label { position: absolute; transform: translateX(-50%); font-size: 11px; letter-spacing: 2.5px; text-transform: uppercase;
+    color: rgba(108,192,210,.85); transition: opacity .3s; pointer-events: none; text-shadow: 0 1px 3px rgba(0,0,0,.6); }
+</style>
+</head>
+<body>
+<canvas id="c"></canvas>
+<div id="ember"></div>
+<div id="bubble"><div id="you"></div><div id="err"></div><span id="txt"></span><span id="caret"></span></div>
+<div id="label"></div>
+<script src="renderer.js"></script>
+</body>
+</html>

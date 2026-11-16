@@ -6,6 +6,8 @@ import type { ToolSpec } from './providers/types.ts';
 export interface CanvasToolContext {
   canvases: Canvases;
   agentId: string;
+  /** Card references in node cardId ("#12", "12" or an id) → card id. */
+  resolveCard?: (ref: string) => string;
 }
 
 const OUTPUT_CAP = 30_000;
@@ -82,7 +84,7 @@ const tool = <S extends z.ZodType>(t: CanvasTool<S>) => t;
 
 export const CANVAS_TOOLS = {
   canvas_list: tool({
-    description: 'List canvases (shared boards Can sees live: diagrams, HTML mockups, running apps, explanations).',
+    description: 'List canvases (shared boards the user sees live: diagrams, HTML mockups, running apps, explanations).',
     input: z.object({}),
     run: (_i, { canvases }) =>
       canvases
@@ -102,26 +104,31 @@ export const CANVAS_TOOLS = {
   }),
   canvas_write: tool({
     description:
-      'Add, replace or delete nodes on a canvas; Can sees changes live. Node kinds: markdown (text), html (a page or ' +
+      'Add, replace or delete nodes on a canvas; the user sees changes live. Node kinds: markdown (text), html (a page or ' +
       'component, rendered sandboxed: use it for UI mockups and design showcases), url (a running app or a file served ' +
       'from your workspace as /api/files/<agent>/<path>), drawing (system design diagrams: sketch elements with ' +
       'x/y/width/height/label; arrows use from/to element ids). Omitted position/size: placed automatically. ' +
-      'Upsert replaces the node with that id; omitted content fields keep their previous value.',
+      'Upsert replaces the node with that id; omitted content fields keep their previous value. ' +
+      'show: node ids to display to the user inline in this chat (view only, they can expand, pan and zoom); use it whenever ' +
+      'you want the user to look at something. To show existing nodes without changing them, call with only id and show.',
     input: z.object({
       id: z.string().describe('canvas id'),
       upsert: z.array(LooseNode).default([]),
       delete: z.array(z.string()).default([]),
+      show: z.array(z.string()).default([]).describe('node ids to show the user inline in the chat'),
     }),
-    run: (i, { canvases, agentId }) => {
+    run: (i, { canvases, agentId, resolveCard }) => {
       const canvas = canvases.get(i.id);
       const placed: CanvasNode[] = [];
-      for (const n of i.upsert) placed.push(place(n, canvas, placed));
+      for (const n of i.upsert) placed.push(place(n.cardId && resolveCard ? { ...n, cardId: resolveCard(n.cardId) } : n, canvas, placed));
       const ops = [
         ...placed.map((node) => CanvasOp.parse({ op: 'upsert', node })),
         ...i.delete.map((id) => CanvasOp.parse({ op: 'delete', id })),
       ];
-      const after = canvases.apply(i.id, ops, agentId);
-      return `canvas ${after.id} is now v${after.version} with ${after.nodes.length} nodes`;
+      const after = ops.length ? canvases.apply(i.id, ops, agentId) : canvas;
+      const unknown = i.show.filter((id) => !after.nodes.some((n) => n.id === id));
+      if (unknown.length) throw new Error(`show: no node ${unknown.join(', ')} on canvas ${after.id}`);
+      return `canvas ${after.id} is now v${after.version} with ${after.nodes.length} nodes` + (i.show.length ? `; shown inline: ${i.show.join(', ')}` : '');
     },
   }),
 } satisfies Record<string, CanvasTool<z.ZodType>>;

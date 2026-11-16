@@ -30,7 +30,7 @@ export class StaleVersionError extends ConflictError {
   }
 }
 
-/** Canvases: versioned node documents, edited by Can in the UI and by agents through canvas tools (design §11). */
+/** Canvases: versioned node documents, edited by the user in the UI and by agents through canvas tools (design §11). */
 export class Canvases {
   constructor(
     private db: Db,

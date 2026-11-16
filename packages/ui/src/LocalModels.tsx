@@ -1,32 +1,26 @@
 import { useCallback, useEffect, useState } from 'react';
-import type { Agent, ChatGptStatus, LocalModel, LocalPull, LocalStatus } from '@atlas/shared';
-import { ModelSections } from './ModelSections.tsx';
-import { UsageSection } from './Usage.tsx';
+import type { Agent, LocalModel, LocalPull, LocalStatus } from '@atlas/shared';
 import { api } from './api.ts';
 import type { MessageStream } from './useMessages.ts';
 
 /**
- * Local models: the engine runs Ollama on its own machine (engine/src/local.ts). This page asks it to install, start
+ * Settings → Local: the engine runs Ollama on its own machine (engine/src/local.ts). This page asks it to install, start
  * and stop the server, download models from the Ollama library, load them into memory and
  * hand them to agents. Everything here is a request to the engine; it keeps running with the window closed.
  */
-export function ModelsView(props: {
+export function LocalModels(props: {
   stream: MessageStream;
   agents: Agent[];
-  chatgpt: ChatGptStatus | null;
   onModelsChanged(): void;
   onError(e: unknown): void;
 }) {
-  const { stream, agents, onError } = props;
-  // Bumped after local actions (« Give to agents » makes a model), so the model list above re-reads.
-  const [tick, setTick] = useState(0);
+  const { stream, agents, onError, onModelsChanged } = props;
   const [status, setStatus] = useState<LocalStatus | null>(null);
   const [models, setModels] = useState<LocalModel[] | null>(null);
   const [pulls, setPulls] = useState<Map<string, LocalPull>>(new Map());
   const [busy, setBusy] = useState<string | null>(null);
 
   const refresh = useCallback(() => {
-    setTick((t) => t + 1);
     api.local().then(setStatus, onError);
     api.localModels().then(
       (r) => {
@@ -53,6 +47,7 @@ export function ModelsView(props: {
     try {
       await f();
       refresh();
+      onModelsChanged(); // « Give to agents » makes a model
     } catch (e) {
       onError(e);
     } finally {
@@ -65,9 +60,7 @@ export function ModelsView(props: {
   const installedNames = new Set((models ?? []).map((m) => m.name));
 
   return (
-    <div className="agents-view models-view">
-      <UsageSection stream={stream} onError={onError} />
-      <ModelSections stream={stream} chatgpt={props.chatgpt} tick={tick} onChanged={props.onModelsChanged} onError={onError} />
+    <>
       <section>
         <div className="section-head">
           <h2>Ollama on this machine</h2>
@@ -82,7 +75,7 @@ export function ModelsView(props: {
       <section>
         <div className="section-head">
           <h2>Installed models</h2>
-          <p>Give one to agents: it joins « Available to agents » above, then pick it as an agent's model on the Agents page.</p>
+          <p>Give one to agents: it joins the <a href="#/settings/model-list">Model list</a>, then pick it as an agent's model on the <a href="#/settings/agents">Agents</a> page.</p>
         </div>
         <Installed
           models={models}
@@ -105,7 +98,7 @@ export function ModelsView(props: {
         <Downloads pulls={pulls} onCancel={(n) => act('cancel:' + n, () => api.cancelPull(n))} />
         <Finder installed={installedNames} pulls={pulls} onPull={pull} disabled={!status?.binary} />
       </section>
-    </div>
+    </>
   );
 }
 

@@ -1,0 +1,140 @@
+import type { Inbox, InboxNeed, Notification, NotificationKind } from '@atlas/shared';
+import type { Db } from './store/db.ts';
+import type { Bus } from './events.ts';
+import { NotFoundError, type Kanban } from './kanban.ts';
+
+interface Row {
+  id: number;
+  at: string;
+  kind: string;
+  title: string;
+  body: string;
+  card_id: string | null;
+  read_at: string | null;
+  archived_at: string | null;
+}
+const toNotification = (r: Row): Notification => ({
+  id: r.id,
+  at: r.at,
+  kind: r.kind,
+  title: r.title,
+  body: r.body,
+  cardId: r.card_id,
+  readAt: r.read_at,
+  archivedAt: r.archived_at,
+});
+
+/** Rows the Inbox shows from the card's live state instead (« Needs you »), never as updates. */
+const LIVE = "('card.blocked', 'card.review')";
+const UPDATES_SHOWN = 200;
+
+export interface NewNotification {
+  kind: NotificationKind;
+  title: string;
+  body: string;
+  cardId?: string | null;
+}
+
+/** Insert a row inside the caller's transaction; the caller emits `notification.created` with it after the commit. */
+export function insertNotification(db: Db, n: NewNotification, at = new Date()): Notification {
+  const { lastInsertRowid } = db
+    .prepare('INSERT INTO notifications (at, kind, title, body, card_id) VALUES (?, ?, ?, ?, ?)')
+    .run(at.toISOString(), n.kind, n.title, n.body, n.cardId ?? null);
+  return toNotification(db.prepare('SELECT * FROM notifications WHERE id = ?').get(lastInsertRowid) as Row);
+}
+
+/** Things the user is told about: a row each, an event the app turns into a system notification, and the Inbox. */
+export class Notifications {
+  constructor(
+    private db: Db,
+    private bus: Bus,
+    private kanban: Kanban,
+    private now: () => number = Date.now,
+  ) {}
+
+  create(n: NewNotification): Notification {
+    const created = insertNotification(this.db, n, new Date(this.now()));
+    this.bus.emit({ type: 'notification.created', notification: created });
+    return created;
+  }
+
+  list(limit = 50): Notification[] {
+    return (this.db.prepare('SELECT * FROM notifications ORDER BY id DESC LIMIT ?').all(limit) as Row[]).map(toNotification);
+  }
+
+  /**
+   * « Needs you »: board cards blocked (except transient: those retry by themselves) or in review, from their live
+   * state. « Updates »: rows not archived, newest first, without the card.blocked / card.review ones.
+   */
+  inbox(): Inbox {
+    const latest = this.db.prepare(`SELECT * FROM notifications WHERE card_id = ? AND kind IN ${LIVE} ORDER BY id DESC LIMIT 1`);
+    const lastRun = this.db.prepare('SELECT status FROM runs WHERE card_id = ? ORDER BY started_at DESC LIMIT 1');
+    // The handoff of card_request_review is also a card event: reviews requested before the Inbox existed (no row) keep it.
+    const handoff = this.db.prepare("SELECT payload FROM card_events WHERE card_id = ? AND kind = 'review_requested' AND at >= ? ORDER BY id DESC LIMIT 1");
+    const needsYou: InboxNeed[] = this.kanban
+      .list()
+      .filter((c) => c.status === 'review' || (c.status === 'blocked' && c.block?.kind !== 'transient'))
+      .map((card) => {
+        const entered = this.enteredAt(card.id, card.status);
+        const row = latest.get(card.id) as Row | undefined;
+        // A row from an earlier wait (before the card moved on and came back) doesn't describe this one.
+        const own = row && row.kind === (card.status === 'review' ? 'card.review' : 'card.blocked') && row.at >= entered ? row : undefined;
+        const run = lastRun.get(card.id) as { status: string } | undefined;
+        return {
+          card,
+          since: own?.at ?? (entered || card.updatedAt),
+          failed: card.status === 'blocked' && card.block?.kind === 'capability' && run?.status === 'failed',
+          notificationId: own?.id ?? null,
+          unread: !!own && !own.read_at,
+          summary: card.status === 'review' ? own?.body || reviewSummary(handoff.get(card.id, entered) as { payload: string } | undefined) : null,
+        };
+      })
+      .sort((a, b) => b.since.localeCompare(a.since));
+    const updates = (
+      this.db.prepare(`SELECT * FROM notifications WHERE archived_at IS NULL AND kind NOT IN ${LIVE} ORDER BY id DESC LIMIT ?`).all(UPDATES_SHOWN) as Row[]
+    ).map(toNotification);
+    return { needsYou, updates, badge: needsYou.length + updates.filter((u) => !u.readAt).length };
+  }
+
+  /** When the card last entered this status ('' if no event says so). */
+  private enteredAt(cardId: string, status: string): string {
+    const rows = this.db
+      .prepare("SELECT at, kind, payload FROM card_events WHERE card_id = ? AND kind IN ('blocked', 'status') ORDER BY id DESC LIMIT 20")
+      .all(cardId) as { at: string; kind: string; payload: string }[];
+    for (const r of rows) {
+      if (status === 'blocked' && r.kind === 'blocked') return r.at;
+      if (r.kind === 'status' && (JSON.parse(r.payload) as { to?: string }).to === status) return r.at;
+    }
+    return '';
+  }
+
+  read(id: number): void {
+    this.change('UPDATE notifications SET read_at = @at WHERE id = @id AND read_at IS NULL', id);
+  }
+
+  /** Archiving reads it too: it leaves the list and the badge. */
+  archive(id: number): void {
+    this.change('UPDATE notifications SET archived_at = @at, read_at = COALESCE(read_at, @at) WHERE id = @id AND archived_at IS NULL', id);
+  }
+
+  /** « Archive all read »: the updates already read leave the list. Returns how many. */
+  archiveRead(): number {
+    const { changes } = this.db
+      .prepare(`UPDATE notifications SET archived_at = ? WHERE archived_at IS NULL AND read_at IS NOT NULL AND kind NOT IN ${LIVE}`)
+      .run(new Date(this.now()).toISOString());
+    if (changes) this.bus.emit({ type: 'inbox.changed' });
+    return changes;
+  }
+
+  private change(sql: string, id: number): void {
+    if (!this.db.prepare('SELECT 1 FROM notifications WHERE id = ?').get(id)) throw new NotFoundError(`notification ${id} not found`);
+    const { changes } = this.db.prepare(sql).run({ at: new Date(this.now()).toISOString(), id });
+    if (changes) this.bus.emit({ type: 'inbox.changed' });
+  }
+}
+
+function reviewSummary(row: { payload: string } | undefined): string | null {
+  if (!row) return null;
+  const s = (JSON.parse(row.payload) as { summary?: unknown }).summary;
+  return typeof s === 'string' && s ? s : null;
+}

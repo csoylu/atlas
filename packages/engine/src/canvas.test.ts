@@ -20,44 +20,44 @@ const md = (id: string, text = 'hi'): CanvasNode => ({ id, kind: 'markdown', x: 
 describe('canvases', () => {
   it('saves with optimistic versions and rejects a stale save', () => {
     const { canvases, events } = setup();
-    const c = canvases.create({ name: 'System' }, 'can');
-    const v2 = canvases.save(c.id, { nodes: [md('a')], baseVersion: 1 }, 'can');
+    const c = canvases.create({ name: 'System' }, 'user');
+    const v2 = canvases.save(c.id, { nodes: [md('a')], baseVersion: 1 }, 'user');
     expect(v2.version).toBe(2);
-    expect(() => canvases.save(c.id, { nodes: [], baseVersion: 1 }, 'can')).toThrow(StaleVersionError);
+    expect(() => canvases.save(c.id, { nodes: [], baseVersion: 1 }, 'user')).toThrow(StaleVersionError);
     expect(events.filter((e) => e.type === 'canvas.updated')).toHaveLength(2);
   });
 
   it('applies agent ops on the latest version and refuses duplicates', () => {
     const { canvases } = setup();
-    const c = canvases.create({ name: 'x' }, 'can');
+    const c = canvases.create({ name: 'x' }, 'user');
     canvases.apply(c.id, [{ op: 'upsert', node: md('a') }, { op: 'upsert', node: md('b') }], 'atlas');
     canvases.apply(c.id, [{ op: 'upsert', node: md('a', 'changed') }, { op: 'delete', id: 'b' }], 'atlas');
     const now = canvases.get(c.id);
     expect(now.nodes).toEqual([md('a', 'changed')]);
     expect(now.updatedBy).toBe('atlas');
     expect(() => canvases.apply(c.id, [{ op: 'delete', id: 'zz' }], 'atlas')).toThrow(/not on canvas/);
-    expect(() => canvases.save(c.id, { nodes: [md('a'), md('a')], baseVersion: now.version }, 'can')).toThrow(/duplicate/);
+    expect(() => canvases.save(c.id, { nodes: [md('a'), md('a')], baseVersion: now.version }, 'user')).toThrow(/duplicate/);
     expect(canvases.get(c.id).version).toBe(now.version); // failed writes change nothing
   });
 
   it('keeps the last 50 versions and restores one', () => {
     const { canvases } = setup();
-    const c = canvases.create({ name: 'x' }, 'can');
+    const c = canvases.create({ name: 'x' }, 'user');
     for (let i = 0; i < 60; i++) canvases.apply(c.id, [{ op: 'upsert', node: md('a', String(i)) }], 'atlas');
     const versions = canvases.versions(c.id);
     expect(versions).toHaveLength(50);
     expect(versions[0]!.version).toBe(61);
-    const restored = canvases.restore(c.id, 20, 'can');
+    const restored = canvases.restore(c.id, 20, 'user');
     expect(restored.nodes).toEqual([md('a', '18')]);
     expect(restored.version).toBe(62);
-    expect(() => canvases.restore(c.id, 2, 'can')).toThrow(/no version 2/);
+    expect(() => canvases.restore(c.id, 2, 'user')).toThrow(/no version 2/);
   });
 });
 
 describe('canvas tools', () => {
   it('auto-places nodes and keeps omitted content', () => {
     const { canvases } = setup();
-    const c = canvases.create({ name: 'x' }, 'can');
+    const c = canvases.create({ name: 'x' }, 'user');
     const ctx = { canvases, agentId: 'atlas' };
     const r = runCanvasTool(
       'canvas_write',
@@ -80,12 +80,17 @@ describe('canvas tools', () => {
     nodes = canvases.get(c.id).nodes;
     expect(nodes[0]).toMatchObject({ id: 'notes', title: 'Plan', y: 50, text: '# Plan' });
     expect(runCanvasTool('canvas_write', { id: 'nope', upsert: [] }, ctx)).toMatchObject({ isError: true });
+    // show: existing nodes without a write (no new version), unknown ids refused
+    const v = canvases.get(c.id).version;
+    expect(runCanvasTool('canvas_write', { id: c.id, show: ['arch'] }, ctx)).toMatchObject({ isError: false, output: expect.stringContaining('shown inline: arch') });
+    expect(canvases.get(c.id).version).toBe(v);
+    expect(runCanvasTool('canvas_write', { id: c.id, show: ['ghost'] }, ctx)).toMatchObject({ isError: true });
   });
 
   it('summarises UI-edited drawings for agents', () => {
     const { canvases } = setup();
-    const c = canvases.create({ name: 'x' }, 'can');
-    canvases.apply(c.id, [{ op: 'upsert', node: { id: 'd', kind: 'drawing', x: 0, y: 0, w: 400, h: 300, title: '', scene: { elements: [{ id: 'e1', type: 'text', x: 1.4, y: 2, width: 50, height: 20, text: 'Hello', strokeColor: '#000', seed: 123 }, { id: 'e2', type: 'rectangle', isDeleted: true }] } } }], 'can');
+    const c = canvases.create({ name: 'x' }, 'user');
+    canvases.apply(c.id, [{ op: 'upsert', node: { id: 'd', kind: 'drawing', x: 0, y: 0, w: 400, h: 300, title: '', scene: { elements: [{ id: 'e1', type: 'text', x: 1.4, y: 2, width: 50, height: 20, text: 'Hello', strokeColor: '#000', seed: 123 }, { id: 'e2', type: 'rectangle', isDeleted: true }] } } }], 'user');
     const out = JSON.parse(readable(canvases.get(c.id)));
     expect(out.nodes[0].scene).toEqual({ edited_in_ui: true, elements: [{ id: 'e1', type: 'text', x: 1, y: 2, w: 50, h: 20, text: 'Hello' }] });
   });

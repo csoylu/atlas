@@ -1,22 +1,44 @@
 import { randomUUID } from 'node:crypto';
-import { mkdirSync } from 'node:fs';
-import type { Agent, Card, ContentBlock, Model, Run, RunKind, RunStatus } from '@atlas/shared';
+import { mkdirSync, readdirSync, readFileSync, rmSync, statSync } from 'node:fs';
+import { join } from 'node:path';
+import { RESUME_KICK } from '@atlas/shared';
+import type { Agent, Card, ContentBlock, EndedRun, Model, Run, RunKind, RunStatus, TodoItem, ToolCallDetail, ToolCallTiming } from '@atlas/shared';
 import type { Db } from './store/db.ts';
 import type { Bus } from './events.ts';
-import type { Kanban } from './kanban.ts';
+import { chatTitle, RENAME_AT, type Kanban } from './kanban.ts';
 import type { Agents } from './agents.ts';
 import type { Models } from './models.ts';
 import type { Usage } from './usage.ts';
-import { ModelError, type ModelRequest, type Provider, type ToolSpec } from './providers/types.ts';
-import { buildMessages, COMPACT_AT, compactedView, degrade, estimateTokens, INTERRUPTED, needsTurn, pickCut, renderForSummary } from './context.ts';
+import { invalidToolInput, ModelError, type ModelRequest, type Provider, type ToolSpec } from './providers/types.ts';
+import {
+  buildMessages,
+  COMPACT_AT,
+  COMPACT_TO,
+  compactedView,
+  degrade,
+  estimateTokens,
+  INTERRUPTED,
+  measuredSize,
+  needsTurn,
+  pickCut,
+  pickPrune,
+  PRUNE_MIN,
+  PRUNE_TAIL,
+  renderForSummary,
+  type Reading,
+} from './context.ts';
 import { runTool, toolSpecs } from './tools.ts';
 import { cardToolSpecs, describeCard, isCardTool, runCardTool, type Terminal } from './cardTools.ts';
 import { canvasToolSpecs, isCanvasTool, runCanvasTool } from './canvasTools.ts';
+import { docToolSpecs, isDocTool, runDocTool } from './docTools.ts';
+import type { Documents } from './documents.ts';
 import { isTeamTool, runTeamTool, teamToolSpecs } from './teamTools.ts';
 import { SHARED, type Memories } from './memory.ts';
 import type { Canvases } from './canvas.ts';
 import type { Schedules } from './schedules.ts';
 import { workdirOf } from './agents.ts';
+import type { FileLog } from './fileLog.ts';
+import { Background, exitNote, type BgProcess } from './background.ts';
 
 interface RunRow {
   id: string;
@@ -39,6 +61,11 @@ const toRun = (r: RunRow): Run => ({
   endedAt: r.ended_at,
 });
 
+/** Tools after which the agent's documents are re-indexed. */
+const WRITES_FILES = new Set(['write_file', 'edit_file', 'shell']);
+/** Turns in a row whose tool calls had invalid JSON arguments before the run fails (each one is answered with an error). */
+const MAX_BAD_JSON_TURNS = 3;
+
 export interface RunnerOptions {
   dataDir: string;
   maxTurns?: number;
@@ -46,6 +73,14 @@ export interface RunnerOptions {
   leaseMs?: number;
   /** Token usage of every call (usage.ts); omitted in runner-only tests. */
   usage?: Usage;
+  /** The human: name and own description (settings). Defaults to an unnamed user. */
+  user?: () => { name: string; about: string | null };
+  /** The direct chat Master talks to by voice (desktop voice mode): its replies are read aloud. */
+  isVoiceChat?: (cardId: string) => boolean;
+  /** Documents and side panels (panel_open / panel_close; file tools re-index the workspace). */
+  documents?: Documents;
+  /** Logs the files each tool call changed (Rewind puts back only its own chat's changes); omitted in runner-only tests. */
+  fileLog?: FileLog;
 }
 
 export interface WakeOptions {
@@ -61,9 +96,17 @@ export interface RunEnd {
   run: Run;
   terminal: Terminal;
   transient: boolean;
+  /** A transient failure known to clear at this time (every plan subscription paused until its reset). */
+  retryAt?: string;
 }
 
 const isoIn = (ms: number) => new Date(Date.now() + ms).toISOString();
+/** The seq of the last message of a transcript (0 if empty). */
+const upto = (transcript: { seq: number }[]) => transcript.at(-1)?.seq ?? 0;
+/** The note a run leaves when it reaches the turn limit. */
+export const pausedNote = (n: number) => `Paused after ${n} turns: reply to continue.`;
+/** Turns per run before it pauses (design §4). */
+export const MAX_TURNS = 150;
 
 /** Runs an agent on a card's conversation until the agent owes no reply (design §4). One run per card at a time. */
 export class Runner {
@@ -77,6 +120,8 @@ export class Runner {
   onRunEnd: (end: RunEnd) => void = () => {};
   /** Set by the dispatcher: deliver a message an agent posted on another card. */
   deliver: (cardId: string) => void = (id) => void this.wake(id);
+  /** Background shell processes (shell with background: true). */
+  readonly background: Background;
 
   constructor(
     private db: Db,
@@ -89,12 +134,32 @@ export class Runner {
     private schedules: Schedules,
     private opts: RunnerOptions,
   ) {
-    this.maxTurns = opts.maxTurns ?? 60;
+    this.maxTurns = opts.maxTurns ?? MAX_TURNS;
     this.leaseMs = opts.leaseMs ?? 60_000;
+    this.background = new Background(db, this.instance, this.leaseMs);
+    this.background.onExit = (p) => this.backgroundEnded(p);
+  }
+
+  /** Where an agent's full outputs go (long shell output, fetched pages, background logs). */
+  outputsDir(agentId: string): string {
+    return join(this.opts.dataDir, 'outputs', agentId);
+  }
+
+  /** A background process ended by itself (or was lost in a restart): a system note in its conversation wakes the agent. */
+  private backgroundEnded(p: BgProcess): void {
+    try {
+      this.kanban.appendMessage(p.cardId, 'user', 'system', [{ type: 'text', text: exitNote(p) }]);
+    } catch (e) {
+      console.error(`note for background process ${p.id} failed`, e);
+      return;
+    }
+    // A run going on reads it at its next turn; else (or if that run just ended) the agent is woken.
+    void this.settled(p.cardId).then(() => this.deliver(p.cardId));
   }
 
   /** Begin lease renewal and periodic recovery of runs whose owner died. */
   start(): void {
+    pruneOutputs(join(this.opts.dataDir, 'outputs'), OUTPUTS_KEPT_MS);
     this.recover();
     this.timers.push(setInterval(() => this.renew(), this.leaseMs / 3).unref());
     this.timers.push(setInterval(() => this.recover(), this.leaseMs / 2).unref());
@@ -102,6 +167,38 @@ export class Runner {
 
   runs(cardId: string): Run[] {
     return (this.db.prepare('SELECT * FROM runs WHERE card_id = ? ORDER BY started_at DESC, rowid DESC LIMIT 20').all(cardId) as RunRow[]).map(toRun);
+  }
+
+  /** Every run of the card that ended without finishing (failed, stopped, interrupted), oldest first, with when the next run started. */
+  endedRuns(cardId: string): EndedRun[] {
+    return (
+      this.db
+        .prepare(
+          `SELECT r.*, (SELECT MIN(n.started_at) FROM runs n WHERE n.card_id = r.card_id AND n.started_at > r.started_at) AS next
+             FROM runs r WHERE r.card_id = ? AND r.status IN ('failed', 'stopped', 'interrupted') ORDER BY r.started_at, r.rowid`,
+        )
+        .all(cardId) as (RunRow & { next: string | null })[]
+    ).map((r) => ({ ...toRun(r), next: r.next }));
+  }
+
+  /** Where the card's context summary ends (the model reads it instead of the messages up to that seq), if it has one. */
+  summaryOf(cardId: string): { uptoSeq: number; text: string } | null {
+    const row = this.db.prepare('SELECT summary, summary_upto_seq FROM conversations WHERE id = ?').get(this.kanban.get(cardId).conversationId) as
+      | { summary: string | null; summary_upto_seq: number | null }
+      | undefined;
+    return row?.summary && row.summary_upto_seq != null ? { uptoSeq: row.summary_upto_seq, text: row.summary } : null;
+  }
+
+  /** Every tool call made on the card, oldest first: when each ran (the chat shows durations and live timers). */
+  toolCalls(cardId: string): ToolCallTiming[] {
+    return (
+      this.db
+        .prepare(
+          `SELECT t.tool_use_id, t.name, t.status, t.started_at, t.ended_at, t.detail FROM tool_calls t JOIN runs r ON r.id = t.run_id
+            WHERE r.card_id = ? ORDER BY t.id`,
+        )
+        .all(cardId) as ToolCallRow[]
+    ).map(toTiming);
   }
 
   /** The run currently executing on a card (any engine), if any. */
@@ -150,9 +247,10 @@ export class Runner {
     return runId;
   }
 
-  stop(cardId: string): boolean {
+  /** Abort the card's run now: the model call and every running command (its process group) are killed. */
+  stop(cardId: string, reason = 'stopped by you'): boolean {
     const a = this.active.get(cardId);
-    a?.ctrl.abort(new Error('stopped by can'));
+    a?.ctrl.abort(new Error(reason));
     return !!a;
   }
 
@@ -166,6 +264,7 @@ export class Runner {
    * whose latest run was interrupted is resumed (design §6). Orphan shell processes are killed first.
    */
   recover(): string[] {
+    this.background.recover();
     const now = new Date().toISOString();
     const stale = this.db
       .prepare("SELECT * FROM runs WHERE status = 'running' AND (lease_until IS NULL OR lease_until < ?)")
@@ -184,6 +283,7 @@ export class Runner {
             .prepare("UPDATE tool_calls SET status = 'error', output = ?, ended_at = ? WHERE id = ?")
             .run(`interrupted by a restart${notes.get(o.id)}`, now, o.id);
       })();
+      this.emitCalls(orphans.map((o) => o.id));
       this.emitRun(r.id);
     }
     const toResume = this.db
@@ -197,7 +297,7 @@ export class Runner {
       this.wake(card_id, {
         agentId: agent_id,
         kind,
-        kick: kind === 'chat' ? undefined : 'The engine restarted during your work. Continue where you left off.',
+        kick: kind === 'chat' ? undefined : RESUME_KICK,
       })
         ? [card_id]
         : [],
@@ -207,12 +307,14 @@ export class Runner {
   /** Graceful stop: abort runs (they end 'interrupted' and resume at next start), stop timers. */
   async shutdown(): Promise<void> {
     this.timers.forEach(clearInterval);
+    this.background.shutdown();
     const all = [...this.active.values()];
     for (const a of all) a.ctrl.abort(new Error('engine shutting down'));
     await Promise.allSettled(all.map((a) => a.done));
   }
 
   private renew(): void {
+    this.background.renew();
     const ids = [...this.active.values()].map((a) => a.runId);
     if (!ids.length) return;
     const stmt = this.db.prepare("UPDATE runs SET lease_until = ? WHERE id = ? AND owner = ? AND status = 'running'");
@@ -222,7 +324,7 @@ export class Runner {
 
   private transcript(card: Card) {
     return this.db
-      .prepare('SELECT * FROM messages WHERE conversation_id = ? ORDER BY seq')
+      .prepare('SELECT * FROM messages WHERE conversation_id = ? AND rewind_id IS NULL ORDER BY seq')
       .all(card.conversationId)
       .map((r) => {
         const row = r as {
@@ -253,6 +355,7 @@ export class Runner {
     let error: string | null = null;
     let terminal: Terminal = null;
     let transient = false;
+    let retryAt: string | undefined;
     try {
       const agent = this.agents.get(agentId);
       if (!agent.enabled) throw new ModelError(`agent ${agentId} is disabled`);
@@ -261,48 +364,79 @@ export class Runner {
       const { model, provider } = this.models.provider(first.modelId ?? agent.modelId);
       const workdir = workdirOf(agent, this.opts.dataDir);
       mkdirSync(workdir, { recursive: true });
-      const tools = [...toolSpecs(), ...cardToolSpecs(), ...canvasToolSpecs(), ...teamToolSpecs()];
+      const tools = [...toolSpecs(), ...cardToolSpecs(), ...canvasToolSpecs(), ...teamToolSpecs(), ...(this.opts.documents ? docToolSpecs() : [])];
+      // Documents: a direct chat's panel is its own; a card's is the chat it was created from. Work is attached to its card.
+      const panelChat = first.board === 'direct' ? first.id : first.originCard;
+      const workCard = first.board === 'direct' ? null : first.id;
 
+      // Anthropic paused a long server-tool turn (web search): the same answer continues with one more call.
+      let paused = false;
+      let badJsonTurns = 0;
       for (let turn = 0; !terminal; turn++) {
         const card = this.kanban.get(cardId);
         this.closeDanglingToolUses(card);
         const transcript = this.transcript(card);
-        if (!needsTurn(buildMessages(transcript))) break;
-        if (turn >= this.maxTurns) throw new Error(`turn limit (${this.maxTurns}) reached; send a message to continue`);
-        const upto = transcript.at(-1)?.seq ?? 0;
+        if (!paused && !needsTurn(buildMessages(transcript))) break;
+        paused = false;
+        if (turn >= this.maxTurns) {
+          // A limit ends as waiting, never as an error (design §4): the note closes the turn, a reply resumes the work.
+          this.kanban.appendMessage(cardId, 'assistant', 'system', [{ type: 'text', text: pausedNote(this.maxTurns) }], upto(transcript));
+          break;
+        }
+        const seen = upto(transcript);
         const system = this.systemPrompt(agent, card, kind, workdir);
-        const view = await this.contextFor(card, transcript, model, provider, system, tools, signal);
+        const { view, exact } = await this.contextFor(card, transcript, model, provider, system.text, tools, signal);
 
         const res = await this.call(model.id, () => provider.complete(
           {
             model: model.name,
             maxTokens: model.maxTokens,
-            system,
+            system: system.text,
             messages: view,
             tools,
+            webSearch: true,
+            cache: { systemStable: system.stable },
             ...(card.effort ? { effort: card.effort } : {}),
           },
           (text) => this.bus.emit({ type: 'run.delta', runId, conversationId: card.conversationId, text }),
           signal,
         ));
-        this.opts.usage?.record({ model, agentId: agent.id, cardId, conversationId: card.conversationId, kind: 'turn', usage: res.usage });
+        this.opts.usage?.record({ model, agentId: agent.id, cardId, conversationId: card.conversationId, kind: 'turn', usage: res.usage, accountId: res.account });
+        // The real prompt size, for the next compaction decision; not for a degraded view (it would read as fitting).
+        this.db
+          .prepare('UPDATE conversations SET last_input_tokens = ?, last_input_upto = ? WHERE id = ?')
+          .run(exact && res.usage.input > 0 ? res.usage.input : null, exact && res.usage.input > 0 ? seen : null, card.conversationId);
         if (res.content.length === 0) throw new ModelError(`model ${model.id} returned an empty answer (stop: ${res.stopReason})`);
         if (turn === 0 && model.lastError) this.models.record(model.id, null);
-        this.kanban.appendMessage(cardId, 'assistant', agent.id, res.content, upto);
+        this.kanban.appendMessage(cardId, 'assistant', agent.id, res.content, seen);
+        if (res.stopReason === 'pause_turn') {
+          paused = true;
+          continue;
+        }
 
         const uses = res.content.filter((b) => b.type === 'tool_use');
         if (!uses.length) continue;
+        // Arguments that weren't valid JSON: the call gets an error result and the model resends it; a model that keeps
+        // failing ends the run (rule 3).
+        badJsonTurns = uses.some((u) => invalidToolInput(u.input)) ? badJsonTurns + 1 : 0;
         const results = await Promise.all(
           uses.map(async (u) => {
             const { lastInsertRowid } = this.db
               .prepare("INSERT INTO tool_calls (run_id, tool_use_id, name, input, status, started_at) VALUES (?, ?, ?, ?, 'running', ?)")
               .run(runId, u.id, u.name, JSON.stringify(u.input), new Date().toISOString());
+            this.emitCalls([Number(lastInsertRowid)]);
             let r: { output: string; isError: boolean };
-            if (isCardTool(u.name)) {
+            let detail: ToolCallDetail | null = null;
+            const live = this.liveTail(Number(lastInsertRowid), cardId);
+            const invalid = invalidToolInput(u.input);
+            if (invalid) r = { output: invalid, isError: true };
+            else if (isCardTool(u.name)) {
               const c = runCardTool(u.name, u.input, { kanban: this.kanban, agentId: agent.id, cardId });
               if (c.terminal && !c.isError) terminal = c.terminal;
               r = c;
-            } else if (isCanvasTool(u.name)) r = runCanvasTool(u.name, u.input, { canvases: this.canvases, agentId: agent.id });
+            } else if (isCanvasTool(u.name)) r = runCanvasTool(u.name, u.input, { canvases: this.canvases, agentId: agent.id, resolveCard: (ref) => this.kanban.resolve(ref) });
+            else if (this.opts.documents && isDocTool(u.name))
+              r = runDocTool(u.name, u.input, { documents: this.opts.documents, agentId: agent.id, chatId: panelChat, cardId: workCard, cardRef: (id) => this.kanban.ref(id) });
             else if (isTeamTool(u.name))
               r = runTeamTool(u.name, u.input, {
                 kanban: this.kanban,
@@ -312,20 +446,34 @@ export class Runner {
                 cardId,
                 deliver: (id) => this.deliver(id),
               });
-            else
-              r = await runTool(u.name, u.input, {
-                workdir,
-                signal,
-                onSpawn: (pid) => this.db.prepare('UPDATE tool_calls SET pid = ? WHERE id = ?').run(pid, lastInsertRowid),
-              });
+            else {
+              const exec = () =>
+                runTool(u.name, u.input, {
+                  workdir,
+                  signal,
+                  conversationId: card.conversationId,
+                  outputsDir: this.outputsDir(agent.id),
+                  background: { registry: this.background, agentId: agent.id, cardId },
+                  onSpawn: (pid) => this.db.prepare('UPDATE tool_calls SET pid = ? WHERE id = ?').run(pid, lastInsertRowid),
+                  onDetail: (d) => (detail = d),
+                  onOutput: live.push,
+                });
+              const log = this.opts.fileLog;
+              r = await (log ? log.track(cardId, workdir, u.name, u.input, exec) : exec()).finally(live.stop);
+            }
+            // Files written by the agent become new document versions (a « changed » mark in open panels).
+            if (this.opts.documents && WRITES_FILES.has(u.name)) this.opts.documents.sync(agent.id, agent.id, workCard);
             this.db
-              .prepare('UPDATE tool_calls SET status = ?, output = ?, ended_at = ? WHERE id = ?')
-              .run(r.isError ? 'error' : 'done', r.output, new Date().toISOString(), lastInsertRowid);
+              .prepare('UPDATE tool_calls SET status = ?, output = ?, ended_at = ?, detail = ? WHERE id = ?')
+              .run(r.isError ? 'error' : 'done', r.output, new Date().toISOString(), detail ? JSON.stringify(detail) : null, lastInsertRowid);
+            this.emitCalls([Number(lastInsertRowid)]);
             return { type: 'tool_result' as const, tool_use_id: u.id, content: r.output, ...(r.isError ? { is_error: true } : {}) };
           }),
         );
         signal.throwIfAborted();
         this.kanban.appendMessage(cardId, 'user', 'tool', results);
+        if (badJsonTurns >= MAX_BAD_JSON_TURNS)
+          throw new ModelError(`model ${model.id} sent tool calls with invalid JSON arguments ${badJsonTurns} turns in a row: ${invalidToolInput(uses.find((u) => invalidToolInput(u.input))!.input)!.split('\n')[0]}`);
       }
     } catch (e) {
       if (signal.aborted) {
@@ -336,13 +484,23 @@ export class Runner {
         status = 'failed';
         error = e instanceof Error ? e.message : String(e);
         transient = e instanceof ModelError && e.transient;
+        retryAt = e instanceof ModelError ? e.retryAt : undefined;
         if (!(e instanceof ModelError)) console.error(`run ${runId} failed`, e);
       }
     }
-    this.db.prepare('UPDATE runs SET status = ?, error = ?, ended_at = ? WHERE id = ?').run(status, error, new Date().toISOString(), runId);
+    const ended = new Date().toISOString();
+    const cut = (this.db.prepare("SELECT id FROM tool_calls WHERE run_id = ? AND status = 'running'").all(runId) as { id: number }[]).map((c) => c.id);
+    this.db.transaction(() => {
+      this.db.prepare('UPDATE runs SET status = ?, error = ?, ended_at = ? WHERE id = ?').run(status, error, ended, runId);
+      // Tool calls cut short by a stop or a shutdown (their processes were killed with the abort).
+      this.db
+        .prepare("UPDATE tool_calls SET status = 'error', output = ?, ended_at = ? WHERE run_id = ? AND status = 'running'")
+        .run(`interrupted: ${error ?? status}`, ended, runId);
+    })();
+    this.emitCalls(cut);
     const run = this.emitRun(runId);
     try {
-      this.onRunEnd({ run, terminal, transient });
+      this.onRunEnd({ run, terminal, transient, retryAt });
     } catch (e) {
       console.error(`after run ${runId}`, e);
     }
@@ -362,10 +520,13 @@ export class Runner {
   }
 
   /**
-   * The view sent to the model (design §8): summary + recent messages. Past COMPACT_AT of the context window, the
-   * oldest messages are folded into the conversation's summary with a call to the same model (a few rounds at most,
-   * each leaving about half the budget free so it doesn't happen every turn). If that fails, the view is degraded
-   * (old tool outputs first) and the summary is retried at the next turn. The stored transcript never changes.
+   * The view sent to the model (design §8): summary + recent messages, the older ones pruned. Its size is the provider's
+   * real count of the last turn plus an estimate of the messages since (chars/4 without a reading). Past COMPACT_AT of
+   * the context window: first old tool outputs are pruned (no model call), and only if that doesn't bring the view
+   * under COMPACT_TO are the oldest messages folded into the conversation's summary with a call to the same model (a
+   * few rounds at most, each leaving about half the budget free so it doesn't happen every turn). If that fails, the
+   * view is degraded (old tool outputs first) and the summary is retried at the next turn. The stored transcript never
+   * changes. `exact`: false for a degraded view (its real size must not count as the conversation's).
    */
   private async contextFor(
     card: Card,
@@ -375,19 +536,47 @@ export class Runner {
     system: string,
     tools: ToolSpec[],
     signal: AbortSignal,
-  ): Promise<ModelRequest['messages']> {
+  ): Promise<{ view: ModelRequest['messages']; exact: boolean }> {
+    const window = model.contextWindow;
     const overhead = estimateTokens(system) + estimateTokens(tools);
-    const budget = Math.floor(model.contextWindow * COMPACT_AT);
+    const budget = Math.floor(window * COMPACT_AT);
     let conv = this.conversation(card.conversationId);
-    let view = compactedView(transcript, conv.summary, conv.uptoSeq);
-    for (let round = 0; overhead + estimateTokens(view) > budget && round < 4; round++) {
+    const viewOf = (pruneUpto = conv.pruneUpto) => compactedView(transcript, conv.summary, conv.uptoSeq, pruneUpto, conv.todos);
+    let view = viewOf();
+    // The provider's count of the last turn + the messages since; chars/4 only without a reading.
+    let size = measuredSize(conv.reading, transcript) ?? overhead + estimateTokens(view);
+    if (size <= budget) return { view, exact: true };
+
+    // 1. Prune old tool outputs (no model call). It breaks the prompt cache, so only in a big step: if it reclaims
+    // PRUNE_MIN of the window; the protected tail is PRUNE_TAIL, so it lands well under the threshold.
+    const rest = conv.uptoSeq == null ? transcript : transcript.filter((m) => m.seq > conv.uptoSeq!);
+    const pruneUpto = pickPrune(rest, Math.floor(window * PRUNE_TAIL));
+    if (pruneUpto != null && pruneUpto > (conv.pruneUpto ?? 0)) {
+      const pruned = viewOf(pruneUpto);
+      const saved = estimateTokens(view) - estimateTokens(pruned);
+      if (saved >= window * PRUNE_MIN) {
+        this.db
+          .prepare('UPDATE conversations SET prune_upto_seq = ?, last_input_tokens = NULL, last_input_upto = NULL WHERE id = ?')
+          .run(pruneUpto, card.conversationId);
+        this.kanban.event(card.id, 'pruned', { upto: pruneUpto, savedTokens: saved });
+        conv = this.conversation(card.conversationId);
+        view = pruned;
+        size -= saved;
+        if (size <= window * COMPACT_TO) return { view, exact: true };
+      }
+    }
+
+    // 2. Not enough: fold the oldest messages into the summary with a model call (at least once, more rounds while over).
+    for (let round = 0; (round === 0 || size > budget) && round < 4; round++) {
       const rest = conv.uptoSeq == null ? transcript : transcript.filter((m) => m.seq > conv.uptoSeq!);
       const room = Math.floor(model.contextWindow * 0.5) - estimateTokens(conv.summary ?? '') - 1000;
       const cut = pickCut(rest, Math.floor((budget - overhead) / 2), room);
       if (cut == null) break;
       try {
         const summary = await this.summarize(model, provider, conv.summary, rest.filter((m) => m.seq <= cut), signal, card);
-        this.db.prepare('UPDATE conversations SET summary = ?, summary_upto_seq = ? WHERE id = ?').run(summary, cut, card.conversationId);
+        this.db
+          .prepare('UPDATE conversations SET summary = ?, summary_upto_seq = ?, last_input_tokens = NULL, last_input_upto = NULL WHERE id = ?')
+          .run(summary, cut, card.conversationId);
         this.kanban.event(card.id, 'compacted', { upto: cut, summaryChars: summary.length });
       } catch (e) {
         signal.throwIfAborted();
@@ -397,16 +586,67 @@ export class Runner {
         break;
       }
       conv = this.conversation(card.conversationId);
-      view = compactedView(transcript, conv.summary, conv.uptoSeq);
+      view = viewOf();
+      size = overhead + estimateTokens(view);
     }
-    return overhead + estimateTokens(view) > budget ? degrade(view, budget, overhead) : view;
+    return size > budget ? { view: degrade(view, budget, overhead), exact: false } : { view, exact: true };
   }
 
-  private conversation(id: string): { summary: string | null; uptoSeq: number | null } {
-    const r = this.db.prepare('SELECT summary, summary_upto_seq FROM conversations WHERE id = ?').get(id) as
-      | { summary: string | null; summary_upto_seq: number | null }
+  private conversation(id: string): { summary: string | null; uptoSeq: number | null; pruneUpto: number | null; reading: Reading | null; todos: TodoItem[] | null } {
+    const r = this.db
+      .prepare('SELECT summary, summary_upto_seq, prune_upto_seq, last_input_tokens, last_input_upto, todos FROM conversations WHERE id = ?')
+      .get(id) as
+      | { summary: string | null; summary_upto_seq: number | null; prune_upto_seq: number | null; last_input_tokens: number | null; last_input_upto: number | null; todos: string | null }
       | undefined;
-    return { summary: r?.summary ?? null, uptoSeq: r?.summary_upto_seq ?? null };
+    return {
+      summary: r?.summary ?? null,
+      uptoSeq: r?.summary_upto_seq ?? null,
+      pruneUpto: r?.prune_upto_seq ?? null,
+      reading: r?.last_input_tokens != null && r.last_input_upto != null ? { tokens: r.last_input_tokens, upto: r.last_input_upto } : null,
+      todos: r?.todos ? (JSON.parse(r.todos) as TodoItem[]) : null,
+    };
+  }
+
+  /**
+   * The user's RENAME_AT-th message in a direct chat: the chat's model writes a short title from the conversation so far,
+   * in the background (the UI shows "naming" meanwhile). Once per chat; a failure keeps the first-message title.
+   */
+  nameChat(cardId: string): void {
+    const card = this.kanban.get(cardId);
+    if (card.board !== 'direct' || card.naming || this.kanban.lastEventAt(cardId, 'renamed')) return;
+    const messages = this.kanban.messages(cardId);
+    if (messages.filter((m) => m.author === 'user').length !== RENAME_AT) return;
+    const text = messages
+      .map((m) => ({ who: m.author === 'user' ? this.user().name : m.author, text: m.content.flatMap((b) => (b.type === 'text' ? [b.text] : [])).join('\n').trim() }))
+      .filter((m) => m.text && m.who !== 'system')
+      .map((m) => `${m.who}: ${m.text.length > 1500 ? m.text.slice(0, 1500) + '…' : m.text}`)
+      .join('\n\n');
+    this.kanban.setNaming(cardId, true);
+    void (async () => {
+      const { model, provider } = this.models.provider(card.modelId ?? this.agents.get(card.assignee ?? '').modelId);
+      const res = await provider.complete(
+        {
+          model: model.name,
+          maxTokens: Math.min(model.maxTokens, 1000),
+          system: TITLE_SYSTEM,
+          messages: [{ role: 'user', content: [{ type: 'text', text: `Conversation:\n\n${text}\n\nWrite the title.` }] }],
+          tools: [],
+        },
+        () => {},
+        AbortSignal.timeout(60_000),
+      );
+      this.opts.usage?.record({ model, agentId: card.assignee, cardId, conversationId: card.conversationId, kind: 'title', usage: res.usage, accountId: res.account });
+      const title = cleanTitle(res.content.flatMap((b) => (b.type === 'text' ? [b.text] : [])).join(' '));
+      if (title) this.kanban.renameChat(cardId, title);
+    })()
+      .catch((e: unknown) => console.error(`naming chat ${cardId} failed:`, e instanceof Error ? e.message : e))
+      .finally(() => {
+        try {
+          this.kanban.setNaming(cardId, false);
+        } catch {
+          // deleted meanwhile
+        }
+      });
   }
 
   /** Fold `messages` into the previous summary, with the agent's own model. */
@@ -433,7 +673,7 @@ export class Runner {
       () => {},
       signal,
     );
-    this.opts.usage?.record({ model, agentId: card.assignee, cardId: card.id, conversationId: card.conversationId, kind: 'summary', usage: res.usage });
+    this.opts.usage?.record({ model, agentId: card.assignee, cardId: card.id, conversationId: card.conversationId, kind: 'summary', usage: res.usage, accountId: res.account });
     const text = res.content.flatMap((b) => (b.type === 'text' ? [b.text] : [])).join('\n').trim();
     if (!text) throw new ModelError(`model ${model.id} returned no summary text (stop: ${res.stopReason})`);
     return text;
@@ -458,69 +698,234 @@ export class Runner {
       );
   }
 
+  /**
+   * The live tail of a running tool's output: toolcall.updated with `tail` (the last lines), at most every TAIL_MS.
+   * Display only, never stored: the result replaces it when the call ends.
+   */
+  private liveTail(id: number, cardId: string): { push(chunk: string): void; stop(): void } {
+    let out = '';
+    let timer: NodeJS.Timeout | null = null;
+    let stopped = false;
+    const send = () => {
+      timer = null;
+      if (stopped) return;
+      const row = this.db.prepare('SELECT t.tool_use_id, t.name, t.status, t.started_at, t.ended_at, t.detail FROM tool_calls t WHERE t.id = ?').get(id) as ToolCallRow | undefined;
+      if (row?.status === 'running') this.bus.emit({ type: 'toolcall.updated', cardId, call: { ...toTiming(row), tail: tailOf(out) } });
+    };
+    return {
+      push: (chunk) => {
+        out = (out + chunk).slice(-8000);
+        timer ??= setTimeout(send, TAIL_MS);
+      },
+      stop: () => {
+        stopped = true;
+        if (timer) clearTimeout(timer);
+      },
+    };
+  }
+
+  /** toolcall.updated for each of these tool_calls rows (after their write committed). */
+  private emitCalls(ids: number[]): void {
+    for (const id of ids) {
+      const row = this.db
+        .prepare('SELECT t.tool_use_id, t.name, t.status, t.started_at, t.ended_at, t.detail, r.card_id FROM tool_calls t JOIN runs r ON r.id = t.run_id WHERE t.id = ?')
+        .get(id) as (ToolCallRow & { card_id: string }) | undefined;
+      if (row) this.bus.emit({ type: 'toolcall.updated', cardId: row.card_id, call: toTiming(row) });
+    }
+  }
+
   private emitRun(runId: string): Run {
     const run = toRun(this.db.prepare('SELECT * FROM runs WHERE id = ?').get(runId) as RunRow);
     this.bus.emit({ type: 'run.updated', run });
+    // A direct chat's `working` flag follows its runs: refresh the sidebar item (no updatedAt bump, so it keeps its place).
+    if (this.kanban.get(run.cardId).board === 'direct') this.kanban.emit(run.cardId);
     return run;
   }
 
-  private systemPrompt(agent: Agent, card: Card, kind: RunKind, workdir: string): string {
+  /** The human as agents see them. */
+  private user(): { name: string; about: string | null } {
+    return this.opts.user?.() ?? { name: 'the user', about: null };
+  }
+
+  /**
+   * The system prompt, in a fixed order: who you are, who the user is, what this conversation is, how to work,
+   * workspace, team, project instructions (the stable prefix, `stable` chars: cached), then memory, the current card,
+   * today's date (the volatile tail). The user is named, never given a pronoun.
+   */
+  private systemPrompt(agent: Agent, card: Card, kind: RunKind, workdir: string): { text: string; stable: number } {
+    const { name, about } = this.user();
     const roster = this.agents
       .list()
       .filter((a) => a.enabled)
-      .map((a) => `- ${a.id}: ${a.rolePrompt.split('\n')[0] || '(no role description)'}`)
+      .map((a) => `- ${a.id}${a.id === agent.id ? ' (you)' : ''}: ${a.rolePrompt.split('\n')[0] || '(no role description)'}`)
       .join('\n');
-    const own = this.memories.get(agent.id).text;
-    const shared = this.memories.get(SHARED).text;
+    const own = this.memories.get(agent.id).text.trim();
+    const shared = this.memories.get(SHARED).text.trim();
+    const conversation =
+      kind === 'triage'
+        ? [
+            `Your task: triage the card below. ${name} dropped a raw idea; turn it into work agents can do.`,
+            '- One piece of work: rewrite it with card_update (clear title; body with context and acceptance criteria;',
+            '  assignee; priority 0-3) and set status ready.',
+            '- Several pieces: create one card per piece with card_create (parents for order), archive this card with',
+            '  card_update(status=archived), and say which cards you created.',
+            `- Something essential unclear: ask ${name} ONE short question in plain text, recommended answer first, and`,
+            '  leave the card in triage; the answer comes in this chat.',
+            'Do not do the work itself.',
+          ]
+        : kind === 'work'
+          ? [
+              'Your task: do the card below. End your run with exactly one of: card_complete (done and verified),',
+              `card_request_review (${name} should look before it is done) or card_block (you need an answer, access, or`,
+              `another card first). If you stop without one, the card is blocked with your last message as the question for ${name}.`,
+            ]
+          : card.board === 'direct'
+            ? [
+                `A direct chat with ${name}, not a card: answer whatever ${name} asks. Work worth tracking goes on cards`,
+                '(card_create, with assignee and parents for order); say which cards you created. Cards you create here report',
+                `back in this chat (a system message when one finishes, is closed, stopped or needs ${name}): then tell ${name}`,
+                `in your own words, briefly. If ${name} changes their mind about a card, close it (card_update status=closed).`,
+                ...(this.opts.isVoiceChat?.(card.id)
+                  ? [
+                      `${name} talks to you by voice here: their messages are speech-to-text, and your reply is read aloud`,
+                      'sentence by sentence. Answer in a few short spoken sentences: plain text, no markdown, lists, tables,',
+                      'code or links (put those in a document or on a canvas and say so).',
+                    ]
+                  : []),
+              ]
+            : [`The chat of the card below. ${name} reads it live and may write at any time. Answer; change the card only if asked.`];
     const parts = [
-      agent.rolePrompt,
+      `You are "${agent.id}", an AI agent in Atlas, where a small team of agents works for ${name}, the user: the only human here.`,
+      `Atlas has a kanban board (cards assigned to agents, run automatically, block on questions, go to review), direct`,
+      `chats with ${name}, shared canvases ${name} sees live, schedules, and per-agent models and memory.`,
+      `Role: ${agent.rolePrompt.trim() || `no specific role: help with whatever ${name} asks.`}`,
       '',
-      ...(shared ? ['Shared memory (all agents):', shared, ''] : []),
-      ...(own ? ['Your memory:', own, ''] : []),
-      `You are the agent "${agent.id}" in Atlas, a kanban board where agents work on cards. Can is the only human.`,
-      card.board === 'direct'
-        ? 'This is your direct chat with Can, not a card: he talks to you here about anything. Answer him. For work that'
-          + ' should be tracked, create cards with card_create (assignee, parents for order) and say which.'
-        : 'This conversation is the chat of the card below: Can reads it live and may write to you at any time.',
-      'Be concise; say what you did and how you verified it.',
-      `Your working directory is ${workdir}. File tools and shell run there; paths outside it are refused.`,
-      `Files you write there are served at /api/files/${agent.id}/<path>: show pages, built apps (dist/) or images on a`,
-      'canvas with a url node. Use canvases to explain (drawing nodes for system design, markdown for notes) and to',
-      'showcase designs (html nodes); mention the canvas id in the chat so Can can open it.',
+      `# ${name}`,
+      ...(about ? [`In their own words: "${about}"`] : []),
+      `Adapt explanations, vocabulary and level of detail to who ${name} is. Address ${name} by name or as "you";`,
+      'never assume gender. In transcripts and tool output, messages by "user" are theirs.',
       '',
-      'Agents:',
+      '# This conversation',
+      ...conversation,
+      '',
+      '# How to work',
+      `- Before building anything non-trivial (UI, behaviour, structure): ask ${name} the open questions (options, your`,
+      '  recommendation first), then show the design on a canvas (an html mockup for UI, a drawing for system design)',
+      `  and wait for ${name}'s OK (on a card: card_block needs_input). Build only what was approved. Small, clear fixes`,
+      '  can go straight in.',
+      "- Verify before saying it's done: run it, test it.",
+      `- Be concise: say what you did and how you checked it. Reply in the language ${name} writes in.`,
+      '',
+      '# Workspace',
+      `Working directory: ${workdir}. File tools and shell run there; paths outside it are refused.`,
+      `Files there are served at /api/files/${agent.id}/<path>: show pages, built apps (dist/) or images on a canvas`,
+      'with a url node. Canvases: drawing nodes for system design, markdown for notes, html for mockups. Mention the',
+      'canvas id, and pass show: [node ids] to canvas_write to display nodes inline in the chat.',
+      ...(this.opts.documents
+        ? [
+            'Documents: write designs, specs and reports as docs/*.md, pages as pages/*.html, diagrams as diagrams/*.svg; Atlas',
+            `versions every change. panel_open shows one to ${name} in the side panel beside the chat (real size, tabs; on a card,`,
+            `in the chat it came from, and the document is attached to the card). A message starting with ❝ quotes the part of a`,
+            `document ${name} is asking about (path, version, section): answer that, and edit the file if asked.`,
+          ]
+        : []),
+      '',
+      '# Team',
       roster,
+      'To reach another agent, write on its card with card_message.',
       '',
-      ...(card.board === 'direct' ? [] : [`Current card: ${describeCard(card)}`, card.body || '(no description)', '']),
+      ...projectInstructions(workdir),
     ];
-    if (kind === 'triage')
-      parts.push(
-        'TASK: triage this card. Can dropped a raw idea. Turn it into work agents can do:',
-        '- If it is one piece of work: rewrite it with card_update (clear title, body with context and acceptance',
-        '  criteria, assignee, priority 0-3) and set status ready.',
-        '- If it is several pieces: create one card per piece with card_create (parents for order), then archive this',
-        '  card with card_update(status=archived) and say which cards you created.',
-        '- If something essential is unclear, ask Can ONE short question in plain text, recommended answer first,',
-        '  and leave the card in triage; he answers in this chat.',
-        'Do not do the work itself.',
-      );
-    else if (kind === 'work')
-      parts.push(
-        'TASK: do this card. End your run with exactly one of: card_complete (done and verified), card_request_review',
-        '(Can should look before it is done), or card_block (you need an answer, access, or another card first).',
-        'If you stop without one of these, the card is blocked with your last message as the question to Can.',
-      );
-    else if (card.board !== 'direct') parts.push('Can wrote to you on this card. Answer him; change the card only if he asks.');
-    return parts.join('\n');
+    // Volatile tail (changes during a conversation): after the cache breakpoint, so a change re-reads the prefix.
+    const tail = [
+      '# Memory',
+      'Yours (only you edit it, with memory_edit):',
+      own || '(empty)',
+      'Shared by all agents:',
+      shared || '(empty)',
+      '',
+      ...(card.board === 'direct' ? [] : ['# Current card', describeCard(card, (id) => this.kanban.ref(id)), card.body || '(no description)', '']),
+      `Today is ${today()}.`,
+    ];
+    const stable = parts.join('\n') + '\n';
+    return { text: stable + tail.join('\n'), stable: stable.length };
   }
+}
+
+/** Today's date and the engine's time zone, e.g. "Thursday 12 November 2026 (Europe/Paris)". Date only: the prompt stays cacheable all day. */
+export function today(now = new Date()): string {
+  const zone = Intl.DateTimeFormat().resolvedOptions().timeZone;
+  const date = now.toLocaleDateString('en-GB', { weekday: 'long', day: 'numeric', month: 'long', year: 'numeric', timeZone: zone });
+  return `${date} (${zone})`;
+}
+
+const TITLE_SYSTEM = [
+  'You name a chat between a person and an AI agent, for their chat history.',
+  'Reply with only the title: 3 to 6 words, in the language of the conversation, saying what it is about.',
+  'No quotes, no final period, no preamble.',
+].join(' ');
+
+/** The model's title, tidied: first line, no quotes / "Title:" / final period, at most 60 characters. */
+export function cleanTitle(raw: string): string {
+  const line = raw.trim().split('\n')[0]!.replace(/^(title|titre)\s*:\s*/i, '').replace(/^["'“«*`]+|["'”»*`.]+$/g, '').trim();
+  return line ? chatTitle(line) : '';
 }
 
 const SUMMARY_SYSTEM = [
   "You compress an agent's working conversation so the agent can continue it with less context.",
-  'Write what the agent needs to carry on: the goal; what Can asked and decided (his exact words where they matter);',
+  'Write what the agent needs to carry on: the goal; what the user asked and decided (their exact words where they matter);',
   'what was done (files, commands, results, card and canvas ids); what was learned; errors and how they were fixed;',
   'what remains. Keep identifiers, paths, numbers and URLs exact. Plain text, no preamble.',
 ].join(' ');
+
+/** Full outputs older than this are deleted at start. */
+const OUTPUTS_KEPT_MS = 7 * 24 * 3600_000;
+
+function pruneOutputs(dir: string, maxAgeMs: number): void {
+  let agents: string[];
+  try {
+    agents = readdirSync(dir);
+  } catch {
+    return; // no outputs yet
+  }
+  const before = Date.now() - maxAgeMs;
+  for (const a of agents)
+    try {
+      for (const f of readdirSync(join(dir, a))) {
+        const p = join(dir, a, f);
+        if (statSync(p).mtimeMs < before) rmSync(p, { force: true });
+      }
+    } catch (e) {
+      console.warn(`pruning old outputs in ${join(dir, a)} failed`, e);
+    }
+}
+
+/** Project instructions included in the system prompt: these files at the root of the agent's workdir. */
+export const PROJECT_FILES = ['AGENTS.md', 'CLAUDE.md'];
+export const PROJECT_FILE_CAP = 20_000;
+
+/** The `# Project instructions` section: each file labelled with its path, capped with a note. Empty if none. */
+export function projectInstructions(workdir: string): string[] {
+  const out: string[] = [];
+  for (const name of PROJECT_FILES) {
+    const path = join(workdir, name);
+    let text: string;
+    try {
+      text = readFileSync(path, 'utf8').trim();
+    } catch (e) {
+      if ((e as NodeJS.ErrnoException).code === 'ENOENT') continue;
+      throw e;
+    }
+    if (!text) continue;
+    const cut = text.length > PROJECT_FILE_CAP;
+    out.push(
+      `## ${path}`,
+      cut ? text.slice(0, PROJECT_FILE_CAP) + `\n[… cut: the file has ${text.length} chars; read_file ${name} for the rest]` : text,
+      '',
+    );
+  }
+  return out.length ? ['# Project instructions', 'From files in your working directory; follow them for work there.', '', ...out] : [];
+}
 
 /** Kill a shell left running by a dead engine (its whole process group on Unix). Returns a note for the transcript. */
 function killOrphan(pid: number | null): string {
@@ -532,4 +937,31 @@ function killOrphan(pid: number | null): string {
   } catch {
     return ''; // already gone: nothing to report
   }
+}
+
+interface ToolCallRow {
+  tool_use_id: string;
+  name: string;
+  status: ToolCallTiming['status'];
+  started_at: string;
+  ended_at: string | null;
+  detail: string | null;
+}
+const toTiming = (r: ToolCallRow): ToolCallTiming => ({
+  toolUseId: r.tool_use_id,
+  name: r.name,
+  status: r.status,
+  startedAt: r.started_at,
+  endedAt: r.ended_at,
+  ...(r.detail ? { detail: JSON.parse(r.detail) as ToolCallDetail } : {}),
+});
+
+/** Lines of a running shell command's output sent to the chat, and how often. */
+export const TAIL_LINES = 12;
+const TAIL_MS = 300;
+
+/** The last `n` lines of a growing output (a trailing partial line counts). */
+export function tailOf(out: string, n = TAIL_LINES): string {
+  const ls = out.replace(/\n$/, '').split('\n');
+  return ls.slice(-n).join('\n');
 }

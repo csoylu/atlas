@@ -7,9 +7,10 @@
     <script>
       // Apply the saved theme before the first paint (no flash). Kept in sync with src/theme.ts.
       (function () {
-        // ?theme=gray previews a theme without saving it.
+        // ?theme=light previews a theme without saving it. « gray » was dropped (13 Nov 2026): it reads as dark.
         var t = new URLSearchParams(location.search).get('theme') || localStorage.getItem('atlas.theme');
-        if (t !== 'light' && t !== 'gray' && t !== 'dark')
+        if (t === 'gray') t = 'dark';
+        if (t !== 'light' && t !== 'dark')
           t = window.matchMedia('(prefers-color-scheme: dark)').matches ? 'dark' : 'light';
         document.documentElement.dataset.theme = t;
       })();

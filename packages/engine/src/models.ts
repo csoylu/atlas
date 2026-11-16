@@ -25,7 +25,7 @@ export const realProviders: ProviderFactory = (m, env) => {
     const token = env['CLAUDE_CODE_OAUTH_TOKEN']?.trim();
     const key = env['ANTHROPIC_API_KEY']?.trim();
     if (!token && !key) throw new ModelError(`model ${m.id} needs CLAUDE_CODE_OAUTH_TOKEN or ANTHROPIC_API_KEY in the engine's environment`);
-    // Keep the legacy adapter's hardcoded identity aligned with Can's installed Claude Code version.
+    // Keep the legacy adapter's hardcoded identity aligned with the installed Claude Code version.
     return new AnthropicProvider(token ? null : key!, {
       baseURL: m.baseUrl ?? undefined,
       authToken: token,
@@ -38,7 +38,7 @@ export const realProviders: ProviderFactory = (m, env) => {
   const key = m.credentialEnv ? env[m.credentialEnv] : undefined;
   if (m.provider === 'anthropic') {
     if (!key)
-      throw new ModelError(`model ${m.id} needs ${m.credentialEnv ?? 'an API key'}: set it on the Models page (desktop) or in the engine's environment`);
+      throw new ModelError(`model ${m.id} needs ${m.credentialEnv ?? 'an API key'}: set it in Settings → Model list (desktop) or in the engine's environment`);
     return new AnthropicProvider(key, m.baseUrl ?? undefined);
   }
   if (!m.baseUrl) throw new ModelError(`model ${m.id} has no base URL`);

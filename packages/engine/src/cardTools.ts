@@ -1,5 +1,6 @@
+import { searchSummary } from './context.ts';
 import { z } from 'zod';
-import { BLOCK_KINDS, type Card } from '@atlas/shared';
+import { BLOCK_KINDS, cardRef, type Card } from '@atlas/shared';
 import type { Kanban } from './kanban.ts';
 import type { ToolSpec } from './providers/types.ts';
 
@@ -21,13 +22,20 @@ interface CardTool<S extends z.ZodType> {
 }
 const tool = <S extends z.ZodType>(t: CardTool<S>) => t;
 
-const Editable = z.enum(['triage', 'todo', 'ready', 'archived']);
+const Editable = z.enum(['triage', 'todo', 'ready', 'closed', 'archived']);
 
-export function describeCard(c: Card): string {
-  const bits = [`${c.id} [${c.status}]`, c.assignee ? `@${c.assignee}` : 'unassigned', `P${c.priority}`, c.title];
-  if (c.parents.length) bits.push(`(parents: ${c.parents.join(', ')})`);
+/** One line about a card, for agents. `refOf` names a parent (its #number; the id if it's gone). */
+export function describeCard(c: Card, refOf: (id: string) => string = (id) => id): string {
+  const bits = [`${cardRef(c)} [${c.status}]`, c.assignee ? `@${c.assignee}` : 'unassigned', `P${c.priority}`, c.title];
+  if (c.parents.length) bits.push(`(parents: ${c.parents.map(refOf).sort((x, y) => x.localeCompare(y, 'en', { numeric: true })).join(', ')})`);
   return bits.join(' ');
 }
+
+/** describeCard with parents named by their #number. */
+export const describeWith = (kanban: Kanban) => (c: Card) => describeCard(c, (id) => kanban.ref(id));
+
+/** Card ids the tools take: "#12", "12" or the internal id. */
+const CardId = z.union([z.string(), z.number().int()]).transform(String).describe('card number (#12 or 12) or id');
 
 export const CARD_TOOLS = {
   card_list: tool({
@@ -35,15 +43,15 @@ export const CARD_TOOLS = {
     input: z.object({ status: z.string().optional() }),
     run: ({ status }, { kanban }) => {
       const cards = kanban.list().filter((c) => !status || c.status === status);
-      return cards.length ? cards.map(describeCard).join('\n') : '(no cards)';
+      return cards.length ? cards.map(describeWith(kanban)).join('\n') : '(no cards)';
     },
   }),
   card_show: tool({
     description: 'Show a card: fields, description, parents, block.',
-    input: z.object({ id: z.string() }),
+    input: z.object({ id: CardId }),
     run: ({ id }, { kanban }) => {
-      const c = kanban.get(id);
-      return [describeCard(c), c.block ? `blocked (${c.block.kind}): ${c.block.reason}` : '', '', c.body || '(no description)']
+      const c = kanban.get(kanban.resolve(id));
+      return [describeWith(kanban)(c), c.block ? `blocked (${c.block.kind}): ${c.block.reason}` : '', '', c.body || '(no description)']
         .filter((l, i) => l || i > 1)
         .join('\n');
     },
@@ -51,46 +59,51 @@ export const CARD_TOOLS = {
   card_create: tool({
     description:
       'Create a card. Give a clear title, a body with context and acceptance criteria, an assignee, and parents for ' +
-      'cards that must finish first. Status defaults to ready (it waits in todo automatically while a parent is open).',
+      'cards that must finish first. Status defaults to ready (it waits in todo automatically while a parent is open). ' +
+      'Created from a direct chat, the chat is told when the card finishes, closes, is stopped or needs the user.',
     input: z.object({
       title: z.string().min(1).max(200),
       body: z.string().default(''),
       assignee: z.string().nullable().optional(),
       priority: z.number().int().min(0).max(3).default(0),
-      parents: z.array(z.string()).default([]),
+      parents: z.array(CardId).default([]),
       status: Editable.default('ready'),
     }),
-    run: (i, { kanban, agentId }) => {
-      const c = kanban.create({ ...i, assignee: i.assignee ?? null }, agentId);
-      return `created ${describeCard(c)}`;
+    run: (i, { kanban, agentId, cardId }) => {
+      const origin = kanban.get(cardId).board === 'direct' ? cardId : null;
+      const c = kanban.create({ ...i, assignee: i.assignee ?? null }, agentId, origin);
+      return `created ${describeWith(kanban)(c)}`;
     },
   }),
   card_update: tool({
-    description: 'Edit a card: title, body, assignee, priority, parents, or status (triage, todo, ready, archived).',
+    description:
+      'Edit a card: title, body, assignee, priority, parents, or status (triage, todo, ready, closed, archived). closed = ' +
+      'cancelled, nothing more is done (stops its run; e.g. the user changed their mind). It does not count as done for ' +
+      'child cards.',
     input: z.object({
-      id: z.string(),
+      id: CardId,
       title: z.string().min(1).max(200).optional(),
       body: z.string().optional(),
       assignee: z.string().nullable().optional(),
       priority: z.number().int().min(0).max(3).optional(),
-      parents: z.array(z.string()).optional(),
+      parents: z.array(CardId).optional(),
       status: Editable.optional(),
     }),
-    run: ({ id, ...patch }, { kanban, agentId }) => `updated ${describeCard(kanban.update(id, patch, agentId))}`,
+    run: ({ id, ...patch }, { kanban, agentId }) => `updated ${describeWith(kanban)(kanban.update(kanban.resolve(id), patch, agentId))}`,
   }),
   card_complete: tool({
     description: 'Finish your current card: the work is done and verified. The summary is the handoff (what changed, how it was checked).',
     input: z.object({ summary: z.string().min(1) }),
     terminal: 'complete',
     run: ({ summary }, { kanban, agentId, cardId }) => {
-      kanban.update(cardId, { status: 'done' }, agentId);
+      kanban.update(cardId, { status: 'done' }, agentId, summary);
       kanban.event(cardId, 'completed', { by: agentId, summary });
       return 'card done';
     },
   }),
   card_block: tool({
     description:
-      'Stop and wait. kind: needs_input (a question for Can; give options, recommended first), dependency (waiting ' +
+      'Stop and wait. kind: needs_input (a question for the user; give options, recommended first), dependency (waiting ' +
       'on other work), capability (missing access or tool), transient (retry later; set retry_in_minutes).',
     input: z.object({
       kind: z.enum(BLOCK_KINDS),
@@ -106,11 +119,11 @@ export const CARD_TOOLS = {
     },
   }),
   card_request_review: tool({
-    description: 'Hand the finished work to Can for review. The summary says what to look at and how it was verified.',
+    description: 'Hand the finished work to the user for review. The summary says what to look at and how it was verified.',
     input: z.object({ summary: z.string().min(1) }),
     terminal: 'review',
     run: ({ summary }, { kanban, agentId, cardId }) => {
-      kanban.update(cardId, { status: 'review' }, agentId);
+      kanban.update(cardId, { status: 'review' }, agentId, summary);
       kanban.event(cardId, 'review_requested', { by: agentId, summary });
       return 'review requested';
     },
@@ -124,7 +137,9 @@ export const CARD_TOOLS = {
       .object({ query: z.string().min(2).optional(), seq: z.number().int().positive().optional() })
       .refine((i) => i.query || i.seq, 'give a query or a seq'),
     run: ({ query, seq }, { kanban, cardId }) => {
-      const messages = kanban.messages(cardId);
+      // Messages the user rewound (hidden from the chat) can still be found, marked as such.
+      const messages = kanban.messages(cardId, { rewound: true });
+      const tag = (m: (typeof messages)[number]) => (m.rewound ? ' [rewound by the user: not part of the conversation]' : '');
       // Earlier searches would match themselves: leave them out.
       const own = new Set(messages.flatMap((m) => m.content.flatMap((b) => (b.type === 'tool_use' && b.name === 'history_search' ? [b.id] : []))));
       const textOf = (m: (typeof messages)[number]) =>
@@ -133,6 +148,8 @@ export const CARD_TOOLS = {
             if (b.type === 'text') return [b.text];
             if (b.type === 'tool_use') return own.has(b.id) ? [] : [`→ ${b.name} ${JSON.stringify(b.input)}`];
             if (b.type === 'tool_result') return own.has(b.tool_use_id) ? [] : [`← ${b.content}`];
+            if (b.type === 'server_tool_use') return [`→ ${b.name} ${JSON.stringify(b.input)}`];
+            if (b.type === 'web_search_tool_result') return [`← ${searchSummary(b.content)}`];
             return [];
           })
           .join('\n');
@@ -140,13 +157,13 @@ export const CARD_TOOLS = {
         const m = messages.find((x) => x.seq === seq);
         if (!m) throw new Error(`no message #${seq} (this transcript has ${messages.length})`);
         const t = textOf(m);
-        return `#${m.seq} ${m.author} (${m.at}):\n${t.length > 20_000 ? t.slice(0, 20_000) + `\n… (${t.length - 20_000} more chars)` : t}`;
+        return `#${m.seq} ${m.author}${tag(m)} (${m.at}):\n${t.length > 20_000 ? t.slice(0, 20_000) + `\n… (${t.length - 20_000} more chars)` : t}`;
       }
       const q = query!.toLowerCase();
       const hits = messages.flatMap((m) => {
         const t = textOf(m);
         const i = t.toLowerCase().indexOf(q);
-        return i < 0 ? [] : [`#${m.seq} ${m.author}: …${t.slice(Math.max(0, i - 150), i + q.length + 150).replace(/\s+/g, ' ')}…`];
+        return i < 0 ? [] : [`#${m.seq} ${m.author}${tag(m)}: …${t.slice(Math.max(0, i - 150), i + q.length + 150).replace(/\s+/g, ' ')}…`];
       });
       if (!hits.length) return `no message contains "${query}"`;
       return (hits.length > 15 ? hits.slice(-15) : hits).join('\n') + (hits.length > 15 ? `\n(${hits.length - 15} older matches not shown)` : '');

@@ -1,7 +1,12 @@
-import { app, BrowserWindow, dialog, nativeTheme, safeStorage, shell } from 'electron';
+import { app, BrowserWindow, dialog, globalShortcut, nativeTheme, safeStorage, shell, systemPreferences } from 'electron';
 import { existsSync, mkdirSync, readFileSync, renameSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
-import { startEngine, type Engine, type SecretStore } from '@atlas/engine';
+import { startEngine, type Engine, type SecretStore, type VoiceHost } from '@atlas/engine';
+import { OrbOverlay } from './orb/overlay.ts';
+import { DesktopVoice, voiceLog } from './voice.ts';
+import { nativeHoldKey } from './optionkey.ts';
+import { AtlasTray } from './tray/tray.ts';
+import type { TrayAction, TrayInput } from './tray/model.ts';
 
 /**
  * Atlas desktop. Default: runs the engine in this process (design §2) with data in the app's user-data folder, and
@@ -37,11 +42,31 @@ class KeychainStore implements SecretStore {
   }
 }
 
+/**
+ * Voice mode (Settings → Voice), Mac only: models in userData/voice-models, the microphone through macOS's permission
+ * prompt (Info.plist NSMicrophoneUsageDescription, set in package.json → build.mac.extendInfo).
+ */
+const voiceHost = (): VoiceHost | undefined =>
+  process.platform !== 'darwin'
+    ? undefined
+    : {
+        modelsDir: join(app.getPath('userData'), 'voice-models'),
+        micAccess: () => systemPreferences.getMediaAccessStatus('microphone'),
+        requestMicAccess: () => systemPreferences.askForMediaAccess('microphone'),
+      };
+
 let engine: Engine | undefined;
 let quitting = false;
+/** The Atlas window (the voice orb is a second, always-present window: never count it as « the » window). */
+let mainWindow: BrowserWindow | null = null;
+/** Voice mode on a Mac: the voice loop (voice.ts) drives the orb (setState, transcript, speak). */
+let orb: OrbOverlay | undefined;
+let talk: DesktopVoice | undefined;
+/** The menu bar / tray orb (card #54): with the in-process engine only (not in dev, where the engine runs apart). */
+let tray: AtlasTray | undefined;
 
 function createWindow(url: string) {
-  const win = new BrowserWindow({
+  const win = (mainWindow = new BrowserWindow({
     width: 1440,
     height: 900,
     minWidth: 900,
@@ -53,6 +78,9 @@ function createWindow(url: string) {
     trafficLightPosition: { x: 14, y: 12 },
     autoHideMenuBar: true,
     webPreferences: { contextIsolation: true, sandbox: true },
+  }));
+  win.on('closed', () => {
+    if (mainWindow === win) mainWindow = null;
   });
   // Links and url-node « open in new tab » go to the system browser, never a second Electron window.
   win.webContents.setWindowOpenHandler(({ url: target }) => {
@@ -68,15 +96,119 @@ async function start() {
   mkdirSync(dataDir, { recursive: true });
   // The built UI ships as an extra resource in the packaged app; in a local build it sits in packages/ui/dist.
   const uiDir = app.isPackaged ? join(process.resourcesPath, 'ui') : join(app.getAppPath(), '../../packages/ui/dist');
-  engine = await startEngine({ dbFile: join(dataDir, 'atlas.db'), dataDir, port: 0, uiDir, secrets: new KeychainStore() });
+  engine = await startEngine({ dbFile: join(dataDir, 'atlas.db'), dataDir, port: 0, uiDir, secrets: new KeychainStore(), version: app.getVersion(), voice: voiceHost() });
   createWindow(engine.url);
+  if (engine.voice) followVoice(engine, engine.voice);
+  startTray(engine);
+}
+
+/** Atlas in front, on `hash` if given (#/inbox/<card>: that card's question or review; #/board?card=<id>: its ticket). */
+function showAtlas(e: Engine, hash?: string) {
+  const win = mainWindow;
+  if (!win) createWindow(hash ? `${e.url}/${hash}` : e.url);
+  else {
+    if (win.isMinimized()) win.restore();
+    if (hash) void win.webContents.executeJavaScript(`location.hash = ${JSON.stringify(hash)}`);
+  }
+  mainWindow?.show();
+  mainWindow?.focus();
+  if (process.platform === 'darwin') app.focus({ steal: true });
+}
+
+function startTray(e: Engine) {
+  const fail = (what: string) => (err: unknown) => dialog.showErrorBox(what, err instanceof Error ? err.message : String(err)); // rule 3
+  const input = (): TrayInput => ({
+    platform: process.platform,
+    voice: e.voice?.status() ?? null,
+    loopRunning: talk?.running ?? false,
+    orb: orb?.current ?? 'idle',
+    needs: e.notifications.inbox().needsYou,
+    running: e.kanban.list().filter((c) => c.status === 'running'),
+    now: new Date(),
+  });
+  const act = (a: TrayAction) => {
+    try {
+      switch (a.type) {
+        case 'open':
+          return showAtlas(e);
+        case 'go':
+          return showAtlas(e, a.hash);
+        case 'talk':
+          if (!talk) throw new Error('voice mode is not running: turn it on (and wait until it says Ready) first');
+          return talk.talk();
+        case 'voice':
+          return void e.voice?.update({ enabled: a.on }).catch(fail('Voice mode could not change'));
+        case 'pause':
+          return void e.voice?.update({ pause: { until: a.until } }).catch(fail('Listening could not be paused'));
+        case 'resume':
+          return void e.voice?.update({ pause: null }).catch(fail('Listening could not resume'));
+        case 'stop':
+          e.runner.stop(a.cardId);
+          return;
+        case 'quit':
+          return app.quit();
+      }
+    } catch (err) {
+      fail('Atlas')(err);
+    }
+  };
+  tray = new AtlasTray({ input, act, log: (line) => voiceLog(voiceLogFile(), `tray ${line}`) });
+  e.bus.on((ev) => {
+    if (ev.type === 'card.updated' || ev.type === 'card.deleted' || ev.type === 'inbox.changed' || ev.type === 'notification.created' || ev.type === 'voice.updated') tray?.changed();
+  });
+}
+
+/**
+ * The voice orb overlay: the ember shows bottom-right while voice mode is on (Settings → Voice), hidden otherwise.
+ * Its window is created the first time voice mode is on (none otherwise). Its position is remembered in settings.
+ * While shown, its page streams the microphone to the voice loop (voice.ts), which runs once voice mode is ready.
+ */
+const voiceLogFile = () => join(app.getPath('userData'), 'data', 'logs', 'voice.log');
+
+function followVoice(e: Engine, voice: NonNullable<Engine['voice']>) {
+  let creating: Promise<OrbOverlay> | null = null;
+  let shown = false;
+  const sync = () => {
+    talk?.sync();
+    // paused (menu bar orb → Pause listening): hidden, so the microphone is closed too
+    const on = voice.status().enabled && !voice.status().paused;
+    if (on === shown) return;
+    shown = on;
+    creating ??= OrbOverlay.create({
+      store: e.settings,
+      dir: join(import.meta.dirname, 'orb'),
+      onAudio: (samples) => talk?.feed(samples),
+      onEscape: () => talk?.escape(),
+      onDismiss: () => talk?.dismissed(),
+      onError: (message) => talk?.error(new Error(`orb: ${message}`)),
+      onTrace: (line) => voiceLog(voiceLogFile(), `orb ${line}`), // from the window's creation on
+      onState: () => tray?.now(),
+    }).then((o) => {
+      orb = o;
+      // push-to-talk (card #57): Electron's global shortcuts; register() is false when another app holds the keys
+      const shortcuts = { register: (acc: string, cb: () => void) => globalShortcut.register(acc, cb), unregister: (acc: string) => globalShortcut.unregister(acc) };
+      // hold ⌥ (card #75): a native event tap, Mac only
+      const holdKey = process.platform === 'darwin' ? nativeHoldKey((line) => voiceLog(voiceLogFile(), line)) : null;
+      talk = new DesktopVoice(e, o, voiceLogFile(), () => tray?.changed(), shortcuts, holdKey);
+      talk.sync();
+      return o;
+    });
+    creating
+      .then((o) => (shown ? o.show() : o.hide()))
+      // fail loudly (CLAUDE.md rule 3)
+      .catch((err: unknown) => dialog.showErrorBox('The voice orb could not start', err instanceof Error ? (err.stack ?? err.message) : String(err)));
+  };
+  e.bus.on((ev) => {
+    if (ev.type === 'voice.updated') sync();
+  });
+  sync();
 }
 
 // One app per data folder: two engines on one database would fight over runs.
 if (!app.requestSingleInstanceLock()) app.quit();
 else {
   app.on('second-instance', () => {
-    const [win] = BrowserWindow.getAllWindows();
+    const win = mainWindow;
     if (win) {
       if (win.isMinimized()) win.restore();
       win.focus();
@@ -88,7 +220,7 @@ else {
     app.exit(1);
   });
   app.on('activate', () => {
-    if (BrowserWindow.getAllWindows().length === 0 && (engine || DEV_UI)) createWindow(engine?.url ?? DEV_UI!);
+    if (!mainWindow && (engine || DEV_UI)) createWindow(engine?.url ?? DEV_UI!);
   });
   app.on('window-all-closed', () => {
     if (process.platform !== 'darwin') app.quit();
@@ -98,6 +230,7 @@ else {
     if (!engine || quitting) return;
     e.preventDefault();
     quitting = true;
+    talk?.stop();
     engine.stop().finally(() => app.quit());
   });
 }

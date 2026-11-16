@@ -187,7 +187,7 @@ function NewAccount(props: { keyStore: string | null; onCreated(): void; onError
     >
       <label className="field">
         Name
-        <input autoFocus value={label} onChange={(e) => setLabel(e.target.value)} placeholder="e.g. Datinel, Personal" />
+        <input autoFocus value={label} onChange={(e) => setLabel(e.target.value)} placeholder="e.g. Work, Personal" />
       </label>
       <label className="field grow">
         {byKey ? 'API key' : 'Env var holding the key'}

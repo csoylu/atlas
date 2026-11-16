@@ -1,37 +1,58 @@
 import { useCallback, useEffect, useRef, useState, type ReactNode } from 'react';
-import type { Agent, Card, ChatGptStatus, Model, Schedule, Settings } from '@atlas/shared';
+import type { Doc, Agent, Card, ChatGptStatus, Inbox as InboxData, Model, Schedule, Settings } from '@atlas/shared';
 import { api, subscribe, type AuthState } from './api.ts';
 import { Board } from './Board.tsx';
-import { CardPanel } from './CardPanel.tsx';
+import { Inbox } from './Inbox.tsx';
+import { systemTitle } from './inboxView.ts';
+import { CardModal } from './CardModal.tsx';
+import { findCard, splitHash, withCard } from './cardModal.ts';
 import { useMessageStream } from './useMessages.ts';
-import { CanvasView } from './canvas/CanvasView.tsx';
-import { AgentsView } from './AgentsView.tsx';
+import { Library } from './Library.tsx';
 import { SchedulesView } from './SchedulesView.tsx';
-import { ModelsView } from './ModelsView.tsx';
+import { Welcome } from './Profile.tsx';
 import { ChatView } from './ChatView.tsx';
 import { PlanWelcome } from './ChatGptSection.tsx';
 import { ClaudeWelcome } from './ClaudePlanSection.tsx';
 import { useTheme } from './theme.ts';
-import { SettingsMenu, type SettingsSection } from './SettingsMenu.tsx';
 import { SettingsView } from './SettingsView.tsx';
+import { settingsLabel, settingsPageOf, type SettingsPage } from './settingsPages.ts';
 import { registerAgents } from './agentTint.ts';
 import { ChatHistory } from './ChatHistory.tsx';
 import { deletedChatRoute } from './chatHistoryMenu.ts';
+import { tint } from './agentTint.ts';
+import { HeaderSlot, Icon } from './ScreenHeader.tsx';
+import { Palette, ShortcutsSheet, type PaletteContext } from './Palette.tsx';
+import { GO_HASH, globalKey, nextRow } from './keys.ts';
+import { TOGGLE_PANEL } from './ChatView.tsx';
 
-/** Route in the URL hash, so reloads and the Electron window keep the place: #/board, #/canvas/<id>, or #/schedules. */
-type View = 'chat' | 'board' | 'canvas' | 'agents' | 'models' | 'schedules' | 'settings';
-function useRoute(): [{ view: View; canvasId: string | null }, (hash: string) => void] {
-  const parse = (): { view: View; canvasId: string | null } => {
-    const [, view, id] = location.hash.split('/');
-    if (view === 'settings') {
-      if (id === 'models' || id === 'agents') return { view: id, canvasId: null };
-      return { view: 'settings', canvasId: id === 'board' ? 'board' : 'canvas' };
+/**
+ * Route in the URL hash, so reloads and the Electron window keep the place: #/inbox/<item>, #/board, #/library/<docId>,
+ * #/schedules, #/chat/<id> or #/settings/<page>. Old links #/doc/<id> and #/canvas/<id> go to the Library viewer. Old settings hashes (#/agents, #/models, #/settings/canvas) are rewritten in place.
+ * `?card=<id>` on any route opens that card's ticket modal over it (#/chat/c_1?card=c_2).
+ */
+type View = 'inbox' | 'chat' | 'board' | 'library' | 'canvas' | 'schedules' | 'settings';
+function useRoute(): [{ view: View; canvasId: string | null; card: string | null }, (hash: string) => void] {
+  const parse = (): { view: View; canvasId: string | null; card: string | null } => ({ ...parseView(), card: splitHash(location.hash).card });
+  const parseView = (): { view: View; canvasId: string | null } => {
+    const { path, card } = splitHash(location.hash);
+    const [, view, id] = path.split('/');
+    const page = settingsPageOf(view, id);
+    if (page) {
+      const want = withCard('#/settings/' + page, card);
+      if (location.hash !== want) history.replaceState(null, '', want);
+      return { view: 'settings', canvasId: page };
     }
-    if (view === 'canvas') return { view: 'canvas', canvasId: id || null };
+    if (view === 'library') return { view: 'library', canvasId: id ? decodeURIComponent(id) : null };
+    // Old links: #/doc/<id> is the Library viewer; #/canvas/<id> too, once its whiteboard document is known.
+    if (view === 'doc' || (view === 'canvas' && !id)) {
+      const want = withCard('#/library' + (view === 'doc' && id ? '/' + id : ''), card);
+      history.replaceState(null, '', want);
+      return { view: 'library', canvasId: view === 'doc' && id ? decodeURIComponent(id) : null };
+    }
+    if (view === 'canvas') return { view: 'canvas', canvasId: id! };
     if (view === 'chat') return { view: 'chat', canvasId: id || null };
     if (view === 'schedules') return { view: 'schedules', canvasId: null };
-    if (view === 'agents') return { view: 'agents', canvasId: null };
-    if (view === 'models') return { view: 'models', canvasId: null };
+    if (view === 'inbox') return { view: 'inbox', canvasId: id ? decodeURIComponent(id) : null };
     return { view: 'board', canvasId: null };
   };
   const [route, setRoute] = useState(parse);
@@ -61,7 +82,7 @@ function LoginScreen() {
   return (
     <div className="login">
       <div className="login-card">
-        <h1 className="login-title"><Mark /> Atlas</h1>
+        <h1 className="login-title"><Mark size={28} /> Atlas</h1>
         <p className="login-sub">This Atlas server needs its password (ATLAS_PASSWORD).</p>
         {error && <div className="login-error">{error}</div>}
         {msg && <div className="login-msg">{msg}</div>}
@@ -85,10 +106,14 @@ function LoginScreen() {
 export function App() {
   const [auth, setAuth] = useState<AuthState | null>(null);
   const [cards, setCards] = useState<Card[]>([]);
-  const [openId, setOpenId] = useState<string | null>(null);
   const [route, go] = useRoute();
-  const [themeChoice, , setThemeChoice] = useTheme();
+  const [themeChoice, theme, setThemeChoice] = useTheme();
+  const [palette, setPalette] = useState(false);
+  const [help, setHelp] = useState(false);
+  /** « New card » asked from outside the Board (C, the palette): the Board opens its composer. */
+  const [createAsk, setCreateAsk] = useState(0);
   const [menu, setMenu] = useState(false);
+  const [headSlot, setHeadSlot] = useState<HTMLElement | null>(null);
   const [online, setOnline] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [agents, setAgents] = useState<Agent[]>([]);
@@ -99,6 +124,7 @@ export function App() {
   const [chatgpt, setChatgpt] = useState<ChatGptStatus | null>(null);
   const [claudeWelcome, setClaudeWelcome] = useState(false);
   const [models, setModels] = useState<Model[]>([]);
+  const [inbox, setInbox] = useState<InboxData | null>(null);
   const stream = useMessageStream();
   const pendingAuth = useRef(false);
 
@@ -112,7 +138,13 @@ export function App() {
     if (!auth) return;
     if (!auth.authenticated && auth.enabled) return;
     const reload = () => api.cards().then(setCards, (e: Error) => setError(e.message));
-    return subscribe(
+    // The Inbox follows the board and the notifications; bursts of events reload it once.
+    let inboxTimer: ReturnType<typeof setTimeout> | undefined;
+    const reloadInbox = () => {
+      clearTimeout(inboxTimer);
+      inboxTimer = setTimeout(() => api.inbox().then(setInbox, (e: Error) => setError(e.message)), 120);
+    };
+    const unsubscribe = subscribe(
       (e) => {
         if (e.type === 'card.updated' && e.card.board === 'direct')
           // Direct chats aren't on the board: they are the sidebar's chat history, latest activity first.
@@ -121,7 +153,8 @@ export function App() {
               .filter((c) => c.status !== 'archived')
               .sort((a, b) => b.updatedAt.localeCompare(a.updatedAt)),
           );
-        else if (e.type === 'card.updated')
+        else if (e.type === 'card.updated') {
+          reloadInbox();
           setCards((cs) => {
             const i = cs.findIndex((c) => c.id === e.card.id);
             if (e.card.status === 'archived') return cs.filter((c) => c.id !== e.card.id);
@@ -130,27 +163,40 @@ export function App() {
             next[i] = e.card;
             return next;
           });
-        else if (e.type === 'card.deleted') {
+        } else if (e.type === 'card.deleted') {
+          reloadInbox();
           setCards((cs) => cs.filter((c) => c.id !== e.id));
           setChats((cs) => cs.filter((c) => c.id !== e.id));
         }
         else if (e.type === 'message.appended') stream.push(e.message.conversationId, { type: 'message', message: e.message });
         else if (e.type === 'run.delta') stream.push(e.conversationId, { type: 'delta', runId: e.runId, text: e.text });
         else if (e.type === 'run.updated') stream.push(e.run.cardId, { type: 'run', run: e.run });
+        else if (e.type === 'toolcall.updated') stream.push(e.cardId, { type: 'toolcall', call: e.call });
+        else if (e.type === 'conversation.rewound') stream.push(e.conversationId, { type: 'rewound' });
         else if (e.type === 'canvas.updated') {
           stream.push('canvas:' + e.canvas.id, { type: 'canvas', canvas: e.canvas });
           stream.push('canvases', { type: 'canvases' });
         } else if (e.type === 'canvas.deleted') stream.push('canvases', { type: 'canvases' });
+        else if (e.type === 'document.updated') {
+          stream.push('doc:' + e.doc.id, { type: 'doc', doc: e.doc });
+          stream.push('docs', { type: 'doc', doc: e.doc });
+        } else if (e.type === 'panel.updated') stream.push('panel:' + e.chatId, { type: 'panel', tabs: e.tabs });
         else if (e.type === 'schedule.updated') setSchedules((ss) => { const i = ss.findIndex(s => s.id === e.schedule.id); const next = ss.slice(); if (i < 0) return [...ss, e.schedule]; next[i] = e.schedule; return next; });
         else if (e.type === 'schedule.deleted') setSchedules((ss) => ss.filter(s => s.id !== e.id));
         else if (e.type === 'local.updated') stream.push('local', { type: 'local', status: e.status });
         else if (e.type === 'local.pull') stream.push('local', { type: 'pull', pull: e.pull });
+        else if (e.type === 'voice.updated') stream.push('voice', { type: 'voice', status: e.status });
         else if (e.type === 'usage.recorded') {
           if (e.cardId) stream.push('usage:' + e.cardId, { type: 'usage' });
           stream.push('usage', { type: 'usage' });
         } else if (e.type === 'chatgpt.updated') {
           setChatgpt(e.status);
           api.models().then(setModels, (err: Error) => setError(err.message));
+        } else if (e.type === 'notification.created') {
+          notify(systemTitle(e.notification), e.notification.body);
+          reloadInbox();
+        } else if (e.type === 'inbox.changed') {
+          reloadInbox();
         } else if (e.type === 'claude.updated') {
           stream.push('claude', { type: 'claude', status: e.status });
           setClaudeWelcome(e.status.showWelcome);
@@ -161,6 +207,7 @@ export function App() {
         setOnline(up);
         if (up) {
           void reload();
+          reloadInbox();
           api.agents().then(setAgents, (e: Error) => setError(e.message));
           api.schedules().then(setSchedules, (e: Error) => setError(e.message));
           api.settings().then(setSettings, (e: Error) => setError(e.message));
@@ -174,23 +221,111 @@ export function App() {
         }
       },
     );
+    return () => {
+      clearTimeout(inboxTimer);
+      unsubscribe();
+    };
   }, [auth, stream]);
 
   // Agent tints are handed out in agent order; set before children render.
   registerAgents(agents.map((a) => a.id));
+  const openId = route.card;
   const open = cards.find((c) => c.id === openId) ?? null;
-  const [lastCanvas, setLastCanvas] = useState<string | null>(() => localStorage.getItem('atlas.canvas'));
-  useEffect(() => {
-    if (route.view === 'canvas' && route.canvasId) {
-      setLastCanvas(route.canvasId);
-      localStorage.setItem('atlas.canvas', route.canvasId);
-    }
-  }, [route.view, route.canvasId]);
-  const selectCanvas = useCallback((id: string | null) => {
-    if (!id) localStorage.removeItem('atlas.canvas');
-    location.hash = '#/canvas' + (id ? '/' + id : '');
+  /** Opens a card's ticket modal over the current view (or closes it): `?card=` in the hash, so it survives reloads. */
+  const cardsNow = useRef(cards);
+  cardsNow.current = cards;
+  const setOpenId = useCallback((ref: string | null) => {
+    // "#12" references (links in messages) open the card with that number; ids open as they are.
+    const id = ref === null ? null : (findCard(cardsNow.current, ref)?.id ?? ref);
+    location.hash = withCard(location.hash, id);
   }, []);
+  useEffect(() => {
+    if (route.view === 'settings' && route.canvasId) localStorage.setItem('atlas.settings', route.canvasId);
+  }, [route.view, route.canvasId]);
+  // #/canvas/<id> (old links, « Open in Library » on inline canvases): to its whiteboard in the Library.
+  useEffect(() => {
+    if (route.view !== 'canvas' || !route.canvasId) return;
+    api.whiteboardDoc(route.canvasId).then(
+      (d) => location.replace(withCard('#/library/' + d.id, splitHash(location.hash).card)),
+      (e) => {
+        fail(e);
+        location.replace('#/library');
+      },
+    );
+  }, [route.view, route.canvasId]);
+  /** The Inbox item in the URL: replaces the history entry (J/K would fill Back with every row). */
+  const selectInbox = useCallback((key: string | null) => {
+    location.replace(withCard('#/inbox' + (key ? '/' + encodeURIComponent(key) : ''), splitHash(location.hash).card));
+  }, []);
+  // App-wide shortcuts (keys.ts): ⌘K, ⌘N, ⌘\, ?, C, G then B/L/I/S, J/K in lists. The Inbox keeps its own J/K/E/R.
+  const keyState = useRef({ gAt: null as number | null, view: route.view, palette, help });
+  keyState.current = { ...keyState.current, view: route.view, palette, help };
+  useEffect(() => {
+    const onKey = (e: KeyboardEvent) => {
+      const st = keyState.current;
+      const blocked = st.palette || st.help || !!document.querySelector('.card-modal, .modal-scrim, .new-card-modal, .drawing-modal');
+      const a = globalKey(e, e.target, { gAt: st.gAt, now: Date.now(), blocked });
+      if (a?.kind !== 'goPrefix') st.gAt = null;
+      if (!a) return;
+      switch (a.kind) {
+        case 'palette':
+          setHelp(false);
+          setPalette((p) => !p);
+          break;
+        case 'help':
+          setHelp(true);
+          break;
+        case 'newChat':
+          location.hash = '#/chat/new';
+          break;
+        case 'togglePanel':
+          if (st.view !== 'chat') return;
+          window.dispatchEvent(new Event(TOGGLE_PANEL));
+          break;
+        case 'newCard':
+          if (st.view !== 'board') location.hash = '#/board';
+          setCreateAsk((n) => n + 1);
+          break;
+        case 'goPrefix':
+          st.gAt = Date.now();
+          return; // not prevented: a lone G does nothing else
+        case 'go':
+          location.hash = GO_HASH[a.to];
+          break;
+        case 'listNext':
+        case 'listPrev': {
+          if (st.view === 'inbox') return; // the Inbox moves its own selection
+          const rows = [...document.querySelectorAll<HTMLElement>('main [data-row]')].filter((r) => r.offsetParent !== null);
+          const i = nextRow(rows.length, rows.indexOf(document.activeElement as HTMLElement), a.kind === 'listNext' ? 1 : -1);
+          if (i === null) return;
+          rows[i]!.focus();
+          rows[i]!.scrollIntoView({ block: 'nearest' });
+          break;
+        }
+      }
+      e.preventDefault();
+    };
+    window.addEventListener('keydown', onKey);
+    return () => window.removeEventListener('keydown', onKey);
+  }, []);
+  /** The open Library document's title, for the breadcrumb. */
+  const [libraryTitle, setLibraryTitle] = useState<string | null>(null);
   const fail = useCallback((e: unknown) => setError(e instanceof Error ? e.message : String(e)), []);
+  const clearCreateAsk = useCallback(() => setCreateAsk(0), []);
+  const closePalette = useCallback(() => setPalette(false), []);
+  const closeHelp = useCallback(() => setHelp(false), []);
+  /** Deletes a chat after a confirm (sidebar menu, chat header); leaves it if it was on screen. */
+  const deleteChat = useCallback(
+    (chat: Card) => {
+      if (!confirm(`Delete the chat “${chat.title}”?`)) return;
+      api.deleteCard(chat.id).then(() => {
+        setChats((cs) => cs.filter((c) => c.id !== chat.id));
+        const next = deletedChatRoute(location.hash, chat.id);
+        if (next) location.hash = next;
+      }, fail);
+    },
+    [fail],
+  );
   const onPlan = (m: Model | undefined) => m?.provider === 'chatgpt';
   const planAgents = new Set(agents.filter((a) => onPlan(models.find((m) => m.id === a.modelId))).map((a) => a.id));
   /** A chat or card on the plan: its own model if picked, else its agent's. */
@@ -201,47 +336,78 @@ export function App() {
   // Auth not yet checked → blank (will load in <100 ms)
   if (!auth) return null;
 
-  const nav: { view: View; label: string; hash: string; icon: ReactNode }[] = [
-    { view: 'board', label: 'Board', hash: '#/board', icon: <Icon.board /> },
-    { view: 'canvas', label: 'Canvas', hash: '#/canvas' + (lastCanvas ? '/' + lastCanvas : ''), icon: <Icon.canvas /> },
-    { view: 'schedules', label: 'Schedules', hash: '#/schedules', icon: <Icon.clock /> },
+  const nav: { view: View; label: string; hash: string; icon: ReactNode; keys: string }[] = [
+    { view: 'inbox', label: 'Inbox', hash: '#/inbox', icon: <Icon.inbox />, keys: 'G then I' },
+    { view: 'board', label: 'Board', hash: '#/board', icon: <Icon.board />, keys: 'G then B' },
+    { view: 'library', label: 'Library', hash: '#/library', icon: <Icon.library />, keys: 'G then L' },
+    { view: 'schedules', label: 'Schedules', hash: '#/schedules', icon: <Icon.clock />, keys: 'G then S' },
   ];
   const openChat = route.view === 'chat' ? chats.find((c) => c.id === route.canvasId) : undefined;
-  const needYou = cards.filter((c) => c.status === 'blocked' || c.status === 'review').length;
-  const runningCount = cards.filter((c) => c.status === 'running').length;
+  const badge = inbox?.badge ?? 0;
   const activeSchedules = schedules.filter((s) => s.enabled).length;
-  const head: Record<View, [string, string]> = {
-    chat: openChat
-      ? [openChat.title, `Chat with @${openChat.assignee}`]
-      : ['New chat', 'Talk to an agent directly, no card needed.'],
-    board: [
-      'Board',
-      cards.length === 0
-        ? 'No cards yet. Drop an idea in Triage.'
-        : [
-            `${cards.length} card${cards.length === 1 ? '' : 's'}`,
-            runningCount ? `${runningCount} running` : '',
-            needYou ? `${needYou} waiting for you` : '',
-          ]
-            .filter(Boolean)
-            .join(' · '),
-    ],
-    canvas: ['Canvas', 'System design, drawings, notes and live pages on one surface.'],
-    agents: ['Agents', `${agents.length} agent${agents.length === 1 ? '' : 's'}, their models and memory.`],
-    models: ['Models', 'What agents run on: Claude, your ChatGPT plan, and models on this machine through Ollama.'],
-    settings: [route.canvasId === 'board' ? 'Board settings' : 'Canvas settings', 'Settings'],
-    schedules: ['Schedules', `${activeSchedules} active of ${schedules.length}.`],
+  /** An agent is busy while one of its cards runs or one of its chats is answering. */
+  const busy = (id: string) => cards.some((c) => c.assignee === id && c.status === 'running') || chats.some((c) => c.assignee === id && c.working);
+  const nav0 = (hash: string) => {
+    go(hash);
+    setMenu(false);
+  };
+  /** The header's breadcrumb (parts before the title), its title and a faint note after it. */
+  const crumb: { parts: ReactNode[]; title: string; sub?: string } =
+    route.view === 'chat'
+      ? openChat
+        ? {
+            parts: [
+              <span key="a" className="crumb-part crumb-agent">
+                <span className="dot-avatar" aria-hidden="true" style={tint(openChat.assignee ?? '')}>{(openChat.assignee ?? '?').slice(0, 1).toUpperCase()}</span>
+                {openChat.assignee}
+              </span>,
+            ],
+            title: openChat.naming ? 'Generating chat name…' : openChat.title,
+          }
+        : { parts: [], title: 'New chat' }
+      : route.view === 'board'
+        ? { parts: [], title: 'Board' }
+        : route.view === 'library' || route.view === 'canvas'
+          ? route.canvasId && route.view === 'library'
+            ? { parts: [<a key="l" className="crumb-link" href="#/library">Library</a>], title: libraryTitle ?? 'Document' }
+            : { parts: [], title: 'Library' }
+          : route.view === 'schedules'
+            ? { parts: [], title: 'Schedules', sub: `${activeSchedules} active of ${schedules.length}` }
+            : route.view === 'settings'
+              ? { parts: [<span key="s" className="crumb-part">Settings</span>], title: settingsLabel(route.canvasId as SettingsPage) }
+              : { parts: [], title: 'Document' };
+  const paletteCtx: PaletteContext = {
+    view: route.view,
+    label: route.view === 'inbox' ? 'Inbox' : route.view === 'chat' && openChat ? openChat.title : crumb.title,
+    chatId: openChat?.id ?? null,
+  };
+  const menuButton = (
+    <button className="menu-btn ghost" aria-label="Menu" aria-expanded={menu} onClick={() => setMenu(!menu)}>
+      <Icon.menu />
+    </button>
+  );
+  /** The ticket modal's « open on the right »: in the chat the card came from (or the chat on screen), else full size. */
+  const openDoc = (doc: Doc, card: Card) => {
+    const target = card.originCard && chats.some((c) => c.id === card.originCard) ? card.originCard : (openChat?.id ?? null);
+    if (!target) return go('#/library/' + doc.id);
+    api.panelOpen(target, doc.id).then(() => go('#/chat/' + target), fail);
   };
 
   return (
     <div className={'app' + (menu ? ' menu-open' : '')}>
       <aside className="sidebar" aria-label="Navigation">
-        <div className="brand">
+        <div className="ws-row">
           <Mark />
-          <div>
-            <div className="brand-name">Atlas</div>
-            <div className="brand-scope">{auth.enabled ? 'Server' : 'This Mac'}</div>
-          </div>
+          <span className="ws-name">Atlas</span>
+          <span className="ws-scope">{auth.enabled ? 'Server' : ''}</span>
+          <span className="ws-acts">
+            <button type="button" className="icon-btn" aria-label="Search" title="Search and commands (⌘K)" onClick={() => (setMenu(false), setPalette(true))}>
+              <Icon.search />
+            </button>
+            <button type="button" className="icon-btn box" aria-label="New chat" title="New chat (⌘N)" onClick={() => nav0('#/chat/new')}>
+              <Icon.edit />
+            </button>
+          </span>
         </div>
         <nav className="nav">
           {nav.map((n) => (
@@ -249,64 +415,85 @@ export function App() {
               key={n.view}
               className={'nav-item' + (route.view === n.view ? ' active' : '')}
               aria-current={route.view === n.view ? 'page' : undefined}
-              onClick={() => {
-                go(n.hash);
-                setMenu(false);
-              }}
+              title={`${n.label} (${n.keys})`}
+              onClick={() => nav0(n.hash)}
             >
               {n.icon}
               <span>{n.label}</span>
-              {n.view === 'board' && needYou > 0 && <span className="nav-count" title="Cards waiting for you">{needYou}</span>}
+              {n.view === 'inbox' && badge > 0 && <span className="nav-count" title="Waiting for you and unread">{badge}</span>}
             </button>
           ))}
         </nav>
-        <div className="side-rule" role="separator" />
+        {agents.length > 0 && (
+          <section className="side-agents" aria-label="Agents">
+            <div className="side-group">Agents</div>
+            {agents.map((a) => (
+              <button
+                key={a.id}
+                className={'nav-item agent-item' + (route.view === 'chat' && route.canvasId === a.id ? ' active' : '')}
+                title={`New chat with @${a.id}${busy(a.id) ? ' · working…' : ''}`}
+                onClick={() => nav0('#/chat/' + a.id)}
+              >
+                <span className="dot-avatar" aria-hidden="true" style={tint(a.id)}>{a.id.slice(0, 1).toUpperCase()}</span>
+                <span>{a.id}</span>
+                {busy(a.id) && <span className="spin" aria-label="working" />}
+              </button>
+            ))}
+          </section>
+        )}
         <section className="side-chats" aria-label="Chats">
+          <div className="side-group">
+            Chats
+            <button type="button" className="icon-btn new-chat-btn" aria-label="New chat" title="New chat (⌘N)" onClick={() => nav0('#/chat/new')}>
+              <Icon.plus />
+            </button>
+          </div>
+          <ChatHistory chats={chats} selected={openChat?.id}
+            onSelect={(id) => nav0('#/chat/' + id)}
+            onDelete={deleteChat} />
+        </section>
+        <div className="sidebar-foot">
+          <span className="me" aria-hidden="true">{(settings?.userName ?? '?').slice(0, 1).toUpperCase()}</span>
+          <span className="me-name">{settings?.userName ?? ''}</span>
+          <span className={'conn ' + (online ? 'up' : 'down')} role="status" aria-label={online ? 'Engine connected' : 'Engine offline'} title={online ? 'Engine connected' : 'Engine offline'} />
+          {auth.enabled && (
+            <button type="button" className="icon-btn" aria-label="Log out" title="Log out" onClick={() => api.authLogout().then(() => location.reload())}>
+              <Icon.logout />
+            </button>
+          )}
           <button
-            className={'nav-item new-chat-btn' + (route.view === 'chat' && !openChat ? ' active' : '')}
+            type="button"
+            className={'icon-btn' + (route.view === 'settings' ? ' active' : '')}
+            aria-label="Settings"
+            title="Settings"
+            aria-current={route.view === 'settings' ? 'page' : undefined}
             onClick={() => {
-              go('#/chat/new');
+              if (route.view !== 'settings') go('#/settings/' + (localStorage.getItem('atlas.settings') ?? 'agents'));
               setMenu(false);
             }}
           >
-            <Icon.plus />
-            <span>New chat</span>
+            <Icon.gear />
           </button>
-          <ChatHistory chats={chats} selected={openChat?.id}
-            onSelect={(id) => { go('#/chat/' + id); setMenu(false); }}
-            onDelete={(chat) => {
-              if (!confirm(`Delete the chat “${chat.title}”?`)) return;
-              api.deleteCard(chat.id).then(() => {
-                setChats(cs => cs.filter(c => c.id !== chat.id));
-                const next = deletedChatRoute(location.hash, chat.id);
-                if (next) go(next);
-              }, fail);
-            }} />
-        </section>
-        <div className="sidebar-foot">
-          <SettingsMenu
-            active={route.view === 'settings' ? route.canvasId as SettingsSection : route.view === 'agents' || route.view === 'models' ? route.view : null}
-            onNavigate={() => setMenu(false)}
-          />
-          <div className="side-status">
-            <span className={'conn ' + (online ? 'up' : 'down')}>{online ? 'Engine connected' : 'Engine offline'}</span>
-            {auth.enabled && (
-              <button className="ghost small" onClick={() => api.authLogout().then(() => location.reload())}>
-                Log out
-              </button>
-            )}
-          </div>
         </div>
       </aside>
       <div className="workspace">
-        <header className="topbar">
-          <button className="menu-btn ghost" aria-label="Menu" aria-expanded={menu} onClick={() => setMenu(!menu)}>
-            <Icon.menu />
-          </button>
-          <h1>{head[route.view][0]}</h1>
-          <p className="topbar-sub">{head[route.view][1]}</p>
-        </header>
         <div className="sheet">
+          {route.view !== 'inbox' && <header className="screen-head">
+            {menuButton}
+            <div className="crumb">
+              {crumb.parts.map((p, i) => (
+                <span key={i} className="crumb-part">
+                  {p}
+                  <span className="crumb-sep" aria-hidden="true">
+                    <Icon.chev />
+                  </span>
+                </span>
+              ))}
+              <h1>{crumb.title}</h1>
+            </div>
+            {crumb.sub && <span className="crumb-sub">{crumb.sub}</span>}
+            <div className="head-actions" ref={setHeadSlot} />
+          </header>}
           {error && (
             <div className="error" role="alert">
               <span>{error}</span>
@@ -315,8 +502,21 @@ export function App() {
               </button>
             </div>
           )}
-      <main className={open ? 'with-panel' : ''}>
-        {route.view === 'chat' ? (
+      <HeaderSlot.Provider value={headSlot}>
+      <main>
+        {route.view === 'inbox' ? (
+          <Inbox
+            inbox={inbox}
+            cards={cards}
+            agents={agents}
+            selected={route.canvasId}
+            onSelect={selectInbox}
+            onOpenCard={setOpenId}
+            menuButton={menuButton}
+            stream={stream}
+            onError={fail}
+          />
+        ) : route.view === 'chat' ? (
           <ChatView
             agents={agents}
             chats={chats}
@@ -324,79 +524,114 @@ export function App() {
             target={route.canvasId}
             planAgents={planAgents}
             models={models}
+            userName={settings?.userName ?? null}
             stream={stream}
             cards={cards}
             onOpenChat={(id) => go('#/chat/' + (id ?? 'new'))}
-            onOpenCard={(id) => {
-              go('#/board');
-              setOpenId(id);
-            }}
+            onOpenCard={setOpenId}
             onError={fail}
           />
         ) : route.view === 'settings' ? (
-          <SettingsView section={route.canvasId === 'board' ? 'board' : 'canvas'}
-            settings={settings} agents={agents} theme={themeChoice} onTheme={setThemeChoice}
-            onSettings={setSettings} onError={fail}
-            canvasHash={'#/canvas' + (lastCanvas ? '/' + lastCanvas : '')} />
-        ) : route.view === 'models' ? (
-          <ModelsView stream={stream} agents={agents} chatgpt={chatgpt} onModelsChanged={() => api.models().then(setModels, fail)} onError={fail} />
-        ) : route.view === 'agents' ? (
-          <AgentsView
+          <SettingsView
+            page={route.canvasId as SettingsPage}
+            stream={stream}
             settings={settings}
+            agents={agents}
+            models={models}
+            chatgpt={chatgpt}
+            theme={themeChoice}
+            onTheme={setThemeChoice}
             onSettings={setSettings}
             onAgentsChanged={() => {
               api.agents().then(setAgents, fail);
               api.models().then(setModels, fail);
             }}
+            onModelsChanged={() => api.models().then(setModels, fail)}
+            onError={fail}
+          />
+        ) : route.view === 'library' || route.view === 'canvas' ? (
+          <Library
+            docId={route.view === 'library' ? route.canvasId : null}
+            agents={agents}
+            cards={cards}
+            chats={chats}
+            stream={stream}
+            onOpenCard={setOpenId}
+            onTitle={setLibraryTitle}
             onError={fail}
           />
         ) : route.view === 'schedules' ? (
           <SchedulesView schedules={schedules} agents={agents} onOpenCard={setOpenId} onError={fail} />
-        ) : route.view === 'canvas' ? (
-          <CanvasView
-            canvasId={route.canvasId}
-            stream={stream}
-            onSelect={selectCanvas}
-            onOpenCard={(id) => setOpenId(id)}
-            onError={fail}
-          />
         ) : (
         <Board
           cards={cards}
+          agents={agents}
           openId={openId}
           onOpen={setOpenId}
-          onCreate={(title) => api.createCard(title).catch(fail)}
+          onCreate={api.createCard}
+          onError={fail}
           onMove={(id, status) => api.moveCard(id, status).catch(fail)}
+          createAsk={createAsk}
+          onCreateAsked={clearCreateAsk}
         />
         )}
         {open && (
-          <CardPanel
+          <CardModal
             key={open.id}
             card={open}
-            plan={onPlanCard(open)}
+            plan={!!onPlanCard(open)}
             models={models}
             cards={cards}
+            chats={chats}
             onOpen={setOpenId}
+            onOpenChat={(id) => go('#/chat/' + id)}
+            onOpenDoc={(doc) => openDoc(doc, open)}
             agents={agents}
             stream={stream}
             onClose={() => setOpenId(null)}
             onError={fail}
+            userName={settings?.userName ?? null}
           />
         )}
       </main>
+      </HeaderSlot.Provider>
         </div>
       </div>
       {menu && <div className="scrim" onClick={() => setMenu(false)} />}
-      {chatgpt?.showWelcome && <PlanWelcome onDone={() => api.updateChatgpt({ welcomed: true }).then(setChatgpt, fail)} />}
-      {claudeWelcome && !chatgpt?.showWelcome && <ClaudeWelcome onDone={() => api.updateClaude({ welcomed: true }).then((c) => setClaudeWelcome(c.showWelcome), fail)} />}
+      {palette && (
+        <Palette
+          ctx={paletteCtx}
+          cards={cards}
+          chats={chats}
+          agents={agents}
+          theme={theme}
+          go={go}
+          onOpenCard={setOpenId}
+          onNewCard={() => {
+            if (route.view !== 'board') go('#/board');
+            setCreateAsk((n) => n + 1);
+          }}
+          onTogglePanel={() => window.dispatchEvent(new Event(TOGGLE_PANEL))}
+          onTheme={setThemeChoice}
+          onHelp={() => setHelp(true)}
+          onClose={closePalette}
+          onError={fail}
+        />
+      )}
+      {help && <ShortcutsSheet onClose={closeHelp} />}
+      {settings && (!settings.userName || !settings.userAbout) ? (
+        <Welcome settings={settings} onSaved={setSettings} />
+      ) : null}
+      {settings?.userName && settings.userAbout && chatgpt?.showWelcome && <PlanWelcome onDone={() => api.updateChatgpt({ welcomed: true }).then(setChatgpt, fail)} />}
+      {settings?.userName && settings.userAbout && claudeWelcome && !chatgpt?.showWelcome && <ClaudeWelcome onDone={() => api.updateClaude({ welcomed: true }).then((c) => setClaudeWelcome(c.showWelcome), fail)} />}
     </div>
   );
 }
 
 /** The Atlas mark: a meridian and a parallel on a globe, drawn in the accent. */
-function Mark() {
+function Mark({ size = 20 }: { size?: number }) {
   return (
-    <svg className="mark" viewBox="0 0 24 24" width="28" height="28" aria-hidden="true">
+    <svg className="mark" viewBox="0 0 24 24" width={size} height={size} aria-hidden="true">
       <rect width="24" height="24" rx="7" fill="var(--accent)" />
       <circle cx="12" cy="12" r="6.25" fill="none" stroke="var(--on-accent)" strokeWidth="1.5" />
       <ellipse cx="12" cy="12" rx="2.6" ry="6.25" fill="none" stroke="var(--on-accent)" strokeWidth="1.5" />
@@ -405,18 +640,10 @@ function Mark() {
   );
 }
 
-const svg = (d: ReactNode) => () => (
-  <svg className="icon" viewBox="0 0 16 16" width="16" height="16" fill="none" stroke="currentColor" strokeWidth="1.4" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
-    {d}
-  </svg>
-);
-const Icon = {
-  board: svg(<><rect x="2" y="2.5" width="12" height="11" rx="2" /><path d="M6 2.5v11M10 2.5v11" /></>),
-  canvas: svg(<><path d="M2.5 13.5l3-.7 7.3-7.3a1.5 1.5 0 0 0-2.1-2.1L3.4 10.7z" /><path d="M9.5 4.5l2 2" /></>),
-  agents: svg(<><circle cx="8" cy="5.5" r="2.5" /><path d="M3 13.5c.6-2.4 2.6-3.8 5-3.8s4.4 1.4 5 3.8" /></>),
-  chat: svg(<path d="M2.75 4.25a2 2 0 0 1 2-2h6.5a2 2 0 0 1 2 2v5a2 2 0 0 1-2 2H7l-3 2.5v-2.5h-.25a1 1 0 0 1-1-1z" />),
-  chip: svg(<><rect x="4" y="4" width="8" height="8" rx="1.5" /><path d="M6.5 1.75v2.25M9.5 1.75v2.25M6.5 12v2.25M9.5 12v2.25M1.75 6.5H4M1.75 9.5H4M12 6.5h2.25M12 9.5h2.25" /></>),
-  plus: svg(<path d="M8 3v10M3 8h10" />),
-  clock: svg(<><circle cx="8" cy="8" r="5.75" /><path d="M8 4.75V8l2.25 1.5" /></>),
-  menu: svg(<path d="M2.5 4.5h11M2.5 8h11M2.5 11.5h11" />),
-};
+/** A system notification (the desktop app shows it in macOS Notification Center); asks once in a browser. */
+function notify(title: string, body: string): void {
+  if (typeof Notification === 'undefined') return;
+  const show = () => void new Notification(title, { body });
+  if (Notification.permission === 'granted') show();
+  else if (Notification.permission !== 'denied') void Notification.requestPermission().then((p) => p === 'granted' && show());
+}
