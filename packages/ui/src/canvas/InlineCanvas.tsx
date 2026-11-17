@@ -2,7 +2,7 @@ import { useEffect, useLayoutEffect, useRef, useState } from 'react';
 import type { Canvas, CanvasNode } from '@atlas/shared';
 import { api } from '../api.ts';
 import type { MessageStream } from '../useMessages.ts';
-import { RENDERERS } from './renderers/index.ts';
+import { isKnown, RENDERERS } from './renderers/index.ts';
 import type { Renderer } from './renderers/types.ts';
 
 const PAD = 24;
@@ -48,7 +48,7 @@ export function InlineCanvas(props: { canvasId: string; nodeIds: string[]; strea
     });
   }, [canvasId, stream]);
 
-  const nodes = canvas?.nodes.filter((n) => props.nodeIds.includes(n.id)) ?? [];
+  const nodes = canvas?.nodes.filter((n) => props.nodeIds.includes(n.id) && isKnown(n)) ?? [];
   const minX = Math.min(...nodes.map((n) => n.x));
   const minY = Math.min(...nodes.map((n) => n.y));
   const width = Math.max(...nodes.map((n) => n.x + n.w)) - minX;

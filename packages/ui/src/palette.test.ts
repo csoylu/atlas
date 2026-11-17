@@ -37,12 +37,12 @@ describe('fuzzy matcher', () => {
 
 describe('matchItem', () => {
   it('#12 and 12 find card 12 first, then numbers starting with 12', () => {
-    const c12 = item('Cards', 'Export CSV', { number: 12 });
-    const c123 = item('Cards', 'Other', { number: 123 });
+    const c12 = item('Tasks', 'Export CSV', { number: 12 });
+    const c123 = item('Tasks', 'Other', { number: 123 });
     expect(matchItem(c12, '#12')!.score).toBe(1000);
     expect(matchItem(c12, '12')!.score).toBe(1000);
     expect(matchItem(c123, '#12')!.score).toBeLessThan(1000);
-    expect(matchItem(item('Cards', 'x', { number: 7 }), '#12')).toBeNull();
+    expect(matchItem(item('Tasks', 'x', { number: 7 }), '#12')).toBeNull();
   });
   it('falls back to keywords, ranked below a title match, highlights only the title', () => {
     const doc = item('Artifacts', 'Atlas design', { keywords: 'docs/design.md @atlas' });
@@ -62,12 +62,12 @@ describe('rank', () => {
     item('Navigation', 'Go to Library'),
     item('Navigation', 'Go to Board'),
     item('Actions', 'New card'),
-    item('Cards', 'Library screen', { number: 42 }),
+    item('Tasks', 'Library screen', { number: 42 }),
     item('Chats', 'Orderbook ingestion'),
   ];
   it('empty query: every section in the screen order, recency kept', () => {
     const g = rank(items, '', sectionOrder('chat'));
-    expect(g.map((x) => x.section)).toEqual(['Artifacts', 'Chats', 'Cards', 'Navigation', 'Actions']);
+    expect(g.map((x) => x.section)).toEqual(['Artifacts', 'Chats', 'Tasks', 'Navigation', 'Actions']);
     expect(g[0]!.items.map((r) => r.item.title)).toEqual(['Design refresh: Linear direction', 'System overview']);
   });
   it('empty query: boosted items first, artifacts capped', () => {
@@ -88,11 +88,11 @@ describe('rank', () => {
   });
   it('#42 jumps to the card', () => {
     const g = rank(items, '#42', sectionOrder('chat'));
-    expect(g[0]!.section).toBe('Cards');
+    expect(g[0]!.section).toBe('Tasks');
     expect(g[0]!.items[0]!.item.number).toBe(42);
   });
   it('caps each section with a query', () => {
-    const many = Array.from({ length: 10 }, (_, i) => item('Cards', 'Card ' + i));
+    const many = Array.from({ length: 10 }, (_, i) => item('Tasks', 'Card ' + i));
     expect(rank(many, 'card', sectionOrder('board'), 6)[0]!.items).toHaveLength(6);
   });
 });

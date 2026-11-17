@@ -21,7 +21,7 @@ describe('canvas rows', () => {
   it('fits every node in a 2:1 thumbnail with a margin', () => {
     expect(thumbLayout([])).toBeNull();
     const wide = thumbLayout([
-      { id: 'a', kind: 'drawing', title: '', x: 0, y: 0, w: 400, h: 100 },
+      { id: 'a', kind: 'markdown', title: '', x: 0, y: 0, w: 400, h: 100 },
       { id: 'b', kind: 'html', title: '', x: 500, y: 0, w: 500, h: 100 },
     ])!;
     const [x, y, w, h] = wide.viewBox.split(' ').map(Number) as [number, number, number, number];

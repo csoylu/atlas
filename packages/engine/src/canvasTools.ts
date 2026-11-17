@@ -1,5 +1,5 @@
 import { z } from 'zod';
-import { CanvasOp, SketchElement, type Canvas, type CanvasNode } from '@atlas/shared';
+import { CanvasOp, type Canvas, type CanvasNode } from '@atlas/shared';
 import type { Canvases } from './canvas.ts';
 import type { ToolSpec } from './providers/types.ts';
 
@@ -15,7 +15,7 @@ const OUTPUT_CAP = 30_000;
 /** Node as an agent writes it: position and size are optional (auto-placed to the right of existing nodes). */
 const LooseNode = z.object({
   id: z.string().min(1),
-  kind: z.enum(['markdown', 'html', 'url', 'drawing']),
+  kind: z.enum(['markdown', 'html', 'url']),
   title: z.string().optional(),
   x: z.number().optional(),
   y: z.number().optional(),
@@ -25,14 +25,12 @@ const LooseNode = z.object({
   text: z.string().optional().describe('markdown nodes: the markdown'),
   html: z.string().optional().describe('html nodes: a full HTML document or fragment, rendered in a sandboxed iframe'),
   url: z.string().optional().describe('url nodes: http(s) URL, or /api/files/<agent>/<path> for a file in an agent workspace'),
-  sketch: z.array(SketchElement).optional().describe('drawing nodes: simplified elements; arrows bind with from/to ids'),
 });
 
 const DEFAULT_SIZE: Record<CanvasNode['kind'], [number, number]> = {
   markdown: [420, 320],
   html: [640, 480],
   url: [960, 640],
-  drawing: [720, 480],
 };
 
 function place(n: z.infer<typeof LooseNode>, canvas: Canvas, pending: CanvasNode[]): CanvasNode {
@@ -57,21 +55,12 @@ function place(n: z.infer<typeof LooseNode>, canvas: Canvas, pending: CanvasNode
       return { ...base, kind: 'html', html: n.html ?? (prev as { html?: string } | undefined)?.html ?? '' };
     case 'url':
       return { ...base, kind: 'url', url: n.url ?? (prev as { url?: string } | undefined)?.url ?? 'about:blank' };
-    case 'drawing':
-      return { ...base, kind: 'drawing', scene: n.sketch ? { sketch: n.sketch } : ((prev as { scene?: object } | undefined)?.scene ?? { sketch: [] }) };
   }
 }
 
-/** What an agent reads: full markdown/html/url, drawings as sketch or a compact summary of Excalidraw elements. */
+/** What an agent reads: every node in full. */
 export function readable(canvas: Canvas): string {
-  const nodes = canvas.nodes.map((n) => {
-    if (n.kind !== 'drawing' || !n.scene.elements) return n;
-    const elements = (n.scene.elements as Record<string, unknown>[])
-      .filter((e) => !e.isDeleted)
-      .map((e) => ({ id: e.id, type: e.type, x: Math.round(Number(e.x)), y: Math.round(Number(e.y)), w: Math.round(Number(e.width)), h: Math.round(Number(e.height)), text: e.text ?? undefined }));
-    return { ...n, scene: { edited_in_ui: true, elements } };
-  });
-  const out = JSON.stringify({ id: canvas.id, name: canvas.name, version: canvas.version, nodes }, null, 1);
+  const out = JSON.stringify({ id: canvas.id, name: canvas.name, version: canvas.version, nodes: canvas.nodes }, null, 1);
   return out.length > OUTPUT_CAP ? out.slice(0, OUTPUT_CAP) + `\n[truncated, ${out.length - OUTPUT_CAP} chars omitted]` : out;
 }
 
@@ -84,7 +73,7 @@ const tool = <S extends z.ZodType>(t: CanvasTool<S>) => t;
 
 export const CANVAS_TOOLS = {
   canvas_list: tool({
-    description: 'List canvases (shared boards the user sees live: diagrams, HTML mockups, running apps, explanations).',
+    description: 'List canvases (shared boards the user sees live: HTML mockups, diagrams, running apps, explanations).',
     input: z.object({}),
     run: (_i, { canvases }) =>
       canvases
@@ -106,8 +95,7 @@ export const CANVAS_TOOLS = {
     description:
       'Add, replace or delete nodes on a canvas; the user sees changes live. Node kinds: markdown (text), html (a page or ' +
       'component, rendered sandboxed: use it for UI mockups and design showcases), url (a running app or a file served ' +
-      'from your workspace as /api/files/<agent>/<path>), drawing (system design diagrams: sketch elements with ' +
-      'x/y/width/height/label; arrows use from/to element ids). Omitted position/size: placed automatically. ' +
+      'from your workspace as /api/files/<agent>/<path>; for system design diagrams, write an svg file and show it here). Omitted position/size: placed automatically. ' +
       'Upsert replaces the node with that id; omitted content fields keep their previous value. ' +
       'show: node ids to display to the user inline in this chat (view only, they can expand, pan and zoom); use it whenever ' +
       'you want the user to look at something. To show existing nodes without changing them, call with only id and show.',

@@ -10,6 +10,7 @@ interface AgentRow {
   workdir: string | null;
   enabled: number;
   max_runs: number;
+  main_chat: string | null;
 }
 const toAgent = (r: AgentRow): Agent => ({
   id: r.id,
@@ -18,6 +19,7 @@ const toAgent = (r: AgentRow): Agent => ({
   workdir: r.workdir,
   enabled: r.enabled === 1,
   maxRuns: r.max_runs,
+  mainChat: r.main_chat,
 });
 
 /** An agent's working directory: its configured path, or data/workspaces/<id>. */
@@ -56,14 +58,22 @@ export class Agents {
       .prepare("SELECT id, number FROM cards WHERE assignee = ? AND status NOT IN ('done', 'closed', 'archived') ORDER BY number")
       .all(id) as { id: string; number: number | null }[];
     if (cards.length)
-      throw new ConflictError(`@${id} still has open cards: ${cards.map(cardRef).join(', ')}. Reassign, finish or close them first.`);
+      throw new ConflictError(`@${id} still has open tasks: ${cards.map(cardRef).join(', ')}. Reassign, finish or close them first.`);
     if (this.db.prepare("SELECT 1 FROM settings WHERE key = 'triage_agent' AND value = ?").get(id))
       throw new ConflictError(`@${id} is the triage agent: pick another one in Settings → Board first.`);
     this.db.transaction(() => {
       // Their direct chat goes with them (kept in the database, archived).
       this.db.prepare("UPDATE cards SET status = 'archived' WHERE board = 'direct' AND assignee = ?").run(id);
       this.db.prepare("UPDATE cards SET assignee = NULL WHERE assignee = ?").run(id);
-      this.db.prepare('DELETE FROM memory WHERE agent_id = ?').run(id);
+      // Their memories are archived, never deleted (Settings → Memory still shows them).
+      const now = new Date().toISOString();
+      this.db
+        .prepare(
+          `INSERT INTO memory_changes (memory_id, at, by, action, before_text, before_kind, before_scope, before_status, before_pinned)
+           SELECT id, ?, 'user', 'forget', text, kind, scope, status, pinned FROM memories WHERE scope = ? AND status != 'archived'`,
+        )
+        .run(now, `agent:${id}`);
+      this.db.prepare("UPDATE memories SET status = 'archived', updated_at = ?, updated_by = 'user' WHERE scope = ? AND status != 'archived'").run(now, `agent:${id}`);
       this.db.prepare('DELETE FROM agents WHERE id = ?').run(id);
     })();
   }

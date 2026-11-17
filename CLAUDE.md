@@ -9,7 +9,8 @@ first launch (Settings → About you). Full design: `docs/design.md`. Read it be
 - Engine: one Node process (`packages/engine`). Interface: React + Vite (`packages/ui`). Desktop: Electron (`apps/desktop`)
   wraps both. Server mode: the same engine on a VPS, UI opened in a browser.
 - SQLite (`better-sqlite3`, WAL mode) is the single source of truth. No second store, no JSON state files.
-- Canvas: the `@excalidraw/excalidraw` component, embedded, not reimplemented.
+- Canvas: our own board of html / url / markdown nodes. Diagrams are svg documents. Excalidraw was removed in v3
+  (17 Nov 2026, migration 0037 dropped drawing nodes); don't bring a whiteboard library back without asking.
 - Models: Anthropic Messages API (API key), any OpenAI-compatible endpoint (llama.cpp, Ollama,
   LM Studio) for local models.
 

@@ -1,11 +1,9 @@
-import { lazy, Suspense, useCallback, useEffect, useMemo, useRef, useState, type PointerEvent as RPointerEvent } from 'react';
-import { USER, type Canvas, type CanvasNode, type CanvasNodeKind, type DrawingScene } from '@atlas/shared';
+import { useCallback, useEffect, useRef, useState, type PointerEvent as RPointerEvent } from 'react';
+import { USER, type Canvas, type CanvasNode, type CanvasNodeKind } from '@atlas/shared';
 import { api, ApiError } from '../api.ts';
 import type { MessageStream } from '../useMessages.ts';
-import { KINDS, RENDERERS } from './renderers/index.ts';
+import { isKnown, KINDS, RENDERERS } from './renderers/index.ts';
 import type { Renderer } from './renderers/types.ts';
-
-const DrawingEditor = lazy(() => import('./excalidraw.tsx').then((m) => ({ default: m.DrawingEditor })));
 
 interface View {
   x: number;
@@ -27,7 +25,6 @@ export function CanvasBoard(props: { id: string; stream: MessageStream; onOpenCa
   const [view, setView] = useState<View>(() => JSON.parse(localStorage.getItem('atlas.view.' + id) ?? 'null') ?? { x: 40, y: 40, z: 0.8 });
   const [selected, setSelected] = useState<string | null>(null);
   const [editing, setEditing] = useState<string | null>(null);
-  const [drawingOpen, setDrawingOpen] = useState<string | null>(null);
   const [interacting, setInteracting] = useState(false);
   const [notice, setNotice] = useState<string | null>(null);
   const board = useRef<HTMLDivElement>(null);
@@ -122,8 +119,7 @@ export function CanvasBoard(props: { id: string; stream: MessageStream; onOpenCa
     setNodes((ns) => [...ns, node]);
     dirty.current.changed.add(node.id);
     setSelected(node.id);
-    if (r.modal) setDrawingOpen(node.id);
-    else setEditing(node.id);
+    setEditing(node.id);
     save();
   };
 
@@ -159,7 +155,7 @@ export function CanvasBoard(props: { id: string; stream: MessageStream; onOpenCa
 
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
-      if (editing || drawingOpen || !selected) return;
+      if (editing || !selected) return;
       if ((e.target as HTMLElement).closest('input, textarea')) return;
       if (e.key === 'Delete' || e.key === 'Backspace') remove(selected);
       if (e.key === 'Escape') setSelected(null);
@@ -185,10 +181,6 @@ export function CanvasBoard(props: { id: string; stream: MessageStream; onOpenCa
     window.addEventListener('pointermove', move);
     window.addEventListener('pointerup', up);
   };
-
-  const drawingNode = useMemo(() => nodes.find((n) => n.id === drawingOpen && n.kind === 'drawing'), [nodes, drawingOpen]) as
-    | Extract<CanvasNode, { kind: 'drawing' }>
-    | undefined;
 
   if (!canvas) return <div className="canvas-board loading">Loading canvas…</div>;
 
@@ -234,7 +226,7 @@ export function CanvasBoard(props: { id: string; stream: MessageStream; onOpenCa
         }}
       >
         <div className="canvas-layer" style={{ transform: `translate(${view.x}px, ${view.y}px) scale(${view.z})` }}>
-          {nodes.map((n) => {
+          {nodes.filter(isKnown).map((n) => {
             const r = rendererOf(n.kind);
             const isEditing = editing === n.id;
             return (
@@ -251,7 +243,7 @@ export function CanvasBoard(props: { id: string; stream: MessageStream; onOpenCa
                     const sx = n.x, sy = n.y;
                     drag(e, (dx, dy) => update(n.id, { x: Math.round(sx + dx / view.z), y: Math.round(sy + dy / view.z) }));
                   }}
-                  onDoubleClick={() => (r.modal ? setDrawingOpen(n.id) : setEditing(isEditing ? null : n.id))}
+                  onDoubleClick={() => setEditing(isEditing ? null : n.id)}
                 >
                   <span className="icon">{r.icon}</span>
                   {isEditing ? (
@@ -265,7 +257,7 @@ export function CanvasBoard(props: { id: string; stream: MessageStream; onOpenCa
                     </button>
                   )}
                   <span className="cnode-actions" onPointerDown={(e) => e.stopPropagation()}>
-                    <button onClick={() => (r.modal ? setDrawingOpen(n.id) : setEditing(isEditing ? null : n.id))}>{isEditing ? 'Done' : 'Edit'}</button>
+                    <button onClick={() => setEditing(isEditing ? null : n.id)}>{isEditing ? 'Done' : 'Edit'}</button>
                     {n.kind === 'url' && (
                       <a href={(n as { url: string }).url} target="_blank" rel="noreferrer" title="Open in a new tab">
                         ↗
@@ -291,22 +283,10 @@ export function CanvasBoard(props: { id: string; stream: MessageStream; onOpenCa
           })}
         </div>
         {nodes.length === 0 && (
-          <div className="board-hint">Add a drawing, an HTML component, a running app or a note from the toolbar. Agents can write here with canvas tools.</div>
+          <div className="board-hint">Add an HTML component, a running app or a note from the toolbar. Agents can write here with canvas tools.</div>
         )}
         {notice && <div className="canvas-notice">{notice}</div>}
       </div>
-      {drawingNode && (
-        <Suspense fallback={<div className="drawing-modal loading">Loading editor…</div>}>
-          <DrawingEditor
-            title={drawingNode.title}
-            scene={drawingNode.scene}
-            onClose={(scene: DrawingScene | null) => {
-              if (scene) update(drawingNode.id, { scene });
-              setDrawingOpen(null);
-            }}
-          />
-        </Suspense>
-      )}
     </div>
   );
 }

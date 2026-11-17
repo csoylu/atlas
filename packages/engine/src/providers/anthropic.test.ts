@@ -155,7 +155,7 @@ describe('web search (server tool)', () => {
       ])) as unknown as typeof globalThis.fetch;
     const p = new AnthropicProvider('k', { fetch, maxRetries: 0 });
     const streamed: string[] = [];
-    const res = await p.complete(req(), (t) => streamed.push(t), new AbortController().signal);
+    const res = await p.complete(req(), (t, kind) => streamed.push(`${kind}:${t}`), new AbortController().signal);
     expect(res.content).toEqual([
       { type: 'thinking', thinking: 'hmm', signature: 'sig' },
       { type: 'text', text: 'Writing it.' },
@@ -163,7 +163,8 @@ describe('web search (server tool)', () => {
       { type: 'tool_use', id: 't2', name: 'shell', input: { command: 'ls' } },
       { type: 'tool_use', id: 't3', name: 'list_files', input: {} },
     ]);
-    expect(streamed).toEqual(['Writing ', 'it.']);
+    // Thinking streams live too, before the text (#80).
+    expect(streamed).toEqual(['thinking:hmm', 'text:Writing ', 'text:it.']);
     expect(res.stopReason).toBe('tool_use');
     expect(res.usage).toEqual({ input: 15, output: 42, cached: 5 });
   });

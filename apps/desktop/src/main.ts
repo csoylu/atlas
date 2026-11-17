@@ -57,6 +57,8 @@ const voiceHost = (): VoiceHost | undefined =>
 
 let engine: Engine | undefined;
 let quitting = false;
+/** A quit is waiting for the main window to close; cleared if Master cancels at the unsaved-drawing prompt. */
+let quitPending = false;
 /** The Atlas window (the voice orb is a second, always-present window: never count it as « the » window). */
 let mainWindow: BrowserWindow | null = null;
 /** Voice mode on a Mac: the voice loop (voice.ts) drives the orb (setState, transcript, speak). */
@@ -226,11 +228,20 @@ else {
     if (process.platform !== 'darwin') app.quit();
   });
   // Graceful shutdown: running agents end 'interrupted' and resume at next launch (design §6).
+  // The window closes first, then the engine stops.
   app.on('before-quit', (e) => {
     if (!engine || quitting) return;
     e.preventDefault();
-    quitting = true;
-    talk?.stop();
-    engine.stop().finally(() => app.quit());
+    const stopAll = () => {
+      if (quitting || !quitPending) return;
+      quitting = true;
+      talk?.stop();
+      engine!.stop().finally(() => app.quit());
+    };
+    quitPending = true;
+    const win = mainWindow;
+    if (!win || win.isDestroyed()) return stopAll();
+    win.once('closed', stopAll);
+    win.close();
   });
 }

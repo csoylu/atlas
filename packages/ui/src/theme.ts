@@ -62,15 +62,3 @@ export function useTheme(): [ThemeChoice, Theme, (t: ThemeChoice) => void] {
     },
   ];
 }
-
-/** Excalidraw follows the theme (light or dark). Re-renders when the theme changes. */
-export function useExcalidrawTheme(): 'light' | 'dark' {
-  const read = () => (document.documentElement.dataset.theme === 'light' ? 'light' : 'dark');
-  const [t, setT] = useState<'light' | 'dark'>(read);
-  useEffect(() => {
-    const o = new MutationObserver(() => setT(read()));
-    o.observe(document.documentElement, { attributes: true, attributeFilter: ['data-theme'] });
-    return () => o.disconnect();
-  }, []);
-  return t;
-}

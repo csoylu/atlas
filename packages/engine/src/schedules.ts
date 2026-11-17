@@ -108,12 +108,12 @@ export class Schedules {
     return toSchedule(row);
   }
 
-  create(input: CreateSchedule, by: string): Schedule {
+  /** `id`: a fixed one for a built-in schedule (the memory cleanup), else a random one. */
+  create(input: CreateSchedule, by: string, id = 'sch_' + randomUUID().slice(0, 8)): Schedule {
     const c = CreateSchedule.parse(input);
     this.checkAgent(c.agentId);
     const when = { kind: c.kind, cron: c.kind === 'cron' ? c.cron : null, at: c.kind === 'at' ? c.at : null, timezone: c.timezone ?? localTimeZone() };
     const next = c.enabled ? this.firstRun(when) : null;
-    const id = 'sch_' + randomUUID().slice(0, 8);
     const now = this.now().toISOString();
     const title = c.title ?? firstLine(c.prompt);
     this.db
@@ -224,7 +224,7 @@ export class Schedules {
     return this.kanban.create(
       {
         title: s.title,
-        body: `The card of schedule ${s.id} (${describeWhen(s)}). Each run posts the prompt in this chat and reopens the card, so the conversation keeps what earlier runs did.`,
+        body: `The task of schedule ${s.id} (${describeWhen(s)}). Each run posts the prompt in this chat and reopens the task, so the conversation keeps what earlier runs did.`,
         assignee: s.agentId,
         status: 'todo',
       },

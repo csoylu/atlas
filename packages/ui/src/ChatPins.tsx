@@ -30,7 +30,7 @@ export function ChatPins(props: { chatId: string; cards: Card[]; stream: Message
   };
   if (!pins.length) return null;
   return (
-    <div className="chat-pins" role="list" aria-label="Cards from this chat">
+    <div className="chat-pins" role="list" aria-label="Tasks from this chat">
       {pins.map((p) => (
         <PinView key={p.id} pin={p} now={now} stream={props.stream} onOpen={props.onOpen} onUnpin={() => unpin(p)} onError={props.onError} />
       ))}

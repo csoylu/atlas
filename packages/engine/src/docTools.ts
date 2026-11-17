@@ -48,14 +48,14 @@ export const DOC_TOOLS = {
       'Show a document to the user in the side panel beside the chat, at real size, in a tab: a markdown doc, an html ' +
       'page, an svg diagram (files in your workspace, versioned by Atlas) or a canvas as a whiteboard. Use it for designs, ' +
       'specs and reports instead of pasting long text. section scrolls to a markdown heading (id or text) or an html element ' +
-      'id; call again with another section to scroll there. On a card, the document is attached to the card.',
+      'id; call again with another section to scroll there. In a task, the document is attached to the task.',
     input: z.object({ ...Target, section: z.string().optional() }),
     run: (i, ctx) => {
       const doc = resolveDoc(i, ctx);
       const section = sectionOf(doc, i.section, ctx);
       const what = `${doc.title} (${doc.id}, ${doc.path ?? 'canvas ' + doc.canvasId}, v${doc.version})`;
-      const attached = doc.cardId ? `; attached to card ${ctx.cardRef?.(doc.cardId) ?? doc.cardId}` : '';
-      if (!ctx.chatId) return `${what} is indexed${attached}. This card has no chat with the user, so it isn't shown: the user opens it from the card.`;
+      const attached = doc.cardId ? `; attached to task ${ctx.cardRef?.(doc.cardId) ?? doc.cardId}` : '';
+      if (!ctx.chatId) return `${what} is indexed${attached}. This task has no chat with the user, so it isn't shown: the user opens it from the task.`;
       ctx.documents.open(ctx.chatId, doc.id, ctx.agentId, section);
       return `opened ${what} in the side panel of chat ${ctx.chatId}${section ? `, scrolled to #${section}` : ''}${attached}`;
     },
@@ -64,7 +64,7 @@ export const DOC_TOOLS = {
     description: 'Close a document tab in the side panel beside the chat, or the whole panel (no path or canvas).',
     input: z.object(Target),
     run: (i, ctx) => {
-      if (!ctx.chatId) throw new Error('this card has no chat with the user, so there is no panel to close');
+      if (!ctx.chatId) throw new Error('this task has no chat with the user, so there is no panel to close');
       if (!i.path && !i.canvas) {
         ctx.documents.close(ctx.chatId, null);
         return 'closed the panel';

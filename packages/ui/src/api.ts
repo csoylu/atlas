@@ -1,4 +1,4 @@
-import type { Inbox, FileChange, RewindPreview, RewindResult, Doc, DocContent, DocRef, DocVersion, PanelTab, About, CreatePlanAccount, Notification, PlanProvider, UpdatePlanAccount, ChatUsage, UsageSummary, ChatGptModel, ChatGptStatus, UpdateChatGpt, ClaudePlanModel, ClaudePlanStatus, UpdateClaudePlan, Account, CreateAccount, UpdateAccount, LocalModel, LocalPull, LocalStatus, UpdateLocal, Agent, Canvas, CanvasNode, Card, CardStatus, CreateAgent, CreateCard, CreateModel, CreateSchedule, Memory, Message, Model, ModelTest, Run, Schedule, Timeline, ToolCallTiming, ServerEvent, Settings, UpdateVoice, VoiceName, VoiceStatus, UpdateAgent, UpdateModel, UpdateSchedule } from '@atlas/shared';
+import type { Inbox, FileChange, RewindPreview, RewindResult, Doc, DocContent, DocRef, DocVersion, PanelTab, About, CreatePlanAccount, Notification, PlanProvider, UpdatePlanAccount, ChatUsage, UsageSummary, ChatGptModel, ChatGptStatus, UpdateChatGpt, ClaudePlanModel, ClaudePlanStatus, UpdateClaudePlan, Account, CreateAccount, UpdateAccount, LocalModel, LocalPull, LocalStatus, UpdateLocal, Agent, Canvas, CanvasNode, Card, CardStatus, CreateAgent, CreateCard, CreateModel, CreateSchedule, Memory, MemoryChange, MemoryProposal, MemoryQuery, UpdateMemory, Message, Model, ModelTest, Run, Schedule, Timeline, ToolCallTiming, ServerEvent, Settings, UpdateVoice, VoiceName, VoiceStatus, UpdateAgent, UpdateModel, UpdateSchedule } from '@atlas/shared';
 
 /** HTTP error with the parsed body (e.g. 409 carries the current canvas). */
 export class ApiError extends Error {
@@ -69,6 +69,9 @@ export const api = {
   agents: () => call<Agent[]>('GET', '/agents'),
   chats: () => call<Card[]>('GET', '/chats'),
   newChat: (agentId: string) => call<Card>('POST', `/agents/${agentId}/chats`),
+  mainChat: (agentId: string) => call<Card>('POST', `/agents/${agentId}/main-chat`),
+  /** `/clear`: a fresh main chat; the previous one stays in History. */
+  newMainChat: (agentId: string) => call<Card>('POST', `/agents/${agentId}/main-chat/new`),
   usage: (days = 30) => call<UsageSummary>('GET', `/usage?days=${days}`),
   cardUsage: (id: string) => call<ChatUsage>('GET', `/cards/${id}/usage`),
   chatgpt: () => call<ChatGptStatus>('GET', '/chatgpt'),
@@ -98,8 +101,17 @@ export const api = {
   createAgent: (a: CreateAgent) => call<Agent>('POST', '/agents', a),
   updateAgent: (id: string, patch: UpdateAgent) => call<Agent>('PATCH', `/agents/${id}`, patch),
   deleteAgent: (id: string) => call<void>('DELETE', `/agents/${id}`),
-  memory: (agent: string) => call<Memory>('GET', `/memory/${agent}`),
-  setMemory: (agent: string, text: string) => call<Memory>('PUT', `/memory/${agent}`, { text }),
+  // ── Memory v2 (design §8): Settings → Memory, the Inbox digest ──
+  memories: (q: MemoryQuery = {}) => call<Memory[]>('GET', '/memories?' + new URLSearchParams(Object.entries(q).filter(([, v]) => v) as [string, string][]).toString()),
+  memory: (id: number) => call<Memory>('GET', `/memories/${id}`),
+  updateMemory: (id: number, patch: UpdateMemory) => call<Memory>('PATCH', `/memories/${id}`, patch),
+  /** Changes since `since` (default: the last 24 h), newest first. */
+  memoryChanges: (since?: string) => call<MemoryChange[]>('GET', '/memories/changes' + (since ? `?since=${encodeURIComponent(since)}` : '')),
+  undoMemoryChange: (changeId: number) => call<Memory>('POST', `/memories/changes/${changeId}/undo`),
+  memoryProposals: (cardId: string) => call<MemoryProposal[]>('GET', '/memory-proposals?cardId=' + encodeURIComponent(cardId)),
+  approveProposal: (id: number) => call<MemoryProposal>('POST', `/memory-proposals/${id}/approve`),
+  rejectProposal: (id: number) => call<MemoryProposal>('POST', `/memory-proposals/${id}/reject`),
+  memoryBudget: (agentId: string) => call<{ used: number; limit: number }>('GET', `/agents/${agentId}/memory-budget`),
   models: () => call<Model[]>('GET', '/models'),
   createModel: (m: CreateModel) => call<Model>('POST', '/models', m),
   updateModel: (id: string, patch: UpdateModel) => call<Model>('PATCH', `/models/${id}`, patch),

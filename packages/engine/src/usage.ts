@@ -19,7 +19,7 @@ export class Usage {
     agentId: string | null;
     cardId: string | null;
     conversationId: string | null;
-    kind: 'turn' | 'summary' | 'title';
+    kind: 'turn' | 'summary' | 'title' | 'review';
     usage: { input: number; output: number; cached?: number };
     /** The plan subscription that answered, if any. */
     accountId?: string | null;

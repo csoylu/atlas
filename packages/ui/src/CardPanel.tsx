@@ -7,8 +7,8 @@ import type { MessageStream } from './useMessages.ts';
 import { submitOnEnter } from './composerKeys.ts';
 import { ComposerMeta, useChatUsage } from './Usage.tsx';
 import { CARD_HREF, findCard, linkCardIds, linkCardRefsMd } from './cardModal.ts';
-import { Turn } from './ChatActivity.tsx';
-import { turns } from './chatTurn.ts';
+import { StepRow, Turn } from './ChatActivity.tsx';
+import { draftSegments, turns, type Segment } from './chatTurn.ts';
 import type { ToolOutcome } from './toolRows.ts';
 import { sysLine } from './chatPins.ts';
 import { webSearchResult } from './webRows.ts';
@@ -22,16 +22,29 @@ import { draftKey, readDraft, useDraft, writeDraft } from './drafts.ts';
 import { RewindConfirm, RewindIcon, RewindNote, useRewind, type Rewind } from './Rewind.tsx';
 import { distribute, messageRow, timelineRows, type SysRow } from './sysRows.ts';
 import { SystemRow } from './SystemRow.tsx';
-import { draftMarkdown, rehypeCaret, useThrottledDraft } from './streamDraft.ts';
+import { focusSeqFor, groupForSeq } from './memoryView.ts';
+import { NO_DRAFT, addDelta, draftMarkdown, rehypeCaret, useThrottledDraft, type Draft } from './streamDraft.ts';
+
+/** The message `?msg=<seq>` in the URL asks this conversation to show (a memory's source link), followed live. */
+function useFocusSeq(cardId: string): number | null {
+  const [seq, setSeq] = useState(() => (typeof location === 'undefined' ? null : focusSeqFor(location.hash, cardId))); // no location: server render in tests
+  useEffect(() => {
+    const on = () => setSeq(focusSeqFor(location.hash, cardId));
+    on();
+    window.addEventListener('hashchange', on);
+    return () => window.removeEventListener('hashchange', on);
+  }, [cardId]);
+  return seq;
+}
 
 /** A document reference in a message (« ❝ Doc › Section »). */
 export type MessageRef = NonNullable<ReturnType<typeof parseDocRef>>;
 
-/** Live state of a card's conversation: messages, the streaming draft, the latest run, tool results and timings by id. */
+/** Live state of a card's conversation: messages, the streaming draft (thinking and text, in order), the latest run, tool results and timings by id. */
 export function useCardConversation(card: Card, stream: MessageStream, onError: (e: unknown) => void) {
   const [messages, setMessages] = useState<Message[]>([]);
   const [run, setRun] = useState<Run | null>(null);
-  const [draft, setDraft] = useState('');
+  const [draft, setDraft] = useState<Draft>(NO_DRAFT);
   const [timings, setTimings] = useState<Map<string, ToolCallTiming>>(new Map());
   const [timeline, setTimeline] = useState<Timeline>(NO_TIMELINE);
   const lastRun = useRef('');
@@ -43,11 +56,11 @@ export function useCardConversation(card: Card, stream: MessageStream, onError: 
     const offMsg = stream.listen(card.conversationId, (e) => {
       if (e.type === 'message') {
         setMessages((ms) => (ms.some((x) => x.id === e.message.id) ? ms : [...ms, e.message]));
-        if (e.message.role === 'assistant') setDraft('');
-      } else if (e.type === 'delta') setDraft((d) => d + e.text);
+        if (e.message.role === 'assistant') setDraft(NO_DRAFT);
+      } else if (e.type === 'delta' || e.type === 'thinking') setDraft((d) => addDelta(d, e.type === 'delta' ? 'text' : 'thinking', e.text));
       else if (e.type === 'rewound') {
         // Hidden (or brought back) by a rewind: the server's list is the truth.
-        setDraft('');
+        setDraft(NO_DRAFT);
         api.messages(card.id).then(setMessages, onError);
         void reloadTimeline();
       }
@@ -59,7 +72,7 @@ export function useCardConversation(card: Card, stream: MessageStream, onError: 
       if (lastRun.current !== key) void reloadTimeline();
       lastRun.current = key;
       setRun(e.run);
-      if (e.run.status !== 'running') setDraft('');
+      if (e.run.status !== 'running') setDraft(NO_DRAFT);
     });
     api.messages(card.id).then((ms) => setMessages((live) => merge(ms, live)), onError);
     api.runs(card.id).then((rs) => setRun((live) => live ?? rs[0] ?? null), onError);
@@ -107,6 +120,8 @@ export function CardPanel(props: {
   /** « Ask about this » from the side panel: shown as a chip in the composer, sent with the message. */
   quote?: Quote | null;
   onQuoteClear?(): void;
+  /** `/clear` typed in a direct chat's composer: start a fresh main chat with the agent. */
+  onClear?(agentId: string): void;
   /** Tabs open in a hidden side panel (overlay mode): a button brings it back. */
   hiddenDocs?: number;
   onShowDocs?(): void;
@@ -157,12 +172,12 @@ export function CardPanel(props: {
           onRewind={rw.ask}
           onUndo={rw.undoById}
           onError={onError}
-          empty={`Ask @${card.assignee} anything. For work to track, it creates cards on the board.`}
+          empty={`Ask @${card.assignee} anything. For work to track, it creates tasks.`}
         />
       </div>
       <RewindNote rw={rw} />
       {!rw.hideRun && <RunLine run={convo.run} onStop={() => void rw.stopTurn()} />}
-      <CardComposer card={card} agents={props.agents} models={props.models} plan={!!props.plan} stream={stream} onError={onError} quote={props.quote} onQuoteClear={props.onQuoteClear} rewind={rw} />
+      <CardComposer card={card} agents={props.agents} models={props.models} plan={!!props.plan} stream={stream} onError={onError} quote={props.quote} onQuoteClear={props.onQuoteClear} onClear={props.onClear} rewind={rw} />
       <RewindConfirm rw={rw} />
     </aside>
   );
@@ -243,8 +258,10 @@ export function Activity(props: {
   onError(e: unknown): void;
 }) {
   const { messages, results, timings, run, timeline } = props.convo;
-  // The streaming reply, re-rendered as markdown at most every few dozen ms (#79).
-  const draft = useThrottledDraft(props.convo.draft);
+  // The streaming reply, re-rendered as markdown at most every few dozen ms (#79): its thinking rows above its text (#80).
+  const shownDraft = useThrottledDraft(props.convo.draft);
+  const draftSegs = useMemo(() => draftSegments(shownDraft), [shownDraft]);
+  const draft = draftSegs.length > 0;
   const { cards, onOpenCard } = props;
   // A reference opens the card it names (by id); unknown ones stay plain text.
   const cardLinks = useMemo(
@@ -268,7 +285,24 @@ export function Activity(props: {
   useEffect(() => {
     if (askRef.current) askRef.current.scrollIntoView({ block: 'start' });
     else end.current?.scrollIntoView({ block: 'end' });
-  }, [messages.length, draft, asking, card.block?.reason]);
+  }, [messages.length, shownDraft, asking, card.block?.reason]);
+  // A memory's source link (?msg=<seq>, #82): scroll to that message once it is loaded and flash it.
+  const focusSeq = useFocusSeq(card.id);
+  const focusDone = useRef<number | null>(null);
+  const listBox = useRef<HTMLSpanElement>(null);
+  useEffect(() => {
+    if (focusSeq === null) return void (focusDone.current = null);
+    if (focusDone.current === focusSeq || !messages.length) return;
+    const root = listBox.current?.parentElement;
+    const els = [...(root?.querySelectorAll<HTMLElement>('[data-seq]') ?? [])];
+    const el = els[groupForSeq(els.map((e) => Number(e.dataset.seq)), focusSeq)];
+    if (!el) return;
+    focusDone.current = focusSeq;
+    el.scrollIntoView({ block: 'center' });
+    el.classList.remove('flash');
+    void el.offsetWidth; // restart the animation
+    el.classList.add('flash');
+  }, [focusSeq, messages.length]);
   const text = (t: string, key?: string, user?: boolean) => <TextBlock key={key} text={t} onOpenRef={user ? props.onOpenRef : undefined} quotes={user} cardLinks={cardLinks} />;
   const renderText = useCallback((t: string, key: string) => <TextBlock key={key} text={t} cardLinks={cardLinks} />, [cardLinks]);
   const renderTurn = (ms: Message[], live: boolean, last: boolean) => (
@@ -285,7 +319,7 @@ export function Activity(props: {
   // Where the streaming reply shows: inside the last group when it's this agent's turn (see draftHere), else as its own message.
   const lastGroup = groups.at(-1)?.[0];
   const draftJoined =
-    !!draft && !!lastGroup && isAgent(lastGroup) && lastGroup.author === card.assignee && lastGroup.author !== 'system' && !messageRow(lastGroup, card.assignee) && !placed.after[groups.length - 1]!.length;
+    draft && !!lastGroup && isAgent(lastGroup) && lastGroup.author === card.assignee && lastGroup.author !== 'system' && !messageRow(lastGroup, card.assignee) && !placed.after[groups.length - 1]!.length;
   const sysRow = (r: SysRow) => (
     <SystemRow
       key={r.key}
@@ -298,6 +332,7 @@ export function Activity(props: {
   );
   return (
     <>
+      <span ref={listBox} hidden />
       {messages.length === 0 && !asking && <p className="empty">{props.empty}</p>}
       {placed.before.map(sysRow)}
       {groups.map((ms, i) => {
@@ -326,11 +361,11 @@ export function Activity(props: {
         const cont = prev?.author === m.author && !placed.after[i - 1]?.length;
         return (
           <Fragment key={m.id}>
-          <div className={'msg ' + m.role + (cont ? ' cont' : '')}>
+          <div className={'msg ' + m.role + (cont ? ' cont' : '')} data-seq={m.seq}>
             {!cont && <div className="who">{m.author === USER ? (props.userName ?? 'You') : m.author}</div>}
             <div className="msg-body">
               {isAgent(m) ? renderTurn(ms, running && last, last) : m.content.map((b, k) => (b.type === 'text' ? text(b.text, String(k), m.author === USER) : null))}
-              {draftHere && <TextBlock text={draft} cardLinks={cardLinks} streaming />}
+              {draftHere && <DraftView segments={draftSegs} cardLinks={cardLinks} />}
               {m.author === USER && props.onRewind && (
                 <div className="msg-actions">
                   <button type="button" className="msg-action" onClick={() => props.onRewind!(m.seq)} aria-label="Rewind to here" title="Rewind to here: hide this message and the rest, put the agent's files back">
@@ -348,7 +383,7 @@ export function Activity(props: {
         <div className="msg assistant">
           <div className="who">{card.assignee}</div>
           <div className="msg-body">
-            <TextBlock text={draft} cardLinks={cardLinks} streaming />
+            <DraftView segments={draftSegs} cardLinks={cardLinks} />
           </div>
         </div>
       )}
@@ -358,6 +393,21 @@ export function Activity(props: {
         </AskMessage>
       )}
       <div ref={end} />
+    </>
+  );
+}
+
+/** The streaming answer: live thinking rows (the saved step's look) and text, the last text with the caret. */
+function DraftView({ segments, cardLinks }: { segments: Segment[]; cardLinks?: CardLinks }) {
+  return (
+    <>
+      {segments.map((s, i) =>
+        s.kind === 'text' ? (
+          <TextBlock key={s.key} text={s.text} cardLinks={cardLinks} streaming={i === segments.length - 1} />
+        ) : s.kind === 'step' ? (
+          <StepRow key={s.step.id} step={s.step} now={0} at={s.step.at} />
+        ) : null,
+      )}
     </>
   );
 }
@@ -436,7 +486,7 @@ function SysNote({ text, onOpenCard }: { text: string; onOpenCard?(id: string): 
       className="sys-note open"
       role="button"
       tabIndex={0}
-      title="Open the card"
+      title="Open the task"
       onClick={open}
       onKeyDown={(e) => {
         if (e.target === e.currentTarget && (e.key === 'Enter' || e.key === ' ')) {
@@ -469,9 +519,9 @@ export function RunLine({ run, onStop, stop = true }: { run: Run | null; onStop(
 /** Message box for the card's agent, with usage and the model/effort chooser. */
 export const CardComposer = forwardRef<
   HTMLTextAreaElement,
-  { card: Card; agents: Agent[]; models: Model[]; plan: boolean; stream: MessageStream; onError(e: unknown): void; quote?: Quote | null; onQuoteClear?(): void; rewind?: Rewind }
+  { card: Card; agents: Agent[]; models: Model[]; plan: boolean; stream: MessageStream; onError(e: unknown): void; quote?: Quote | null; onQuoteClear?(): void; onClear?(agentId: string): void; rewind?: Rewind }
 >(
-  function CardComposer({ card, agents, models, plan, stream, onError, quote, onQuoteClear, rewind }, ref) {
+  function CardComposer({ card, agents, models, plan, stream, onError, quote, onQuoteClear, onClear, rewind }, ref) {
     const draftId = draftKey('card', card.id);
     const [text, setText] = useDraft(draftId);
     const box = useRef<HTMLTextAreaElement | null>(null);
@@ -497,6 +547,12 @@ export const CardComposer = forwardRef<
           e.preventDefault();
           const t = text.trim();
           if (!t) return;
+          // `/clear` (typed, never voice) in a direct chat: a fresh main chat; this one stays in History.
+          if (t === '/clear' && onClear && card.board === 'direct' && card.assignee) {
+            setText('');
+            onClear(card.assignee);
+            return;
+          }
           setText('');
           onQuoteClear?.();
           rewind?.sent();
@@ -608,7 +664,7 @@ const REHYPE_CARET = [rehypeCaret];
 function CardRef({ ref_, links, children }: { ref_: string; links: CardLinks; children: ReactNode }) {
   const c = links.card?.(ref_);
   return (
-    <button type="button" className="card-ref" title={c ? `${c.title} · open the card` : 'Open the card'} onClick={() => links.open(ref_)}>
+    <button type="button" className="card-ref" title={c ? `${c.title} · open the task` : 'Open the task'} onClick={() => links.open(ref_)}>
       {c && <StatusIcon status={c.status} size={12} />}
       {children}
       {c && <em className="card-ref-title">{c.title}</em>}

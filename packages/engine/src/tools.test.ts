@@ -205,6 +205,20 @@ describe('grep and glob', () => {
       expect(await g({ ignoreCase: true, limit: 1 })).toMatch(/\n\[2 more not shown; narrow the search or raise limit\]$/);
     });
 
+  it('js backend maps a leading ripgrep inline-flag group to JS flags', async () => {
+    const c = tree();
+    const g = (o: Partial<Parameters<typeof grep>[0]>) =>
+      grep({ pattern: 'needle', root: c.workdir, base: c.workdir, mode: 'count', limit: 100, ...o }, null);
+    const both = ['src/a.ts:1', 'src/deep/b.tsx:2'];
+    expect((await g({ pattern: '(?i)needle' })).split('\n').sort()).toEqual(both);
+    expect((await g({ pattern: '(?is)NEEDLE.*' })).split('\n').sort()).toEqual(both);
+    expect((await g({ pattern: '(?i)needle', ignoreCase: true })).split('\n').sort()).toEqual(both);
+    expect(await g({ pattern: '(?m)^NEEDLE$' })).toBe('src/deep/b.tsx:1');
+    expect(await g({ pattern: '(?:NEEDLE)' })).toBe('src/deep/b.tsx:1');
+    await expect(g({ pattern: '(?x)needle' })).rejects.toThrow(/unsupported inline flag \(\?x\).*ripgrep not found/);
+    await expect(g({ pattern: '(?i)(' })).rejects.toThrow(/invalid regex for the JS grep fallback \(ripgrep not found\)/);
+  });
+
   it('grep tool searches the workdir', async () => {
     const c = tree();
     expect((await out('grep', { pattern: 'need+le', mode: 'files' }, c)).split('\n').sort()).toEqual(['src/a.ts', 'src/deep/b.tsx']);

@@ -11,7 +11,8 @@ import type { Runner } from './runner.ts';
 import type { Rewinds } from './rewind.ts';
 import type { Dispatcher } from './dispatcher.ts';
 import type { Settings } from './settings.ts';
-import type { Memories } from './memory.ts';
+import { parseMemoryRef, type Memories } from './memory.ts';
+import type { MemoryCleanup } from './cleanup.ts';
 import { localTimeZone, upcoming, type Schedules } from './schedules.ts';
 import { isTokenEntry, SECRET_NAME, type SecretStore } from './secrets.ts';
 import { StaleVersionError, type Canvases } from './canvas.ts';
@@ -30,7 +31,7 @@ import type { PlanAccounts } from './plan-accounts.ts';
 import type { Notifications } from './notifications.ts';
 import type { Usage } from './usage.ts';
 import type { Voice } from './voice.ts';
-import { DEFAULT_CONTEXT_WINDOW, type About, type Timeline } from '@atlas/shared';
+import { DEFAULT_CONTEXT_WINDOW, MEMORY_BUDGET, type About, type Timeline } from '@atlas/shared';
 
 /** Who the UI acts as. One user (design §1). */
 const USER = 'user';
@@ -48,6 +49,7 @@ export function createApi(deps: {
   canvases: Canvases;
   documents: Documents;
   memories: Memories;
+  cleanup: MemoryCleanup;
   schedules: Schedules;
   local: Local;
   accounts: Accounts;
@@ -67,7 +69,7 @@ export function createApi(deps: {
   /** Login and cross-site checks (auth.ts). */
   auth: Auth;
 }): Server {
-  const { kanban, agents, models, runner, rewinds, dispatcher, settings, canvases, documents, memories, schedules, local, accounts, chatgpt, claude, plans, notifications, usage, bus, auth } = deps;
+  const { kanban, agents, models, runner, rewinds, dispatcher, settings, canvases, documents, memories, cleanup, schedules, local, accounts, chatgpt, claude, plans, notifications, usage, bus, auth } = deps;
   const app = express();
   // Behind Caddy on the same machine: trust its X-Forwarded-Proto so session cookies get the Secure flag over HTTPS.
   app.set('trust proxy', 'loopback');
@@ -201,6 +203,14 @@ export function createApi(deps: {
     if (!agents.list().some((a) => a.id === req.params.id)) throw new NotFoundError(`agent ${req.params.id} not found`);
     res.status(201).json(kanban.newChat(req.params.id));
   });
+  /** The agent's main chat (v3), created on first use. */
+  app.post('/api/agents/:id/main-chat', (req, res) => {
+    res.json(kanban.mainChat(req.params.id));
+  });
+  /** `/clear`: a fresh main chat; the previous one stays in History. */
+  app.post('/api/agents/:id/main-chat/new', (req, res) => {
+    res.status(201).json(kanban.newMainChat(req.params.id));
+  });
   app.get('/api/agents', (_req, res) => {
     res.json(agents.list());
   });
@@ -215,13 +225,53 @@ export function createApi(deps: {
     agents.remove(req.params.id);
     res.status(204).end();
   });
-  app.get('/api/memory/:agent', (req, res) => {
-    if (req.params.agent !== 'shared') agents.get(req.params.agent);
-    res.json(memories.get(req.params.agent));
+  // ── Memory v2 (design §8): Settings → Memory, the daily digest ────────
+  app.get('/api/memories', (req, res) => {
+    const q = req.query as Record<string, string | undefined>;
+    res.json(memories.list({ scope: q.scope, kind: q.kind as never, status: q.status as never, q: q.q || undefined }));
   });
-  app.put('/api/memory/:agent', (req, res) => {
-    if (req.params.agent !== 'shared') agents.get(req.params.agent);
-    res.json(memories.set(req.params.agent, String((req.body as { text?: unknown }).text ?? ''), USER));
+  app.post('/api/memories', (req, res) => {
+    res.status(201).json(memories.add(req.body, USER));
+  });
+  /** Changes since `since` (ISO time; default the last 24 h), newest first. */
+  app.get('/api/memories/changes', (req, res) => {
+    const since = typeof req.query.since === 'string' ? req.query.since : new Date(Date.now() - 24 * 3600_000).toISOString();
+    if (Number.isNaN(Date.parse(since))) throw new InvalidError('since: an ISO time');
+    res.json(memories.changes(new Date(since).toISOString()));
+  });
+  app.post('/api/memories/changes/:id/undo', (req, res) => {
+    const id = Number(req.params.id);
+    if (!Number.isInteger(id)) throw new InvalidError('change id: a number');
+    res.json(memories.undo(id, USER));
+  });
+  app.get('/api/memories/:id', (req, res) => {
+    res.json(memories.get(parseMemoryRef(req.params.id)));
+  });
+  /** Edit, pin, archive ({status: 'archived'}) or restore ({status: 'active'}). */
+  app.patch('/api/memories/:id', (req, res) => {
+    res.json(memories.update(parseMemoryRef(req.params.id), req.body, USER));
+  });
+  // ── Weekly memory cleanup (#83): its proposals, approved or rejected one by one ────────
+  app.get('/api/memory-proposals', (req, res) => {
+    const q = req.query as Record<string, string | undefined>;
+    if (q.status && !['pending', 'approved', 'rejected'].includes(q.status)) throw new InvalidError('status: pending, approved or rejected');
+    res.json(cleanup.list({ cardId: q.cardId || undefined, status: (q.status || undefined) as never }));
+  });
+  const proposalId = (raw: string) => {
+    const id = Number(/^p?(\d+)$/i.exec(raw)?.[1] ?? NaN);
+    if (!Number.isInteger(id)) throw new InvalidError('proposal id: a number');
+    return id;
+  };
+  app.post('/api/memory-proposals/:id/approve', (req, res) => {
+    res.json(cleanup.approve(proposalId(req.params.id), USER));
+  });
+  app.post('/api/memory-proposals/:id/reject', (req, res) => {
+    res.json(cleanup.reject(proposalId(req.params.id)));
+  });
+  /** An agent's always-on memory size against the budget. */
+  app.get('/api/agents/:id/memory-budget', (req, res) => {
+    agents.get(req.params.id);
+    res.json({ used: memories.used(req.params.id), limit: MEMORY_BUDGET });
   });
   app.get('/api/models', (_req, res) => {
     res.json(models.list());

@@ -141,13 +141,28 @@ async function grepRg(o: GrepOptions, rg: string): Promise<string[]> {
   });
 }
 
-async function grepJs(o: GrepOptions): Promise<string[]> {
-  let re: RegExp;
-  try {
-    re = new RegExp(o.pattern, o.ignoreCase ? 'i' : '');
-  } catch (e) {
-    throw new Error(`invalid regex: ${e instanceof Error ? e.message : e}`);
+/** JS flags for ripgrep's leading inline-flag group (`(?i)`, `(?is)`…), which JS RegExp rejects. Only a leading group is handled. */
+const INLINE_FLAGS: Record<string, string> = { i: 'i', s: 's', m: 'm' };
+export function jsRegex(pattern: string, ignoreCase = false): RegExp {
+  const flags = new Set(ignoreCase ? ['i'] : []);
+  const lead = /^\(\?([a-zA-Z]+)\)/.exec(pattern);
+  if (lead) {
+    for (const f of lead[1]!) {
+      if (!INLINE_FLAGS[f])
+        throw new Error(`unsupported inline flag (?${f}) in the JS grep fallback (ripgrep not found): only (?i), (?s), (?m) are supported; use ignore_case instead of (?i)`);
+      flags.add(INLINE_FLAGS[f]);
+    }
+    pattern = pattern.slice(lead[0].length);
   }
+  try {
+    return new RegExp(pattern, [...flags].join(''));
+  } catch (e) {
+    throw new Error(`invalid regex for the JS grep fallback (ripgrep not found): ${e instanceof Error ? e.message : e}`);
+  }
+}
+
+async function grepJs(o: GrepOptions): Promise<string[]> {
+  const re = jsRegex(o.pattern, o.ignoreCase);
   const st = await stat(o.root);
   const files = st.isDirectory() ? (await walkFiles(o.root)).files.map((f) => join(o.root, f)) : [o.root];
   const filter = o.glob ? globToRegex(o.glob) : null;

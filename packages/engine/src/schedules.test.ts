@@ -165,7 +165,7 @@ describe('schedules (design §9)', () => {
     const made = runTeamTool('schedule_create', { prompt: 'Check the backups', cron: '0 3 * * *', timezone: 'Europe/Paris' }, ctx);
     expect(made).toMatchObject({ isError: false, output: expect.stringMatching(/^scheduled sch_\w+ "Check the backups" for @atlas: cron "0 3 \* \* \*" \(Europe\/Paris\)/) });
     expect(runTeamTool('schedule_create', { prompt: 'x' }, ctx)).toMatchObject({ isError: true, output: 'give exactly one of cron or at' });
-    expect(runTeamTool('schedule_list', {}, ctx).output).toContain('own card (created on first run)');
+    expect(runTeamTool('schedule_list', {}, ctx).output).toContain('own task (created on first run)');
     const id = engine.schedules.list()[0]!.id;
     expect(runTeamTool('schedule_delete', { id }, ctx).output).toBe(`schedule ${id} deleted`);
   });

@@ -33,6 +33,7 @@ export class Settings {
       triageAgent: map.get('triage_agent') || null,
       userName: map.get('user_name') || null,
       userAbout: map.get('user_about') || null,
+      memoryReviewModel: map.get('memory_review_model') || null,
     };
   }
 
@@ -45,6 +46,11 @@ export class Settings {
     }
     if (p.userName !== undefined) this.set('user_name', p.userName);
     if (p.userAbout !== undefined) this.set('user_about', p.userAbout);
+    if (p.memoryReviewModel !== undefined) {
+      if (p.memoryReviewModel && p.memoryReviewModel !== 'off' && !this.db.prepare('SELECT 1 FROM models WHERE id = ?').get(p.memoryReviewModel))
+        throw new ConflictError(`model ${p.memoryReviewModel} does not exist`);
+      this.set('memory_review_model', p.memoryReviewModel ?? '');
+    }
     return this.get();
   }
 

@@ -217,7 +217,7 @@ function Installed(props: {
                 <span className="model-name">{m.name}</span>
                 {m.parameterSize && <span className="badge">{m.parameterSize}</span>}
                 {m.quantization && <span className="badge">{m.quantization}</span>}
-                {m.capabilities.includes('tools') ? null : <span className="badge bad" title="Agents need tool calls to work on cards">No tools</span>}
+                {m.capabilities.includes('tools') ? null : <span className="badge bad" title="Agents need tool calls to work on tasks">No tools</span>}
               </div>
               <div className="model-detail">
                 <span className="num">{gb(m.size)} on disk</span>

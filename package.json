@@ -16,9 +16,11 @@
     "build": "npm -w @atlas/ui run build",
     "start": "npm -w @atlas/engine run start",
     "typecheck": "tsc -p packages/shared && tsc -p packages/engine && tsc -p packages/ui && tsc -p apps/desktop && tsc -p packages/voice",
-    "test": "vitest run",
+    "test": "vitest run --project fast",
+    "test:full": "vitest run",
+    "test:slow": "vitest run --project slow",
+    "test:changed": "vitest run --project fast --changed",
     "ui:check": "node scripts/ui-check/check.mjs",
-    "test:quick": "vitest run --exclude \"**/crash.test.ts\"",
     "app": "npm -w @atlas/desktop run app",
     "dist": "npm -w @atlas/desktop run dist"
   },

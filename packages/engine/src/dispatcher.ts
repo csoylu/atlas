@@ -102,7 +102,7 @@ export class Dispatcher {
       // A closed card does nothing more: stop its work or triage run (a chat about it may go on).
       for (const c of this.kanban.list()) {
         const cur = c.status === 'closed' ? this.runner.current(c.id) : null;
-        if (cur && cur.kind !== 'chat') this.runner.stop(c.id, 'card closed');
+        if (cur && cur.kind !== 'chat') this.runner.stop(c.id, 'task closed');
       }
       this.deliverReports();
       // Refresh « why not moving » in the UI when it changed.
@@ -271,7 +271,7 @@ export class Dispatcher {
         const open = this.kanban.openParents(c);
         const closed = open.filter((p) => p.status === 'closed');
         if (closed.length)
-          return `parent ${closed.map(cardRef).join(', ')} was closed (cancelled), so this card can't start: remove it from the parents, reopen it, or close this card too`;
+          return `parent ${closed.map(cardRef).join(', ')} was closed (cancelled), so this task can't start: remove it from the parents, reopen it, or close this task too`;
         if (open.length) return 'waiting on ' + open.map((p) => `${cardRef(p)} (${p.status})`).join(', ');
         return c.parents.length ? 'parents done, moving to ready…' : 'parked: move it to ready when it is time';
       }

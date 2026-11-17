@@ -73,6 +73,9 @@ export function kindOf(item: InboxItem): { label: string; icon: IconStatus } {
       return { label: 'schedule', icon: 'done' };
     case 'run.failed':
       return { label: 'failed', icon: 'failed' };
+    case 'memory.digest':
+    case 'memory.cleanup':
+      return { label: 'memory', icon: 'done' };
     case 'plan.exhausted':
       return { label: 'system', icon: 'failed' };
     default:

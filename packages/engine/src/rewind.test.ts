@@ -172,7 +172,7 @@ describe('rewind', () => {
   });
 
   it('a work card goes back to its status at that point (an event records it); Undo puts the later status back', async () => {
-    const t = await setup([text('ok'), [{ type: 'tool_use', id: 'r1', name: 'card_request_review', input: { summary: 'done' } }]]);
+    const t = await setup([text('ok'), [{ type: 'tool_use', id: 'r1', name: 'task_request_review', input: { summary: 'done' } }]]);
     const card = (await (await fetch(t.u + '/cards', { method: 'POST', headers: json, body: JSON.stringify({ title: 'T', assignee: null, status: 'triage' }) })).json()) as Card;
     t.e.kanban.update(card.id, { assignee: 'atlas', status: 'blocked' }, 'user');
     t.e.kanban.block(card.id, { kind: 'needs_input', reason: 'which one?' }, 'atlas');

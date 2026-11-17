@@ -202,7 +202,7 @@ function ScheduleRow(props: { s: Schedule; onEdit(): void; onOpenCard(id: string
           ) : (
             <span className="muted">{s.kind === 'at' && s.lastFiredAt ? 'done' : 'paused'}</span>
           )}
-          <span className="muted">{s.createCard ? 'new card each run' : 'one card, keeps history'}</span>
+          <span className="muted">{s.createCard ? 'new task each run' : 'one task, keeps history'}</span>
           {s.lastCardId && (
             <button className="linklike" onClick={() => props.onOpenCard(s.lastCardId!)} title={s.lastFiredAt ? 'ran ' + new Date(s.lastFiredAt).toLocaleString() : ''}>
               last run {s.lastFiredAt ? relative(s.lastFiredAt) : ''} → {s.lastCardId}
@@ -239,7 +239,7 @@ function ScheduleRow(props: { s: Schedule; onEdit(): void; onOpenCard(id: string
         <button className="ghost" onClick={props.onEdit}>
           Edit
         </button>
-        <button className="ghost danger" onClick={() => confirm(`Delete schedule "${s.title}"? Its cards stay.`) && api.deleteSchedule(s.id).catch(onError)}>
+        <button className="ghost danger" onClick={() => confirm(`Delete schedule "${s.title}"? Its tasks stay.`) && api.deleteSchedule(s.id).catch(onError)}>
           Delete
         </button>
       </div>
@@ -314,7 +314,7 @@ function ScheduleForm(props: { schedule: Schedule | null; agents: Agent[]; onDon
           autoFocus={!schedule}
           value={d.prompt}
           onChange={(e) => set({ prompt: e.target.value })}
-          placeholder="What the agent should do each time, e.g. « Summarize yesterday's cards and post blockers in the chat. »"
+          placeholder="What the agent should do each time, e.g. « Summarize yesterday's tasks and post blockers in the chat. »"
         />
       </label>
 
@@ -400,13 +400,13 @@ function ScheduleForm(props: { schedule: Schedule | null; agents: Agent[]; onDon
           <label>
             <input type="radio" checked={!d.createCard} onChange={() => set({ createCard: false })} />
             <span>
-              <b>One card for this schedule</b>, reopened each run: the agent sees what earlier runs did
+              <b>One task for this schedule</b>, reopened each run: the agent sees what earlier runs did
             </span>
           </label>
           <label>
             <input type="radio" checked={d.createCard} onChange={() => set({ createCard: true })} />
             <span>
-              <b>A new card each run</b>, dated: separate tasks on the board
+              <b>A new task each run</b>, dated: separate tasks on the board
             </span>
           </label>
         </div>

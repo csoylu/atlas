@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useState } from 'react';
-import { cardRef, type Agent, type Card, type Doc } from '@atlas/shared';
+import { cardRef, type Card, type Doc } from '@atlas/shared';
 import { api } from './api.ts';
 import type { MessageStream } from './useMessages.ts';
 import { HeaderActions, Icon } from './ScreenHeader.tsx';
@@ -17,7 +17,6 @@ import { clearFilter, filterCount, groupDocs, LIB_TABS, libraryHref, matches, pa
  */
 export function Library(props: {
   docId: string | null;
-  agents: Agent[];
   cards: Card[];
   chats: Card[];
   stream: MessageStream;
@@ -67,6 +66,27 @@ export function Library(props: {
   const open = props.docId ? docs?.find((d) => d.id === props.docId) : undefined;
   useEffect(() => onTitle(open?.title ?? null), [open?.title, onTitle]);
 
+  /** The type tabs: in the screen header; on phones, a bar under it (the header has no room). */
+  const typeTabs = (cls: string) => (
+    <div className={cls} role="tablist" aria-label="Type">
+      {LIB_TABS.map((t) => {
+        const on = view.tab === t.id;
+        return (
+          <button
+            key={t.id}
+            type="button"
+            role="tab"
+            aria-selected={on}
+            className={'tabbtn' + (on ? ' on' : '')}
+            onClick={() => save({ ...view, tab: t.id })}
+          >
+            {t.label}
+          </button>
+        );
+      })}
+    </div>
+  );
+
   if (props.docId) {
     if (!docs) return <div className="library loading" />;
     if (!open)
@@ -103,7 +123,7 @@ export function Library(props: {
                 {open.path && <span className="sd-path"> · {open.path}</span>}
               </span>
               {c && (
-                <button type="button" className="card-ref" title={`${c.title} · open the card`} onClick={() => props.onOpenCard(c.id)}>
+                <button type="button" className="card-ref" title={`${c.title} · open the task`} onClick={() => props.onOpenCard(c.id)}>
                   <StatusIcon status={c.status} size={12} />
                   {cardRef(c)}
                 </button>
@@ -128,17 +148,6 @@ export function Library(props: {
   const docAgents = withDocs((docs ?? []).map((d) => d.agentId));
   const setFilter = (k: keyof LibView['filter'], v: string | null) => save({ ...view, filter: { ...view.filter, [k]: v } });
 
-  /** The type tabs: in the screen header; on phones, a bar under it (the header has no room). */
-  const typeTabs = (cls: string) => (
-    <div className={cls} role="tablist" aria-label="Type">
-      {LIB_TABS.map((t) => (
-        <button key={t.id} type="button" role="tab" aria-selected={view.tab === t.id} className={'tabbtn' + (view.tab === t.id ? ' on' : '')} onClick={() => save({ ...view, tab: t.id })}>
-          {t.label}
-        </button>
-      ))}
-    </div>
-  );
-
   return (
     <div className="library">
       <HeaderActions>
@@ -147,7 +156,7 @@ export function Library(props: {
         <Menu
           open={menu}
           onOpen={setMenu}
-          title="Filter by agent, card or chat"
+          title="Filter by agent, task or chat"
           label={
             <>
               <Icon.filter />
@@ -166,10 +175,10 @@ export function Library(props: {
               {a === 'user' ? 'You' : '@' + a}
             </PopRow>
           ))}
-          {docCards.size > 0 && <div className="pop-k">Card</div>}
+          {docCards.size > 0 && <div className="pop-k">Task</div>}
           {docCards.size > 0 && (
             <PopRow on={view.filter.card === null} onClick={() => setFilter('card', null)}>
-              Any card
+              Any task
             </PopRow>
           )}
           {[...docCards].map((id) => {
@@ -232,7 +241,7 @@ export function Library(props: {
                   </a>
                   <span className="lib-m">
                     {c && (
-                      <button type="button" className="card-ref" title={`${c.title} · open the card`} onClick={() => props.onOpenCard(c.id)}>
+                      <button type="button" className="card-ref" title={`${c.title} · open the task`} onClick={() => props.onOpenCard(c.id)}>
                         <StatusIcon status={c.status} size={12} />
                         {cardRef(c)}
                       </button>

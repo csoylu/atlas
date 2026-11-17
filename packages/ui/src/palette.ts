@@ -3,7 +3,7 @@
  * Palette.tsx builds the items and draws them.
  */
 
-export type Section = 'Artifacts' | 'Chats' | 'Cards' | 'Navigation' | 'Actions';
+export type Section = 'Artifacts' | 'Chats' | 'Tasks' | 'Navigation' | 'Actions';
 
 export interface PaletteItem {
   id: string;
@@ -94,14 +94,14 @@ export function matchItem(item: PaletteItem, query: string): Match | null {
 export function sectionOrder(view: string): Section[] {
   switch (view) {
     case 'chat':
-      return ['Artifacts', 'Chats', 'Cards', 'Navigation', 'Actions'];
+      return ['Artifacts', 'Chats', 'Tasks', 'Navigation', 'Actions'];
     case 'board':
     case 'inbox':
-      return ['Cards', 'Actions', 'Navigation', 'Artifacts', 'Chats'];
+      return ['Tasks', 'Actions', 'Navigation', 'Artifacts', 'Chats'];
     case 'library':
-      return ['Artifacts', 'Navigation', 'Actions', 'Cards', 'Chats'];
+      return ['Artifacts', 'Navigation', 'Actions', 'Tasks', 'Chats'];
     default:
-      return ['Navigation', 'Actions', 'Artifacts', 'Cards', 'Chats'];
+      return ['Navigation', 'Actions', 'Artifacts', 'Tasks', 'Chats'];
   }
 }
 

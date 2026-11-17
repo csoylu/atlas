@@ -179,7 +179,7 @@ describe('direct chat with an agent', () => {
     const system = fake.calls[0]!.system;
     expect(system).toMatch(/works for Ada, the user: the only human here/);
     expect(system).toContain('# Ada\nIn their own words: "Mathematician, 36, new to programming."');
-    expect(system).toMatch(/A direct chat with Ada, not a card/);
+    expect(system).toMatch(/A direct chat with Ada, not a task/);
     expect(system).toMatch(/Today is \w+day,? \d+ \w+ \d{4} \(.+\)\.$/);
     expect(system).not.toMatch(/\bCan\b|\b(he|him|his)\b/);
     expect(engine.kanban.messages(chat.id)[0]!.author).toBe('user');

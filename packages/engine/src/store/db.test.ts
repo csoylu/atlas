@@ -46,14 +46,19 @@ describe('store', () => {
   });
 
   it("0021 renames the human's id from 'can' to 'user' everywhere it is stored", () => {
-    const file = join(mkdtempSync(join(tmpdir(), 'atlas-')), 'u.db');
-    const db = openDb(file);
-    db.prepare("DELETE FROM schema_migrations WHERE name = '0021_user.sql'").run();
+    const dir = join(dirname(fileURLToPath(import.meta.url)), 'migrations');
+    const db = new Database(':memory:');
+    db.exec('CREATE TABLE schema_migrations (name TEXT PRIMARY KEY, applied_at TEXT NOT NULL)');
+    db.pragma('foreign_keys = OFF'); // cards without agents, like the 0020/0025 tests
+    for (const f of readdirSync(dir).filter((f) => /^\d{4}_.+\.sql$/.test(f) && f < '0021').sort()) {
+      db.exec(readFileSync(join(dir, f), 'utf8'));
+      db.prepare('INSERT INTO schema_migrations (name, applied_at) VALUES (?, ?)').run(f, 'x');
+    }
     db.prepare("INSERT INTO conversations (id, kind) VALUES ('k', 'chat')").run();
     db.prepare("INSERT INTO cards (id, title, status, conversation_id, created_by, created_at, updated_at) VALUES ('c', 't', 'triage', 'k', 'can', 'x', 'x')").run();
     db.prepare("INSERT INTO messages (id, conversation_id, seq, role, author, content, at) VALUES ('m1', 'k', 1, 'user', 'can', '[]', 'x'), ('m2', 'k', 2, 'assistant', 'atlas', '[]', 'x')").run();
     db.prepare(`INSERT INTO card_events (card_id, at, kind, payload) VALUES ('c', 'x', 'created', '{"by":"can"}')`).run();
-    expect(migrate(db)).toEqual(['0021_user.sql']);
+    expect(migrate(db)[0]).toBe('0021_user.sql');
     expect(db.prepare('SELECT author FROM messages ORDER BY seq').all()).toEqual([{ author: 'user' }, { author: 'atlas' }]);
     expect(db.prepare('SELECT created_by FROM cards').get()).toEqual({ created_by: 'user' });
     expect(db.prepare('SELECT payload FROM card_events').get()).toEqual({ payload: '{"by":"user"}' });
@@ -93,5 +98,39 @@ describe('store', () => {
     ]);
     expect(db.prepare('SELECT last FROM card_counter').get()).toEqual({ last: 4 });
     expect(db.prepare("SELECT 1 AS ok FROM schema_migrations WHERE name = '0025_card_numbers.sql'").get()).toEqual({ ok: 1 });
+  });
+
+  it('0037 drops drawing nodes (Excalidraw removed): drawing-only canvases go with their whiteboard docs, others keep the rest', () => {
+    const dir = join(dirname(fileURLToPath(import.meta.url)), 'migrations');
+    const db = new Database(':memory:');
+    db.exec('CREATE TABLE schema_migrations (name TEXT PRIMARY KEY, applied_at TEXT NOT NULL)');
+    db.pragma('foreign_keys = OFF');
+    for (const f of readdirSync(dir).filter((f) => /^\d{4}_.+\.sql$/.test(f) && f < '0037').sort()) {
+      db.exec(readFileSync(join(dir, f), 'utf8'));
+      db.prepare('INSERT INTO schema_migrations (name, applied_at) VALUES (?, ?)').run(f, 'x');
+    }
+    db.pragma('foreign_keys = ON');
+    const node = (id: string, kind: string) => ({ id, kind, x: 0, y: 0, w: 100, h: 100, title: '' });
+    const canvas = db.prepare("INSERT INTO canvases (id, name, nodes, version, updated_by, updated_at) VALUES (?, ?, ?, 3, 'user', 'x')");
+    const version = db.prepare("INSERT INTO canvas_versions VALUES (?, 3, ?, 'user', 'x')");
+    for (const [id, nodes] of [
+      ['cv_draw', [node('d', 'drawing')]],
+      ['cv_mixed', [node('d', 'drawing'), { ...node('h', 'html'), html: '<p>' }]],
+      ['cv_empty', []],
+    ] as const) {
+      canvas.run(id, id, JSON.stringify(nodes));
+      version.run(id, JSON.stringify(nodes));
+      db.prepare("INSERT INTO documents (id, agent_id, canvas_id, kind, title, version, updated_by, updated_at) VALUES (?, 'atlas', ?, 'whiteboard', ?, 1, 'user', 'x')").run('doc_' + id, id, id);
+    }
+    expect(migrate(db)).toContain('0037_drop_drawings.sql');
+    expect(db.prepare('SELECT id FROM canvases ORDER BY id').all()).toEqual([{ id: 'cv_empty' }, { id: 'cv_mixed' }]);
+    expect(db.prepare('SELECT canvas_id FROM documents ORDER BY canvas_id').all()).toEqual([{ canvas_id: 'cv_empty' }, { canvas_id: 'cv_mixed' }]);
+    const kinds = (json: string) => (JSON.parse(json) as { kind: string }[]).map((n) => n.kind);
+    expect(kinds((db.prepare("SELECT nodes FROM canvases WHERE id = 'cv_mixed'").get() as { nodes: string }).nodes)).toEqual(['html']);
+    expect(db.prepare('SELECT canvas_id, nodes FROM canvas_versions ORDER BY canvas_id').all().map((r) => [(r as { canvas_id: string }).canvas_id, kinds((r as { nodes: string }).nodes)])).toEqual([
+      ['cv_empty', []],
+      ['cv_mixed', ['html']],
+    ]);
+    db.close();
   });
 });

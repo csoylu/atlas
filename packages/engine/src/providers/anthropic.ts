@@ -1,6 +1,6 @@
 import Anthropic from '@anthropic-ai/sdk';
 import type { ContentBlock } from '@atlas/shared';
-import { ModelError, toolInput, type ModelRequest, type ModelResponse, type Provider } from './types.ts';
+import { ModelError, toolInput, type ModelRequest, type ModelResponse, type OnDelta, type Provider } from './types.ts';
 
 /** An Anthropic HTTP error with what account failover needs (status, the response headers). */
 export class AnthropicError extends ModelError {
@@ -57,7 +57,7 @@ export class AnthropicProvider implements Provider {
     });
   }
 
-  async complete(req: ModelRequest, onText: (t: string) => void, signal: AbortSignal): Promise<ModelResponse> {
+  async complete(req: ModelRequest, onText: OnDelta, signal: AbortSignal): Promise<ModelResponse> {
     try {
       // The raw event stream, accumulated here (not the SDK's MessageStream): the SDK parses a tool call's arguments
       // itself and throws on invalid JSON, failing the whole turn; toolInput keeps them for the model to resend.
@@ -100,8 +100,11 @@ export class AnthropicProvider implements Provider {
           if (!b) throw new ModelError(`Anthropic streamed a delta for an unknown block ${ev.index}`, true);
           if (d.type === 'text_delta' && b.type === 'text') {
             b.text += d.text;
-            onText(d.text);
-          } else if (d.type === 'thinking_delta' && b.type === 'thinking') b.thinking += d.thinking;
+            onText(d.text, 'text');
+          } else if (d.type === 'thinking_delta' && b.type === 'thinking') {
+            b.thinking += d.thinking;
+            onText(d.thinking, 'thinking');
+          }
           else if (d.type === 'signature_delta' && b.type === 'thinking') b.signature = d.signature;
           else if (d.type === 'input_json_delta' && b.json !== undefined) b.json += d.partial_json;
           // citations_delta: citations aren't kept (as before).

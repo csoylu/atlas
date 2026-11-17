@@ -1,5 +1,5 @@
 import { estimateTokens } from '../context.ts';
-import type { ModelRequest, ModelResponse, Provider } from './types.ts';
+import type { ModelRequest, ModelResponse, OnDelta, Provider } from './types.ts';
 
 /**
  * Scripted provider for tests: each call gets the next reply (or a function of the request). Usage is reported like a
@@ -14,14 +14,17 @@ export class FakeProvider implements Provider {
   private cache = new Set<string>();
   constructor(private script: (ModelResponse['content'] | ((req: ModelRequest) => ModelResponse['content']))[]) {}
 
-  async complete(req: ModelRequest, onText: (t: string) => void, signal: AbortSignal): Promise<ModelResponse> {
+  async complete(req: ModelRequest, onText: OnDelta, signal: AbortSignal): Promise<ModelResponse> {
     this.calls.push(structuredClone(req));
     const step = this.script.shift();
     if (!step) throw new Error('FakeProvider: script exhausted');
     const usage = { input: estimateTokens(req.system) + estimateTokens(req.tools) + estimateTokens(req.messages), output: 1, cached: this.cached(req) };
     this.usages.push(usage);
     const content = typeof step === 'function' ? step(req) : step;
-    for (const b of content) if (b.type === 'text') for (const w of b.text.split(/(?<= )/)) onText(w);
+    for (const b of content) {
+      if (b.type === 'thinking' && b.thinking) onText(b.thinking, 'thinking');
+      if (b.type === 'text') for (const w of b.text.split(/(?<= )/)) onText(w, 'text');
+    }
     await new Promise((r) => setTimeout(r, 1));
     signal.throwIfAborted();
     // A provider-run tool left without its result: Anthropic pauses the turn (pause_turn) for the caller to continue it.

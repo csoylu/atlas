@@ -33,9 +33,12 @@ export interface ModelResponse {
   account?: string;
 }
 
+/** A streamed piece of the answer: reply text, or thinking text (shown live above the reply, #80). */
+export type OnDelta = (text: string, kind: 'text' | 'thinking') => void;
+
 export interface Provider {
-  /** Stream one model turn. `onText` receives text deltas; resolves with the complete message. */
-  complete(req: ModelRequest, onText: (t: string) => void, signal: AbortSignal): Promise<ModelResponse>;
+  /** Stream one model turn. `onText` receives text and thinking deltas, in order; resolves with the complete message. */
+  complete(req: ModelRequest, onText: OnDelta, signal: AbortSignal): Promise<ModelResponse>;
 }
 
 /**

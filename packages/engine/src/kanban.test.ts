@@ -2,8 +2,8 @@ import { describe, expect, it } from 'vitest';
 import { openDb } from './store/db.ts';
 import { Bus } from './events.ts';
 import { Kanban, NotFoundError } from './kanban.ts';
-import { runCardTool } from './cardTools.ts';
-import { runTeamTool, type TeamToolContext } from './teamTools.ts';
+import { isCardTool, runCardTool } from './cardTools.ts';
+import { isTeamTool, runTeamTool, type TeamToolContext } from './teamTools.ts';
 import type { ServerEvent } from '@atlas/shared';
 
 function setup() {
@@ -83,6 +83,15 @@ describe('kanban', () => {
     expect(kanban.create({ title: 'd' }, 'user').number).toBe(4);
   });
 
+  it('a direct chat can be archived (out of History) but takes no other status, assignee or parents', () => {
+    const { kanban } = setup();
+    const chat = kanban.newChat('atlas');
+    expect(() => kanban.update(chat.id, { status: 'ready' }, 'user')).toThrow(/not a work task/);
+    expect(() => kanban.update(chat.id, { status: 'archived', assignee: 'atlas' }, 'user')).toThrow(/not a work task/);
+    expect(kanban.update(chat.id, { status: 'archived' }, 'user').status).toBe('archived');
+    expect(kanban.directs().map((c) => c.id)).not.toContain(chat.id);
+  });
+
   it('resolves card references: #12, 12 and the id; parents too', () => {
     const { kanban } = setup();
     const a = kanban.create({ title: 'a' }, 'user');
@@ -93,7 +102,7 @@ describe('kanban', () => {
     expect(kanban.update(b.id, { parents: ['#1'] }, 'user').parents).toEqual([a.id]);
     expect(kanban.create({ title: 'c', parents: ['1', b.id] }, 'user').parents.sort()).toEqual([a.id, b.id].sort());
     expect(() => kanban.update(a.id, { parents: ['#2'] }, 'user')).toThrow(/linking #2 as parent of #1 would create a cycle/);
-    expect(() => kanban.update(a.id, { parents: ['#42'] }, 'user')).toThrow(/parent card #42 does not exist/);
+    expect(() => kanban.update(a.id, { parents: ['#42'] }, 'user')).toThrow(/parent task #42 does not exist/);
     expect(kanban.ref(a.id)).toBe('#1');
   });
 
@@ -102,15 +111,24 @@ describe('kanban', () => {
     const a = kanban.create({ title: 'a' }, 'user');
     const b = kanban.create({ title: 'b', status: 'ready', parents: [a.id] }, 'user');
     const ctx = { kanban, agentId: 'atlas', cardId: a.id };
-    for (const id of ['#2', '2', 2, b.id]) expect(runCardTool('card_show', { id }, ctx).output).toMatch(/^#2 \[todo\] unassigned P0 b \(parents: #1\)/);
-    expect(runCardTool('card_update', { id: '#2', title: 'B', parents: [] }, ctx).output).toBe('updated #2 [todo] unassigned P0 B');
-    expect(runCardTool('card_create', { title: 'c', parents: ['#1', 2] }, ctx).output).toBe('created #3 [todo] unassigned P0 c (parents: #1, #2)');
-    expect(runCardTool('card_list', {}, ctx).output.split('\n').map((l) => l.split(' ')[0])).toEqual(['#1', '#2', '#3']);
+    for (const id of ['#2', '2', 2, b.id]) expect(runCardTool('task_show', { id }, ctx).output).toMatch(/^#2 \[todo\] unassigned P0 b \(parents: #1\)/);
+    expect(runCardTool('task_update', { id: '#2', title: 'B', parents: [] }, ctx).output).toBe('updated #2 [todo] unassigned P0 B');
+    expect(runCardTool('task_create', { title: 'c', parents: ['#1', 2] }, ctx).output).toBe('created #3 [todo] unassigned P0 c (parents: #1, #2)');
+    expect(runCardTool('task_list', {}, ctx).output.split('\n').map((l) => l.split(' ')[0])).toEqual(['#1', '#2', '#3']);
     const delivered: string[] = [];
     const team = { kanban, agentId: 'atlas', cardId: a.id, deliver: (id: string) => delivered.push(id) } as unknown as TeamToolContext;
-    expect(runTeamTool('card_message', { id: '#2', text: 'hi' }, team)).toEqual({ output: 'message posted on #2', isError: false });
-    expect(kanban.messages(b.id).at(-1)!.content).toEqual([{ type: 'text', text: '[from @atlas, card #1] hi' }]);
+    expect(runTeamTool('task_message', { id: '#2', text: 'hi' }, team)).toEqual({ output: 'message posted on #2', isError: false });
+    expect(kanban.messages(b.id).at(-1)!.content).toEqual([{ type: 'text', text: '[from @atlas, task #1] hi' }]);
     expect(delivered).toEqual([b.id]);
-    expect(runTeamTool('card_message', { id: 1, text: 'me' }, team).output).toMatch(/your own card/);
+    expect(runTeamTool('task_message', { id: 1, text: 'me' }, team).output).toMatch(/your own task/);
+  });
+
+  it('still runs the pre-v3 card_* names (old transcripts, resumed runs)', () => {
+    const { kanban } = setup();
+    const a = kanban.create({ title: 'a' }, 'user');
+    const ctx = { kanban, agentId: 'atlas', cardId: a.id };
+    expect(isCardTool('card_show')).toBe(true);
+    expect(runCardTool('card_show', { id: '#1' }, ctx).output).toMatch(/^#1 \[triage\]/);
+    expect(isTeamTool('card_message')).toBe(true);
   });
 });

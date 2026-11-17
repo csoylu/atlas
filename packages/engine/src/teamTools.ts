@@ -1,10 +1,9 @@
 import { z } from 'zod';
-import { MEMORY_LIMIT, TODO_LIMIT, TodoItem } from '@atlas/shared';
+import { currentToolName, MEMORY_BUDGET, MEMORY_TEXT_MAX, MemoryKind, TODO_LIMIT, TodoItem, type Memory } from '@atlas/shared';
 import { renderTodos } from './context.ts';
 import type { Kanban } from './kanban.ts';
-import type { Memories } from './memory.ts';
+import { agentScope, memoryRef, parseMemoryRef, SHARED, type Memories, type Source } from './memory.ts';
 import { describeWhen, type Schedules } from './schedules.ts';
-import { SHARED } from './memory.ts';
 import type { ToolSpec } from './providers/types.ts';
 
 export interface TeamToolContext {
@@ -13,9 +12,24 @@ export interface TeamToolContext {
   schedules: Schedules;
   agentId: string;
   cardId: string;
+  /** The board card being worked on (null in a direct chat): project memories belong to it. */
+  workCard?: string | null;
+  /** The message the tool call is in: where a new memory was learned. */
+  source?: Source | null;
   /** Get the card's agent to read a new message (chat run, or next turn of a running one). */
   deliver(cardId: string): void;
 }
+
+const memoryId = z.union([z.string(), z.number().int()]).describe('memory id, e.g. m12');
+const memoryLine = (m: Memory) =>
+  `- [${memoryRef(m.id)} · ${m.kind} · ${m.scope === SHARED ? 'shared' : 'yours'}${m.status !== 'active' ? ` · ${m.status}` : ''} · ${m.confirmedAt.slice(0, 10)}] ${m.text}`;
+/** A memory this agent may change: its own or a shared one. */
+function ownMemory(ctx: TeamToolContext, ref: string | number): Memory {
+  const m = ctx.memories.get(parseMemoryRef(ref));
+  if (m.scope !== SHARED && m.scope !== agentScope(ctx.agentId)) throw new Error(`${memoryRef(m.id)} belongs to ${m.scope}: you can change only yours and shared ones`);
+  return m;
+}
+const budgetNote = (ctx: TeamToolContext) => ` · always-on ${ctx.memories.used(ctx.agentId)}/${MEMORY_BUDGET} chars`;
 
 interface TeamTool<S extends z.ZodType> {
   description: string;
@@ -38,39 +52,77 @@ export const TEAM_TOOLS = {
       return `todo list saved (${done}/${todos.length} done):\n${renderTodos(todos)}`;
     },
   }),
-  memory_edit: tool({
+  memory_add: tool({
     description:
-      `Edit your memory (always in your instructions, max ${MEMORY_LIMIT} chars) or the memory shared by all agents. ` +
-      'Keep durable facts only: conventions, the user\'s preferences, where things are. Not progress or logs. ' +
-      'mode replace rewrites it whole (use it to prune), append adds a line.',
+      `Save one durable memory (one idea, ≤ ${MEMORY_TEXT_MAX} chars). kind: rule (how to work) and preference (the user's) are ` +
+      `always in your instructions (budget ${MEMORY_BUDGET} chars, own + shared); fact (where things are, how things work) and ` +
+      'project (about the current task: goes stale when it ends) are recalled when a conversation matches them. ' +
+      'scope: self (you, your workdir) or shared (every agent). Not progress or logs. If similar memories exist, nothing is ' +
+      'saved and they are listed: call again with update: <id> to change one, or new: true if yours is really different.',
     input: z.object({
+      kind: MemoryKind,
       scope: z.enum(['self', 'shared']).default('self'),
-      mode: z.enum(['replace', 'append']).default('append'),
-      text: z.string(),
+      text: z.string().trim().min(1).max(MEMORY_TEXT_MAX),
+      update: memoryId.optional().describe('id of a similar memory to replace with this text'),
+      new: z.boolean().optional().describe('true: save even though similar memories exist'),
     }),
-    run: ({ scope, mode, text }, { memories, agentId }) => {
-      const id = scope === 'shared' ? SHARED : agentId;
-      const cur = memories.get(id).text;
-      const next = mode === 'replace' ? text : cur ? `${cur}\n${text}` : text;
-      const m = memories.set(id, next.trim(), agentId);
-      return `${scope} memory saved (${m.text.length}/${MEMORY_LIMIT} chars)`;
+    run: (i, ctx) => {
+      if (i.update !== undefined) {
+        const m = ctx.memories.update(ownMemory(ctx, i.update).id, { text: i.text, kind: i.kind }, ctx.agentId);
+        return `updated ${memoryRef(m.id)} (${m.kind}, ${m.scope})${budgetNote(ctx)}`;
+      }
+      const scope = i.scope === 'shared' ? SHARED : agentScope(ctx.agentId);
+      if (!i.new) {
+        const similar = ctx.memories.similar([agentScope(ctx.agentId), SHARED], i.text);
+        if (similar.length)
+          throw new Error(
+            ['Nothing saved: similar memories exist.', ...similar.map(memoryLine), 'Call memory_add again with update: <id> to replace one, or new: true if yours is different.'].join('\n'),
+          );
+      }
+      const m = ctx.memories.add({ kind: i.kind, scope, text: i.text, cardId: i.kind === 'project' ? ctx.workCard : null }, ctx.agentId, ctx.source);
+      return `saved ${memoryRef(m.id)} (${m.kind}, ${m.scope}${m.cardId ? `, until ${ctx.kanban.ref(m.cardId)} ends` : ''})${budgetNote(ctx)}`;
     },
   }),
-  card_message: tool({
+  memory_update: tool({
+    description: 'Rewrite one of your or the shared memories (id like m12). The same text again just confirms it is still true.',
+    input: z.object({ id: memoryId, text: z.string().trim().min(1).max(MEMORY_TEXT_MAX), kind: MemoryKind.optional() }),
+    run: ({ id, text, kind }, ctx) => {
+      const before = ownMemory(ctx, id);
+      const m = ctx.memories.update(before.id, { text, ...(kind ? { kind } : {}), ...(before.status !== 'active' ? { status: 'active' as const } : {}) }, ctx.agentId);
+      return `${m.text === before.text && m.kind === before.kind && before.status === 'active' ? 'confirmed' : 'updated'} ${memoryRef(m.id)}${budgetNote(ctx)}`;
+    },
+  }),
+  memory_forget: tool({
+    description: 'Forget a memory that is wrong or outdated (id like m12). It is archived, the user can restore it.',
+    input: z.object({ id: memoryId }),
+    run: ({ id }, ctx) => {
+      const m = ctx.memories.forget(ownMemory(ctx, id).id, ctx.agentId);
+      return `forgot ${memoryRef(m.id)}${budgetNote(ctx)}`;
+    },
+  }),
+  memory_search: tool({
+    description: 'Search your and the shared memories by keywords (facts and project notes not recalled in your instructions, stale ones too).',
+    input: z.object({ query: z.string().trim().min(1) }),
+    run: ({ query }, { memories, agentId }) => {
+      const found = memories.search(agentId, query);
+      return found.length ? found.map(memoryLine).join('\n') : `no memory matches "${query}"`;
+    },
+  }),
+  task_message: tool({
     description:
-      'Write in another card\'s chat (e.g. to ask the agent working on it a question or hand over information). ' +
+      'Write in another task\'s chat (e.g. to ask the agent working on it a question or hand over information). ' +
       'Its agent reads it and replies there; the reply does not come back to you automatically.',
-    input: z.object({ id: z.union([z.string(), z.number().int()]).transform(String).describe('card number (#12 or 12) or id'), text: z.string().min(1) }),
+    input: z.object({ id: z.union([z.string(), z.number().int()]).transform(String).describe('task number (#12 or 12) or id'), text: z.string().min(1) }),
     run: ({ id: ref, text }, ctx) => {
       const id = ctx.kanban.resolve(ref);
-      if (id === ctx.cardId) throw new Error('that is your own card: just answer here');
-      ctx.kanban.appendMessage(id, 'user', ctx.agentId, [{ type: 'text', text: `[from @${ctx.agentId}, card ${ctx.kanban.ref(ctx.cardId)}] ${text}` }]);
+      if (id === ctx.cardId) throw new Error('that is your own task: just answer here');
+      ctx.kanban.appendMessage(id, 'user', ctx.agentId, [{ type: 'text', text: `[from @${ctx.agentId}, task ${ctx.kanban.ref(ctx.cardId)}] ${text}` }]);
       ctx.deliver(id);
       return `message posted on ${ctx.kanban.ref(id)}`;
     },
   }),
   schedule_list: tool({
-    description: 'List schedules: what runs when, for which agent, and the card each one last posted on.',
+    description: 'List schedules: what runs when, for which agent, and the task each one last posted on.',
     input: z.object({}),
     run: (_i, { schedules, kanban }) => {
       const all = schedules.list();
@@ -80,7 +132,7 @@ export const TEAM_TOOLS = {
           [
             `${s.id} @${s.agentId} "${s.title}": ${describeWhen(s)}`,
             s.enabled ? `next ${s.nextRunAt}` : 'disabled',
-            s.createCard ? 'new card each time' : `own card ${s.chatCardId ? kanban.ref(s.chatCardId) : '(created on first run)'}`,
+            s.createCard ? 'new task each time' : `own task ${s.chatCardId ? kanban.ref(s.chatCardId) : '(created on first run)'}`,
             s.lastError ? `LAST RUN FAILED: ${s.lastError}` : '',
           ]
             .filter(Boolean)
@@ -93,7 +145,7 @@ export const TEAM_TOOLS = {
     description:
       'Schedule a prompt for an agent (yourself by default): cron for repeating (5 fields, e.g. "0 9 * * 1-5" = ' +
       'weekdays 09:00, in timezone; default the engine\'s zone) or at for once (ISO time with offset). ' +
-      'new_card_each_time: true = a fresh card per run; false (default) = one card for the schedule, reopened each run, ' +
+      'new_task_each_time: true = a fresh task per run; false (default) = one task for the schedule, reopened each run, ' +
       'so the agent sees what earlier runs did. Tell the user what you scheduled.',
     input: z.object({
       prompt: z.string().min(1),
@@ -102,7 +154,7 @@ export const TEAM_TOOLS = {
       at: z.string().optional(),
       timezone: z.string().optional(),
       agent: z.string().optional(),
-      new_card_each_time: z.boolean().default(false),
+      new_task_each_time: z.boolean().default(false),
     }),
     run: (i, { schedules, agentId }) => {
       if (!!i.cron === !!i.at) throw new Error('give exactly one of cron or at');
@@ -115,7 +167,7 @@ export const TEAM_TOOLS = {
           cron: i.cron ?? null,
           at: i.at ?? null,
           timezone: i.timezone,
-          createCard: i.new_card_each_time,
+          createCard: i.new_task_each_time,
         },
         agentId,
       );
@@ -123,7 +175,7 @@ export const TEAM_TOOLS = {
     },
   }),
   schedule_delete: tool({
-    description: 'Delete a schedule by id. Its cards stay.',
+    description: 'Delete a schedule by id. Its tasks stay.',
     input: z.object({ id: z.string() }),
     run: ({ id }, { schedules }) => {
       schedules.remove(id);
@@ -139,10 +191,10 @@ export function teamToolSpecs(): ToolSpec[] {
   });
 }
 
-export const isTeamTool = (name: string) => name in TEAM_TOOLS;
+export const isTeamTool = (name: string) => currentToolName(name) in TEAM_TOOLS;
 
 export function runTeamTool(name: string, input: unknown, ctx: TeamToolContext): { output: string; isError: boolean } {
-  const t = (TEAM_TOOLS as Record<string, TeamTool<z.ZodType>>)[name]!;
+  const t = (TEAM_TOOLS as Record<string, TeamTool<z.ZodType>>)[currentToolName(name)]!;
   const parsed = t.input.safeParse(input);
   if (!parsed.success) return { output: `invalid input for ${name}: ${parsed.error.message}`, isError: true };
   try {

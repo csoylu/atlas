@@ -1,7 +1,9 @@
 import { tint } from './agentTint.ts';
 import { useCallback, useEffect, useState } from 'react';
-import { MEMORY_LIMIT, type Agent, type Model, type ModelTest, type Settings } from '@atlas/shared';
+import { type Agent, type Memory, type Model, type ModelTest, type Settings } from '@atlas/shared';
 import { api, ApiError } from './api.ts';
+import { Icon } from './ScreenHeader.tsx';
+import { memoryHref } from './memoryView.ts';
 
 export function AgentsView(props: {
   settings: Settings | null;
@@ -29,7 +31,7 @@ export function AgentsView(props: {
           <p>
             Each agent has a role, a model, a working folder and a memory it keeps itself. Models and their accounts
             are under <a href="#/settings/subscriptions">Models</a>; what every agent knows is in{' '}
-            <a href="#/settings/memory">Shared memory</a>.
+            <a href={memoryHref()}>Settings → Memory</a>.
           </p>
         </header>
         <div className="agent-grid">
@@ -45,14 +47,12 @@ export function AgentsView(props: {
 function AgentCard(props: { agent: Agent; models: Model[]; triage: boolean; onChanged(): void; onError(e: unknown): void }) {
   const { agent: a, onError } = props;
   const [draft, setDraft] = useState(a);
-  const [memory, setMemory] = useState<string | null>(null);
-  const [memDraft, setMemDraft] = useState('');
+  const [memory, setMemory] = useState<Memory[] | null>(null);
   useEffect(() => setDraft(a), [a]);
+  const [budget, setBudget] = useState<{ used: number; limit: number } | null>(null);
   useEffect(() => {
-    api.memory(a.id).then((m) => {
-      setMemory(m.text);
-      setMemDraft(m.text);
-    }, onError);
+    api.memories({ scope: `agent:${a.id}`, status: 'active' }).then(setMemory, onError);
+    api.memoryBudget(a.id).then(setBudget, onError);
   }, [a.id, onError]);
   const [confirming, setConfirming] = useState(false);
   /** Why the engine refused to delete (open cards, triage agent): shown in the card, not a far-away banner. */
@@ -155,7 +155,7 @@ function AgentCard(props: { agent: Agent; models: Model[]; triage: boolean; onCh
               <a href="#/settings/board">Open Board settings</a>
             </>
           )}
-          {/open cards/.test(refusal) && (
+          {/open (cards|tasks)/.test(refusal) && (
             <>
               {' '}
               <a href="#/board">Open the board</a>
@@ -163,57 +163,17 @@ function AgentCard(props: { agent: Agent; models: Model[]; triage: boolean; onCh
           )}
         </p>
       )}
-      <details className="memory">
-        <summary>
-          Memory <span className="count">{memory === null ? '…' : `${memory.length}/${MEMORY_LIMIT}`}</span>
-        </summary>
-        <textarea rows={6} value={memDraft} maxLength={MEMORY_LIMIT} onChange={(e) => setMemDraft(e.target.value)} placeholder="Empty. The agent adds durable facts here with memory_edit." />
-        {memDraft !== memory && (
-          <button className="primary small" onClick={() => api.setMemory(a.id, memDraft).then((m) => setMemory(m.text), onError)}>
-            Save memory
-          </button>
+      <a className="agent-memory" href={memoryHref('agent:' + a.id)} title="Open this agent's memory in Settings → Memory">
+        <span>Memory</span>
+        <span className="count">{memory === null ? '…' : `${memory.length} active`}</span>
+        {budget && (
+          <span className={'count' + (budget.used > budget.limit ? ' over' : '')} title="Always on: rules, preferences and pinned (own + shared)">
+            · {budget.used}/{budget.limit} chars always on
+          </span>
         )}
-      </details>
+        <Icon.chev />
+      </a>
     </article>
-  );
-}
-
-/** Settings → Shared memory: the text in every agent's instructions (agents edit it with memory_edit scope shared). */
-export function SharedMemory({ onError }: { onError(e: unknown): void }) {
-  const [text, setText] = useState<string | null>(null);
-  const [draft, setDraft] = useState('');
-  useEffect(() => {
-    api.memory('shared').then((m) => {
-      setText(m.text);
-      setDraft(m.text);
-    }, onError);
-  }, [onError]);
-  return (
-    <section>
-      <header className="section-head">
-        <h2>Shared memory</h2>
-        <p>
-          In every agent's instructions: team conventions, where things live, your preferences. Agents add to it
-          themselves; durable facts only.
-        </p>
-      </header>
-      <div className="shared-memory">
-        <textarea rows={14} value={draft} maxLength={MEMORY_LIMIT} disabled={text === null} onChange={(e) => setDraft(e.target.value)} placeholder="Team conventions, where things live, the user's preferences…" />
-        <div className="actions">
-          <span className="count">{text === null ? '…' : `${draft.length}/${MEMORY_LIMIT}`}</span>
-          {text !== null && draft !== text && (
-            <>
-              <button className="ghost" onClick={() => setDraft(text)}>
-                Cancel
-              </button>
-              <button className="primary small" onClick={() => api.setMemory('shared', draft).then((m) => setText(m.text), onError)}>
-                Save
-              </button>
-            </>
-          )}
-        </div>
-      </div>
-    </section>
   );
 }
 

@@ -21,7 +21,7 @@ settings. Agents work like a small team on a board you can see, and they keep go
   isn't starting, the card tells you why.
 - **Schedules.** Cron or one-shot, in your timezone, sending a prompt to any agent. If the engine was down when a
   schedule was due, it runs once at start.
-- **Canvas.** An infinite board you and the agents both edit live. It holds Excalidraw drawings, HTML mockups, running
+- **Canvas.** An infinite board you and the agents both edit live. It holds HTML mockups, running
   apps (a dev server or a built `dist/`) and markdown notes.
 - **Documents.** Agents write specs, pages and diagrams (`.md`, `.html`, `.svg`) and open them in a side panel next
   to the chat. Every change is versioned and can be restored. Everything ends up in the Library.

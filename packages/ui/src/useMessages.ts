@@ -1,10 +1,12 @@
 import { useMemo } from 'react';
-import type { Doc, PanelTab, Canvas, ClaudePlanStatus, LocalPull, LocalStatus, Message, Run, ToolCallTiming, VoiceStatus } from '@atlas/shared';
+import type { Doc, Memory, MemoryProposal, PanelTab, Canvas, ClaudePlanStatus, LocalPull, LocalStatus, Message, Run, ToolCallTiming, VoiceStatus } from '@atlas/shared';
 
 /** Fan-out of live chat events to whichever card panel is listening. */
 export type LiveEvent =
   | { type: 'message'; message: Message }
   | { type: 'delta'; runId: string; text: string }
+  /** Thinking text as it streams (#80). */
+  | { type: 'thinking'; runId: string; text: string }
   | { type: 'run'; run: Run }
   | { type: 'toolcall'; call: ToolCallTiming }
   /** A rewind hid messages, or its undo brought them back: reload the conversation. */
@@ -17,7 +19,11 @@ export type LiveEvent =
   | { type: 'claude'; status: ClaudePlanStatus }
   | { type: 'doc'; doc: Doc }
   | { type: 'panel'; tabs: PanelTab[] }
-  | { type: 'voice'; status: VoiceStatus };
+  | { type: 'voice'; status: VoiceStatus }
+  /** A memory was added or changed (key 'memories'). */
+  | { type: 'memory'; memory: Memory }
+  /** A cleanup proposal was filed or decided (key 'memories'). */
+  | { type: 'proposal'; proposal: MemoryProposal };
 
 export interface MessageStream {
   push(conversationOrCard: string, e: LiveEvent): void;

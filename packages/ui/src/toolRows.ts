@@ -1,4 +1,4 @@
-import type { ToolCallDetail } from '@atlas/shared';
+import { currentToolName, type ToolCallDetail } from '@atlas/shared';
 import { boardMeta, cardLine } from './cardRows.ts';
 import { diffCount, diffLines } from './fileRows.ts';
 import type { RowTone } from './chatRow.ts';
@@ -105,11 +105,11 @@ const FAILED: Record<string, string> = {
   read_file: 'Couldn’t read', write_file: 'Couldn’t write', edit_file: 'Couldn’t edit', list_files: 'Couldn’t list',
   grep: 'Couldn’t search', glob: 'Couldn’t find files', shell: 'Couldn’t run', shell_output: 'Couldn’t check',
   shell_kill: 'Couldn’t stop', web_fetch: 'Couldn’t fetch', web_search: 'Couldn’t search the web',
-  card_create: 'Couldn’t create', card_update: 'Couldn’t update', card_message: 'Couldn’t message', card_show: 'Couldn’t open',
-  card_list: 'Couldn’t list the board', card_block: 'Couldn’t ask you', card_request_review: 'Couldn’t send for review',
-  card_complete: 'Couldn’t finish the card', history_search: 'Couldn’t search its history', canvas_create: 'Couldn’t create canvas',
+  task_create: 'Couldn’t create', task_update: 'Couldn’t update', task_message: 'Couldn’t message', task_show: 'Couldn’t open',
+  task_list: 'Couldn’t list tasks', task_block: 'Couldn’t ask you', task_request_review: 'Couldn’t send for review',
+  task_complete: 'Couldn’t finish the task', history_search: 'Couldn’t search its history', canvas_create: 'Couldn’t create canvas',
   canvas_write: 'Couldn’t update canvas', canvas_read: 'Couldn’t read canvas', canvas_list: 'Couldn’t list canvases',
-  panel_open: 'Couldn’t open', panel_close: 'Couldn’t close', memory_edit: 'Couldn’t save to memory', todo_write: 'Couldn’t save the plan',
+  panel_open: 'Couldn’t open', panel_close: 'Couldn’t close', memory_edit: 'Couldn’t save to memory', memory_add: 'Couldn’t save to memory', memory_update: 'Couldn’t update memory', memory_forget: 'Couldn’t forget', memory_search: 'Couldn’t search memory', todo_write: 'Couldn’t save the plan',
   schedule_create: 'Couldn’t schedule', schedule_list: 'Couldn’t list schedules', schedule_delete: 'Couldn’t delete schedule',
 };
 
@@ -117,7 +117,8 @@ const FAILED: Record<string, string> = {
  * The row for one tool call. `result` undefined = no result yet (running, or cut short: the caller decides). `detail`:
  * what a file tool did, from the engine (created or rewrote, where an edit landed); older calls have none.
  */
-export function toolRow(name: string, input: unknown, result?: ToolOutcome | null, detail?: ToolCallDetail): RowModel {
+export function toolRow(called: string, input: unknown, result?: ToolOutcome | null, detail?: ToolCallDetail): RowModel {
+  const name = currentToolName(called);
   const o: Input = input && typeof input === 'object' && !Array.isArray(input) ? (input as Input) : {};
   const out = result && !result.isError ? result.content : '';
   const spec = describe(name, o, out, !!result && !result.isError, detail);
@@ -250,32 +251,32 @@ function describe(name: string, o: Input, out: string, ok: boolean, detail?: Too
       return { icon: 'globe', verb: 'Searched the web', running: 'Searching the web', object: quoted(q), meta: ok ? [{ text: plural(n, 'result') }] : [], detail: 'results', short: { verb: 'searched the web for', obj: quoted(cut(q, 24)) } };
     }
     /* ── cards & team ── */
-    case 'card_create': {
+    case 'task_create': {
       const c = cardLine(out);
-      return { icon: 'cardp', tone: 'acc', verb: 'Created', running: 'Creating', ref: c?.ref, object: c?.title ?? str(o.title) ?? '', meta: c ? [{ text: [c.who, c.prio].filter(Boolean).join(' · ') }] : [], detail: 'card', weight: 'write', short: { verb: 'created', obj: c?.ref ?? 'a card' } };
+      return { icon: 'cardp', tone: 'acc', verb: 'Created', running: 'Creating', ref: c?.ref, object: c?.title ?? str(o.title) ?? '', meta: c ? [{ text: [c.who, c.prio].filter(Boolean).join(' · ') }] : [], detail: 'card', weight: 'write', short: { verb: 'created', obj: c?.ref ?? 'a task' } };
     }
-    case 'card_update': {
+    case 'task_update': {
       const c = cardLine(out);
       const ref = c?.ref ?? cardRef(o.id);
       return { icon: 'card', verb: 'Updated', running: 'Updating', ref, object: c?.title, rest: cardChanges(o) || undefined, detail: 'card', weight: 'write', short: { verb: 'updated', obj: ref } };
     }
-    case 'card_message': {
+    case 'task_message': {
       const ref = cardRef(o.id);
       return { icon: 'msg', verb: 'Messaged', running: 'Messaging', ref, rest: plainLine(str(o.text) ?? ''), detail: 'quote', weight: 'write', short: { verb: 'messaged', obj: ref } };
     }
-    case 'card_show': {
+    case 'task_show': {
       const c = cardLine(out);
       const ref = c?.ref ?? cardRef(o.id);
       return { icon: 'card', verb: 'Looked at', running: 'Opening', ref, object: c?.title, meta: c ? [{ text: c.status }] : [], detail: 'card', short: { verb: 'looked at', obj: ref } };
     }
-    case 'card_list':
-      return { icon: 'board', verb: 'Listed the board', running: 'Listing the board', rest: str(o.status) && `${o.status} cards`, meta: ok ? [{ text: boardMeta(out) }] : [], detail: 'board' };
-    case 'card_block':
+    case 'task_list':
+      return { icon: 'board', verb: 'Listed the board', running: 'Listing the board', rest: str(o.status) && `${o.status} tasks`, meta: ok ? [{ text: boardMeta(out) }] : [], detail: 'board' };
+    case 'task_block':
       return { icon: 'hand', tone: 'warn', verb: 'Asked you', running: 'Asking you', object: plainLine(str(o.question) ?? ''), rest: str(o.kind)?.replace('_', ' '), detail: 'quote', weight: 'write', short: { verb: 'asked you' } };
-    case 'card_request_review':
+    case 'task_request_review':
       return { icon: 'inbox', tone: 'warn', verb: 'Sent for your review', running: 'Sending for your review', rest: plainLine(str(o.summary) ?? ''), detail: 'quote', weight: 'write', short: { verb: 'sent it for your review' } };
-    case 'card_complete':
-      return { icon: 'check', tone: 'ok', verb: 'Finished the card', running: 'Finishing the card', rest: plainLine(str(o.summary) ?? ''), detail: 'quote', weight: 'write', short: { verb: 'finished the card' } };
+    case 'task_complete':
+      return { icon: 'check', tone: 'ok', verb: 'Finished the task', running: 'Finishing the task', rest: plainLine(str(o.summary) ?? ''), detail: 'quote', weight: 'write', short: { verb: 'finished the task' } };
     case 'history_search': {
       const q = str(o.query);
       const hits = ok ? (out.startsWith('no message') ? 0 : (out.match(/^#\d+ /gm) ?? []).length) : 0;
@@ -318,6 +319,22 @@ function describe(name: string, o: Input, out: string, ok: boolean, detail?: Too
       const usage = /\((\d+\/\d+) chars\)/.exec(out)?.[1];
       const scope = o.scope === 'shared' ? 'shared' : 'mine';
       return { icon: 'mem', verb: o.mode === 'replace' ? 'Rewrote memory' : 'Saved to memory', running: 'Saving to memory', rest: plainLine(str(o.text) ?? ''), meta: [{ text: usage ? `${scope} · ${usage}` : scope }], detail: 'quote', weight: 'write' };
+    }
+    /* Memory v2 (#81): output « saved m12 (rule, shared) · always-on 1509/3000 chars ». */
+    case 'memory_add':
+    case 'memory_update': {
+      const id = /\b(m\d+)\b/.exec(out)?.[1];
+      const usage = /always-on (\d+\/\d+) chars/.exec(out)?.[1];
+      // A refusal (similar memories, over budget) is an error: the generic failure row shows its first line.
+      const verb = name === 'memory_update' || str(o.update) || typeof o.update === 'number' ? 'Updated memory' : 'Saved to memory';
+      const meta = [str(o.kind), name === 'memory_add' ? (o.scope === 'shared' ? 'shared' : 'mine') : undefined, id, usage].filter((x): x is string => !!x);
+      return { icon: 'mem', verb, running: 'Saving to memory', rest: plainLine(str(o.text) ?? ''), meta: [{ text: meta.join(' · ') }], detail: 'quote', weight: 'write' };
+    }
+    case 'memory_forget':
+      return { icon: 'mem', verb: 'Forgot memory', running: 'Forgetting', object: String(o.id ?? ''), detail: 'generic', weight: 'write' };
+    case 'memory_search': {
+      const n = out.split('\n').filter((l) => /^- \[m\d+/.test(l)).length;
+      return { icon: 'mem', verb: 'Searched memory', running: 'Searching memory', object: str(o.query) ?? '', meta: ok ? [{ text: plural(n, 'match', 'matches') }] : [], detail: 'generic' };
     }
     case 'todo_write': {
       const todos = Array.isArray(o.todos) ? (o.todos as { content?: unknown; status?: unknown }[]) : [];

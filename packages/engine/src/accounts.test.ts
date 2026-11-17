@@ -37,10 +37,10 @@ function setup(behaviour: Record<string, 'ok' | 'rate' | 'auth' | 'bad' | 'mid'>
       if (b === 'auth') throw new AnthropicError('Anthropic API error 401: invalid x-api-key', false, 401, h);
       if (b === 'bad') throw new AnthropicError('Anthropic API error 400: messages: field required', false, 400, h);
       if (b === 'mid') {
-        onText('partial ');
+        onText('partial ', 'text');
         throw new AnthropicError('Anthropic API error 529: overloaded', true, 529, h);
       }
-      onText('hi');
+      onText('hi', 'text');
       return ok('hi from ' + key);
     },
   });

@@ -41,6 +41,9 @@ export function canvasDetail(step: Step, ctx: DetailContext): ReactNode | null |
         </div>
       );
     }
+    case 'memory_add':
+    case 'memory_update':
+      return <blockquote className="step-quote">{ctx.renderText(str(o.text), 'm')}</blockquote>;
     case 'memory_edit':
       return (
         <>
@@ -70,8 +73,8 @@ export function canvasDetail(step: Step, ctx: DetailContext): ReactNode | null |
               <span>@{s.agent}</span>
             </>
           )}
-          <span>card</span>
-          <span>{o.new_card_each_time === true ? 'a new card each run' : 'its own card, reopened each run'}</span>
+          <span>task</span>
+          <span>{o.new_task_each_time === true || o.new_card_each_time === true ? 'a new task each run' : 'its own task, reopened each run'}</span>
           <span>prompt</span>
           <span className="step-kv-long">{str(o.prompt)}</span>
         </div>
@@ -100,7 +103,7 @@ export function canvasDetail(step: Step, ctx: DetailContext): ReactNode | null |
   return undefined;
 }
 
-const KINDS = new Set(['markdown', 'html', 'url', 'drawing']);
+const KINDS = new Set(['markdown', 'html', 'url']);
 
 /** A canvas as boxes where its nodes are (fetched when the row opens), its id and version, and Open canvas. */
 function CanvasThumb({ id }: { id: string }) {

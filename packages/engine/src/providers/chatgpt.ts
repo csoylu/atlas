@@ -1,6 +1,6 @@
 import type { ContentBlock } from '@atlas/shared';
 import { CHATGPT_USAGE_URL } from '@atlas/shared';
-import { ModelError, toolInput, type ModelRequest, type ModelResponse, type Provider } from './types.ts';
+import { ModelError, toolInput, type ModelRequest, type ModelResponse, type OnDelta, type Provider } from './types.ts';
 import { PlanLimitError } from '../plan-accounts.ts';
 
 /** Atlas's tools go to the model as one namespace (ChatGPT plan usage accepts function tools only inside one). */
@@ -46,7 +46,7 @@ export function responsesBody(req: ModelRequest): Record<string, unknown> {
             {
               type: 'namespace',
               name: NAMESPACE,
-              description: 'Atlas tools: files and shell in the agent workspace, cards, canvas, team.',
+              description: 'Atlas tools: files and shell in the agent workspace, tasks, canvas, team.',
               tools: req.tools.map((t) => ({ type: 'function', name: t.name, description: t.description, parameters: t.input_schema })),
             },
           ],
@@ -114,7 +114,7 @@ export class ChatGptProvider implements Provider {
     private fetchFn: typeof fetch = fetch,
   ) {}
 
-  async complete(req: ModelRequest, onText: (t: string) => void, signal: AbortSignal): Promise<ModelResponse> {
+  async complete(req: ModelRequest, onText: OnDelta, signal: AbortSignal): Promise<ModelResponse> {
     const token = await this.access.token();
     let res: Response;
     try {
@@ -170,7 +170,7 @@ export class ChatGptProvider implements Provider {
         case 'response.output_text.delta':
           if (ev.delta) {
             text += ev.delta;
-            onText(ev.delta);
+            onText(ev.delta, 'text');
           }
           break;
         case 'response.output_item.done':

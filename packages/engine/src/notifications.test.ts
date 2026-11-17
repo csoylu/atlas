@@ -131,7 +131,7 @@ describe('inbox', () => {
   });
 
   it('a failed work run: needs you with failed = true; a failed triage: a run.failed update', async () => {
-    const fake = new FakeProvider([[use('card_complete', { summary: 'never' })]]);
+    const fake = new FakeProvider([[use('task_complete', { summary: 'never' })]]);
     fake.complete = async () => {
       throw new ModelError('429 rate limit after 3 retries');
     };

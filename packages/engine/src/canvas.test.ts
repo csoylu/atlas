@@ -6,7 +6,7 @@ import type { CanvasNode, ServerEvent } from '@atlas/shared';
 import { openDb } from './store/db.ts';
 import { Bus } from './events.ts';
 import { Canvases, StaleVersionError } from './canvas.ts';
-import { readable, runCanvasTool } from './canvasTools.ts';
+import { runCanvasTool } from './canvasTools.ts';
 import { startEngine, type Engine } from './index.ts';
 
 function setup() {
@@ -65,7 +65,7 @@ describe('canvas tools', () => {
         id: c.id,
         upsert: [
           { id: 'notes', kind: 'markdown', text: '# Plan' },
-          { id: 'arch', kind: 'drawing', sketch: [{ id: 'api', type: 'rectangle', x: 0, y: 0, width: 120, height: 60, label: 'API' }, { id: 'db', type: 'rectangle', x: 300, y: 0, label: 'DB' }, { type: 'arrow', x: 120, y: 30, from: 'api', to: 'db' }] },
+          { id: 'arch', kind: 'url', url: '/api/files/atlas/diagrams/arch.svg' },
         ],
       },
       ctx,
@@ -74,7 +74,7 @@ describe('canvas tools', () => {
     let nodes = canvases.get(c.id).nodes;
     expect(nodes.map((n) => [n.id, n.x, n.w])).toEqual([
       ['notes', 0, 420],
-      ['arch', 480, 720],
+      ['arch', 480, 960],
     ]);
     runCanvasTool('canvas_write', { id: c.id, upsert: [{ id: 'notes', kind: 'markdown', title: 'Plan', y: 50 }] }, ctx);
     nodes = canvases.get(c.id).nodes;
@@ -87,12 +87,10 @@ describe('canvas tools', () => {
     expect(runCanvasTool('canvas_write', { id: c.id, show: ['ghost'] }, ctx)).toMatchObject({ isError: true });
   });
 
-  it('summarises UI-edited drawings for agents', () => {
+  it('refuses drawing nodes (Excalidraw is gone, v3)', () => {
     const { canvases } = setup();
     const c = canvases.create({ name: 'x' }, 'user');
-    canvases.apply(c.id, [{ op: 'upsert', node: { id: 'd', kind: 'drawing', x: 0, y: 0, w: 400, h: 300, title: '', scene: { elements: [{ id: 'e1', type: 'text', x: 1.4, y: 2, width: 50, height: 20, text: 'Hello', strokeColor: '#000', seed: 123 }, { id: 'e2', type: 'rectangle', isDeleted: true }] } } }], 'user');
-    const out = JSON.parse(readable(canvases.get(c.id)));
-    expect(out.nodes[0].scene).toEqual({ edited_in_ui: true, elements: [{ id: 'e1', type: 'text', x: 1, y: 2, w: 50, h: 20, text: 'Hello' }] });
+    expect(runCanvasTool('canvas_write', { id: c.id, upsert: [{ id: 'd', kind: 'drawing' }] }, { canvases, agentId: 'atlas' })).toMatchObject({ isError: true });
   });
 });
 

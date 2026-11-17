@@ -1,5 +1,5 @@
-import { useCallback, useEffect, useRef, useState, type ReactNode } from 'react';
-import type { Doc, Agent, Card, ChatGptStatus, Inbox as InboxData, Model, Schedule, Settings } from '@atlas/shared';
+import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from 'react';
+import { cardRef, type Doc, type Agent, type Card, type ChatGptStatus, type Inbox as InboxData, type Model, type Schedule, type Settings } from '@atlas/shared';
 import { api, subscribe, type AuthState } from './api.ts';
 import { Board } from './Board.tsx';
 import { Inbox } from './Inbox.tsx';
@@ -7,6 +7,8 @@ import { systemTitle } from './inboxView.ts';
 import { CardModal } from './CardModal.tsx';
 import { findCard, splitHash, withCard } from './cardModal.ts';
 import { useMessageStream } from './useMessages.ts';
+import { useMemoryDigest } from './MemoryDigest.tsx';
+import { withDigest } from './memoryView.ts';
 import { Library } from './Library.tsx';
 import { SchedulesView } from './SchedulesView.tsx';
 import { Welcome } from './Profile.tsx';
@@ -15,7 +17,7 @@ import { PlanWelcome } from './ChatGptSection.tsx';
 import { ClaudeWelcome } from './ClaudePlanSection.tsx';
 import { useTheme } from './theme.ts';
 import { SettingsView } from './SettingsView.tsx';
-import { settingsLabel, settingsPageOf, type SettingsPage } from './settingsPages.ts';
+import { settingsLabel, settingsRoute, type SettingsPage } from './settingsPages.ts';
 import { registerAgents } from './agentTint.ts';
 import { ChatHistory } from './ChatHistory.tsx';
 import { deletedChatRoute } from './chatHistoryMenu.ts';
@@ -23,7 +25,7 @@ import { tint } from './agentTint.ts';
 import { HeaderSlot, Icon } from './ScreenHeader.tsx';
 import { Palette, ShortcutsSheet, type PaletteContext } from './Palette.tsx';
 import { GO_HASH, globalKey, nextRow } from './keys.ts';
-import { TOGGLE_PANEL } from './ChatView.tsx';
+import { LAST_AGENT, TOGGLE_PANEL } from './ChatView.tsx';
 
 /**
  * Route in the URL hash, so reloads and the Electron window keep the place: #/inbox/<item>, #/board, #/library/<docId>,
@@ -31,16 +33,18 @@ import { TOGGLE_PANEL } from './ChatView.tsx';
  * `?card=<id>` on any route opens that card's ticket modal over it (#/chat/c_1?card=c_2).
  */
 type View = 'inbox' | 'chat' | 'board' | 'library' | 'canvas' | 'schedules' | 'settings';
-function useRoute(): [{ view: View; canvasId: string | null; card: string | null }, (hash: string) => void] {
-  const parse = (): { view: View; canvasId: string | null; card: string | null } => ({ ...parseView(), card: splitHash(location.hash).card });
-  const parseView = (): { view: View; canvasId: string | null } => {
+type Route = { view: View; canvasId: string | null; card: string | null; /** What follows #/settings/memory: a scope or m12. */ rest: string };
+function useRoute(): [Route, (hash: string) => void] {
+  const parse = (): Route => ({ rest: '', ...parseView(), card: splitHash(location.hash).card });
+  const parseView = (): { view: View; canvasId: string | null; rest?: string } => {
     const { path, card } = splitHash(location.hash);
     const [, view, id] = path.split('/');
-    const page = settingsPageOf(view, id);
-    if (page) {
-      const want = withCard('#/settings/' + page, card);
-      if (location.hash !== want) history.replaceState(null, '', want);
-      return { view: 'settings', canvasId: page };
+    // Settings pages, old settings hashes, and #/settings/memory[/<scope> | /m12] (old #/library/memory… links too, #87).
+    const settings = settingsRoute(path);
+    if (settings) {
+      // The query stays (?card=…&msg=… from a memory's source link).
+      if (path !== settings.path) history.replaceState(null, '', settings.path + location.hash.slice(path.length));
+      return { view: 'settings', canvasId: settings.page, rest: settings.rest };
     }
     if (view === 'library') return { view: 'library', canvasId: id ? decodeURIComponent(id) : null };
     // Old links: #/doc/<id> is the Library viewer; #/canvas/<id> too, once its whiteboard document is known.
@@ -170,6 +174,7 @@ export function App() {
         }
         else if (e.type === 'message.appended') stream.push(e.message.conversationId, { type: 'message', message: e.message });
         else if (e.type === 'run.delta') stream.push(e.conversationId, { type: 'delta', runId: e.runId, text: e.text });
+        else if (e.type === 'run.thinking') stream.push(e.conversationId, { type: 'thinking', runId: e.runId, text: e.text });
         else if (e.type === 'run.updated') stream.push(e.run.cardId, { type: 'run', run: e.run });
         else if (e.type === 'toolcall.updated') stream.push(e.cardId, { type: 'toolcall', call: e.call });
         else if (e.type === 'conversation.rewound') stream.push(e.conversationId, { type: 'rewound' });
@@ -180,7 +185,9 @@ export function App() {
         else if (e.type === 'document.updated') {
           stream.push('doc:' + e.doc.id, { type: 'doc', doc: e.doc });
           stream.push('docs', { type: 'doc', doc: e.doc });
-        } else if (e.type === 'panel.updated') stream.push('panel:' + e.chatId, { type: 'panel', tabs: e.tabs });
+        } else if (e.type === 'memory.updated') stream.push('memories', { type: 'memory', memory: e.memory });
+        else if (e.type === 'memory.proposal') stream.push('memories', { type: 'proposal', proposal: e.proposal });
+        else if (e.type === 'panel.updated') stream.push('panel:' + e.chatId, { type: 'panel', tabs: e.tabs });
         else if (e.type === 'schedule.updated') setSchedules((ss) => { const i = ss.findIndex(s => s.id === e.schedule.id); const next = ss.slice(); if (i < 0) return [...ss, e.schedule]; next[i] = e.schedule; return next; });
         else if (e.type === 'schedule.deleted') setSchedules((ss) => ss.filter(s => s.id !== e.id));
         else if (e.type === 'local.updated') stream.push('local', { type: 'local', status: e.status });
@@ -263,7 +270,7 @@ export function App() {
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
       const st = keyState.current;
-      const blocked = st.palette || st.help || !!document.querySelector('.card-modal, .modal-scrim, .new-card-modal, .drawing-modal');
+      const blocked = st.palette || st.help || !!document.querySelector('.card-modal, .modal-scrim, .new-card-modal');
       const a = globalKey(e, e.target, { gAt: st.gAt, now: Date.now(), blocked });
       if (a?.kind !== 'goPrefix') st.gAt = null;
       if (!a) return;
@@ -310,15 +317,53 @@ export function App() {
   }, []);
   /** The open Library document's title, for the breadcrumb. */
   const [libraryTitle, setLibraryTitle] = useState<string | null>(null);
+  /** An agent's main chat (v3): created on first use; replaces the #/chat/<agent> or #/chat/new entry in the history. */
+  const openMain = useCallback((agentId: string) => {
+    api.mainChat(agentId).then(
+      (c) => {
+        localStorage.setItem(LAST_AGENT, agentId);
+        setChats((cs) => (cs.some((x) => x.id === c.id) ? cs : [c, ...cs]));
+        setAgents((as) => as.map((a) => (a.id === agentId ? { ...a, mainChat: c.id } : a)));
+        location.replace(withCard('#/chat/' + c.id, splitHash(location.hash).card));
+      },
+      (e: Error) => setError(e.message),
+    );
+  }, []);
+  /** `/clear` typed in a direct chat: a fresh main chat for its agent, opened; the old one stays in History. */
+  const clearMain = useCallback((agentId: string) => {
+    api.newMainChat(agentId).then(
+      (c) => {
+        localStorage.setItem(LAST_AGENT, agentId);
+        setChats((cs) => [c, ...cs.filter((x) => x.id !== c.id)]);
+        setAgents((as) => as.map((a) => (a.id === agentId ? { ...a, mainChat: c.id } : a)));
+        location.hash = '#/chat/' + c.id;
+      },
+      (e: Error) => setError(e.message),
+    );
+  }, []);
   const fail = useCallback((e: unknown) => setError(e instanceof Error ? e.message : String(e)), []);
   const clearCreateAsk = useCallback(() => setCreateAsk(0), []);
   const closePalette = useCallback(() => setPalette(false), []);
   const closeHelp = useCallback(() => setHelp(false), []);
+  // The daily memory digest (#82): one Inbox update, counted in the badge while unread.
+  const digest = useMemoryDigest(stream, fail, !!auth && (auth.authenticated || !auth.enabled));
+  const shownInbox = useMemo(() => inbox && withDigest(inbox, digest.item), [inbox, digest.item]);
   /** Deletes a chat after a confirm (sidebar menu, chat header); leaves it if it was on screen. */
   const deleteChat = useCallback(
     (chat: Card) => {
       if (!confirm(`Delete the chat “${chat.title}”?`)) return;
       api.deleteCard(chat.id).then(() => {
+        setChats((cs) => cs.filter((c) => c.id !== chat.id));
+        const next = deletedChatRoute(location.hash, chat.id);
+        if (next) location.hash = next;
+      }, fail);
+    },
+    [fail],
+  );
+  /** Out of History; the chat stays in the database (status archived). */
+  const archiveChat = useCallback(
+    (chat: Card) => {
+      api.updateCard(chat.id, { status: 'archived' }).then(() => {
         setChats((cs) => cs.filter((c) => c.id !== chat.id));
         const next = deletedChatRoute(location.hash, chat.id);
         if (next) location.hash = next;
@@ -338,23 +383,32 @@ export function App() {
 
   const nav: { view: View; label: string; hash: string; icon: ReactNode; keys: string }[] = [
     { view: 'inbox', label: 'Inbox', hash: '#/inbox', icon: <Icon.inbox />, keys: 'G then I' },
-    { view: 'board', label: 'Board', hash: '#/board', icon: <Icon.board />, keys: 'G then B' },
+    { view: 'board', label: 'Tasks', hash: '#/board', icon: <Icon.board />, keys: 'G then T' },
     { view: 'library', label: 'Library', hash: '#/library', icon: <Icon.library />, keys: 'G then L' },
     { view: 'schedules', label: 'Schedules', hash: '#/schedules', icon: <Icon.clock />, keys: 'G then S' },
   ];
   const openChat = route.view === 'chat' ? chats.find((c) => c.id === route.canvasId) : undefined;
-  const badge = inbox?.badge ?? 0;
+  const badge = shownInbox?.badge ?? 0;
   const activeSchedules = schedules.filter((s) => s.enabled).length;
   /** An agent is busy while one of its cards runs or one of its chats is answering. */
   const busy = (id: string) => cards.some((c) => c.assignee === id && c.status === 'running') || chats.some((c) => c.assignee === id && c.working);
+  const mainChats = new Set(agents.flatMap((a) => (a.mainChat ? [a.mainChat] : [])));
+  const history = chats.filter((c) => !mainChats.has(c.id));
+  const runningTasks = cards.filter((c) => c.status === 'running');
   const nav0 = (hash: string) => {
     go(hash);
     setMenu(false);
   };
   /** The header's breadcrumb (parts before the title), its title and a faint note after it. */
-  const crumb: { parts: ReactNode[]; title: string; sub?: string } =
+  const openIsMain = !!openChat && mainChats.has(openChat.id);
+  const agentDot = (id: string) => (
+    <span className="dot-avatar" aria-hidden="true" style={tint(id)}>{(id || '?').slice(0, 1).toUpperCase()}</span>
+  );
+  const crumb: { parts: ReactNode[]; title: string; titleIcon?: ReactNode; sub?: string } =
     route.view === 'chat'
-      ? openChat
+      ? openChat && openIsMain
+        ? { parts: [], title: openChat.assignee ?? openChat.title, titleIcon: agentDot(openChat.assignee ?? '') }
+        : openChat
         ? {
             parts: [
               <span key="a" className="crumb-part crumb-agent">
@@ -364,9 +418,9 @@ export function App() {
             ],
             title: openChat.naming ? 'Generating chat name…' : openChat.title,
           }
-        : { parts: [], title: 'New chat' }
+        : { parts: [], title: 'Chat' }
       : route.view === 'board'
-        ? { parts: [], title: 'Board' }
+        ? { parts: [], title: 'Tasks' }
         : route.view === 'library' || route.view === 'canvas'
           ? route.canvasId && route.view === 'library'
             ? { parts: [<a key="l" className="crumb-link" href="#/library">Library</a>], title: libraryTitle ?? 'Document' }
@@ -378,7 +432,14 @@ export function App() {
               : { parts: [], title: 'Document' };
   const paletteCtx: PaletteContext = {
     view: route.view,
-    label: route.view === 'inbox' ? 'Inbox' : route.view === 'chat' && openChat ? openChat.title : crumb.title,
+    label:
+      route.view === 'inbox'
+        ? 'Inbox'
+        : route.view === 'chat' && openChat
+          ? openIsMain
+            ? `Chat with @${openChat.assignee ?? openChat.title}`
+            : openChat.title
+          : crumb.title,
     chatId: openChat?.id ?? null,
   };
   const menuButton = (
@@ -404,9 +465,6 @@ export function App() {
             <button type="button" className="icon-btn" aria-label="Search" title="Search and commands (⌘K)" onClick={() => (setMenu(false), setPalette(true))}>
               <Icon.search />
             </button>
-            <button type="button" className="icon-btn box" aria-label="New chat" title="New chat (⌘N)" onClick={() => nav0('#/chat/new')}>
-              <Icon.edit />
-            </button>
           </span>
         </div>
         <nav className="nav">
@@ -430,9 +488,9 @@ export function App() {
             {agents.map((a) => (
               <button
                 key={a.id}
-                className={'nav-item agent-item' + (route.view === 'chat' && route.canvasId === a.id ? ' active' : '')}
-                title={`New chat with @${a.id}${busy(a.id) ? ' · working…' : ''}`}
-                onClick={() => nav0('#/chat/' + a.id)}
+                className={'nav-item agent-item' + (route.view === 'chat' && (route.canvasId === a.id || (!!a.mainChat && route.canvasId === a.mainChat)) ? ' active' : '')}
+                title={`Chat with @${a.id}${busy(a.id) ? ' · working…' : ''}`}
+                onClick={() => nav0('#/chat/' + (a.mainChat ?? a.id))}
               >
                 <span className="dot-avatar" aria-hidden="true" style={tint(a.id)}>{a.id.slice(0, 1).toUpperCase()}</span>
                 <span>{a.id}</span>
@@ -441,17 +499,27 @@ export function App() {
             ))}
           </section>
         )}
-        <section className="side-chats" aria-label="Chats">
-          <div className="side-group">
-            Chats
-            <button type="button" className="icon-btn new-chat-btn" aria-label="New chat" title="New chat (⌘N)" onClick={() => nav0('#/chat/new')}>
-              <Icon.plus />
-            </button>
-          </div>
-          <ChatHistory chats={chats} selected={openChat?.id}
-            onSelect={(id) => nav0('#/chat/' + id)}
-            onDelete={deleteChat} />
-        </section>
+        {runningTasks.length > 0 && (
+          <section className="side-running" aria-label="Running tasks">
+            <div className="side-group">Running</div>
+            {runningTasks.map((c) => (
+              <button key={c.id} type="button" className="nav-item running-item" title={`${cardRef(c)} ${c.title}${c.assignee ? ' · @' + c.assignee : ''}`} onClick={() => (setMenu(false), setOpenId(c.id))}>
+                <span className="spin" aria-hidden="true" />
+                <span className="running-ref">{cardRef(c)}</span>
+                <span className="running-title">{c.title}</span>
+              </button>
+            ))}
+          </section>
+        )}
+        {history.length > 0 && (
+          <section className="side-chats" aria-label="History">
+            <div className="side-group">History</div>
+            <ChatHistory chats={history} selected={openChat?.id}
+              onSelect={(id) => nav0('#/chat/' + id)}
+              onArchive={archiveChat}
+              onDelete={deleteChat} />
+          </section>
+        )}
         <div className="sidebar-foot">
           <span className="me" aria-hidden="true">{(settings?.userName ?? '?').slice(0, 1).toUpperCase()}</span>
           <span className="me-name">{settings?.userName ?? ''}</span>
@@ -489,6 +557,7 @@ export function App() {
                   </span>
                 </span>
               ))}
+              {crumb.titleIcon}
               <h1>{crumb.title}</h1>
             </div>
             {crumb.sub && <span className="crumb-sub">{crumb.sub}</span>}
@@ -506,7 +575,8 @@ export function App() {
       <main>
         {route.view === 'inbox' ? (
           <Inbox
-            inbox={inbox}
+            inbox={shownInbox}
+            digest={digest}
             cards={cards}
             agents={agents}
             selected={route.canvasId}
@@ -528,12 +598,17 @@ export function App() {
             stream={stream}
             cards={cards}
             onOpenChat={(id) => go('#/chat/' + (id ?? 'new'))}
+            onOpenMain={openMain}
+            onClear={clearMain}
             onOpenCard={setOpenId}
             onError={fail}
           />
         ) : route.view === 'settings' ? (
           <SettingsView
             page={route.canvasId as SettingsPage}
+            memoryRest={route.rest}
+            cards={cards}
+            chats={chats}
             stream={stream}
             settings={settings}
             agents={agents}
@@ -552,7 +627,6 @@ export function App() {
         ) : route.view === 'library' || route.view === 'canvas' ? (
           <Library
             docId={route.view === 'library' ? route.canvasId : null}
-            agents={agents}
             cards={cards}
             chats={chats}
             stream={stream}

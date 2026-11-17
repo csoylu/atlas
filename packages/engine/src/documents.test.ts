@@ -260,7 +260,7 @@ describe('panel tools', () => {
     const card = engine.kanban.create({ title: 'x', assignee: 'atlas' }, 'user');
     put('pages/p.html', '<h1>P</h1>');
     const r = runDocTool('panel_open', { path: 'pages/p.html' }, { documents: docs, agentId: 'atlas', chatId: null, cardId: card.id });
-    expect(r.output).toContain('opens it from the card');
+    expect(r.output).toContain('opens it from the task');
     expect(docs.list({ cardId: card.id })[0]).toMatchObject({ kind: 'html' });
   });
 

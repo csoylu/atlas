@@ -442,8 +442,8 @@ export class Rewinds {
   /** How another card or chat is named in a conflict. */
   private label(cardId: string): string {
     const r = this.db.prepare('SELECT number, title, board FROM cards WHERE id = ?').get(cardId) as { number: number | null; title: string; board: string } | undefined;
-    if (!r) return 'a deleted card';
-    return r.number !== null && r.board !== 'direct' ? `card #${r.number} (${r.title})` : `the chat « ${r.title} »`;
+    if (!r) return 'a deleted task';
+    return r.number !== null && r.board !== 'direct' ? `task #${r.number} (${r.title})` : `the chat « ${r.title} »`;
   }
 
   /**

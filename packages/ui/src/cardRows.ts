@@ -62,7 +62,7 @@ export function boardMeta(out: string): string {
   const groups = boardGroups(out);
   const total = groups.reduce((n, g) => n + g.cards.length, 0);
   const n = (s: CardStatus) => groups.find((g) => g.status === s)?.cards.length ?? 0;
-  return [`${total} ${total === 1 ? 'card' : 'cards'}`, n('running') && `${n('running')} running`, n('ready') && `${n('ready')} ready`].filter(Boolean).join(' · ');
+  return [`${total} ${total === 1 ? 'task' : 'tasks'}`, n('running') && `${n('running')} running`, n('ready') && `${n('ready')} ready`].filter(Boolean).join(' · ');
 }
 
 export interface HistoryHit {

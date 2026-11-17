@@ -84,6 +84,3 @@ export function ProfileSettings(props: { settings: Settings | null; onSettings(s
     </section>
   );
 }
-
-/** The user's display name: the name they gave, or "You". */
-export const userLabel = (s: Settings | null) => s?.userName ?? 'You';

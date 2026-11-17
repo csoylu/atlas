@@ -4,7 +4,7 @@ import { ConflictError, NotFoundError } from './kanban.ts';
 import type { Db } from './store/db.ts';
 import type { SecretStore } from './secrets.ts';
 import { AnthropicError, AnthropicProvider } from './providers/anthropic.ts';
-import { ModelError, type ModelRequest, type ModelResponse, type Provider } from './providers/types.ts';
+import { ModelError, type ModelRequest, type ModelResponse, type OnDelta, type Provider } from './providers/types.ts';
 
 /**
  * Anthropic accounts (design §5): several API keys tried in priority order. A call goes to the first enabled
@@ -169,7 +169,7 @@ export class Accounts {
     return { complete: (req, onText, signal) => this.complete(req, onText, signal) };
   }
 
-  private async complete(req: ModelRequest, onText: (t: string) => void, signal: AbortSignal): Promise<ModelResponse> {
+  private async complete(req: ModelRequest, onText: OnDelta, signal: AbortSignal): Promise<ModelResponse> {
     const all = this.ready();
     const usable = all.filter((a) => this.env[a.secret] && !a.cooldownUntil);
     if (!usable.length) {
@@ -185,9 +185,9 @@ export class Accounts {
       try {
         const res = await provider.complete(
           req,
-          (t) => {
+          (t, kind) => {
             streamed = true;
-            onText(t);
+            onText(t, kind);
           },
           signal,
         );

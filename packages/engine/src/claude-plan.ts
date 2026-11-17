@@ -476,7 +476,7 @@ export class ClaudePlan {
               onHeaders: (h) => this.plans.recordQuota(r.id, claudeQuota(h, this.now()), rawLimitHeaders(h)),
             });
             try {
-              return await p.complete(req, (t) => (onStream(), onText(t)), signal);
+              return await p.complete(req, (t, kind) => (onStream(), onText(t, kind)), signal);
             } catch (e) {
               if (e instanceof AnthropicError && e.status === 401) {
                 this.signedOut(r, 'Anthropic refused the access token (HTTP 401)');

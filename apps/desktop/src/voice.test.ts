@@ -176,7 +176,7 @@ describe.skipIf(!haveModels)('push-to-talk and the wake word switch (#57)', () =
     await say(talk, 'follow-up');
     await until('the reply', () => orb.spoken.includes('Tomorrow is clear.') && orb.state === 'listening');
     const chat = engine.kanban.messages(engine.voiceChat!.id()).filter((m) => m.author === 'user');
-    expect(chat.map((m) => m.content.flatMap((b) => (b.type === 'text' ? [b.text] : [])).join('').replace(/\.$/, ''))).toEqual(['And what about tomorrow?']);
+    expect(chat.map((m) => m.content.flatMap((b) => (b.type === 'text' ? [b.text] : [])).join('').replace(/^🎙 /, '').replace(/\.$/, ''))).toEqual(['And what about tomorrow?']);
     expect(stt).toHaveBeenCalled();
 
     // pressed again in the follow-up window: the conversation ends (like Esc), the microphone closes
@@ -226,7 +226,7 @@ describe.skipIf(!haveModels)('push-to-talk and the wake word switch (#57)', () =
     expect([...shortcuts.held.keys()]).toEqual([]);
   }, 120_000);
   const userMessages = (engine: Engine) =>
-    engine.kanban.messages(engine.voiceChat!.id()).filter((m) => m.author === 'user').map((m) => m.content.flatMap((b) => (b.type === 'text' ? [b.text] : [])).join('').replace(/\.$/, ''));
+    engine.kanban.messages(engine.voiceChat!.id()).filter((m) => m.author === 'user').map((m) => m.content.flatMap((b) => (b.type === 'text' ? [b.text] : [])).join('').replace(/^🎙 /, '').replace(/\.$/, ''));
 
   it('hold ⌥ (#75): held → listening at once (no « Yes? »), released → sent without waiting for silence, Atlas replies', async () => {
     const { engine, orb, holdKey, shortcuts, talk } = await setup([text('Tomorrow is clear.')], { wakeWord: false, pttShortcut: 'Option' });

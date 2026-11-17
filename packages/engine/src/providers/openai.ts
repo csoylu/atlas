@@ -1,6 +1,6 @@
 import { randomUUID } from 'node:crypto';
 import type { ContentBlock } from '@atlas/shared';
-import { ModelError, toolInput, type ModelRequest, type ModelResponse, type Provider } from './types.ts';
+import { ModelError, toolInput, type ModelRequest, type ModelResponse, type OnDelta, type Provider } from './types.ts';
 
 type OaMessage =
   | { role: 'system' | 'user'; content: string }
@@ -40,7 +40,7 @@ export class OpenAiCompatProvider implements Provider {
     private apiKey: string | undefined,
   ) {}
 
-  async complete(req: ModelRequest, onText: (t: string) => void, signal: AbortSignal): Promise<ModelResponse> {
+  async complete(req: ModelRequest, onText: OnDelta, signal: AbortSignal): Promise<ModelResponse> {
     const url = this.baseUrl.replace(/\/$/, '') + '/chat/completions';
     let res: Response;
     try {
@@ -104,7 +104,7 @@ export class OpenAiCompatProvider implements Provider {
         const d = choice.delta;
         if (d?.content) {
           text += d.content;
-          onText(d.content);
+          onText(d.content, 'text');
         }
         for (const tc of d?.tool_calls ?? []) {
           const c = (calls[tc.index] ??= { id: '', name: '', args: '' });

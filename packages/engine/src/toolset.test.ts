@@ -157,7 +157,7 @@ describe('project instructions', () => {
     expect(system).toContain(`# Project instructions\nFrom files in your working directory; follow them for work there.\n\n## ${join(wd, 'AGENTS.md')}\nUse pnpm here.\n\n## ${join(wd, 'CLAUDE.md')}\nCCC`);
     expect(system).toContain(`C\n[… cut: the file has ${PROJECT_FILE_CAP + 500} chars; read_file CLAUDE.md for the rest]`);
     // Before the card and the date (the per-conversation tail of the prompt).
-    expect(system.indexOf('# Project instructions')).toBeLessThan(system.indexOf('# Current card'));
+    expect(system.indexOf('# Project instructions')).toBeLessThan(system.indexOf('# Current task'));
     expect(projectInstructions(mkdtempSync(join(tmpdir(), 'empty-')))).toEqual([]);
   });
 });

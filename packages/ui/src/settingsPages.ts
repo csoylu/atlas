@@ -1,6 +1,6 @@
 /** Settings: one page with a grouped sub-navigation (design §12). Each page lives at #/settings/<id>. */
 export const SETTINGS_GROUPS = [
-  { title: 'Team', pages: [{ id: 'agents', label: 'Agents' }, { id: 'memory', label: 'Shared memory' }, { id: 'board', label: 'Board & triage' }] },
+  { title: 'Team', pages: [{ id: 'agents', label: 'Agents' }, { id: 'memory', label: 'Memory' }, { id: 'board', label: 'Board & triage' }] },
   {
     title: 'Models',
     pages: [
@@ -32,4 +32,19 @@ export function settingsPageOf(view: string | undefined, id: string | undefined)
   if (view !== 'settings') return null;
   const known = SETTINGS_PAGES.find((p) => p.id === id);
   return known ? known.id : (LEGACY[id ?? ''] ?? 'agents');
+}
+
+/**
+ * The settings route of a hash path (« #/settings/memory/m12 », no « ?… »), or null when it isn't one: its page, what
+ * follows #/settings/memory (a scope or m12, decoded) and the canonical path to rewrite the hash to. The Memory page
+ * moved from the Library (#87): old #/library/memory… links (posted Inbox digests) land on Settings → Memory.
+ */
+export function settingsRoute(path: string): { page: SettingsPage; rest: string; path: string } | null {
+  const [, view, id, ...more] = path.split('/');
+  if ((view === 'library' || view === 'settings') && id === 'memory') {
+    const raw = more.join('/');
+    return { page: 'memory', rest: more.map(decodeURIComponent).join('/'), path: '#/settings/memory' + (raw ? '/' + raw : '') };
+  }
+  const page = settingsPageOf(view, id);
+  return page ? { page, rest: '', path: '#/settings/' + page } : null;
 }

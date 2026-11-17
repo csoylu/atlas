@@ -1,30 +1,52 @@
 import { useEffect, useRef, useState } from 'react';
 import type { Element, ElementContent, Root, RootContent } from 'hast';
 
+/** One piece of the streaming answer, in the order the model wrote it (#80): thinking first, then the reply text. */
+export interface DraftPart {
+  kind: 'thinking' | 'text';
+  text: string;
+  /** When the piece started (the live row's time). */
+  at: string;
+}
+export type Draft = readonly DraftPart[];
+export const NO_DRAFT: Draft = [];
+
+/** The draft with one more delta: it extends the last part when it's of the same kind, else starts a new one. */
+export function addDelta(draft: Draft, kind: DraftPart['kind'], text: string, at = new Date().toISOString()): Draft {
+  if (!text) return draft;
+  const last = draft.at(-1);
+  if (last?.kind === kind) return [...draft.slice(0, -1), { ...last, text: last.text + text }];
+  return [...draft, { kind, text, at }];
+}
+
+const draftSize = (d: Draft) => d.reduce((n, p) => n + p.text.length, 0);
+
 /**
  * The draft as rendered: follows the live one at most every `draftInterval` ms, so a long reply isn't re-parsed on
- * every token (a 5k-word reply costs ~40 ms per parse). Cleared at once when the draft is.
+ * every token (a 5k-word reply costs ~40 ms per parse). Cleared at once when the draft is (in the same render as the
+ * message that replaces it: no frame with both).
  */
-export function useThrottledDraft(draft: string): string {
+export function useThrottledDraft(draft: Draft): Draft {
   const [shown, setShown] = useState(draft);
   const latest = useRef(draft);
   latest.current = draft;
   const timer = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const empty = draft.length === 0;
   useEffect(() => {
-    if (!draft) {
+    if (empty) {
       if (timer.current) clearTimeout(timer.current);
       timer.current = null;
-      setShown('');
+      setShown(NO_DRAFT);
       return;
     }
     if (timer.current) return;
     timer.current = setTimeout(() => {
       timer.current = null;
       setShown(latest.current);
-    }, draftInterval(draft.length));
-  }, [draft]);
+    }, draftInterval(draftSize(draft)));
+  }, [draft, empty]);
   useEffect(() => () => void (timer.current && clearTimeout(timer.current)), []);
-  return shown;
+  return empty ? NO_DRAFT : shown;
 }
 
 /** ms between draft renders: ~20 fps for a short reply, slower as it grows (parse cost is linear). */

@@ -83,7 +83,7 @@ class FakeOrb implements OrbPort {
 const text = (t: string) => [{ type: 'text' as const, text: t }];
 /** Master's messages in the chat, without Whisper's final full stop (it comes and goes with where the speech detector cuts). */
 const userTexts = (e: Engine, id: string) =>
-  e.kanban.messages(id).filter((m) => m.author === 'user').map((m) => m.content.flatMap((b) => (b.type === 'text' ? [b.text] : [])).join('').replace(/\.$/, ''));
+  e.kanban.messages(id).filter((m) => m.author === 'user').map((m) => m.content.flatMap((b) => (b.type === 'text' ? [b.text] : [])).join('').replace(/^🎙 /, '').replace(/\.$/, ''));
 
 describe.skipIf(!haveModels)('voice loop end to end (WAV fixtures, fake provider)', () => {
   let models: VoiceModels;
@@ -175,7 +175,8 @@ describe.skipIf(!haveModels)('voice loop end to end (WAV fixtures, fake provider
     // the dedicated Voice chat, in SQLite like any chat; the agent knows its reply is spoken
     const chatId = engine.voiceChat!.id();
     const chat = engine.kanban.get(chatId);
-    expect(chat).toMatchObject({ title: 'Voice', board: 'direct', assignee: 'atlas' });
+    expect(chat).toMatchObject({ title: '@atlas', board: 'direct', assignee: 'atlas' }); // v3: atlas's main chat
+    expect(engine.agents.get('atlas').mainChat).toBe(chatId);
     expect(userTexts(engine, chatId)).toEqual(['Create a card to fix the login bug']);
     expect(fake.calls[0]!.system).toMatch(/talks to you by voice here/);
 
@@ -293,11 +294,16 @@ describe.skipIf(!haveModels)('voice loop end to end (WAV fixtures, fake provider
     expect(JSON.stringify(req.messages)).toContain('Noted.');
   }, 90_000);
 
-  it('#52: a reply to a message typed in the Voice chat is spoken once at rest, then the follow-up window', async () => {
-    const { engine, orb, loop, announced } = await setup([text('Typed it. Here is the answer.')], ':memory:', 1, { quietSeconds: 0.3 });
+  it('#52 / v3: in the main chat a reply to a typed message is silent; after a voice message, replies are spoken once', async () => {
+    const { engine, orb, loop, announced } = await setup([text('Written answer.'), text('Typed it. Here is the answer.')], ':memory:', 1, { quietSeconds: 0.3 });
     const id = engine.voiceChat!.id();
-    const res = await fetch(`${engine.url}/api/cards/${id}/messages`, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ text: 'typed question' }) });
-    expect(res.ok).toBe(true);
+    const post = (t: string) => fetch(`${engine.url}/api/cards/${id}/messages`, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ text: t }) });
+    expect((await post('typed question')).ok).toBe(true);
+    await until('answered', () => engine.runner.runs(id)[0]?.status === 'done');
+    await sleep(300);
+    expect(orb.spoken).toEqual([]);
+    // The last message came by voice (e.g. a voice turn that was cut): the next reply is announced.
+    expect((await post('🎙 and by voice')).ok).toBe(true);
     await until('spoken', () => orb.spoken.length === 2 && loop.state === 'listening');
     expect(orb.spoken).toEqual(['Typed it.', 'Here is the answer.']);
     expect(announced).toEqual(['Typed it. Here is the answer.']);

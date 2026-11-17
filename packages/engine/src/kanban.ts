@@ -15,6 +15,8 @@ import {
 import type { Db } from './store/db.ts';
 import type { Bus } from './events.ts';
 import { insertNotification, type NewNotification } from './notifications.ts';
+import { MEMORY_SELECT, staleCardMemories, toMemory } from './memory.ts';
+import { isCleanupCard } from './cleanup.ts';
 
 interface CardRow {
   id: string;
@@ -89,17 +91,17 @@ export function reportText(card: { id: string; number?: number | null; title: st
   const more = detail.text ? `: ${clip(detail.text)}` : '';
   switch (t) {
     case 'done':
-      return `✓ Card ${name} finished${more}`;
+      return `✓ Task ${name} finished${more}`;
     case 'review':
-      return `Card ${name} is ready for your review${more}`;
+      return `Task ${name} is ready for your review${more}`;
     case 'closed':
-      return `Card ${name} closed by ${who}. Nothing more will be done on it.`;
+      return `Task ${name} closed by ${who}. Nothing more will be done on it.`;
     case 'stopped':
-      return `You stopped ${name}. Its run and commands were killed; writing on the card resumes it.`;
+      return `You stopped ${name}. Its run and commands were killed; writing in the task resumes it.`;
     case 'needs_input':
-      return `Card ${name} needs your OK${more}`;
+      return `Task ${name} needs your OK${more}`;
     case 'capability':
-      return `Card ${name} is blocked${more}`;
+      return `Task ${name} is blocked${more}`;
   }
 }
 
@@ -181,7 +183,7 @@ export class Kanban {
         ? this.db.prepare('SELECT id FROM cards WHERE number = ?').get(p.number)
         : this.db.prepare('SELECT id FROM cards WHERE id = ?').get(p?.id ?? ref.trim())
     ) as { id: string } | undefined;
-    if (!row) throw new NotFoundError(`card ${ref} not found`);
+    if (!row) throw new NotFoundError(`task ${ref} not found`);
     return row.id;
   }
 
@@ -193,7 +195,7 @@ export class Kanban {
 
   get(id: string): Card {
     const row = this.db.prepare('SELECT * FROM cards WHERE id = ?').get(id) as CardRow | undefined;
-    if (!row) throw new NotFoundError(`card ${id} not found`);
+    if (!row) throw new NotFoundError(`task ${id} not found`);
     return this.toCard(row, this.parentsOf(id));
   }
 
@@ -251,6 +253,53 @@ export class Kanban {
     return this.emit(card);
   }
 
+  /**
+   * The agent's main chat (v3): the one direct chat the sidebar and voice open, named after the agent and never
+   * auto-titled. Created on first use, and again if it was deleted or archived; other direct chats are its History.
+   */
+  mainChat(agentId: string): Card {
+    const id = this.db
+      .transaction(() => {
+        const row = this.db.prepare('SELECT main_chat FROM agents WHERE id = ?').get(agentId) as { main_chat: string | null } | undefined;
+        if (!row) throw new NotFoundError(`agent ${agentId} does not exist`);
+        if (row.main_chat && this.db.prepare("SELECT 1 FROM cards WHERE id = ? AND board = 'direct' AND status != 'archived'").get(row.main_chat))
+          return { id: row.main_chat, created: false };
+        return { id: this.insertMainChat(agentId), created: true };
+      })
+      .immediate();
+    return id.created ? this.emit(id.id) : this.get(id.id);
+  }
+
+  /**
+   * `/clear` in a direct chat: a fresh, empty main chat for the agent. The previous one stays as it is, in History,
+   * titled « @agent · until <date> ». Voice follows agents.main_chat, so it goes to the new one.
+   */
+  newMainChat(agentId: string): Card {
+    const { id, old } = this.db
+      .transaction(() => {
+        const row = this.db.prepare('SELECT main_chat FROM agents WHERE id = ?').get(agentId) as { main_chat: string | null } | undefined;
+        if (!row) throw new NotFoundError(`agent ${agentId} does not exist`);
+        const old = row.main_chat && this.db.prepare("SELECT 1 FROM cards WHERE id = ? AND board = 'direct' AND status != 'archived'").get(row.main_chat) ? row.main_chat : null;
+        if (old) {
+          const until = new Date().toLocaleDateString('en-GB', { day: 'numeric', month: 'short', year: 'numeric' });
+          this.renameChat(old, `@${agentId} · until ${until}`);
+        }
+        return { id: this.insertMainChat(agentId), old };
+      })
+      .immediate();
+    if (old) this.emit(old);
+    return this.emit(id);
+  }
+
+  /** Inside a transaction: a new direct chat named after the agent (never auto-titled), set as its main chat. */
+  private insertMainChat(agentId: string): string {
+    const c = this.insert({ title: '@' + agentId, status: 'done', assignee: agentId }, 'user', null, 'direct');
+    this.db.prepare("UPDATE conversations SET kind = 'chat' WHERE id = ?").run(c.conversationId);
+    this.renameChat(c.id, '@' + agentId); // a « renamed » event: never auto-titled
+    this.db.prepare('UPDATE agents SET main_chat = ? WHERE id = ?').run(c.id, agentId);
+    return c.id;
+  }
+
   /** Direct chats (chat history), latest activity first: a message bumps the chat's updated_at. */
   directs(): Card[] {
     return (
@@ -264,8 +313,10 @@ export class Kanban {
   update(id: string, patch: UpdateCard, by: string, summary?: string): Card {
     const p = UpdateCard.parse(patch);
     const before = this.get(id);
-    if (before.board === 'direct' && (p.status !== undefined || p.assignee !== undefined || p.parents !== undefined))
-      throw new InvalidError(`${cardRef(before)} is a direct chat with @${before.assignee}, not a work card: create a card for work`);
+    // A direct chat can only be archived (out of History; the row stays): no other status, assignee or parents.
+    const chatArchive = before.board === 'direct' && p.status === 'archived' && p.assignee === undefined && p.parents === undefined;
+    if (before.board === 'direct' && !chatArchive && (p.status !== undefined || p.assignee !== undefined || p.parents !== undefined))
+      throw new InvalidError(`${cardRef(before)} is a direct chat with @${before.assignee}, not a work task: create a task for work`);
     const cols: Record<string, unknown> = {};
     if (p.title !== undefined) cols.title = p.title;
     if (p.body !== undefined) cols.body = p.body;
@@ -291,17 +342,29 @@ export class Kanban {
       if (p.status === 'blocked' && !before.block)
         this.db
           .prepare("UPDATE cards SET block_kind = 'needs_input', block_reason = ?, block_options = '[]', block_until = NULL WHERE id = ?")
-          .run(by === 'user' ? 'Moved to blocked by you. Reply or move the card to continue.' : `Moved to blocked by ${by}.`, id);
+          .run(by === 'user' ? 'Moved to blocked by you. Reply or move the task to continue.' : `Moved to blocked by ${by}.`, id);
       this.normalizeStatus(id, by);
       const after = this.get(id);
       if (after.status !== before.status) {
         this.event(id, 'status', { from: before.status, to: after.status, by });
         if (after.status === 'done' || after.status === 'review' || after.status === 'closed')
           this.reportBack(after, after.status, { by, text: summary });
+        // Its project memories are history now: out of recall (design §8).
+        if (after.status === 'done' || after.status === 'closed') {
+          const stale = staleCardMemories(this.db, id, by);
+          if (stale.length)
+            this.afterCommit.push(() => {
+              for (const m of stale) this.bus.emit({ type: 'memory.updated', memory: toMemory(this.db.prepare(`${MEMORY_SELECT} WHERE m.id = ?`).get(m) as never) });
+            });
+        }
         // The Inbox (design §16): not for what the user did themselves.
         if (by !== 'user' && after.board === 'main') {
           if (after.status === 'review') this.notify({ kind: 'card.review', title: after.title, body: summary ?? '', cardId: id });
-          if (after.status === 'done') {
+          if (after.status === 'done' && isCleanupCard(after)) {
+            // One Inbox item for the week's proposals, approved or rejected line by line (#83).
+            const { n } = this.db.prepare("SELECT COUNT(*) AS n FROM memory_proposals WHERE card_id = ? AND status = 'pending'").get(id) as { n: number };
+            this.notify({ kind: 'memory.cleanup', title: n ? `Memory cleanup: ${n} proposal${n === 1 ? '' : 's'}` : 'Memory cleanup: nothing to change', body: summary ?? '', cardId: id });
+          } else if (after.status === 'done') {
             const s = this.db.prepare('SELECT title FROM schedules WHERE last_card_id = ? OR chat_card_id = ? LIMIT 1').get(id, id) as { title: string } | undefined;
             this.notify(s ? { kind: 'schedule.ran', title: s.title, body: summary ?? '', cardId: id } : { kind: 'card.done', title: after.title, body: summary ?? '', cardId: id });
           }
@@ -315,7 +378,7 @@ export class Kanban {
 
   /** Move a card to 'blocked' with a reason the user can act on (design §7). `stopped`: the user pressed Stop. */
   block(id: string, b: { kind: BlockKind; reason: string; options?: string[]; until?: string | null; stopped?: boolean }, by: string): Card {
-    if (this.get(id).board === 'direct') throw new InvalidError(`${id} is a direct chat, not a work card: just answer in the chat`);
+    if (this.get(id).board === 'direct') throw new InvalidError(`${id} is a direct chat, not a work task: just answer in the chat`);
     const before = this.get(id);
     this.tx(() => {
       this.db
@@ -532,13 +595,13 @@ export class Kanban {
           try {
             return this.resolve(p);
           } catch {
-            throw new ConflictError(`parent card ${p} does not exist`);
+            throw new ConflictError(`parent task ${p} does not exist`);
           }
         }),
       ),
     ];
     for (const p of unique) {
-      if (p === id) throw new ConflictError(`card ${ref(id)} cannot be its own parent`);
+      if (p === id) throw new ConflictError(`task ${ref(id)} cannot be its own parent`);
       if (this.isAncestor(id, p)) throw new ConflictError(`linking ${ref(p)} as parent of ${ref(id)} would create a cycle`);
     }
     this.db.prepare('DELETE FROM card_links WHERE child_id = ?').run(id);

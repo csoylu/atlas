@@ -19,7 +19,7 @@ export interface CardReport {
   body: string;
 }
 
-const HEAD = /^(?:✓ )?(?:Card|You stopped) “(.*?)” \((#\d+|c_[0-9a-f]{8})\)/s;
+const HEAD = /^(?:✓ )?(?:Card|Task|You stopped) “(.*?)” \((#\d+|c_[0-9a-f]{8})\)/s;
 
 /** Parse a report-back message; null for any other system line (it stays a plain note). */
 export function parseReport(text: string): CardReport | null {

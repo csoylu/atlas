@@ -9,7 +9,7 @@ One app where the user's agents work like a small team:
 - **Kanban** board: the only task tracker. Cards are assigned to agents, run automatically, block on questions,
   go to review, finish with a handoff.
 - **Schedules**: run an agent prompt or create a card at a time or on a cron expression.
-- **Canvas**: an Excalidraw whiteboard that the user and agents both read and write (diagrams, plans, mockups).
+- **Canvas**: a board that the user and agents both read and write (HTML mockups, running apps, notes; diagrams as svg).
 - **Models**: Anthropic (cloud) and local LLMs (OpenAI-compatible server), chosen per agent and per card.
 - **Chat**: talk to any agent directly; agents message each other.
 - Runs as a Mac/Windows Electron app, or as a server on a VPS opened in a browser.
@@ -50,7 +50,8 @@ Non-goals for v1: multi-user, plugin marketplace, mobile app, voice, a skill sto
 | `conversations` | id, agent_id, kind (`chat`/`card`/`schedule`), summary, summary_upto_seq |
 | `tool_calls` | id, run_id, tool_use_id, name, input, status, output_ref, started_at, ended_at |
 | `schedules` | id, agent_id, cron or at, prompt or card_template, timezone, next_run_at, last_run_id, enabled |
-| `memory` | id, agent_id or `shared`, text, updated_at |
+| `memories` | id, kind (`rule`/`preference`/`fact`/`project`), scope (`shared`/`agent:<id>`), text (≤ 500), source_conversation_id + source_seq, card_id, status (`active`/`stale`/`archived`), pinned, created_at, confirmed_at, updated_at, updated_by — Memory v2 (§8, migration 0033); `memories_fts` (FTS5, porter) kept in sync by triggers |
+| `memory_changes` | id, memory_id, at, by, action, before_text/kind/status/pinned, undone_by — every change, for the daily digest and undo |
 | `canvases` | id, name, scene (json), version, updated_by, updated_at |
 | `notifications` | id, kind, card_id, text, delivered_at |
 
@@ -261,7 +262,42 @@ Statuses: `triage → todo → ready → running → (blocked | review) → done
 - `todo_write(todos)`: the agent's full todo list each call, stored on the conversation; when its last call is folded
   into the summary, the current list is re-injected after the summary. The UI shows the call as a checklist.
 - A tool `history_search(query)` lets the agent read omitted parts of its own transcript.
-- Memory: per-agent and shared notes, small (a few KB), always in the system prompt. Agents edit them through a tool.
+- **Memory v2** (card #81, 17 Nov 2026; spec canvas cv_ae0bb676). One row per memory in `memories`, one idea
+  (≤ 500 chars), scope `shared` or `agent:<id>` (an agent has one workdir, so agent scope = its project). Kinds:
+  `rule` (how to work), `preference` (the user's), `fact` (where things are, how they work), `project` (about one card:
+  `card_id` = the work card it was saved on). Never deleted: forget = `archived`, restorable.
+  - **Always on** (volatile tail, « # Memory »): active pinned rows + every active rule/preference in the agent's
+    scopes, each labelled `[m12 · rule]`, with the usage `n/3000`. Budget **3000 chars per agent, own + shared**,
+    enforced on every write (add, edit, pin, kind change, restore, undo): a write that pushes any agent over is refused
+    with an error asking to merge/shorten/forget or save as a fact. A write that doesn't grow the total is allowed
+    (v1 rows migrated over the limit can still be trimmed); a text over 500 can be kept but not rewritten long.
+  - **Recall**: top 8 FTS matches (bm25, any keyword of 3+ letters, stop words dropped) among active, unpinned facts
+    and project notes, on the card's title + body, or a direct chat's first user message; labelled with id, kind and
+    `confirmed_at` date (+ `shared`). Recomputed each turn but stable for a conversation, so the cached prefix is untouched.
+  - **Staleness**: when a card goes `done` or `closed`, its active project memories go `stale` in the same transaction
+    (`Kanban.update`): out of recall, still found by `memory_search` and shown dimmed in the Library.
+  - **Dedup**: `memory_add` looks for active memories in the agent's scopes with the same text or ≥ half of the shorter
+    text's keywords (≥ 2) in common; if any, nothing is saved and they are listed: the agent calls again with
+    `update: <id>` or `new: true`. Re-saving the same text (memory_update) only moves `confirmed_at`.
+  - Every change goes to `memory_changes` (before-image): `GET /api/memories/changes?since=` feeds the daily Inbox
+    digest (#82), `POST /api/memories/changes/:id/undo` reverts the latest change of a memory (an add is archived).
+  - API: `GET /api/memories?scope&kind&status&q`, `POST /api/memories`, `GET|PATCH /api/memories/:id` (text, kind,
+    pinned, status = edit/pin/archive/restore), `GET /api/agents/:id/memory-budget`; WS `memory.updated`.
+    Deleting an agent archives its memories. Migration 0033 turned each non-empty line of the v1 text into a rule.
+  - **UI** (#82, `MemoryPage.tsx`, `MemoryDigest.tsx`, pure rules in `memoryView.ts`):
+    - **Settings → Memory** (Team group, #87; it was a Library tab until then: `#/settings/memory`,
+      `…/memory/<scope>` filters a scope, `…/memory/m12` shows one memory; old `#/library/memory…` links are
+      rewritten to the same place): chips by kind (All/Rules/Preferences/Facts/Projects, archived excluded) plus
+      Stale and Archived, with counts; a scope filter; search (FTS through `q`); inline edit (text + kind, Enter
+      saves, Esc cancels); pin, archive, restore; the source link: a chat opens `#/chat/<id>?msg=<seq>`, a board card
+      its ticket `?card=<id>&msg=<seq>` — the conversation scrolls to that message and flashes it. A scope of one
+      agent shows its always-on budget (used/3000). Engine refusals (409 over budget) show as the app's error.
+      Stale and archived rows are dimmed.
+    - **Daily digest**: one Inbox update (synthetic id −1, key `n-1`) built in the UI from the last 24 h of
+      changes by agents and stale project notes (not your own edits, not confirms/undos); one line per change with
+      Undo (only the latest change of each memory; older ones are off, a 409 shows its reason). Read/archive marks are
+      per browser (localStorage `atlas.memory.digest`); a newer change brings it back. It counts in the badge while unread.
+    - Each agent card in Settings → Agents (count + budget) links to its scope (`…/memory/agent:<id>`); the old editors are gone.
 
 ## 9. Scheduler
 - `schedules` rows with a cron expression or a one-shot time, in the user's timezone. Missed runs while the engine was
@@ -281,7 +317,7 @@ Statuses: `triage → todo → ready → running → (blocked | review) → done
 | `message_agent` | posts into the other agent's chat; the reply arrives as a message later |
 | `canvas_read`, `canvas_write` | read the scene as JSON; add/update/delete elements |
 | `schedule_create`, `schedule_list`, `schedule_delete` | |
-| `memory_edit` | |
+| `memory_add`, `memory_update`, `memory_forget`, `memory_search` | Memory v2 (§8). add(kind, scope self/shared, text, update?/new?): refused with the similar ones listed unless `update: id` or `new: true`; over the always-on budget → refused, asking to merge. update(id, text, kind?) and forget(id) on own and shared memories only; forget archives. search(query): own + shared, stale included. Replaced `memory_edit` (old transcripts still render it) |
 | `ask_user` | in chat runs only; on cards use `card_block(needs_input)` |
 
 Project instructions: `AGENTS.md` and `CLAUDE.md` at the root of the agent's workdir go in the system prompt
@@ -294,13 +330,11 @@ Permissions per agent: allowed tools, allowed paths, shell on/off, network on/of
 (`rm -rf` outside the workdir, `git push --force`, writing to `~/.ssh`) require the user's approval in the UI.
 
 ## 11. Canvas
-- `@excalidraw/excalidraw` React component; scene stored as JSON in `canvases`, versioned (each save bumps
-  `version`; keep the last 50).
+- Our own board of nodes (§16); stored as JSON in `canvases`, versioned (each save bumps `version`; keep the last 50).
+  v3 (17 Nov 2026): Excalidraw and `drawing` nodes were removed (migration 0037). System design diagrams are svg
+  documents (`diagrams/*.svg`), shown in the side panel or on a canvas as a `url` node.
 - Live sync: the UI sends scene updates over the WebSocket; the engine broadcasts them; agents' `canvas_write`
   goes through the same path, so the user sees agent edits appear.
-- Agent tools work on a simplified element format (rectangle, ellipse, arrow, text, frame with x, y, w, h, label,
-  links between elements) converted to Excalidraw elements in the engine, so a model doesn't have to produce raw
-  Excalidraw JSON.
 - A card can link a canvas; a canvas element can link a card.
 - A canvas is also one **document** type, the *whiteboard*: it opens in a chat's side panel like a markdown doc,
   an html page or a diagram (§16 « Side panel »).
@@ -311,7 +345,7 @@ Permissions per agent: allowed tools, allowed paths, shell on/off, network on/of
 - Settings (restructured 12 Nov 2026): one plain « Settings » item at the bottom of the sidebar opens `#/settings/<page>`
   (the last one visited). Inside the sheet a second navigation (200px, same nav-item style, small group titles,
   counts on the right) lists the pages; under 900px it collapses to a select at the top. Top bar: « Settings » + page.
-  - Team: **Agents** (`agents`, count) · **Shared memory** (`memory`) · **Board & triage** (`board`, triage agent).
+  - Team: **Agents** (`agents`, count) · **Memory** (`memory`, every memory, design §8) · **Board & triage** (`board`, triage agent).
   - Models: **Subscriptions** (`subscriptions`: Claude plan and ChatGPT plan accounts with quota bars; drag the grip,
     or arrow keys on it, to set the failover order via `PUT /api/plan-accounts/order`) · **API keys** (`api-keys`,
     Anthropic accounts) · **Local** (`local`, Ollama server, installed models, download) · **Model list**
@@ -345,7 +379,7 @@ Permissions per agent: allowed tools, allowed paths, shell on/off, network on/of
   app (no font CDN). Three themes — **light**, **gray** (soft neutral greys for long sessions) and **dark** (true
   black) — differ only in CSS tokens on `html[data-theme]`; "Auto" follows the OS between light and dark. The choice
   is per device (localStorage), applied before first paint by `index.html`; `?theme=gray` previews one without
-  saving. Excalidraw follows: light → light, gray/dark → dark. Chat follows the AI-chat convention: assistant text
+  saving. Chat follows the AI-chat convention: assistant text
   unboxed, the user's messages in a bubble, tool calls as one quiet line each, a rounded composer.
 
 ## 13. After v1
@@ -396,7 +430,6 @@ These override the sections above where they differ.
   « comments » channel for the user.
 - **Canvas = whiteboard + live renders, one surface.** A canvas holds nodes of pluggable kinds, each a small
   renderer module registered in the UI (`packages/ui/src/canvas/renderers/*`):
-  - `drawing`: Excalidraw scene (system design, diagrams),
   - `html`: an HTML string rendered in a sandboxed iframe,
   - `url`: any running app (Vite/React/Next dev server, a built `dist/`) in an iframe,
   - `markdown`: an explanation block.
@@ -413,10 +446,8 @@ These override the sections above where they differ.
   in the chat saying why the agent started.
 - **Canvas details** (built in step 9): one versioned JSON document per canvas (last 50 versions, restorable).
   The UI saves with optimistic versions and, on conflict, merges (server nodes + the user's changed nodes − their deleted
-  ones); agents apply node ops on the latest version (no conflicts). Drawings: agents write `sketch` elements,
-  converted in the UI with Excalidraw's skeleton API (arrows laid out between the boxes they join, colours adjusted
-  for the dark theme's inversion); once edited in the full-screen editor a drawing stores Excalidraw elements and
-  agents read a compact summary. HTML runs in an opaque-origin sandbox; agent workspace files are served at
+  ones); agents apply node ops on the latest version (no conflicts). A node of a kind the UI doesn't know is skipped,
+  never a crash. HTML runs in an opaque-origin sandbox; agent workspace files are served at
   `/api/files/<agent>/<path>` with a CSP sandbox header, so a built app or page can be shown in a `url` node.
 - **Context management** (built in step 8): each model has a `context_window` (default 200k Anthropic, 32k local;
   a model test reads the real value from Ollama `/api/ps` or llama.cpp `/props`, since local servers run far below

@@ -5,16 +5,15 @@
 
 type Key = Pick<KeyboardEvent, 'key' | 'metaKey' | 'ctrlKey' | 'altKey' | 'shiftKey' | 'defaultPrevented' | 'repeat'>;
 
-/** Somewhere text goes, or a whiteboard (Excalidraw has its own letter keys): letters there aren't shortcuts. */
+/** Somewhere text goes: letters there aren't shortcuts. */
 export function isTyping(target: EventTarget | null): boolean {
   const el = target as HTMLElement | null;
   if (!el || typeof el !== 'object') return false;
-  if (el.isContentEditable || ['INPUT', 'TEXTAREA', 'SELECT'].includes(el.tagName)) return true;
-  return typeof el.closest === 'function' && !!el.closest('.excalidraw');
+  return el.isContentEditable || ['INPUT', 'TEXTAREA', 'SELECT'].includes(el.tagName);
 }
 
 export type GoTo = 'board' | 'library' | 'inbox' | 'schedules';
-export const GO_KEYS: Record<string, GoTo> = { b: 'board', l: 'library', i: 'inbox', s: 'schedules' };
+export const GO_KEYS: Record<string, GoTo> = { t: 'board', b: 'board', l: 'library', i: 'inbox', s: 'schedules' };
 export const GO_HASH: Record<GoTo, string> = { board: '#/board', library: '#/library', inbox: '#/inbox', schedules: '#/schedules' };
 
 export type GlobalAction =
@@ -68,11 +67,11 @@ export function nextRow(count: number, current: number, dir: 1 | -1): number | n
 export const SHORTCUTS: { group: string; keys: string[]; label: string }[] = [
   { group: 'General', keys: ['⌘', 'K'], label: 'Command palette' },
   { group: 'General', keys: ['?'], label: 'Keyboard shortcuts' },
-  { group: 'General', keys: ['C'], label: 'New card' },
-  { group: 'General', keys: ['⌘', 'N'], label: 'New chat' },
+  { group: 'General', keys: ['C'], label: 'New task' },
+  { group: 'General', keys: ['⌘', 'N'], label: 'Main chat' },
   { group: 'General', keys: ['⌘', '\\'], label: 'Show / hide the documents panel' },
   { group: 'Go to', keys: ['G', 'I'], label: 'Inbox' },
-  { group: 'Go to', keys: ['G', 'B'], label: 'Board' },
+  { group: 'Go to', keys: ['G', 'T'], label: 'Tasks' },
   { group: 'Go to', keys: ['G', 'L'], label: 'Library' },
   { group: 'Go to', keys: ['G', 'S'], label: 'Schedules' },
   { group: 'Lists', keys: ['J'], label: 'Next row' },
@@ -81,4 +80,5 @@ export const SHORTCUTS: { group: string; keys: string[]; label: string }[] = [
   { group: 'Inbox', keys: ['E'], label: 'Archive' },
   { group: 'Inbox', keys: ['R'], label: 'Reply' },
   { group: 'Inbox', keys: ['1–4'], label: 'Pick an option' },
+  { group: 'Chat', keys: ['/clear', '↵'], label: 'New main chat (this one goes to History)' },
 ];

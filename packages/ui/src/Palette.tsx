@@ -94,7 +94,7 @@ export function Palette(props: {
     for (const c of byRecent)
       out.push({
         id: 'card:' + c.id,
-        section: 'Cards',
+        section: 'Tasks',
         title: c.title,
         number: c.number,
         keywords: [cardRef(c), '@' + (c.assignee ?? ''), STATUS_LABEL[c.status]].join(' '),
@@ -106,15 +106,15 @@ export function Palette(props: {
     const nav = (id: string, title: string, hash: string, icon: ReactNode, kbd?: string, keywords?: string) =>
       out.push({ id, section: 'Navigation', title, icon, kbd, keywords, run: act(() => props.go(hash)) });
     nav('go:inbox', 'Go to Inbox', '#/inbox', <Icon.inbox />, 'G I');
-    nav('go:board', 'Go to Board', '#/board', <Icon.board />, 'G B');
+    nav('go:board', 'Go to Tasks', '#/board', <Icon.board />, 'G T', 'board cards');
     nav('go:library', 'Go to Library', '#/library', <Icon.library />, 'G L', 'documents artifacts');
     nav('go:schedules', 'Go to Schedules', '#/schedules', <Icon.clock />, 'G S');
     for (const p of SETTINGS_PAGES) nav('go:settings:' + p.id, 'Settings: ' + p.label, '#/settings/' + p.id, <Icon.gear />, undefined, 'preferences');
     const action = (id: string, title: string, icon: ReactNode, run: () => void, kbd?: string, keywords?: string) =>
       out.push({ id, section: 'Actions', title, icon, kbd, keywords, run: act(run) });
-    action('new-card', 'New card', <Icon.plus />, props.onNewCard, 'C', 'create ticket issue');
-    action('new-chat', 'New chat', <Icon.edit />, () => props.go('#/chat/new'), '⌘N');
-    for (const a of props.agents) action('new-chat:' + a.id, `New chat with @${a.id}`, <Avatar id={a.id} />, () => props.go('#/chat/' + a.id));
+    action('new-card', 'New task', <Icon.plus />, props.onNewCard, 'C', 'create ticket issue');
+    action('new-chat', 'Main chat', <Icon.edit />, () => props.go('#/chat/new'), '⌘N');
+    for (const a of props.agents) action('new-chat:' + a.id, `Chat with @${a.id}`, <Avatar id={a.id} />, () => props.go('#/chat/' + (a.mainChat ?? a.id)));
     if (ctx.view === 'chat' && ctx.chatId) action('panel', 'Show / hide documents panel', <Icon.doc />, props.onTogglePanel, '⌘\\', 'side panel toggle');
     const other = props.theme === 'dark' ? 'light' : 'dark';
     action('theme', `Switch to ${other} theme`, other === 'light' ? <Icon.sun /> : <Icon.moon />, () => props.onTheme(other), undefined, 'appearance mode');
@@ -150,7 +150,7 @@ export function Palette(props: {
             ref={input}
             value={query}
             onChange={(e) => setQuery(e.target.value)}
-            placeholder="Search artifacts, chats, cards (#12), actions…"
+            placeholder="Search artifacts, chats, tasks (#12), actions…"
             aria-label="Search"
             role="combobox"
             aria-expanded="true"
@@ -271,7 +271,7 @@ export function ShortcutsSheet({ onClose }: { onClose(): void }) {
             </section>
           ))}
         </div>
-        <p className="keys-note">Letter keys are ignored while you type in a field. In a browser, ⌘N may open a new window instead: use ⌘K → New chat.</p>
+        <p className="keys-note">Letter keys are ignored while you type in a field. In a browser, ⌘N may open a new window instead: use ⌘K → Main chat.</p>
       </div>
     </div>
   );

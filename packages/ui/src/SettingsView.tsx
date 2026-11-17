@@ -1,7 +1,8 @@
 import { useCallback, useEffect, useState } from 'react';
-import type { About, Agent, ChatGptStatus, Model, Settings } from '@atlas/shared';
+import type { About, Agent, Card, ChatGptStatus, Model, Settings } from '@atlas/shared';
 import { api } from './api.ts';
-import { AgentsView, SharedMemory } from './AgentsView.tsx';
+import { AgentsView } from './AgentsView.tsx';
+import { MemoryPage } from './MemoryPage.tsx';
 import { AccountsSection } from './AccountsSection.tsx';
 import { ChatGptSection } from './ChatGptSection.tsx';
 import { ClaudePlanSection } from './ClaudePlanSection.tsx';
@@ -20,6 +21,10 @@ import type { MessageStream } from './useMessages.ts';
  */
 export function SettingsView(props: {
   page: SettingsPage;
+  /** What follows #/settings/memory: a scope (« agent:atlas »), a memory (« m12 ») or nothing. */
+  memoryRest: string;
+  cards: Card[];
+  chats: Card[];
   stream: MessageStream;
   settings: Settings | null;
   agents: Agent[];
@@ -101,11 +106,15 @@ export function SettingsView(props: {
             ))}
           </select>
         </div>
+        {page === 'memory' ? (
+          // Memory (#87, from the Library): a full-height list with its own scroller, not a padded settings column.
+          <div className="settings-view settings-memory">
+            <MemoryPage rest={props.memoryRest} agents={props.agents} cards={props.cards} chats={props.chats} stream={stream} settings={props.settings} models={props.models} onSettings={props.onSettings} onError={onError} />
+          </div>
+        ) : (
         <div className="agents-view settings-view" key={page}>
           {page === 'agents' ? (
             <AgentsView settings={props.settings} onSettings={props.onSettings} onAgentsChanged={props.onAgentsChanged} onError={onError} />
-          ) : page === 'memory' ? (
-            <SharedMemory onError={onError} />
           ) : page === 'board' ? (
             <BoardSettings settings={props.settings} agents={props.agents} onSettings={props.onSettings} onError={onError} />
           ) : page === 'subscriptions' ? (
@@ -142,6 +151,7 @@ export function SettingsView(props: {
             <AboutData onError={onError} />
           )}
         </div>
+        )}
       </div>
     </div>
   );
@@ -152,7 +162,7 @@ function BoardSettings(props: { settings: Settings | null; agents: Agent[]; onSe
     <section>
       <header className="section-head">
         <h2>Board &amp; triage</h2>
-        <p>Choose who turns ideas in Triage into actionable cards.</p>
+        <p>Choose who turns ideas in Triage into actionable tasks.</p>
       </header>
       {props.settings ? (
         <label className="field settings-field">
@@ -174,7 +184,7 @@ function BoardSettings(props: { settings: Settings | null; agents: Agent[]; onSe
       ) : (
         <p className="hint">Waiting for engine settings…</p>
       )}
-      <p className="hint">Nobody leaves triage cards for you to organize manually.</p>
+      <p className="hint">Nobody leaves triage tasks for you to organize manually.</p>
     </section>
   );
 }
@@ -184,7 +194,7 @@ function Appearance(props: { theme: ThemeChoice; onTheme(t: ThemeChoice): void }
     <section>
       <header className="section-head">
         <h2>Appearance</h2>
-        <p>Theme for this device, across Atlas. Drawings follow the selected theme; Auto follows your system.</p>
+        <p>Theme for this device, across Atlas. Auto follows your system.</p>
       </header>
       <label className="field settings-field">
         Theme

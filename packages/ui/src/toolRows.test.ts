@@ -42,12 +42,12 @@ describe('toolRow', () => {
     expect(toolRow('card_create', { title: 'X' }, err('unknown parent #99'))).toMatchObject({ ref: undefined, object: 'X', tone: 'bad', verb: 'Couldn’t create' });
     expect(toolRow('card_message', { id: 57, text: '#56: done.\nmore' }, ok('message posted on #57'))).toMatchObject({ verb: 'Messaged', ref: '#57', rest: '#56: done.' });
     expect(toolRow('card_show', { id: 56 }, ok('#56 [running] @atlas P2 Menu bar orb\n\nbody'))).toMatchObject({ verb: 'Looked at', ref: '#56', object: 'Menu bar orb', meta: [{ text: 'running' }] });
-    expect(toolRow('card_list', {}, ok('#10 [done] unassigned P3 A\n#4 [done] unassigned P2 B'))).toMatchObject({ verb: 'Listed the board', meta: [{ text: '2 cards' }] });
-    expect(toolRow('card_list', {}, ok('#1 [running] @atlas P2 A\n#2 [ready] @atlas P2 B\n#3 [done] @atlas P2 C')).meta).toEqual([{ text: '3 cards · 1 running · 1 ready' }]);
-    expect(toolRow('card_list', { status: 'blocked' }, ok('(no cards)'))).toMatchObject({ rest: 'blocked cards', meta: [{ text: '0 cards' }] });
+    expect(toolRow('card_list', {}, ok('#10 [done] unassigned P3 A\n#4 [done] unassigned P2 B'))).toMatchObject({ verb: 'Listed the board', meta: [{ text: '2 tasks' }] });
+    expect(toolRow('card_list', {}, ok('#1 [running] @atlas P2 A\n#2 [ready] @atlas P2 B\n#3 [done] @atlas P2 C')).meta).toEqual([{ text: '3 tasks · 1 running · 1 ready' }]);
+    expect(toolRow('card_list', { status: 'blocked' }, ok('(no cards)'))).toMatchObject({ rest: 'blocked tasks', meta: [{ text: '0 tasks' }] });
     expect(toolRow('card_block', { kind: 'needs_input', question: 'Which one?\nDetails' }, ok('card blocked'))).toMatchObject({ tone: 'warn', verb: 'Asked you', object: 'Which one?', rest: 'needs input' });
     expect(toolRow('card_request_review', { summary: 'Ready.' }, ok('review requested'))).toMatchObject({ tone: 'warn', rest: 'Ready.' });
-    expect(toolRow('card_complete', { summary: '**Done** in `x`.' }, ok('card done'))).toMatchObject({ tone: 'ok', icon: 'check', verb: 'Finished the card', rest: 'Done in x.' });
+    expect(toolRow('card_complete', { summary: '**Done** in `x`.' }, ok('card done'))).toMatchObject({ tone: 'ok', icon: 'check', verb: 'Finished the task', rest: 'Done in x.' });
     expect(toolRow('history_search', { query: 'mockup' }, ok('no message contains "mockup"'))).toMatchObject({ object: '“mockup”', meta: [{ text: '0 hits' }] });
     expect(toolRow('history_search', { seq: 50 }, ok('#50 tool …'))).toMatchObject({ object: 'message #50', meta: [] });
   });
@@ -61,6 +61,10 @@ describe('toolRow', () => {
     expect(toolRow('panel_open', { path: 'docs/chat-activity.md' }, ok('opened …'))).toMatchObject({ tone: 'acc', object: 'chat-activity.md', detail: 'doc' });
     expect(toolRow('memory_edit', { text: 'Voice: short', mode: 'append' }, ok('self memory saved (1513/4000 chars)'))).toMatchObject({ verb: 'Saved to memory', meta: [{ text: 'mine · 1513/4000' }] });
     expect(toolRow('memory_edit', { text: 'x', mode: 'replace', scope: 'shared' }, ok('shared memory saved'))).toMatchObject({ verb: 'Rewrote memory', meta: [{ text: 'shared' }] });
+    expect(toolRow('memory_add', { kind: 'rule', text: 'Run tests' }, ok('saved m12 (rule, agent:atlas) · always-on 1509/3000 chars'))).toMatchObject({ verb: 'Saved to memory', rest: 'Run tests', meta: [{ text: 'rule · mine · m12 · 1509/3000' }] });
+    expect(toolRow('memory_add', { kind: 'rule', text: 'x', update: 'm3' }, ok('updated m3 (rule, shared) · always-on 9/3000 chars'))).toMatchObject({ verb: 'Updated memory' });
+    expect(toolRow('memory_add', { kind: 'rule', text: 'x' }, { isError: true, content: 'Nothing saved: similar memories exist.\n- [m1] y' })).toMatchObject({ verb: 'Couldn’t save to memory', rest: 'Nothing saved: similar memories exist.' });
+    expect(toolRow('memory_search', { query: 'orb' }, ok('- [m1 · fact] a\n- [m2 · fact] b'))).toMatchObject({ verb: 'Searched memory', object: 'orb', meta: [{ text: '2 matches' }] });
     const plan = { todos: [{ content: 'A', status: 'completed' }, { content: 'B', status: 'in_progress' }, { content: 'C', status: 'pending' }] };
     expect(toolRow('todo_write', plan, ok('saved'))).toMatchObject({ verb: 'Plan', object: '1 of 3 done', rest: 'now: B', detail: 'checklist' });
     expect(toolRow('schedule_create', { title: 'Follow-up', at: '2026-11-14T18:55:00+01:00', prompt: 'x' }, ok('scheduled')).rest).toMatch(/^once · Sat 14 Nov \d\d:55$/);
@@ -93,7 +97,7 @@ describe('toolRow', () => {
   });
 
   it('every tool the engine has gets its own row (not the generic one)', () => {
-    const tools = ['read_file', 'write_file', 'edit_file', 'list_files', 'grep', 'glob', 'shell', 'shell_output', 'shell_kill', 'web_fetch', 'web_search', 'card_create', 'card_update', 'card_message', 'card_show', 'card_list', 'card_block', 'card_request_review', 'card_complete', 'history_search', 'canvas_create', 'canvas_write', 'canvas_read', 'canvas_list', 'panel_open', 'panel_close', 'memory_edit', 'todo_write', 'schedule_create', 'schedule_list', 'schedule_delete'];
+    const tools = ['read_file', 'write_file', 'edit_file', 'list_files', 'grep', 'glob', 'shell', 'shell_output', 'shell_kill', 'web_fetch', 'web_search', 'card_create', 'card_update', 'card_message', 'card_show', 'card_list', 'card_block', 'card_request_review', 'card_complete', 'history_search', 'canvas_create', 'canvas_write', 'canvas_read', 'canvas_list', 'panel_open', 'panel_close', 'memory_edit', 'memory_add', 'memory_update', 'memory_forget', 'memory_search', 'todo_write', 'schedule_create', 'schedule_list', 'schedule_delete'];
     for (const t of tools) expect(toolRow(t, {}, ok('')).icon, t).not.toBe('wrench');
   });
 });

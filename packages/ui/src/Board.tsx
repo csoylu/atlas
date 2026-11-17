@@ -18,15 +18,15 @@ import {
 } from './boardView.ts';
 
 const HINT: Partial<Record<CardStatus, string>> = {
-  triage: 'Ideas land here. The triage agent shapes them into cards.',
-  todo: 'Waits here until its parent cards are done.',
+  triage: 'Ideas land here. The triage agent shapes them into tasks.',
+  todo: 'Waits here until its parent tasks are done.',
   ready: 'Starts as soon as the assignee is free.',
   running: 'An agent is working on it.',
   blocked: 'Needs an answer or access.',
   review: 'Waiting for a reviewer.',
 };
 const TABS: { id: BoardTab; label: string; long?: string }[] = [
-  { id: 'all', label: 'All', long: ' cards' },
+  { id: 'all', label: 'All', long: ' tasks' },
   { id: 'needs', label: 'Needs you' },
   { id: 'running', label: 'Running' },
 ];
@@ -105,7 +105,7 @@ export function Board(props: {
   return (
     <div className={'board-screen ' + view.layout}>
       <HeaderActions>
-        <div className="view-tabs" role="tablist" aria-label="Cards">
+        <div className="view-tabs" role="tablist" aria-label="Tasks">
           {TABS.map((t) => (
             <button
               key={t.id}
@@ -179,9 +179,9 @@ export function Board(props: {
             <span className={'pop-switch' + (view.showEmpty ? ' on' : '')} aria-hidden="true" />
           </button>
         </Menu>
-        <button type="button" className="head-btn pri" onClick={() => setCreating('triage')} title="New card (C)" aria-label="New card">
+        <button type="button" className="head-btn pri" onClick={() => setCreating('triage')} title="New task (C)" aria-label="New task">
           <Icon.plus />
-          <span className="btn-text">New card</span>
+          <span className="btn-text">New task</span>
           <span className="kbd">C</span>
         </button>
       </HeaderActions>
@@ -200,14 +200,14 @@ export function Board(props: {
                     className="fold"
                     onClick={() => (empty ? save({ ...view, showEmpty: true }) : toggle(status))}
                     aria-expanded={!isFolded}
-                    title={empty ? `No ${STATUS_LABEL[status]} cards: click to show empty columns` : isFolded ? `Show ${STATUS_LABEL[status]}` : `Fold ${STATUS_LABEL[status]}`}
+                    title={empty ? `No ${STATUS_LABEL[status]} tasks: click to show empty columns` : isFolded ? `Show ${STATUS_LABEL[status]}` : `Fold ${STATUS_LABEL[status]}`}
                   >
                     <StatusIcon status={status} />
                     <span className="name">{STATUS_LABEL[status]}</span>
                     <span className="count">{cards.length}</span>
                   </button>
                   {!isFolded && CREATE_IN.includes(status) && (
-                    <button type="button" className="icon-btn col-add" onClick={() => setCreating(status)} aria-label={`New card in ${STATUS_LABEL[status]}`} title={`New card in ${STATUS_LABEL[status]}`}>
+                    <button type="button" className="icon-btn col-add" onClick={() => setCreating(status)} aria-label={`New task in ${STATUS_LABEL[status]}`} title={`New task in ${STATUS_LABEL[status]}`}>
                       <Icon.plus />
                     </button>
                   )}
@@ -236,7 +236,7 @@ export function Board(props: {
                   <span className="name">{STATUS_LABEL[status]}</span>
                   <span className="count">{cards.length}</span>
                   {CREATE_IN.includes(status) && (
-                    <button type="button" className="icon-btn col-add" onClick={() => setCreating(status)} aria-label={`New card in ${STATUS_LABEL[status]}`} title={`New card in ${STATUS_LABEL[status]}`}>
+                    <button type="button" className="icon-btn col-add" onClick={() => setCreating(status)} aria-label={`New task in ${STATUS_LABEL[status]}`} title={`New task in ${STATUS_LABEL[status]}`}>
                       <Icon.plus />
                     </button>
                   )}
@@ -375,7 +375,7 @@ function NewCard(props: { status: CardStatus; agents: Agent[]; filterAgent: stri
         className="new-card-modal"
         role="dialog"
         aria-modal="true"
-        aria-label="New card"
+        aria-label="New task"
         onSubmit={(e) => {
           e.preventDefault();
           submit();
@@ -383,12 +383,12 @@ function NewCard(props: { status: CardStatus; agents: Agent[]; filterAgent: stri
         onKeyDown={(e) => (e.metaKey || e.ctrlKey) && e.key === 'Enter' && (e.preventDefault(), submit())}
       >
         <div className="nc-head">
-          <span className="nc-crumb">New card</span>
+          <span className="nc-crumb">New task</span>
           <button type="button" className="icon-btn" onClick={onClose} aria-label="Close">
             <Icon.x />
           </button>
         </div>
-        <input className="nc-title" autoFocus value={title} onChange={(e) => setTitle(e.target.value)} placeholder="Card title" aria-label="Title" maxLength={200} />
+        <input className="nc-title" autoFocus value={title} onChange={(e) => setTitle(e.target.value)} placeholder="Task title" aria-label="Title" maxLength={200} />
         <textarea className="nc-desc" value={body} onChange={(e) => setBody(e.target.value)} placeholder="Description, acceptance criteria…" aria-label="Description" />
         <div className="nc-props">
           <label className="prop-pill" title="Status">
@@ -419,7 +419,7 @@ function NewCard(props: { status: CardStatus; agents: Agent[]; filterAgent: stri
         <div className="nc-foot">
           <span className="nc-note">{status === 'triage' ? 'The triage agent shapes it.' : assignee ? `@${assignee} picks it up when it is ready.` : 'Assign an agent so it runs.'}</span>
           <button type="submit" className="primary small" disabled={!title.trim() || busy}>
-            Create card <span className="kbd">⌘↵</span>
+            Create task <span className="kbd">⌘↵</span>
           </button>
         </div>
       </form>

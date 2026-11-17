@@ -1,18 +1,20 @@
-import { useEffect, useLayoutEffect, useRef, useState } from 'react';
+import { useEffect, useLayoutEffect, useRef, useState, type KeyboardEvent as ReactKeyboardEvent } from 'react';
 import { createPortal } from 'react-dom';
 import type { Card } from '@atlas/shared';
 import { tint } from './agentTint.ts';
 import { menuPosition } from './chatHistoryMenu.ts';
 
-export function ChatHistory({ chats, selected, onSelect, onDelete }: {
+export function ChatHistory({ chats, selected, onSelect, onArchive, onDelete }: {
   chats: Card[];
   selected?: string;
   onSelect(id: string): void;
+  onArchive(chat: Card): void;
   onDelete(chat: Card): void;
 }) {
   const [menu, setMenu] = useState<{ chat: Card; x: number; y: number; trigger: HTMLButtonElement } | null>(null);
   const popup = useRef<HTMLDivElement>(null);
   const action = useRef<HTMLButtonElement>(null);
+  const second = useRef<HTMLButtonElement>(null);
   const close = (restoreFocus = false) => {
     if (restoreFocus) menu?.trigger.focus();
     setMenu(null);
@@ -59,6 +61,14 @@ export function ChatHistory({ chats, selected, onSelect, onDelete }: {
     if (menu && !chats.some(c => c.id === menu.chat.id)) setMenu(null);
   }, [chats, menu]);
 
+  /** Two items: arrows, Home and End move between them. */
+  const moveFocus = (e: ReactKeyboardEvent<HTMLButtonElement>) => {
+    if (!['ArrowDown', 'ArrowUp', 'Home', 'End'].includes(e.key)) return;
+    e.preventDefault();
+    const other = e.key === 'Home' ? action : e.key === 'End' ? second : e.currentTarget === action.current ? second : action;
+    other.current?.focus();
+  };
+
   return <div className="chat-history">
     {chats.map(c => <button key={c.id}
       className={'chat-hist-item' + (selected === c.id ? ' active' : '') + (c.working ? ' running' : '')}
@@ -87,10 +97,13 @@ export function ChatHistory({ chats, selected, onSelect, onDelete }: {
       onContextMenu={e => e.preventDefault()} onBlur={e => {
         if (!e.currentTarget.contains(e.relatedTarget)) setMenu(null);
       }}>
-      <button ref={action} role="menuitem" onClick={() => { close(true); onDelete(menu.chat); }}
-        onKeyDown={e => {
-          if (['ArrowDown', 'ArrowUp', 'Home', 'End'].includes(e.key)) { e.preventDefault(); action.current?.focus(); }
-        }}>
+      <button ref={action} role="menuitem" onClick={() => { close(true); onArchive(menu.chat); }} onKeyDown={moveFocus}>
+        <svg viewBox="0 0 20 20" width="16" height="16" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+          <path d="M3 4.5h14v3H3zM4.5 7.5v8h11v-8M8 10.5h4" />
+        </svg>
+        Archive
+      </button>
+      <button ref={second} role="menuitem" onClick={() => { close(true); onDelete(menu.chat); }} onKeyDown={moveFocus}>
         <svg viewBox="0 0 20 20" width="16" height="16" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
           <path d="M3.5 5.5h13M8 3h4l1 2.5H7L8 3ZM5.5 5.5l.7 11h7.6l.7-11M8.5 8.5v5M11.5 8.5v5" />
         </svg>

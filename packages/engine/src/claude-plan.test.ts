@@ -110,7 +110,7 @@ async function setup(env: Record<string, string> = SETTINGS, o: { dispatch?: boo
   const call = async () => {
     const { model, provider } = engine!.models.provider('opus');
     return provider.complete(
-      { model: model.name, maxTokens: 50, system: 'You are atlas, the lead agent.', messages: [{ role: 'user', content: [{ type: 'text', text: 'hi' }] }], tools: [{ name: 'card_list', description: 'List cards', input_schema: { type: 'object', properties: {} } }] },
+      { model: model.name, maxTokens: 50, system: 'You are atlas, the lead agent.', messages: [{ role: 'user', content: [{ type: 'text', text: 'hi' }] }], tools: [{ name: 'task_list', description: 'List cards', input_schema: { type: 'object', properties: {} } }] },
       () => {},
       AbortSignal.timeout(5000),
     );
@@ -201,7 +201,7 @@ describe('Claude plan (Atlas’s own approved OAuth client)', () => {
     // Atlas's own prompt and tool names, untouched.
     expect(JSON.stringify(req.body!.system)).not.toContain('Claude Code');
     expect(JSON.stringify(req.body!.system)).toContain('You are atlas');
-    expect((req.body!.tools as { name: string }[]).map((t) => t.name)).toEqual(['card_list']);
+    expect((req.body!.tools as { name: string }[]).map((t) => t.name)).toEqual(['task_list']);
   });
 
   it('refreshes near expiry, pauses on 429 until the reset, and signs out on 401', async () => {

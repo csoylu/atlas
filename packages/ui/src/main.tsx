@@ -7,14 +7,6 @@ import '@fontsource/ibm-plex-mono/400.css';
 import '@fontsource/ibm-plex-mono/500.css';
 import './styles.css';
 
-declare global {
-  interface Window {
-    EXCALIDRAW_ASSET_PATH?: string | string[];
-  }
-}
-// Excalidraw loads its fonts from here (served at /fonts by Vite and by the engine), not from esm.sh: works offline.
-window.EXCALIDRAW_ASSET_PATH = '/';
-
 if (/Electron/.test(navigator.userAgent) && /Mac/.test(navigator.platform))
   document.documentElement.classList.add('electron-mac');
 

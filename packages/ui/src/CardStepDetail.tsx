@@ -1,5 +1,5 @@
 import type { ReactNode } from 'react';
-import type { Card, CardStatus } from '@atlas/shared';
+import { currentToolName, type Card, type CardStatus } from '@atlas/shared';
 import { boardGroups, cardLine, cardSub, historyHits, historyMessage, markHits } from './cardRows.ts';
 import type { Step } from './chatTurn.ts';
 import { STATUS_LABEL, StatusIcon } from './StatusIcon.tsx';
@@ -72,16 +72,17 @@ export function cardDetail(step: Step, ctx: DetailContext): ReactNode | null {
   const o = (step.input && typeof step.input === 'object' ? step.input : {}) as Record<string, unknown>;
   const out = step.result && !step.result.isError ? step.result.content : null;
   const { cards } = ctx;
-  switch (step.name) {
-    case 'card_create':
-    case 'card_show':
-    case 'card_update': {
+  const name = currentToolName(step.name);
+  switch (name) {
+    case 'task_create':
+    case 'task_show':
+    case 'task_update': {
       const c = out === null ? null : cardLine(out);
       if (!c) return null;
-      const sub = step.name === 'card_update' ? cardChanges(o) || cardSub(c) : cardSub(c);
+      const sub = name === 'task_update' ? cardChanges(o) || cardSub(c) : cardSub(c);
       return <CardChip ref_={c.ref} status={c.status} title={c.title} sub={sub} cards={cards} />;
     }
-    case 'card_message': {
+    case 'task_message': {
       const ref = cardRef(o.id);
       return (
         <>
@@ -90,7 +91,7 @@ export function cardDetail(step: Step, ctx: DetailContext): ReactNode | null {
         </>
       );
     }
-    case 'card_block': {
+    case 'task_block': {
       const options = Array.isArray(o.options) ? o.options.filter((x): x is string => typeof x === 'string') : [];
       return (
         <>
@@ -105,10 +106,10 @@ export function cardDetail(step: Step, ctx: DetailContext): ReactNode | null {
         </>
       );
     }
-    case 'card_request_review':
-    case 'card_complete':
+    case 'task_request_review':
+    case 'task_complete':
       return <div className="step-md">{ctx.renderText(str(o.summary), 's')}</div>;
-    case 'card_list': {
+    case 'task_list': {
       if (out === null) return null;
       const groups = boardGroups(out);
       if (!groups.length) return <p className="step-empty">No cards{str(o.status) ? ` in ${str(o.status)}` : ''}.</p>;

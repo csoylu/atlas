@@ -1,18 +1,18 @@
+import { USER, VOICE_MARK } from '@atlas/shared';
 import type { Agents } from './agents.ts';
 import type { Bus } from './events.ts';
 import type { Kanban } from './kanban.ts';
 import type { Db } from './store/db.ts';
 
-export const VOICE_CHAT_TITLE = 'Voice';
 /** The agent that answers by voice, when it exists and is enabled; otherwise the first enabled agent. */
 const VOICE_AGENT = 'atlas';
 /** A posted message must start a run this fast (the dispatcher wakes chat runs at once). */
 const START_TIMEOUT_MS = 15_000;
 
 /**
- * The dedicated « Voice » direct chat: what Master says by voice is posted there as their message (through the engine
+ * Voice in the voice agent's main chat: what Master says by voice is posted there as their message (through the engine
  * API, like the chat box does: rewind snapshot, dispatcher wake), and the agent's reply is streamed back from the bus.
- * The chat and its messages are in SQLite like any chat (CLAUDE.md rule 2); its card id is the setting voice_chat.
+ * The chat and its messages are in SQLite like any chat (CLAUDE.md rule 2); the chat is agents.main_chat.
  */
 export class VoiceChat {
   /** ask() calls in flight: while one is, every reply text in the chat goes to it (spoken by the voice turn). */
@@ -29,26 +29,31 @@ export class VoiceChat {
     private url: () => string,
   ) {}
 
-  /** The Voice chat's card id; created (and named « Voice ») on first use, or again if it was deleted or archived. */
+  /**
+   * The chat voice goes to (v3): the voice agent's main chat, where Master also types. Voice messages start with
+   * VOICE_MARK, so the agent knows which ones to answer in short spoken sentences.
+   */
   id(): string {
-    const saved = this.get();
-    if (saved) {
-      const card = this.kanban.directs().find((c) => c.id === saved); // deleted or archived: a new one
-      if (card) return saved;
-    }
-    const enabled = this.agents.list().filter((a) => a.enabled);
-    const agent = enabled.find((a) => a.id === VOICE_AGENT) ?? enabled[0];
-    if (!agent) throw new Error('no enabled agent to answer the Voice chat: enable one in Settings → Agents');
-    const card = this.kanban.newChat(agent.id);
-    this.kanban.renameChat(card.id, VOICE_CHAT_TITLE); // a « renamed » event: never auto-titled
-    this.kanban.emit(card.id);
-    this.db.prepare("INSERT INTO settings (key, value) VALUES ('voice_chat', ?) ON CONFLICT(key) DO UPDATE SET value = excluded.value").run(card.id);
-    return card.id;
+    return this.kanban.mainChat(this.agent()).id;
   }
 
-  /** True for the Voice chat (its replies are spoken: the system prompt asks for short, plain sentences). */
+  private agent(): string {
+    const enabled = this.agents.list().filter((a) => a.enabled);
+    const agent = enabled.find((a) => a.id === VOICE_AGENT) ?? enabled[0];
+    if (!agent) throw new Error('no enabled agent to answer by voice: enable one in Settings → Agents');
+    return agent.id;
+  }
+
+  /** True for the chat voice goes to (its system prompt explains the 🎙 messages). */
   isVoiceChat(cardId: string): boolean {
     return this.get() === cardId;
+  }
+
+  /** Master's latest own message in the chat came by voice: replies (task reports too) are spoken. */
+  private speaking(id: string): boolean {
+    const last = [...this.kanban.messages(id)].reverse().find((m) => m.author === USER);
+    const text = last?.content.flatMap((b) => (b.type === 'text' ? [b.text] : [])).join('') ?? '';
+    return text.startsWith(VOICE_MARK);
   }
 
   /**
@@ -98,7 +103,7 @@ export class VoiceChat {
     const res = await fetch(`${this.url()}/api/cards/${id}/messages`, {
       method: 'POST',
       headers: { 'content-type': 'application/json' },
-      body: JSON.stringify({ text }),
+      body: JSON.stringify({ text: VOICE_MARK + text }),
       signal,
     }).catch((e: unknown) => {
       off();
@@ -135,11 +140,13 @@ export class VoiceChat {
       texts.delete(e.run.id);
       if (this.claimed.delete(e.run.id)) return;
       // a failed run shows its error in the chat; a stopped one was stopped by Master
-      if (text?.trim() && e.run.status === 'done' && e.run.cardId === this.get()) onReply(text);
+      if (text?.trim() && e.run.status === 'done' && e.run.cardId === this.get() && this.speaking(e.run.cardId)) onReply(text);
     });
   }
 
+  /** The main chat voice goes to, if it exists (never creates one). */
   private get(): string | undefined {
-    return (this.db.prepare("SELECT value FROM settings WHERE key = 'voice_chat'").get() as { value: string } | undefined)?.value || undefined;
+    const enabled = this.agents.list().filter((a) => a.enabled);
+    return (enabled.find((a) => a.id === VOICE_AGENT) ?? enabled[0])?.mainChat ?? undefined;
   }
 }

@@ -5,7 +5,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import type { ContentBlock } from '@atlas/shared';
 import { startEngine, type Engine } from './index.ts';
-import type { ModelRequest, ModelResponse, Provider } from './providers/types.ts';
+import type { ModelRequest, ModelResponse, OnDelta, Provider } from './providers/types.ts';
 import { runCardTool } from './cardTools.ts';
 
 /**
@@ -19,7 +19,7 @@ class RoutedFake implements Provider {
     public chat: Step[],
     public work: Step[],
   ) {}
-  async complete(req: ModelRequest, _onText: (t: string) => void, signal: AbortSignal): Promise<ModelResponse> {
+  async complete(req: ModelRequest, _onText: OnDelta, signal: AbortSignal): Promise<ModelResponse> {
     const kind = req.system.includes('A direct chat with') ? 'chat' : 'work';
     this.calls.push({ kind, req: structuredClone(req) });
     const step = (kind === 'chat' ? this.chat : this.work).shift();
@@ -74,7 +74,7 @@ describe('card lifecycle from a chat', () => {
   it('records the origin chat, reports the finish there once and has the agent tell the user', async () => {
     const fake = new RoutedFake(
       [
-        [use('card_create', { title: 'Add web_fetch tool', body: 'Fetch a URL as markdown.', assignee: 'atlas' })],
+        [use('task_create', { title: 'Add web_fetch tool', body: 'Fetch a URL as markdown.', assignee: 'atlas' })],
         text('On it: I created a card and started it.'),
         (req) => {
           const last = req.messages.at(-1)!.content.map((b) => (b.type === 'text' ? b.text : '')).join('');
@@ -83,7 +83,7 @@ describe('card lifecycle from a chat', () => {
         },
       ],
       // The work takes a moment, so the chat has answered « On it » before the report arrives.
-      [[use('shell', { command: 'sleep 0.3' })], [use('card_complete', { summary: 'web_fetch is in, 141 tests pass' })]],
+      [[use('shell', { command: 'sleep 0.3' })], [use('task_complete', { summary: 'web_fetch is in, 141 tests pass' })]],
     );
     const e = await setup(fake);
     const chat = e.kanban.newChat('atlas');
@@ -93,7 +93,7 @@ describe('card lifecycle from a chat', () => {
     await until(() => e.kanban.messages(chat.id).at(-1)?.content.some((b) => b.type === 'text' && b.text.startsWith('Done:')) ?? false, 'the agent tells the user');
     const card = createdCard(e);
     expect(card).toMatchObject({ status: 'done', originCard: chat.id });
-    expect(systemTexts(e, chat.id)).toEqual([`✓ Card “Add web_fetch tool” (${cardRef(card)}) finished: web_fetch is in, 141 tests pass`]);
+    expect(systemTexts(e, chat.id)).toEqual([`✓ Task “Add web_fetch tool” (${cardRef(card)}) finished: web_fetch is in, 141 tests pass`]);
     await until(() => reports(e)[0]?.delivered_at != null, 'report delivered');
     expect(reports(e)).toMatchObject([{ chat_id: chat.id, card_id: card.id, transition: 'done' }]);
     expect(e.runner.runs(chat.id).map((r) => r.status)).toEqual(['done', 'done']); // the user's message, then the report
@@ -114,7 +114,7 @@ describe('card lifecycle from a chat', () => {
     let cardId = '';
     const fake = new RoutedFake(
       [
-        () => [use('card_update', { id: cardId, status: 'closed' })],
+        () => [use('task_update', { id: cardId, status: 'closed' })],
         text('Closed it before any edit. “Board” stays.'),
         text('(report) It is closed.'),
       ],
@@ -130,10 +130,10 @@ describe('card lifecycle from a chat', () => {
     e.kanban.appendMessage(chat.id, 'user', 'user', text('Wait, I was wrong, keep “Board”.'));
     e.dispatcher.onUserMessage(chat.id);
     await until(() => e.runner.runs(card.id)[0]?.status === 'stopped', 'work run stopped by the close');
-    expect(e.runner.runs(card.id)[0]!.error).toBe('card closed');
+    expect(e.runner.runs(card.id)[0]!.error).toBe('task closed');
     expect(e.kanban.get(card.id).status).toBe('closed'); // not blocked: the stop of a closed card changes nothing
     expect(e.kanban.get(card.id).block).toBeNull();
-    expect(systemTexts(e, chat.id)).toEqual([`Card “Rename Board to Tasks” (${cardRef(card)}) closed by @atlas. Nothing more will be done on it.`]);
+    expect(systemTexts(e, chat.id)).toEqual([`Task “Rename Board to Tasks” (${cardRef(card)}) closed by @atlas. Nothing more will be done on it.`]);
     await until(() => reports(e)[0]?.delivered_at != null, 'report delivered');
 
     // The child stays in todo: a closed parent is not done.
@@ -148,7 +148,7 @@ describe('card lifecycle from a chat', () => {
   it('closed is an editable status for agents, and a closed card never starts', async () => {
     const e = await setup(new RoutedFake([], []), { dispatch: false });
     const card = e.kanban.create({ title: 'x', status: 'todo', assignee: 'atlas' }, 'user');
-    const r = runCardTool('card_update', { id: card.id, status: 'closed' }, { kanban: e.kanban, agentId: 'atlas', cardId: card.id });
+    const r = runCardTool('task_update', { id: card.id, status: 'closed' }, { kanban: e.kanban, agentId: 'atlas', cardId: card.id });
     expect(r.isError).toBe(false);
     e.dispatcher.start(10);
     await new Promise((res) => setTimeout(res, 50));
@@ -160,7 +160,7 @@ describe('card lifecycle from a chat', () => {
   it('Stop kills a running command and its process within 1 s; the card says so and writing resumes it', async () => {
     const fake = new RoutedFake(
       [text('Stopped. The last command was killed before it finished.'), text('It finished without running it again.')],
-      [[use('shell', { command: 'sleep 30; echo never' })], [{ type: 'text', text: 'Resumed: not running it again.' }, use('card_complete', { summary: 'skipped' })]],
+      [[use('shell', { command: 'sleep 30; echo never' })], [{ type: 'text', text: 'Resumed: not running it again.' }, use('task_complete', { summary: 'skipped' })]],
     );
     const e = await setup(fake);
     const chat = e.kanban.newChat('atlas');
@@ -190,7 +190,7 @@ describe('card lifecycle from a chat', () => {
 
     await until(() => e.kanban.get(card.id).status === 'blocked', 'card blocked');
     expect(e.kanban.get(card.id).block).toMatchObject({ kind: 'needs_input', reason: 'Stopped by you. Write what to do next.' });
-    expect(systemTexts(e, chat.id)).toEqual([`You stopped “Clean up old data folders” (${cardRef(card)}). Its run and commands were killed; writing on the card resumes it.`]);
+    expect(systemTexts(e, chat.id)).toEqual([`You stopped “Clean up old data folders” (${cardRef(card)}). Its run and commands were killed; writing in the task resumes it.`]);
     await until(() => reports(e)[0]?.delivered_at != null, 'stop reported');
     expect(reports(e).map((r) => r.transition)).toEqual(['stopped']);
 
@@ -204,12 +204,12 @@ describe('card lifecycle from a chat', () => {
   });
 
   it('reports a needs_input block, once', async () => {
-    const fake = new RoutedFake([text('It needs your OK on the colour.')], [[use('card_block', { kind: 'needs_input', question: 'Blue or green?' })]]);
+    const fake = new RoutedFake([text('It needs your OK on the colour.')], [[use('task_block', { kind: 'needs_input', question: 'Blue or green?' })]]);
     const e = await setup(fake);
     const chat = e.kanban.newChat('atlas');
     const card = e.kanban.create({ title: 'Theme', status: 'ready', assignee: 'atlas' }, 'atlas', chat.id);
     await until(() => reports(e)[0]?.delivered_at != null, 'report delivered');
-    expect(systemTexts(e, chat.id)).toEqual([`Card “Theme” (${cardRef(card)}) needs your OK: Blue or green?`]);
+    expect(systemTexts(e, chat.id)).toEqual([`Task “Theme” (${cardRef(card)}) needs your OK: Blue or green?`]);
     expect(e.runner.runs(chat.id)).toHaveLength(1);
     // A transient block or a dependency is not reported.
     e.kanban.update(card.id, { status: 'todo' }, 'user');
@@ -230,7 +230,7 @@ describe('card lifecycle from a chat', () => {
 
     // Second process: delivers it, but dies during the chat run (left 'running' with an expired lease).
     const second = await setup(new RoutedFake([], []), { dbFile, dataDir, dispatch: false });
-    expect(systemTexts(second, chat.id)).toEqual([`✓ Card “Job” (${cardRef(card)}) finished: all good`]);
+    expect(systemTexts(second, chat.id)).toEqual([`✓ Task “Job” (${cardRef(card)}) finished: all good`]);
     second.db
       .prepare("INSERT INTO runs (id, card_id, agent_id, kind, status, started_at) VALUES ('r_dead', ?, 'atlas', 'chat', 'running', ?)")
       .run(chat.id, new Date().toISOString());

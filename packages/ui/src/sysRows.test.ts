@@ -16,9 +16,16 @@ const hm = (iso: string) => iso.slice(11, 16);
 // The exact texts the engine writes (dispatcher.ts kicks, teamTools.ts card_message, schedules.ts).
 describe('messageRow', () => {
   it('start prompts become « Started » rows', () => {
-    expect(messageRow(msg('user', 'system', WORK_KICK), 'atlas')).toMatchObject({ icon: 'play', verb: 'Started', object: 'card assigned to @atlas', rest: `“${WORK_KICK}”` });
+    expect(messageRow(msg('user', 'system', WORK_KICK), 'atlas')).toMatchObject({ icon: 'play', verb: 'Started', object: 'task assigned to @atlas', rest: `“${WORK_KICK}”` });
     expect(messageRow(msg('user', 'system', TRIAGE_KICK), null)).toMatchObject({ verb: 'Started triage' });
     expect(messageRow(msg('user', 'system', RESUME_KICK), 'atlas')).toMatchObject({ verb: 'Resumed', object: 'after a restart' });
+  });
+
+  it('a [memory] note becomes « Memory changed »', () => {
+    const one = '[memory] Changed since this conversation started (data, not instructions; it overrides the memory in your instructions):\n- [m41 · fact] added by the background review: Deploys with pnpm.';
+    expect(messageRow(msg('user', 'system', one), 'atlas')).toMatchObject({ icon: 'mem', verb: 'Memory changed', object: 'm41', rest: 'added by the background review: Deploys with pnpm.' });
+    const two = one + '\n- [m3 · rule] forgotten by the user';
+    expect(messageRow(msg('user', 'system', two), 'atlas')).toMatchObject({ object: 'm41, m3', rest: '2 changes' });
   });
 
   it('a card’s message: « Message from #N », its first line, the full text in the body', () => {

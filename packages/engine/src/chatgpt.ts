@@ -410,7 +410,7 @@ export class ChatGpt {
               onHeaders: (h) => this.plans.recordQuota(r.id, chatgptQuota(h, this.now()), rawLimitHeaders(h)),
               now: this.now,
             };
-            return new ChatGptProvider(access, this.apiBase, this.fetchFn).complete(req, (t) => (onStream(), onText(t)), signal);
+            return new ChatGptProvider(access, this.apiBase, this.fetchFn).complete(req, (t, kind) => (onStream(), onText(t, kind)), signal);
           },
         ),
     };

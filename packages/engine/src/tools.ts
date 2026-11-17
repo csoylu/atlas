@@ -124,11 +124,6 @@ function serial<T>(full: string, fn: () => Promise<T>): Promise<T> {
   return next;
 }
 
-/** Forget every read (tests). */
-export function clearReads(): void {
-  reads.clear();
-}
-
 /** A page of a text file with line numbers (`N|text`), cut on a line boundary, with a footer when there is more. */
 export function numberedPage(text: string, offset: number, limit: number, budget = READ_CHARS): string {
   const lines = text.split('\n');
@@ -236,7 +231,7 @@ export const TOOLS = {
   }),
   grep: tool({
     description:
-      'Search file contents with a regular expression (ripgrep syntax). Use this instead of grep/rg/find in shell. ' +
+      'Search file contents with a regular expression (ripgrep syntax; use ignore_case instead of (?i)). Use this instead of grep/rg/find in shell. ' +
       'mode: content (matching lines as path:line:text), files (paths only) or count (path:matches). Skips node_modules and .git.',
     input: z.object({
       pattern: z.string().min(1),
@@ -398,8 +393,6 @@ function runForeground(command: string, timeout_s: number, { workdir, signal, on
     });
   });
 }
-
-export type ToolName = keyof typeof TOOLS;
 
 export function toolSpecs(): ToolSpec[] {
   return Object.entries(TOOLS).map(([name, t]) => {

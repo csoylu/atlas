@@ -15,6 +15,8 @@ import { Canvases } from './canvas.ts';
 import { Documents } from './documents.ts';
 import { workdirOf } from './agents.ts';
 import { Memories } from './memory.ts';
+import { MemoryCleanup } from './cleanup.ts';
+import { MemoryReview } from './memoryReview.ts';
 import { envWithSecrets, type SecretStore } from './secrets.ts';
 import { createApi } from './api.ts';
 import { Schedules } from './schedules.ts';
@@ -45,6 +47,8 @@ export interface EngineOptions {
   leaseMs?: number;
   /** Turns per run before it pauses (tests lower it; default MAX_TURNS). */
   maxTurns?: number;
+  /** Background memory review after runs (v3); default on. Tests with a scripted provider turn it off. */
+  memoryReview?: boolean;
   /** Start the dispatcher (default true). Runner-only tests turn it off. */
   dispatch?: boolean;
   /** Desktop: keys kept in the OS keychain, editable from Settings. */
@@ -78,6 +82,8 @@ export interface Engine {
   canvases: Canvases;
   documents: Documents;
   memories: Memories;
+  cleanup: MemoryCleanup;
+  review: MemoryReview;
   models: Models;
   schedules: Schedules;
   local: Local;
@@ -117,15 +123,18 @@ export async function startEngine(opts: EngineOptions): Promise<Engine> {
   models.setClaude(claude);
   const usage = new Usage(db, bus);
   const canvases = new Canvases(db, bus);
-  const memories = new Memories(db);
+  const memories = new Memories(db, bus);
   const schedules = new Schedules(db, bus, kanban);
+  const cleanup = new MemoryCleanup(db, bus, memories);
   const settings = new Settings(db);
   const voice = opts.voice ? new Voice(db, bus, opts.voice) : null;
   let url = '';
   const voiceChat = opts.voice ? new VoiceChat(db, bus, kanban, agents, () => url) : null;
   const documents = new Documents(db, bus, kanban, canvases, (id) => workdirOf(agents.get(id), opts.dataDir));
   const fileLog = new FileLog(db, new Snapshots(join(opts.dataDir, 'checkpoints')));
-  const runner = new Runner(db, bus, kanban, agents, models, canvases, memories, schedules, { fileLog, dataDir: opts.dataDir, leaseMs: opts.leaseMs, maxTurns: opts.maxTurns, usage, user: () => settings.user(), documents, isVoiceChat: voiceChat ? (id) => voiceChat.isVoiceChat(id) : undefined });
+  const review = new MemoryReview(db, kanban, memories, models, agents, settings, usage);
+  if (opts.memoryReview === false) review.after = () => {};
+  const runner = new Runner(db, bus, kanban, agents, models, canvases, memories, schedules, { fileLog, dataDir: opts.dataDir, leaseMs: opts.leaseMs, maxTurns: opts.maxTurns, usage, user: () => settings.user(), documents, cleanup, review, isVoiceChat: voiceChat ? (id) => voiceChat.isVoiceChat(id) : undefined });
   const rewinds = new Rewinds(db, bus, kanban, agents, runner, opts.dataDir, fileLog);
   const dispatcher = new Dispatcher(bus, kanban, agents, models, settings, runner);
   const server = createApi({
@@ -139,6 +148,7 @@ export async function startEngine(opts: EngineOptions): Promise<Engine> {
     canvases,
     documents,
     memories,
+    cleanup,
     schedules,
     local,
     accounts,
@@ -167,6 +177,8 @@ export async function startEngine(opts: EngineOptions): Promise<Engine> {
   if (opts.manageLocal ?? (opts.dispatch !== false && opts.dbFile !== ':memory:')) void local.startWatching();
   if (opts.dispatch !== false) {
     dispatcher.start();
+    // Built-in schedules come with the scheduler (tests without a dispatcher start from an empty list).
+    cleanup.ensureSchedule(schedules, agents);
     schedules.start();
   }
   voice?.start();
@@ -184,6 +196,8 @@ export async function startEngine(opts: EngineOptions): Promise<Engine> {
     canvases,
     documents,
     memories,
+    cleanup,
+    review,
     models,
     schedules,
     local,
@@ -201,6 +215,8 @@ export async function startEngine(opts: EngineOptions): Promise<Engine> {
       voice?.stop();
       dispatcher.stop();
       await runner.shutdown();
+      review.after = () => {};
+      await review.idle; // a background memory review writes to the db: let it finish before closing
       await rewinds.shutdown();
       await local.shutdown();
       chatgpt.stop();

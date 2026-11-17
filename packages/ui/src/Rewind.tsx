@@ -243,7 +243,7 @@ export function RewindConfirm({ rw }: { rw: Rewind }) {
           <p>No files changed since then.</p>
         )}
         <p className="rewind-fine">
-          Only files this chat changed come back; other chats' and cards' work is left alone. What it did elsewhere (commands, messages, other services) stays
+          Only files this chat changed come back; other chats' and tasks' work is left alone. What it did elsewhere (commands, messages, other services) stays
           done.
         </p>
         <div className="rewind-actions">

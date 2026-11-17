@@ -18,7 +18,7 @@ afterEach(async () => {
 });
 
 async function setup(fake: FakeProvider | null, maxTurns?: number) {
-  engine = await startEngine({
+  engine = await startEngine({ memoryReview: false, 
     maxTurns,
     dbFile: ':memory:',
     dataDir: mkdtempSync(join(tmpdir(), 'atlas-')),
@@ -44,9 +44,9 @@ describe('dispatcher', () => {
   it('triages a raw idea, then works it to done', async () => {
     let cardId = '';
     const fake = new FakeProvider([
-      () => [use('card_update', { id: cardId, title: 'Landing hero', body: 'Hero with CTA. Done when it renders.', assignee: 'atlas', priority: 2, status: 'ready' })],
+      () => [use('task_update', { id: cardId, title: 'Landing hero', body: 'Hero with CTA. Done when it renders.', assignee: 'atlas', priority: 2, status: 'ready' })],
       text('Triaged: ready for @atlas.'),
-      [use('card_complete', { summary: 'Hero built and checked.' })],
+      [use('task_complete', { summary: 'Hero built and checked.' })],
     ]);
     const e = await setup(fake);
     cardId = e.kanban.create({ title: 'landing hero thing' }, 'user').id;
@@ -60,12 +60,12 @@ describe('dispatcher', () => {
     ]);
     const system = e.kanban.messages(cardId).filter((m) => m.author === 'system');
     expect(system.map((m) => (m.content[0] as { text: string }).text)).toEqual([TRIAGE_KICK, WORK_KICK]);
-    expect(fake.calls[0]!.system).toContain('Your task: triage the card below');
-    expect(fake.calls[2]!.system).toContain('Your task: do the card below');
+    expect(fake.calls[0]!.system).toContain('Your job: triage the task below');
+    expect(fake.calls[2]!.system).toContain('Your job: do the task below');
   });
 
   it('keeps a child in todo until its parent is done', async () => {
-    const fake = new FakeProvider([[use('card_complete', { summary: 'parent done' })], [use('card_complete', { summary: 'child done' })]]);
+    const fake = new FakeProvider([[use('task_complete', { summary: 'parent done' })], [use('task_complete', { summary: 'child done' })]]);
     const e = await setup(fake);
     e.dispatcher.stop(); // set up both cards before anything runs
     const parent = e.kanban.create({ title: 'API', status: 'ready', assignee: 'atlas' }, 'user');
@@ -82,7 +82,7 @@ describe('dispatcher', () => {
   it('blocks with the last message when an agent stops without finishing, and resumes on answer', async () => {
     // A long status update with a table: kept whole, never cut (it was cut at 600 chars + « … »).
     const question = 'Here is where it stands.\n\n| Option | Cost |\n|---|---|\n' + '| blue | 1 |\n'.repeat(80) + '\nWhich colour do you want, blue or green?';
-    const fake = new FakeProvider([text(question), [use('card_complete', { summary: 'blue it is' })]]);
+    const fake = new FakeProvider([text(question), [use('task_complete', { summary: 'blue it is' })]]);
     const e = await setup(fake);
     const card = e.kanban.create({ title: 'Button', status: 'ready', assignee: 'atlas' }, 'user');
     await until(() => e.kanban.get(card.id).status === 'blocked', 'blocked');
@@ -96,7 +96,7 @@ describe('dispatcher', () => {
   });
 
   it('a work run reaching the turn limit pauses (asks to reply, not failed) and the reply resumes it', async () => {
-    const fake = new FakeProvider([[use('shell', { command: 'echo 1' })], [use('shell', { command: 'echo 2' })], [use('card_complete', { summary: 'finished after the pause' })]]);
+    const fake = new FakeProvider([[use('shell', { command: 'echo 1' })], [use('shell', { command: 'echo 2' })], [use('task_complete', { summary: 'finished after the pause' })]]);
     const e = await setup(fake, 2);
     const card = e.kanban.create({ title: 'Long', status: 'ready', assignee: 'atlas' }, 'user');
     await until(() => e.kanban.get(card.id).status === 'blocked', 'paused');
@@ -152,9 +152,9 @@ describe('dispatcher', () => {
     const order: string[] = [];
     const fake = new FakeProvider([]);
     fake.complete = async (req) => {
-      order.push(req.system.match(/# Current card\n(#\d+)/)![1]!);
+      order.push(req.system.match(/# Current task\n(#\d+)/)![1]!);
       await gate;
-      return { content: [use('card_complete', { summary: 'ok' })], stopReason: 'tool_use', usage: { input: 1, output: 1 } };
+      return { content: [use('task_complete', { summary: 'ok' })], stopReason: 'tool_use', usage: { input: 1, output: 1 } };
     };
     const e = await setup(fake);
     e.dispatcher.stop();
@@ -169,7 +169,7 @@ describe('dispatcher', () => {
   });
 
   it('retries a transient block when its time comes', async () => {
-    const fake = new FakeProvider([[use('card_complete', { summary: 'ok' })]]);
+    const fake = new FakeProvider([[use('task_complete', { summary: 'ok' })]]);
     const e = await setup(fake);
     const card = e.kanban.create({ title: 'x', status: 'triage', assignee: 'atlas' }, 'user');
     e.settings.update({ triageAgent: null });

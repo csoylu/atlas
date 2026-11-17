@@ -252,7 +252,7 @@ export function CardModal(props: {
           )}
           {!finished && (
             <button type="button" className="cm-btn" onClick={() => api.updateCard(card.id, { status: 'closed' }).then(onClose, onError)}>
-              Close card
+              Close task
             </button>
           )}
           <span className="cm-sp" />

@@ -16,9 +16,6 @@ describe('isTyping', () => {
     expect(isTyping(el('BUTTON'))).toBe(false);
     expect(isTyping(null)).toBe(false);
   });
-  it('a whiteboard keeps its own letter keys', () => {
-    expect(isTyping(el('CANVAS', { closest: (s: string) => (s === '.excalidraw' ? {} : null) }))).toBe(true);
-  });
 });
 
 describe('globalKey', () => {

@@ -152,33 +152,6 @@ export const TODO_LIMIT = 50;
 /** A user message; `ref` = the document part it is about (« Ask about this » in the side panel). */
 export const PostMessage = z.object({ text: z.string().trim().min(1).max(100_000), ref: DocRef.optional() });
 
-/**
- * Simplified drawing elements (design §11): what agents write instead of raw Excalidraw JSON. The UI converts them
- * with Excalidraw's skeleton API. `from`/`to` on arrows bind them to other elements by id.
- */
-export const SketchElement = z.object({
-  id: z.string().optional(),
-  type: z.enum(['rectangle', 'ellipse', 'diamond', 'text', 'arrow', 'line', 'frame']),
-  x: z.number(),
-  y: z.number(),
-  width: z.number().positive().optional(),
-  height: z.number().positive().optional(),
-  label: z.string().optional(),
-  from: z.string().optional(),
-  to: z.string().optional(),
-  color: z.string().optional().describe('stroke/text, Excalidraw light palette, e.g. #1e1e1e #c92a2a #1971c2 #2f9e44; dark theme adapts it'),
-  background: z.string().optional().describe('fill, Excalidraw light palette, e.g. #ffc9c9 #d0ebff #d3f9d8 #fff3bf #e9ecef; dark theme adapts it'),
-});
-export type SketchElement = z.infer<typeof SketchElement>;
-
-/** A drawing is either agent-written sketch elements, or full Excalidraw elements once edited in the UI. */
-export const DrawingScene = z.object({
-  sketch: z.array(SketchElement).optional(),
-  elements: z.array(z.unknown()).optional(),
-  files: z.record(z.string(), z.unknown()).optional(),
-});
-export type DrawingScene = z.infer<typeof DrawingScene>;
-
 /** Canvas nodes (design §16): one zod entry per renderer kind. Adding a kind = one entry here + one UI renderer. */
 const NodeBase = z.object({
   id: z.string().min(1),
@@ -194,7 +167,6 @@ export const CanvasNode = z.discriminatedUnion('kind', [
   NodeBase.extend({ kind: z.literal('markdown'), text: z.string() }),
   NodeBase.extend({ kind: z.literal('html'), html: z.string() }),
   NodeBase.extend({ kind: z.literal('url'), url: z.string().min(1) }),
-  NodeBase.extend({ kind: z.literal('drawing'), scene: DrawingScene }),
 ]);
 export type CanvasNode = z.infer<typeof CanvasNode>;
 export type CanvasNodeKind = CanvasNode['kind'];
@@ -296,7 +268,11 @@ export interface Agent {
   enabled: boolean;
   /** Work runs this agent may have at once. */
   maxRuns: number;
+  /** Its main chat (v3): the direct chat the sidebar and voice open; null until first opened. */
+  mainChat: string | null;
 }
+/** Starts a user message that came by voice (speech-to-text): the agent answers it in short spoken sentences. */
+export const VOICE_MARK = '🎙 ';
 export const UpdateAgent = z
   .object({
     rolePrompt: z.string().max(50_000),
@@ -323,6 +299,11 @@ export interface Settings {
   userName: string | null;
   /** The human in their own words (age, job, background): agents adapt to it. Asked on first launch. */
   userAbout: string | null;
+  /**
+   * The model of the background memory review (after a task ends, every REVIEW_EVERY messages of a chat): null = automatic
+   * (a Sonnet model if there is one, else the agent's own), 'off' = no review.
+   */
+  memoryReviewModel: string | null;
 }
 /** Max length of Settings.userAbout. */
 export const USER_ABOUT_MAX = 200;
@@ -343,6 +324,7 @@ export const UpdateSettings = z
     triageAgent: z.string().nullable(),
     userName: z.string().trim().min(1, 'Enter your name').max(40),
     userAbout: z.string().trim().min(1, 'Say a few words about yourself').max(USER_ABOUT_MAX),
+    memoryReviewModel: z.string().min(1).nullable(),
   })
   .partial()
   .strict();
@@ -367,12 +349,90 @@ export interface Model {
   lastError: string | null;
 }
 
-export const MEMORY_LIMIT = 4000;
+/**
+ * Memory v2 (design §8): one row per memory. Scope `shared` (every agent) or `agent:<id>` (that agent, i.e. its
+ * workdir/project). Rules, preferences and pinned rows are always in the system prompt (MEMORY_BUDGET chars per agent,
+ * own + shared, enforced on write); facts and project notes come back by recall (FTS on the card / first message).
+ */
+export const MEMORY_TEXT_MAX = 500;
+export const MEMORY_BUDGET = 3000;
+export const MEMORY_RECALL = 8;
+/** The background memory review reads a chat again after this many new messages (v3). */
+export const MEMORY_REVIEW_EVERY = 20;
+export const MemoryKind = z.enum(['rule', 'preference', 'fact', 'project']);
+export type MemoryKind = z.infer<typeof MemoryKind>;
+export const MemoryStatus = z.enum(['active', 'stale', 'archived']);
+export type MemoryStatus = z.infer<typeof MemoryStatus>;
+export const MemoryScope = z.string().regex(/^(shared|agent:[a-z][a-z0-9_-]*)$/, 'shared or agent:<id>');
 export interface Memory {
-  agentId: string;
+  id: number;
+  kind: MemoryKind;
+  scope: string;
   text: string;
+  /** Where it was learned: a message of a conversation (null when the user wrote it or it came from the v1 migration). */
+  sourceConversationId: string | null;
+  sourceSeq: number | null;
+  /** That conversation's card (to open it), when it still exists. */
+  sourceCardId: string | null;
+  /** Project memories: the card they belong to; it goes `stale` when that card is done or closed. */
+  cardId: string | null;
+  status: MemoryStatus;
+  pinned: boolean;
+  createdAt: string;
+  confirmedAt: string;
+  updatedAt: string;
   updatedBy: string;
-  updatedAt: string | null;
+}
+export const CreateMemory = z
+  .object({ kind: MemoryKind, scope: MemoryScope, text: z.string().trim().min(1).max(MEMORY_TEXT_MAX), pinned: z.boolean().default(false), cardId: z.string().nullable().default(null) })
+  .strict();
+export type CreateMemory = z.input<typeof CreateMemory>;
+/** Edit, pin, archive (status archived) or restore (status active). */
+export const UpdateMemory = z
+  .object({ text: z.string().trim().min(1).max(MEMORY_TEXT_MAX), kind: MemoryKind, scope: MemoryScope, pinned: z.boolean(), status: MemoryStatus })
+  .partial()
+  .strict();
+export type UpdateMemory = z.infer<typeof UpdateMemory>;
+export const MemoryQuery = z
+  .object({ scope: MemoryScope, kind: MemoryKind, status: MemoryStatus, q: z.string().trim().min(1) })
+  .partial();
+export type MemoryQuery = z.infer<typeof MemoryQuery>;
+/** One change to a memory, for the daily digest and its undo. `before`: the row before the change (null for an add). */
+export interface MemoryChange {
+  id: number;
+  memoryId: number;
+  at: string;
+  by: string;
+  action: 'add' | 'update' | 'confirm' | 'forget' | 'restore' | 'pin' | 'unpin' | 'stale' | 'undo';
+  before: { text: string; kind: MemoryKind; scope: string | null; status: MemoryStatus; pinned: boolean } | null;
+  /** Undone by a later change (its id). */
+  undoneBy: number | null;
+}
+
+/**
+ * Weekly memory cleanup (#83): an agent proposes, the user approves or rejects each line in the Inbox. merge: the first
+ * memory gets `text` (and kind/scope if given), the others are archived. update: one memory gets text/kind/scope.
+ * archive: every memory listed is archived.
+ */
+export const ProposalAction = z.enum(['merge', 'update', 'archive']);
+export type ProposalAction = z.infer<typeof ProposalAction>;
+export type ProposalStatus = 'pending' | 'approved' | 'rejected';
+export interface MemoryProposal {
+  id: number;
+  /** The cleanup card that made it. */
+  cardId: string;
+  action: ProposalAction;
+  memoryIds: number[];
+  text: string | null;
+  kind: MemoryKind | null;
+  scope: string | null;
+  reason: string;
+  status: ProposalStatus;
+  createdBy: string;
+  createdAt: string;
+  decidedAt: string | null;
+  /** The memories it is about, as they are now. */
+  memories: Memory[];
 }
 
 // claude_code remains readable only for historical records; new/updated models cannot select it.
@@ -496,11 +556,15 @@ export type ServerEvent =
   | { type: 'conversation.rewound'; cardId: string; conversationId: string }
   | { type: 'run.updated'; run: Run }
   | { type: 'run.delta'; runId: string; conversationId: string; text: string }
+  /** Thinking text as the model streams it (#80): shown live above the reply, not spoken. */
+  | { type: 'run.thinking'; runId: string; conversationId: string; text: string }
   /** A tool call started or ended. */
   | { type: 'toolcall.updated'; cardId: string; call: ToolCallTiming }
   | { type: 'canvas.updated'; canvas: Canvas }
   | { type: 'canvas.deleted'; id: string }
   | { type: 'document.updated'; doc: Doc }
+  | { type: 'memory.updated'; memory: Memory }
+  | { type: 'memory.proposal'; proposal: MemoryProposal }
   | { type: 'panel.updated'; chatId: string; tabs: PanelTab[] }
   | { type: 'schedule.updated'; schedule: Schedule }
   | { type: 'schedule.deleted'; id: string }
@@ -655,7 +719,7 @@ export type UpdatePlanAccount = z.infer<typeof UpdatePlanAccount>;
  * Kinds of notification the engine writes. card.blocked / card.review rows are for the system notification and history;
  * the Inbox shows those cards from their live state (InboxNeed). plan.* rows are « system ».
  */
-export const NOTIFICATION_KINDS = ['card.blocked', 'card.review', 'card.done', 'run.failed', 'schedule.ran', 'plan.switched', 'plan.exhausted'] as const;
+export const NOTIFICATION_KINDS = ['card.blocked', 'card.review', 'card.done', 'run.failed', 'schedule.ran', 'memory.cleanup', 'plan.switched', 'plan.exhausted'] as const;
 export type NotificationKind = (typeof NOTIFICATION_KINDS)[number];
 
 /** Something the user is told about (also shown as a system notification by the app). */
@@ -912,3 +976,6 @@ export const UpdateAccount = z
   .partial()
   .strict();
 export type UpdateAccount = z.infer<typeof UpdateAccount>;
+
+/** Pre-v3 transcripts call the task tools card_* (card_create…): the same tool under its current task_* name. */
+export const currentToolName = (name: string): string => (name.startsWith('card_') ? `task_${name.slice(5)}` : name);

@@ -42,6 +42,9 @@ export const Icon = {
   filter: svg(<path d="M2.5 4h11M4.5 8h7M6.5 12h3" />, 14),
   list: svg(<path d="M5.5 4h8M5.5 8h8M5.5 12h8M2.5 4h.01M2.5 8h.01M2.5 12h.01" />, 14),
   x: svg(<path d="M4 4l8 8M12 4l-8 8" />, 14),
+  archive: svg(<><rect x="2" y="3" width="12" height="3" rx="0.8" /><path d="M3 6v7h10V6M6.5 8.5h3" /></>, 14),
+  undo: svg(<path d="M5.5 3.5 2.5 6.5l3 3M2.5 6.5h7a3.5 3.5 0 0 1 0 7H7" />, 14),
+  memory: svg(<><path d="M8 2.5a3.5 3.5 0 0 0-3.5 3.5c0 1.3.6 2.1 1.4 2.8.6.5.9 1.1.9 1.7h2.4c0-.6.3-1.2.9-1.7.8-.7 1.4-1.5 1.4-2.8A3.5 3.5 0 0 0 8 2.5z" /><path d="M6.5 12.5h3M7 14h2" /></>),
   panel: svg(<><rect x="2" y="2.5" width="12" height="11" rx="1.5" /><path d="M9.5 2.5v11" /></>, 14),
   logout: svg(<path d="M6 2.5H3v11h3M10.5 5l3 3-3 3M13.5 8H6.5" />, 14),
   up: () => (

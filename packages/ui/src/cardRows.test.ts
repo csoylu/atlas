@@ -20,9 +20,9 @@ describe('card rows', () => {
       { status: 'ready', cards: [{ ref: '#3', title: 'C' }] },
       { status: 'done', cards: [{ ref: '#1', title: 'A' }] },
     ]);
-    expect(boardMeta(out)).toBe('4 cards · 2 running · 1 ready');
-    expect(boardMeta('(no cards)')).toBe('0 cards');
-    expect(boardMeta('#1 [done] @atlas P2 A')).toBe('1 card');
+    expect(boardMeta(out)).toBe('4 tasks · 2 running · 1 ready');
+    expect(boardMeta('(no cards)')).toBe('0 tasks');
+    expect(boardMeta('#1 [done] @atlas P2 A')).toBe('1 task');
   });
   it('history hits and one message', () => {
     const out = '#50 tool: …← exit 0 RUN v5.1.0…\n#62 atlas [rewound by the user: not part of the conversation]: …The reusable ChatRow is in…\n(3 older matches not shown)';

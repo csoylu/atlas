@@ -43,7 +43,9 @@ const plural = (n: number, one: string, many = one + 's') => `${n} ${n === 1 ? o
 const textOf = (m: Message) => m.content.flatMap((b) => (b.type === 'text' ? [b.text] : [])).join('\n');
 const quoted = (s: string) => `“${s}”`;
 
-const FROM = /^\[from @([\w.-]+), card (#\d+|c_[0-9a-f]{8})\]\s*([\s\S]*)$/;
+/** The engine's note that memory changed mid-conversation (memory.ts memoryDeltaNote). */
+const MEMORY_NOTE = '[memory] ';
+const FROM = /^\[from @([\w.-]+), (?:card|task) (#\d+|c_[0-9a-f]{8})\]\s*([\s\S]*)$/;
 const SCHEDULE = /\n\n— from schedule (\S+?), ([\s\S]*?)\.?\s*$/;
 
 /**
@@ -56,9 +58,15 @@ export function messageRow(m: Message, assignee: string | null): SysRow | null {
   const text = textOf(m).trim();
   const base = { key: m.id, at: m.at };
   if (m.author === 'system') {
-    if (text === WORK_KICK) return { ...base, icon: 'play', tone: 'plain', verb: 'Started', object: assignee ? `card assigned to @${assignee}` : 'the card', rest: quoted(text) };
-    if (text === TRIAGE_KICK) return { ...base, icon: 'play', tone: 'plain', verb: 'Started triage', object: 'new card', rest: quoted(text) };
+    if (text === WORK_KICK) return { ...base, icon: 'play', tone: 'plain', verb: 'Started', object: assignee ? `task assigned to @${assignee}` : 'the task', rest: quoted(text) };
+    if (text === TRIAGE_KICK) return { ...base, icon: 'play', tone: 'plain', verb: 'Started triage', object: 'new task', rest: quoted(text) };
     if (text === RESUME_KICK) return { ...base, icon: 'play', tone: 'plain', verb: 'Resumed', object: 'after a restart', rest: quoted(text) };
+    if (text.startsWith(MEMORY_NOTE)) {
+      // v3: memory changed since the chat started (another chat, the user, the background review).
+      const lines = text.split('\n').slice(1).filter((l) => l.startsWith('- ['));
+      const refs = lines.map((l) => /^- \[(m\d+)/.exec(l)?.[1]).filter(Boolean);
+      return { ...base, icon: 'mem', tone: 'plain', verb: 'Memory changed', object: refs.join(', '), rest: lines.length === 1 ? cut(lines[0]!.replace(/^- \[[^\]]*\]\s*/, ''), 140) : `${lines.length} changes`, body: { kind: 'markdown', text: lines.join('\n') } };
+    }
     return null;
   }
   if (m.author === 'schedule') {

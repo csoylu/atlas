@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import type { ContentBlock, Message } from '@atlas/shared';
-import { endedOnFailure, groupSummary, groupTurn, turns, type Segment } from './chatTurn.ts';
+import { draftSegments, endedOnFailure, groupSummary, groupTurn, turns, type Segment } from './chatTurn.ts';
 import type { ToolOutcome } from './toolRows.ts';
 
 let seq = 0;
@@ -128,5 +128,33 @@ describe('turns', () => {
   it('merges one agent’s consecutive messages', () => {
     const ms = [msg([text('hi')], 'user'), msg([text('a')]), msg([text('b')]), msg([text('sys')], 'system'), msg([text('c')])];
     expect(turns(ms, (m) => m.role === 'assistant').map((t) => t.length)).toEqual([1, 2, 1, 1]);
+  });
+});
+
+describe('draftSegments (#80)', () => {
+  const at = '2026-11-16T10:00:00.000Z';
+  it('the live thinking row sits above the streaming text, running until text follows', () => {
+    const thinking = draftSegments([{ kind: 'thinking', text: 'Let me see.', at }]);
+    expect(thinking).toMatchObject([{ kind: 'step', step: { kind: 'thinking', text: 'Let me see.', state: 'running', row: { running: 'Thinking' } } }]);
+    const both = draftSegments([
+      { kind: 'thinking', text: 'Let me see.', at },
+      { kind: 'text', text: 'Hi there.', at },
+    ]);
+    expect(kinds(both)).toEqual(['step', 'text']);
+    expect(both[0]).toMatchObject({ step: { state: 'done', id: thinking[0]!.kind === 'step' && thinking[0]!.step.id } }); // same key: the row stays
+  });
+
+  it('lays out like the landed message: no reorder, no duplicate', () => {
+    const live = draftSegments([
+      { kind: 'thinking', text: 'Let me see.', at },
+      { kind: 'text', text: 'Hi there.', at },
+    ]);
+    const landed = groupTurn([msg([{ type: 'thinking', thinking: 'Let me see.', signature: 's' }, text('Hi there.')])], new Map(), { live: false });
+    const shape = (ss: Segment[]) => ss.map((x) => (x.kind === 'step' ? `${x.step.kind}:${x.step.text}:${x.step.state}` : x.kind === 'text' ? `text:${x.text}` : x.kind));
+    expect(shape(live)).toEqual(shape(landed));
+  });
+
+  it('blank thinking shows nothing (as when saved)', () => {
+    expect(draftSegments([{ kind: 'thinking', text: '  ', at }])).toEqual([]);
   });
 });

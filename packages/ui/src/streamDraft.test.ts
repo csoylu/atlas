@@ -3,7 +3,7 @@ import { createElement } from 'react';
 import { renderToStaticMarkup } from 'react-dom/server';
 import Markdown from 'react-markdown';
 import remarkGfm from 'remark-gfm';
-import { CARET, draftMarkdown, openFence, rehypeCaret } from './streamDraft.ts';
+import { CARET, NO_DRAFT, addDelta, draftMarkdown, openFence, rehypeCaret } from './streamDraft.ts';
 
 const html = (draft: string) => renderToStaticMarkup(createElement(Markdown, { remarkPlugins: [remarkGfm], rehypePlugins: [rehypeCaret] }, draftMarkdown(draft)));
 const CARET_HTML = '<span class="caret" aria-hidden="true"></span>';
@@ -51,5 +51,26 @@ describe('draftMarkdown + rehypeCaret', () => {
     const md = '## Plan\n\n1. **One**: [x](https://x.y)\n2. Two\n\n| k | v |\n|---|---|\n| a | 1 |\n\n```js\nf()\n```\n\nDone.';
     const final = renderToStaticMarkup(createElement(Markdown, { remarkPlugins: [remarkGfm] }, md));
     expect(html(md).replace(CARET_HTML, '')).toBe(final);
+  });
+});
+
+describe('addDelta (#80)', () => {
+  it('keeps the stream order: thinking, then text; same-kind deltas extend the last part', () => {
+    let d = NO_DRAFT;
+    d = addDelta(d, 'thinking', 'Let me ', 't0');
+    d = addDelta(d, 'thinking', 'see.', 't1');
+    d = addDelta(d, 'text', '', 't2'); // empty deltas are ignored
+    d = addDelta(d, 'text', 'Hi ', 't3');
+    d = addDelta(d, 'text', 'there.', 't4');
+    expect(d).toEqual([
+      { kind: 'thinking', text: 'Let me see.', at: 't0' },
+      { kind: 'text', text: 'Hi there.', at: 't3' },
+    ]);
+    expect(NO_DRAFT).toEqual([]); // never mutated
+  });
+
+  it('interleaved thinking starts a new part', () => {
+    const d = ['thinking', 'text', 'thinking'].reduce((acc, k) => addDelta(acc, k as 'text' | 'thinking', k, 't'), NO_DRAFT);
+    expect(d.map((p) => p.kind)).toEqual(['thinking', 'text', 'thinking']);
   });
 });

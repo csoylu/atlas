@@ -10,6 +10,8 @@ import { CardDocs } from './DocPanel.tsx';
 import { ago } from './PlanAccounts.tsx';
 import { submitOnEnter } from './composerKeys.ts';
 import type { MessageStream } from './useMessages.ts';
+import { CleanupBody, DigestBody, type MemoryDigestState } from './MemoryDigest.tsx';
+import { DIGEST_ID } from './memoryView.ts';
 import { clearDraft, draftKey, readDraft, useDraft } from './drafts.ts';
 import {
   inboxKey,
@@ -46,9 +48,11 @@ export function Inbox(props: {
   onOpenCard(id: string): void;
   menuButton: ReactNode;
   stream: MessageStream;
+  /** The daily memory digest (#82): its row is in `inbox` already (withDigest), read and archived here. */
+  digest: MemoryDigestState;
   onError(e: unknown): void;
 }) {
-  const { inbox, selected, onSelect, onError } = props;
+  const { inbox, selected, onSelect, onError, digest } = props;
   const [tab, setTabState] = useState<InboxTab>(() => parseTab(localStorage.getItem('atlas.inbox.tab')));
   const setTab = (t: InboxTab) => {
     setTabState(t);
@@ -69,9 +73,10 @@ export function Inbox(props: {
   const unreadId = item ? toRead(item) : null;
   useEffect(() => {
     if (unreadId === null || readTried.current.has(unreadId)) return;
+    if (unreadId === DIGEST_ID) return void digest.seen(); // read again when a newer change comes
     readTried.current.add(unreadId);
     api.readNotification(unreadId).catch(onError);
-  }, [unreadId, onError]);
+  }, [unreadId, onError, digest]);
 
   // The key that left the list gives way to the item now at its place: keep the URL on what is shown.
   useEffect(() => {
@@ -83,7 +88,7 @@ export function Inbox(props: {
     listRef.current?.querySelector('.ni.on')?.scrollIntoView({ block: 'nearest' });
   }, [item?.key]);
 
-  const archive = (u: Notification) => api.archiveNotification(u.id).catch(onError);
+  const archive = (u: Notification) => (u.id === DIGEST_ID ? Promise.resolve(void digest.archive()) : api.archiveNotification(u.id).catch(onError));
   /** True when the message went out (the reply box then drops its draft); false after showing the error. */
   const answer = (cardId: string, text: string) =>
     api.postMessage(cardId, text).then(
@@ -147,7 +152,10 @@ export function Inbox(props: {
               aria-label="Archive all read"
               title={readCount ? `Archive all read (${readCount})` : 'Archive all read: nothing read yet'}
               disabled={!readCount}
-              onClick={() => api.archiveRead().catch(onError)}
+              onClick={() => {
+                if (digest.item?.readAt) digest.archive();
+                api.archiveRead().catch(onError);
+              }}
             >
               <Icon.dots />
             </button>
@@ -180,6 +188,7 @@ export function Inbox(props: {
             onOpenCard={props.onOpenCard}
             onArchive={archive}
             onAnswer={answer}
+            digest={digest}
             onError={onError}
           />
         ) : (
@@ -247,6 +256,7 @@ function Detail(props: {
   onOpenCard(id: string): void;
   onArchive(u: Notification): void;
   onAnswer(cardId: string, text: string): Promise<boolean>;
+  digest: MemoryDigestState;
   onError(e: unknown): void;
 }) {
   const { item } = props;
@@ -275,7 +285,7 @@ function Detail(props: {
         <div className="head-actions">
           {cardId && (
             <button type="button" className="head-btn" onClick={() => props.onOpenCard(cardId)}>
-              Open card
+              Open task
             </button>
           )}
           {item.update && (
@@ -302,7 +312,15 @@ function Detail(props: {
           {metaOf(item)} {ago(timeOf(item))}
           {card && card.parents.length > 0 && <> · child of {card.parents.map((p) => refName(p, props.cards)).join(', ')}</>}
         </div>
-        {item.need ? <NeedBody need={item.need} {...props} /> : <UpdateBody update={item.update} {...props} />}
+        {item.need ? (
+          <NeedBody need={item.need} {...props} />
+        ) : item.update.id === DIGEST_ID ? (
+          <DigestBody digest={props.digest} onError={props.onError} />
+        ) : item.update.kind === 'memory.cleanup' && item.update.cardId ? (
+          <CleanupBody cardId={item.update.cardId} summary={item.update.body} stream={props.stream} onError={props.onError} />
+        ) : (
+          <UpdateBody update={item.update} {...props} />
+        )}
       </div>
     </>
   );
@@ -358,7 +376,7 @@ function NeedBody(props: Parameters<typeof Detail>[0] & { need: InboxNeed }) {
               <Markdown remarkPlugins={[remarkGfm]}>{need.summary}</Markdown>
             </div>
           ) : (
-            <p className="muted">No summary: open the card for the conversation.</p>
+            <p className="muted">No summary: open the task for the conversation.</p>
           )}
           <div className="ibx-actions">
             <button type="button" className="head-btn pri" onClick={() => api.moveCard(card.id, 'done').catch(onError)}>
@@ -371,7 +389,7 @@ function NeedBody(props: Parameters<typeof Detail>[0] & { need: InboxNeed }) {
           {reply(`Or say what ${agent} should change…`)}
         </div>
         <CardDocs cardId={card.id} stream={props.stream} onOpenCard={props.onOpenCard} onError={onError} />
-        <p className="ibx-note">Approving moves the card to done. Requested changes go back to {agent}. Either way the item leaves the inbox by itself.</p>
+        <p className="ibx-note">Approving moves the task to done. Requested changes go back to {agent}. Either way the item leaves the inbox by itself.</p>
       </>
     );
 
@@ -391,7 +409,7 @@ function NeedBody(props: Parameters<typeof Detail>[0] & { need: InboxNeed }) {
           </div>
           {reply('Or tell ' + agent + ' what to do instead…')}
         </div>
-        <p className="ibx-note">Retry runs the card again. The item leaves the inbox by itself.</p>
+        <p className="ibx-note">Retry runs the task again. The item leaves the inbox by itself.</p>
       </>
     );
 
@@ -417,7 +435,7 @@ function NeedBody(props: Parameters<typeof Detail>[0] & { need: InboxNeed }) {
         )}
         {reply(b.options.length ? 'Or reply in your own words…' : `Reply to ${agent}…`)}
       </div>
-      <p className="ibx-note">Answering unblocks the card and {agent} carries on. The item leaves the inbox by itself.</p>
+      <p className="ibx-note">Answering unblocks the task and {agent} carries on. The item leaves the inbox by itself.</p>
     </>
   );
 }
@@ -470,7 +488,7 @@ function metaOf(item: InboxItem): string {
     if (item.need.failed) return 'failed';
     return 'blocked';
   }
-  return ({ 'card.done': 'done', 'schedule.ran': 'ran', 'run.failed': 'failed' } as Record<string, string>)[item.update.kind] ?? '';
+  return ({ 'card.done': 'done', 'schedule.ran': 'ran', 'run.failed': 'failed', 'memory.digest': 'latest change', 'memory.cleanup': 'proposed' } as Record<string, string>)[item.update.kind] ?? '';
 }
 
 function refName(id: string, cards: Card[]): string {

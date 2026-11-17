@@ -19,7 +19,7 @@ afterEach(async () => {
 });
 
 async function setup(fake: FakeProvider | null, dbFile = ':memory:', dataDir = mkdtempSync(join(tmpdir(), 'atlas-')), extra: { maxTurns?: number } = {}) {
-  const engine = await startEngine({
+  const engine = await startEngine({ memoryReview: false, 
     dbFile,
     dataDir,
     port: 0,
@@ -37,6 +37,17 @@ async function setup(fake: FakeProvider | null, dbFile = ':memory:', dataDir = m
 const text = (t: string) => [{ type: 'text' as const, text: t }];
 
 describe('runner', () => {
+  it('streams thinking as run.thinking, before the text, and never as run.delta (#80)', async () => {
+    const fake = new FakeProvider([[{ type: 'thinking', thinking: 'Let me see.', signature: 's' }, { type: 'text', text: 'Hi there.' }]]);
+    const { engine, events } = await setup(fake);
+    const card = engine.kanban.create({ title: 'Think', assignee: 'atlas' }, 'user');
+    engine.kanban.appendMessage(card.id, 'user', 'user', text('hello'));
+    engine.runner.wake(card.id);
+    await engine.runner.settled(card.id);
+    const live = events.flatMap((e) => (e.type === 'run.thinking' || e.type === 'run.delta' ? [`${e.type}:${e.text}`] : []));
+    expect(live).toEqual(['run.thinking:Let me see.', 'run.delta:Hi ', 'run.delta:there.']);
+  });
+
   it('answers a message on an assigned card, using tools, and streams text', async () => {
     const fake = new FakeProvider([
       [
@@ -384,10 +395,10 @@ describe('context management (design §8)', () => {
     const stable = req.system.slice(0, req.cache!.systemStable);
     expect(stable).toContain('# Team');
     expect(stable).not.toContain('# Memory');
-    expect(req.system.slice(req.cache!.systemStable)).toMatch(/^# Memory[\s\S]*# Current card[\s\S]*Today is /);
+    expect(req.system.slice(req.cache!.systemStable)).toMatch(/^# Memory[\s\S]*# Current task[\s\S]*Today is /);
 
     // A memory edit changes only the tail: the prefix is still read from the cache.
-    engine.memories.set('atlas', 'likes tea', 'atlas');
+    engine.memories.add({ kind: 'preference', scope: 'agent:atlas', text: 'likes tea' }, 'atlas');
     engine.kanban.appendMessage(card.id, 'user', 'user', text('two'));
     engine.runner.wake(card.id);
     await engine.runner.settled(card.id);

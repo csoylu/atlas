@@ -93,7 +93,7 @@ export function DocPanel(props: {
               {byline(tab, props.userName).replace(/ · attached to card .*$/, '')}
               {tab.cardTitle && doc.cardId && (
                 <>
-                  {' · attached to card '}
+                  {' · attached to task '}
                   <button className="sd-link" onClick={() => props.onOpenCard(doc.cardId!)}>
                     “{tab.cardTitle}”
                   </button>
@@ -166,7 +166,7 @@ export function CardDocs({ cardId, stream, onOpenInPanel, onOpenCard, onError }:
           actions={
             <>
               {onOpenInPanel && (
-                <button className="sd-btn" title="Show it beside the card's chat" onClick={() => onOpenInPanel(doc)}>
+                <button className="sd-btn" title="Show it beside the task's chat" onClick={() => onOpenInPanel(doc)}>
                   Open in panel
                 </button>
               )}

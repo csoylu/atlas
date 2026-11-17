@@ -1,4 +1,4 @@
-import type { ContentBlock, Message, ToolCallDetail } from '@atlas/shared';
+import { currentToolName, type ContentBlock, type Message, type ToolCallDetail } from '@atlas/shared';
 import { artifactOf } from './cardModal.ts';
 import { thinkingRow, toolRow, type RowIcon, type RowModel, type ToolOutcome } from './toolRows.ts';
 
@@ -85,9 +85,23 @@ export function groupTurn(messages: Message[], results: Map<string, ToolOutcome>
   return out;
 }
 
+/**
+ * The streaming answer as segments (#80), in the model's order: a thinking part is the same row as the saved thinking
+ * step (running while it's the last part, « Thought » once text follows), a text part is text. Keys are by position,
+ * so a row keeps its state (open or not) while later parts stream in.
+ */
+export function draftSegments(parts: readonly { kind: 'thinking' | 'text'; text: string; at: string }[]): Segment[] {
+  return parts.flatMap((p, i): Segment[] => {
+    if (p.kind === 'text') return [{ kind: 'text', key: `draft:${i}`, text: p.text }];
+    if (!p.text.trim()) return [];
+    const running = i === parts.length - 1;
+    return [{ kind: 'step', step: { id: `draft:${i}`, kind: 'thinking', name: 'thinking', input: null, text: p.text, row: thinkingRow(), state: running ? 'running' : 'done', at: p.at } }];
+  });
+}
+
 function pinOf(s: Step, livePlan: boolean): Pin | null {
   const ok = s.result && !s.result.isError;
-  if (s.name === 'card_block') return 'ask';
+  if (currentToolName(s.name) === 'task_block') return 'ask';
   if (s.name === 'todo_write' && livePlan) return 'plan';
   if (ok && shownNodes(s.name, s.input)) return 'canvas';
   if (ok && artifactOf(s.name, s.input, s.result!.content)) return 'doc';

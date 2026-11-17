@@ -1,29 +1,25 @@
-import { useEffect, useRef, useState } from 'react';
-import type { Agent, Card, Effort, Model } from '@atlas/shared';
+import { useEffect, useState } from 'react';
+import { cardRef, type Agent, type Card, type Model } from '@atlas/shared';
+import { ThreadPanel } from './ThreadPanel.tsx';
 import { api } from './api.ts';
 import { CardPanel } from './CardPanel.tsx';
 import type { MessageStream } from './useMessages.ts';
-import { tint } from './agentTint.ts';
-import { submitOnEnter } from './composerKeys.ts';
-import { ComposerMeta } from './Usage.tsx';
-import { clearDraft, draftKey, useDraft } from './drafts.ts';
 import { DocPanel, usePanelMode, usePanelTabs, type Quote } from './DocPanel.tsx';
 
-const LAST_AGENT = 'atlas.chat.agent';
+export const LAST_AGENT = 'atlas.chat.agent';
 /** Window event: show / hide the documents panel of the chat on screen (⌘\, the palette). */
 export const TOGGLE_PANEL = 'atlas:toggle-panel';
 
 /**
- * Direct chats: talk to any agent without making a card first. The history lives in the sidebar (App); this pane
- * shows one chat (#/chat/<cardId>) or a new one (#/chat/new, or #/chat/<agentId> to start with that agent).
- * A new chat is only created when the user sends its first message, so "New chat" clicks leave no empty chats behind.
+ * Direct chats (v3): each agent has one main chat (#/chat/<agentId> opens it, created on first use); older chats are
+ * History (#/chat/<cardId>, still open to continue). #/chat/new opens the main chat of the agent last talked to.
  */
 export function ChatView(props: {
   agents: Agent[];
   chats: Card[];
   /** The chat history has loaded (until then an unknown chat id is "loading", not "gone"). */
   loaded: boolean;
-  /** Card id of a chat, an agent id to start a chat with, or null / 'new'. */
+  /** Card id of a chat, an agent id (its main chat), or null / 'new'. */
   target: string | null;
   stream: MessageStream;
   cards: Card[];
@@ -32,6 +28,10 @@ export function ChatView(props: {
   models: Model[];
   userName: string | null;
   onOpenChat(cardId: string | null): void;
+  /** Open an agent's main chat (App: creates it if needed, refreshes the agents, navigates). */
+  onOpenMain(agentId: string): void;
+  /** `/clear` typed in the composer: start a fresh main chat with the agent. */
+  onClear(agentId: string): void;
   onOpenCard(id: string): void;
   onError(e: unknown): void;
 }) {
@@ -40,100 +40,16 @@ export function ChatView(props: {
   if (!agents.length) return <div className="empty-note chat-empty">No agents yet. Add one on the Agents page.</div>;
   if (chat) return <ChatWithPanel key={chat.id} {...props} chat={chat} />;
   if (props.target?.startsWith('c_') && !props.loaded) return <div className="chat-pane loading" />;
-  const start = agents.some((a) => a.id === props.target) ? props.target : null;
-  return <NewChat key={start ?? 'new'} agents={agents} planAgents={props.planAgents} models={props.models} start={start} onCreated={props.onOpenChat} onError={onError} />;
+  const enabled = agents.filter((a) => a.enabled);
+  const last = localStorage.getItem(LAST_AGENT);
+  const agentId = agents.some((a) => a.id === props.target) ? props.target! : (enabled.find((a) => a.id === last) ?? enabled[0] ?? agents[0])!.id;
+  return <OpenMain key={agentId} agentId={agentId} onOpenMain={props.onOpenMain} />;
 }
 
-/** A chat that doesn't exist yet: pick the agent, write, and the first message creates it. */
-function NewChat(props: { agents: Agent[]; planAgents: Set<string>; models: Model[]; start: string | null; onCreated(cardId: string): void; onError(e: unknown): void }) {
-  const enabled = props.agents.filter((a) => a.enabled);
-  const remembered = localStorage.getItem(LAST_AGENT);
-  const [agentId, setAgentId] = useState(
-    props.start ?? (enabled.some((a) => a.id === remembered) ? remembered! : (enabled[0] ?? props.agents[0])!.id),
-  );
-  const [text, setText] = useDraft(draftKey('new'));
-  const [sending, setSending] = useState(false);
-  const [pick, setPick] = useState<{ modelId: string | null; effort: Effort | null }>({ modelId: null, effort: null });
-  const input = useRef<HTMLTextAreaElement>(null);
-  useEffect(() => {
-    input.current?.focus();
-  }, [agentId]);
-  const agent = props.agents.find((a) => a.id === agentId);
-
-  const send = async () => {
-    const t = text.trim();
-    if (!t || sending) return;
-    setSending(true);
-    try {
-      const card = await api.newChat(agentId);
-      if (pick.modelId || pick.effort) await api.updateCard(card.id, pick);
-      await api.postMessage(card.id, t);
-      localStorage.setItem(LAST_AGENT, agentId);
-      setText('');
-      clearDraft(draftKey('new'));
-      props.onCreated(card.id);
-    } catch (e) {
-      setSending(false);
-      props.onError(e);
-    }
-  };
-
-  return (
-    <div className="chat-view">
-      <aside className="panel chat-pane new-chat">
-        <div className="new-chat-body">
-          <h2>New chat</h2>
-          <div className="agent-pick" role="radiogroup" aria-label="Agent">
-            {props.agents.map((a) => (
-              <button
-                key={a.id}
-                role="radio"
-                aria-checked={a.id === agentId}
-                className={'agent-chip' + (a.id === agentId ? ' on' : '')}
-                onClick={() => setAgentId(a.id)}
-                title={a.enabled ? a.modelId : `${a.modelId} · disabled`}
-              >
-                <span className="avatar small" style={tint(a.id)}>
-                  {a.id.slice(0, 1).toUpperCase()}
-                </span>
-                <span>@{a.id}</span>
-              </button>
-            ))}
-          </div>
-          <p className="muted">
-            {agent?.rolePrompt.split('\n')[0] || `Ask @${agentId} anything.`} For work to track, it creates cards on the board.
-          </p>
-        </div>
-        <form
-          className="composer"
-          onSubmit={(e) => {
-            e.preventDefault();
-            void send();
-          }}
-        >
-          <textarea
-            ref={input}
-            value={text}
-            placeholder={`Message @${agentId}…  (Enter to send · Shift+Enter for newline)`}
-            onChange={(e) => setText(e.target.value)}
-            onKeyDown={submitOnEnter}
-          />
-          <ComposerMeta
-            usage={null}
-            send={{ disabled: !text.trim() || sending }}
-            plan={pick.modelId ? props.models.find((m) => m.id === pick.modelId)?.provider === 'chatgpt' : props.planAgents.has(agentId)}
-            pick={{
-              models: props.models,
-              agentModelId: agent?.modelId ?? null,
-              modelId: pick.modelId,
-              effort: pick.effort,
-              onChange: (p) => setPick((cur) => ({ ...cur, ...p })),
-            }}
-          />
-        </form>
-      </aside>
-    </div>
-  );
+/** Resolves #/chat/<agent> or #/chat/new to the agent's main chat. */
+function OpenMain({ agentId, onOpenMain }: { agentId: string; onOpenMain(agentId: string): void }) {
+  useEffect(() => onOpenMain(agentId), [agentId, onOpenMain]);
+  return <div className="chat-pane loading" />;
 }
 
 /**
@@ -149,7 +65,15 @@ function ChatWithPanel(props: Parameters<typeof ChatView>[0] & { chat: Card }) {
   // An agent opening or focusing a tab shows the panel again.
   const lastFocus = tabs.reduce((m, t) => (t.focusedAt > m ? t.focusedAt : m), '');
   useEffect(() => setHidden(false), [lastFocus]);
-  const show = tabs.length > 0 && !hidden;
+  // v3: a task created from this chat opens as a thread beside it (others, and « Details », in the ticket modal).
+  const [threadId, setThreadId] = useState<string | null>(null);
+  const thread = threadId ? props.cards.find((c) => c.id === threadId && c.board !== 'direct') : undefined;
+  const openCard = (ref: string) => {
+    const c = props.cards.find((x) => x.id === ref || cardRef(x) === ref);
+    if (c && c.originCard === chat.id && c.board !== 'direct') setThreadId(c.id);
+    else props.onOpenCard(ref);
+  };
+  const show = tabs.length > 0 && !hidden && !thread;
   // ⌘\ (App) and the palette toggle the panel of the chat on screen.
   const hasTabs = tabs.length > 0;
   useEffect(() => {
@@ -159,12 +83,12 @@ function ChatWithPanel(props: Parameters<typeof ChatView>[0] & { chat: Card }) {
   }, [hasTabs]);
   const focusComposer = () => setTimeout(() => document.querySelector<HTMLTextAreaElement>('.chat-pane .composer textarea')?.focus(), 0);
   return (
-    <div className={'chat-view' + (show ? ' with-doc ' + mode : '')}>
+    <div className={'chat-view' + (show || thread ? ' with-doc ' + mode : '')}>
       <CardPanel
         plan={chat.modelId ? props.models.find((m) => m.id === chat.modelId)?.provider === 'chatgpt' : props.planAgents.has(chat.assignee ?? '')}
         models={props.models}
         card={chat}
-        onOpen={props.onOpenCard}
+        onOpen={openCard}
         agents={props.agents}
         stream={stream}
         onClose={() => props.onOpenChat(null)}
@@ -173,6 +97,7 @@ function ChatWithPanel(props: Parameters<typeof ChatView>[0] & { chat: Card }) {
         cards={props.cards}
         quote={quote}
         onQuoteClear={() => setQuote(null)}
+        onClear={props.onClear}
         hiddenDocs={hidden ? tabs.length : 0}
         onShowDocs={() => setHidden(false)}
         onHideDocs={show ? () => setHidden(true) : undefined}
@@ -180,6 +105,23 @@ function ChatWithPanel(props: Parameters<typeof ChatView>[0] & { chat: Card }) {
           api.panelOpen(chat.id, r.docId, r.section).then(() => setHidden(false), onError);
         }}
       />
+      {thread && (
+        <ThreadPanel
+          key={thread.id}
+          card={thread}
+          cards={props.cards}
+          agents={props.agents}
+          models={props.models}
+          plan={thread.modelId ? props.models.find((m) => m.id === thread.modelId)?.provider === 'chatgpt' : props.planAgents.has(thread.assignee ?? '')}
+          mode={mode}
+          stream={stream}
+          userName={props.userName}
+          onOpenCard={openCard}
+          onDetails={() => props.onOpenCard(thread.id)}
+          onClose={() => setThreadId(null)}
+          onError={onError}
+        />
+      )}
       {show && (
         <DocPanel
           chatId={chat.id}

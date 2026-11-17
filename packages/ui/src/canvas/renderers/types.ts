@@ -13,8 +13,6 @@ export interface Renderer<K extends CanvasNodeKind = CanvasNodeKind> {
   size: [number, number];
   /** Live view inside the node frame. `interactive` is false while the board is being dragged. */
   View: ComponentType<{ node: NodeOf<K>; interactive: boolean }>;
-  /** Editor shown when the node is in edit mode; omit if the kind edits in a modal (drawing). */
+  /** Editor shown when the node is in edit mode. */
   Editor?: ComponentType<{ node: NodeOf<K>; onChange(patch: Partial<NodeOf<K>>): void }>;
-  /** Opens a full-screen editor instead of inline editing. */
-  modal?: boolean;
 }

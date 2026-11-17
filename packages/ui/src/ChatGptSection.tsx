@@ -167,15 +167,3 @@ export function PlanWelcome(props: { onDone(): void }) {
     </div>
   );
 }
-
-/** « Using ChatGPT plan · Manage usage », near the composer of a chat whose agent runs on the plan. */
-export function PlanNote() {
-  return (
-    <div className="plan-note">
-      <span>Using ChatGPT plan</span>
-      <a href={CHATGPT_USAGE_URL} target="_blank" rel="noreferrer">
-        Manage usage
-      </a>
-    </div>
-  );
-}
