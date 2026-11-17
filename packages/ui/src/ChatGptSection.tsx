@@ -1,16 +1,15 @@
-import { useCallback, useEffect, useState } from 'react';
-import { CHATGPT_USAGE_URL, type ChatGptModel, type ChatGptStatus, type Model } from '@atlas/shared';
+import { useState } from 'react';
+import { CHATGPT_USAGE_URL, type ChatGptStatus } from '@atlas/shared';
 import { api } from './api.ts';
 import { PlanAccountList } from './PlanAccounts.tsx';
 
 /**
  * The user's ChatGPT plan (engine chatgpt.ts, OpenAI's « Sign in with ChatGPT » for open-source, locally hosted apps):
- * sign in, choose whether board work may use it, add its models, see when it's paused. Wording and actions follow
+ * sign in, choose whether board work may use it, see when it's paused (its models are added on Settings → Model list). Wording and actions follow
  * OpenAI's UI guidelines: « Continue with ChatGPT », « Manage usage » next to usage and on the limit.
  */
-export function ChatGptSection(props: { status: ChatGptStatus | null; models: Model[]; onChanged(): void; onError(e: unknown): void }) {
+export function ChatGptSection(props: { status: ChatGptStatus | null; onChanged(): void; onError(e: unknown): void }) {
   const { status: s, onError } = props;
-  const [available, setAvailable] = useState<ChatGptModel[] | null>(null);
   const [busy, setBusy] = useState<string | null>(null);
   const act = async (key: string, f: () => Promise<unknown>) => {
     setBusy(key);
@@ -23,12 +22,6 @@ export function ChatGptSection(props: { status: ChatGptStatus | null; models: Mo
       setBusy(null);
     }
   };
-  const ready = !!s?.signedIn && s.planUsage;
-  const loadModels = useCallback(() => api.chatgptModels().then(setAvailable, onError), [onError]);
-  useEffect(() => {
-    if (ready) void loadModels();
-    else setAvailable(null);
-  }, [ready, loadModels]);
 
   const signIn = (accountId?: string) =>
     act('login', async () => {
@@ -36,7 +29,6 @@ export function ChatGptSection(props: { status: ChatGptStatus | null; models: Mo
       // The desktop app opens window.open links in the system browser (OpenAI requires it for sign-in).
       window.open(url, '_blank', 'noopener');
     });
-  const added = new Set(props.models.filter((m) => m.provider === 'chatgpt').map((m) => m.name));
   const siwc = (accountId?: string) =>
     s?.pending && (!accountId || s.pendingAccountId === accountId) ? (
       <>
@@ -107,45 +99,11 @@ export function ChatGptSection(props: { status: ChatGptStatus | null; models: Mo
             onChanged={props.onChanged}
             onError={onError}
           />
-          {ready && (
-            <div className="plan-models">
-              <div className="plan-models-head">Models on your plan</div>
-              {available === null ? (
-                <span className="muted">Loading…</span>
-              ) : available.length === 0 ? (
-                <span className="muted">This account has no models for Atlas.</span>
-              ) : (
-                available.map((m) => (
-                  <div key={m.slug} className="plan-model">
-                    <span>{m.displayName}</span>
-                    <code>{m.slug}</code>
-                    {added.has(m.slug) ? (
-                      <span className="muted">Added: pick it on an agent</span>
-                    ) : (
-                      <button
-                        className="tool"
-                        disabled={busy === 'add:' + m.slug}
-                        onClick={() => act('add:' + m.slug, () => api.createModel({ id: modelId(m.slug), provider: 'chatgpt', name: m.slug }))}
-                      >
-                        Give to agents
-                      </button>
-                    )}
-                  </div>
-                ))
-              )}
-            </div>
-          )}
         </div>
       )}
     </section>
   );
 }
-
-/** An Atlas model id from an OpenAI slug ('gpt-6.1-sol' → 'gpt-6-1-sol'). */
-export const modelId = (slug: string) => {
-  const id = slug.toLowerCase().replace(/[^a-z0-9_-]+/g, '-');
-  return (/^[a-z]/.test(id) ? id : 'm-' + id).slice(0, 31);
-};
 
 /** The one-time notice after the first sign-in with plan use (OpenAI's guidelines: shown once, then Got it). */
 export function PlanWelcome(props: { onDone(): void }) {

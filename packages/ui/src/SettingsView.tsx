@@ -119,8 +119,8 @@ export function SettingsView(props: {
             <BoardSettings settings={props.settings} agents={props.agents} onSettings={props.onSettings} onError={onError} />
           ) : page === 'subscriptions' ? (
             <>
-              <ClaudePlanSection stream={stream} models={props.models} keyStore={keyStore} onChanged={modelsChanged} onError={onError} />
-              <ChatGptSection status={props.chatgpt} models={props.models} onChanged={modelsChanged} onError={onError} />
+              <ClaudePlanSection stream={stream} keyStore={keyStore} onChanged={modelsChanged} onError={onError} />
+              <ChatGptSection status={props.chatgpt} onChanged={modelsChanged} onError={onError} />
             </>
           ) : page === 'api-keys' ? (
             <AccountsSection keyStore={keyStore} onChanged={modelsChanged} onError={onError} />
@@ -129,7 +129,7 @@ export function SettingsView(props: {
               <LocalModels stream={stream} agents={props.agents} onModelsChanged={modelsChanged} onError={onError} />
             </div>
           ) : page === 'model-list' ? (
-            <ModelListSection onChanged={modelsChanged} onError={onError} />
+            <ModelListSection stream={stream} chatgpt={props.chatgpt} onChanged={modelsChanged} onError={onError} />
           ) : page === 'usage' ? (
             <UsageSection stream={stream} onError={onError} />
           ) : page === 'profile' ? (

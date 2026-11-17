@@ -1,14 +1,13 @@
 import { useCallback, useEffect, useState } from 'react';
-import { CLAUDE_PLAN_SETTINGS, type ClaudePlanModel, type ClaudePlanSetting, type ClaudePlanStatus, type Model } from '@atlas/shared';
+import { CLAUDE_PLAN_SETTINGS, type ClaudePlanSetting, type ClaudePlanStatus } from '@atlas/shared';
 import { api } from './api.ts';
 import { PlanAccountList } from './PlanAccounts.tsx';
 import type { MessageStream } from './useMessages.ts';
 
-/** Claude subscription sign-in, available models and limit status. */
-export function ClaudePlanSection(props: { stream: MessageStream; models: Model[]; keyStore: string | null; onChanged(): void; onError(e: unknown): void }) {
+/** Claude subscription sign-in, accounts and limit status. Its models are added on Settings → Model list (#101). */
+export function ClaudePlanSection(props: { stream: MessageStream; keyStore: string | null; onChanged(): void; onError(e: unknown): void }) {
   const { stream, onError } = props;
   const [s, setS] = useState<ClaudePlanStatus | null>(null);
-  const [available, setAvailable] = useState<ClaudePlanModel[] | null>(null);
   const [busy, setBusy] = useState<string | null>(null);
   const [code, setCode] = useState('');
   const [editing, setEditing] = useState(false);
@@ -31,18 +30,12 @@ export function ClaudePlanSection(props: { stream: MessageStream; models: Model[
       setBusy(null);
     }
   };
-  const ready = !!s?.signedIn && s.configured;
-  useEffect(() => {
-    if (ready) api.claudeModels().then(setAvailable, onError);
-    else setAvailable(null);
-  }, [ready, onError]);
 
   const signIn = (accountId?: string) =>
     act('login', async () => {
       const { url } = await api.claudeLogin(accountId);
       window.open(url, '_blank', 'noopener');
     });
-  const added = new Set(props.models.filter((m) => m.provider === 'claude_plan').map((m) => m.name));
   const showSettings = editing || (s && !s.configured);
   const pasteCode = (
     <>
@@ -113,42 +106,11 @@ export function ClaudePlanSection(props: { stream: MessageStream; models: Model[
               </button>
             </div>
           )}
-          {ready && (
-            <div className="plan-models">
-              <div className="plan-models-head">Models on your plan</div>
-              {available === null ? (
-                <span className="muted">Loading…</span>
-              ) : available.length === 0 ? (
-                <span className="muted">This account has no models for Atlas.</span>
-              ) : (
-                available.map((m) => (
-                  <div key={m.id} className="plan-model">
-                    <span>{m.displayName}</span>
-                    <code>{m.id}</code>
-                    {added.has(m.id) ? (
-                      <span className="muted">Added: pick it on an agent</span>
-                    ) : (
-                      <button
-                        className="tool"
-                        disabled={busy === 'add:' + m.id}
-                        onClick={() => act('add:' + m.id, () => api.createModel({ id: planModelId(m.id), provider: 'claude_plan', name: m.id }))}
-                      >
-                        Give to agents
-                      </button>
-                    )}
-                  </div>
-                ))
-              )}
-            </div>
-          )}
         </div>
       )}
     </section>
   );
 }
-
-/** An Atlas model id for a plan model ('claude-opus-5' → 'plan-claude-opus-5'), distinct from API-key models. */
-const planModelId = (id: string) => ('plan-' + id.toLowerCase().replace(/[^a-z0-9_-]+/g, '-')).slice(0, 31);
 
 /** The connection details: each one a keychain entry (desktop) or an env var (server). Secrets never come back. */
 function ClaudeSettings(props: { status: ClaudePlanStatus; keyStore: string | null; onDone(): void; onSaved(): Promise<unknown>; onError(e: unknown): void }) {

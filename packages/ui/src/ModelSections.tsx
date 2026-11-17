@@ -1,12 +1,14 @@
 import { useCallback, useEffect, useState } from 'react';
-import type { Agent, Model, ModelTest } from '@atlas/shared';
+import type { Agent, ChatGptModel, ChatGptStatus, ClaudePlanModel, ClaudePlanStatus, LocalModel, LocalStatus, Model, ModelTest } from '@atlas/shared';
 import { api } from './api.ts';
+import { chatgptSource, claudeSource, localSource, type AvailableRow, type AvailableSource } from './availableModels.ts';
+import type { MessageStream } from './useMessages.ts';
 
 /**
  * Settings → Model list: the models agents can pick (Claude, ChatGPT plan models, OpenAI-compatible servers, local
  * models given to agents), each with its test, edit and key.
  */
-export function ModelListSection(props: { onChanged(): void; onError(e: unknown): void }) {
+export function ModelListSection(props: { stream: MessageStream; chatgpt: ChatGptStatus | null; onChanged(): void; onError(e: unknown): void }) {
   const { onError } = props;
   const [agents, setAgents] = useState<Agent[]>([]);
   const [models, setModels] = useState<Model[]>([]);
@@ -17,18 +19,21 @@ export function ModelListSection(props: { onChanged(): void; onError(e: unknown)
     api.secrets().then(setSecrets, onError);
   }, [onError]);
   useEffect(reload, [reload]);
+  const [addKey, setAddKey] = useState(0); // bumped after a change so « Available to add » reloads its « Added » state
   const changed = () => {
     reload();
+    setAddKey((k) => k + 1);
     props.onChanged();
   };
 
   return (
+    <>
     <section>
       <header className="section-head">
         <h2>Available to agents</h2>
         <p>
           The models an agent can pick on the <a href="#/settings/agents">Agents</a> page: Claude, ChatGPT plan models, any
-          OpenAI-compatible server, and the models on this machine (« Give to agents » on the <a href="#/settings/local">Local</a> page).{' '}
+          OpenAI-compatible server, and the models on this machine (« Give to agents » under Available to add, below).{' '}
           {secrets.store
             ? `Keys are encrypted with the ${secrets.store}; they never come back to this screen.`
             : "Keys come from the engine's environment (.env on a dev machine or server); only the variable name is stored here."}
@@ -47,6 +52,112 @@ export function ModelListSection(props: { onChanged(): void; onError(e: unknown)
           />
         ))}
         <NewModel onCreated={changed} onError={onError} />
+      </div>
+    </section>
+    <AvailableToAdd stream={props.stream} chatgpt={props.chatgpt} models={models} reloadKey={addKey} onAdded={changed} onError={onError} />
+    </>
+  );
+}
+
+/** « Available to add » (#101): plan and local models not yet given to agents, grouped by source. */
+function AvailableToAdd(props: {
+  stream: MessageStream;
+  chatgpt: ChatGptStatus | null;
+  models: Model[];
+  reloadKey: number;
+  onAdded(): void;
+  onError(e: unknown): void;
+}) {
+  const { stream, onError } = props;
+  const [claude, setClaude] = useState<ClaudePlanStatus | null>(null);
+  const [claudeModels, setClaudeModels] = useState<ClaudePlanModel[] | null>(null);
+  const [gptModels, setGptModels] = useState<ChatGptModel[] | null>(null);
+  const [local, setLocal] = useState<LocalStatus | null>(null);
+  const [installed, setInstalled] = useState<LocalModel[] | null>(null);
+  const [busy, setBusy] = useState<string | null>(null);
+
+  const loadLocal = useCallback(() => api.localModels().then((r) => setInstalled(r.models), onError), [onError]);
+  useEffect(() => {
+    api.claude().then(setClaude, onError);
+    api.local().then(setLocal, onError);
+    const offClaude = stream.listen('claude', (e) => {
+      if (e.type === 'claude') setClaude(e.status);
+    });
+    const offLocal = stream.listen('local', (e) => {
+      if (e.type === 'local') setLocal(e.status);
+    });
+    return () => {
+      offClaude();
+      offLocal();
+    };
+  }, [stream, onError]);
+
+  const claudeReady = !!claude?.available && claude.signedIn && claude.configured;
+  useEffect(() => {
+    if (claudeReady) api.claudeModels().then(setClaudeModels, onError);
+    else setClaudeModels(null);
+  }, [claudeReady, onError]);
+  const g = props.chatgpt;
+  const gptReady = !!g?.available && g.signedIn && g.planUsage;
+  useEffect(() => {
+    if (gptReady) api.chatgptModels().then(setGptModels, onError);
+    else setGptModels(null);
+  }, [gptReady, onError]);
+  const localReady = !!local?.binary && local.running;
+  useEffect(() => {
+    if (localReady) void loadLocal();
+    else setInstalled(null);
+  }, [localReady, loadLocal, props.reloadKey]);
+
+  const add = async (r: AvailableRow) => {
+    setBusy(r.key);
+    try {
+      if (r.add.kind === 'create') await api.createModel(r.add.model);
+      else await api.useLocal(r.add.name);
+      props.onAdded();
+    } catch (e) {
+      onError(e);
+    } finally {
+      setBusy(null);
+    }
+  };
+
+  const sources: AvailableSource[] = [claudeSource(claude, claudeModels, props.models), chatgptSource(g, gptModels, props.models), localSource(local, installed)];
+  return (
+    <section>
+      <header className="section-head">
+        <h2>Available to add</h2>
+        <p>Models from your plans and from this machine. « Give to agents » puts one in the list above.</p>
+      </header>
+      <div className="model-list">
+      {sources.map((src) => (
+        <div key={src.id} className="plan-models" data-source={src.id}>
+          <div className="plan-models-head">{src.title}</div>
+          {src.state.kind === 'loading' ? (
+            <span className="muted">Loading…</span>
+          ) : src.state.kind === 'off' ? (
+            <span className="muted">
+              {src.state.text} <a href={src.state.href}>{src.state.linkText}</a>
+            </span>
+          ) : src.state.kind === 'empty' ? (
+            <span className="muted">{src.state.text}</span>
+          ) : (
+            src.state.rows.map((r) => (
+              <div key={r.key} className="plan-model">
+                <span>{r.label}</span>
+                {r.code && <code>{r.code}</code>}
+                {r.added ? (
+                  <span className="muted">Added: pick it on an agent</span>
+                ) : (
+                  <button className="tool" disabled={busy === r.key} onClick={() => void add(r)}>
+                    Give to agents
+                  </button>
+                )}
+              </div>
+            ))
+          )}
+        </div>
+      ))}
       </div>
     </section>
   );

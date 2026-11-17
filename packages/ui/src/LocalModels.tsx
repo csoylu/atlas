@@ -5,8 +5,8 @@ import type { MessageStream } from './useMessages.ts';
 
 /**
  * Settings → Local: the engine runs Ollama on its own machine (engine/src/local.ts). This page asks it to install, start
- * and stop the server, download models from the Ollama library, load them into memory and
- * hand them to agents. Everything here is a request to the engine; it keeps running with the window closed.
+ * and stop the server, download models from the Ollama library and load them into memory
+ * (they are given to agents on Settings → Model list, #101). Everything here is a request to the engine; it keeps running with the window closed.
  */
 export function LocalModels(props: {
   stream: MessageStream;
@@ -47,7 +47,7 @@ export function LocalModels(props: {
     try {
       await f();
       refresh();
-      onModelsChanged(); // « Give to agents » makes a model
+      onModelsChanged(); // deleting or loading can change what the Model list shows
     } catch (e) {
       onError(e);
     } finally {
@@ -75,7 +75,7 @@ export function LocalModels(props: {
       <section>
         <div className="section-head">
           <h2>Installed models</h2>
-          <p>Give one to agents: it joins the <a href="#/settings/model-list">Model list</a>, then pick it as an agent's model on the <a href="#/settings/agents">Agents</a> page.</p>
+          <p>To give one to agents, use « Available to add » on the <a href="#/settings/model-list">Model list</a>, then pick it as an agent's model on the <a href="#/settings/agents">Agents</a> page.</p>
         </div>
         <Installed
           models={models}
@@ -239,11 +239,6 @@ function Installed(props: {
               </div>
             </div>
             <div className="model-actions">
-              {m.usedBy.length === 0 && (
-                <button className="primary small" disabled={busy === 'use:' + m.name} onClick={() => act('use:' + m.name, () => api.useLocal(m.name))}>
-                  Give to agents
-                </button>
-              )}
               <button
                 className="tool"
                 disabled={busy === 'load:' + m.name}
