@@ -1835,3 +1835,18 @@ button.msg-quote:hover { color: var(--text); }
 .running-item .running-ref { color: var(--muted); font-size: 12px; flex: none; }
 .running-item .running-title { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 @media (min-width: 901px) and (max-width: 1280px) { .app:has(.side-doc.side) .side-running { display: none; } }
+
+/* ── Slash commands in the composer (card #99): the popup above the box, the busy line ─────────────────────── */
+.composer { position: relative; }
+.slash-pop {
+  position: absolute; left: 0; right: 0; bottom: calc(100% + 6px); z-index: 20; padding: 5px;
+  background: var(--raised); border: 1px solid var(--line-2); border-radius: 10px; box-shadow: var(--composer-shadow);
+}
+.slash-op { display: flex; align-items: baseline; gap: 10px; padding: 7px 10px; border-radius: 7px; cursor: pointer; }
+.slash-op.on { background: var(--accent-soft); }
+.slash-cmd { font-family: var(--mono, ui-monospace, Menlo, monospace); font-size: 13px; color: var(--text); min-width: 76px; flex: none; }
+.slash-desc { font-size: 13px; color: var(--muted); min-width: 0; }
+.slash-desc em { font-style: normal; color: var(--faint); }
+.slash-hint { margin-left: auto; font-size: 12px; color: var(--faint); flex: none; }
+.slash-busy { display: flex; align-items: center; gap: 8px; font-size: 12px; color: var(--muted); }
+.sys-clear-note { margin: 0; font-size: 13px; color: var(--muted); }

@@ -217,6 +217,8 @@ export class Rewinds {
         )
         .run(id, cardId, target.seq, upto, cp?.workdir ?? null, ops.length ? null : '[]', filesError, JSON.stringify(cardBefore), JSON.stringify(ops), ops.length ? 'restoring' : 'done', new Date().toISOString());
       this.db.prepare('UPDATE messages SET rewind_id = ? WHERE conversation_id = ? AND seq >= ? AND rewind_id IS NULL').run(id, card.conversationId, target.seq);
+      // A /clear made after the target message goes with the messages it followed (#99): the agent sees them again.
+      this.db.prepare("UPDATE context_clears SET rewind_id = ? WHERE card_id = ? AND upto_seq >= ? AND state = 'done' AND rewind_id IS NULL").run(id, cardId, target.seq);
       // The chat's file changes since are put back (not on a conflict: they stay in effect, a later rewind may retry them).
       if (!plan.conflicts.length) this.db.prepare('UPDATE file_changes SET rewind_id = ? WHERE card_id = ? AND started_at >= ? AND rewind_id IS NULL').run(id, cardId, target.at);
       // The model's view changes: a summary covering hidden messages goes (rebuilt when needed), so does the size reading.
@@ -296,6 +298,7 @@ export class Rewinds {
     this.db.transaction(() => {
       this.db.prepare('UPDATE rewinds SET state = ?, undone_at = ? WHERE id = ?').run(ops.length ? 'undoing' : 'undone', new Date().toISOString(), id);
       this.db.prepare('UPDATE messages SET rewind_id = NULL WHERE rewind_id = ?').run(id);
+      this.db.prepare('UPDATE context_clears SET rewind_id = NULL WHERE rewind_id = ?').run(id);
       this.db.prepare('UPDATE file_changes SET rewind_id = NULL WHERE rewind_id = ?').run(id);
       this.db.prepare('UPDATE conversations SET last_input_tokens = NULL, last_input_upto = NULL WHERE id = ?').run(card.conversationId);
       const back = JSON.parse(r.card_before) as CardState;

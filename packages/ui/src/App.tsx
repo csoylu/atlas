@@ -329,18 +329,6 @@ export function App() {
       (e: Error) => setError(e.message),
     );
   }, []);
-  /** `/clear` typed in a direct chat: a fresh main chat for its agent, opened; the old one stays in History. */
-  const clearMain = useCallback((agentId: string) => {
-    api.newMainChat(agentId).then(
-      (c) => {
-        localStorage.setItem(LAST_AGENT, agentId);
-        setChats((cs) => [c, ...cs.filter((x) => x.id !== c.id)]);
-        setAgents((as) => as.map((a) => (a.id === agentId ? { ...a, mainChat: c.id } : a)));
-        location.hash = '#/chat/' + c.id;
-      },
-      (e: Error) => setError(e.message),
-    );
-  }, []);
   const fail = useCallback((e: unknown) => setError(e instanceof Error ? e.message : String(e)), []);
   const clearCreateAsk = useCallback(() => setCreateAsk(0), []);
   const closePalette = useCallback(() => setPalette(false), []);
@@ -599,7 +587,6 @@ export function App() {
             cards={cards}
             onOpenChat={(id) => go('#/chat/' + (id ?? 'new'))}
             onOpenMain={openMain}
-            onClear={clearMain}
             onOpenCard={setOpenId}
             onError={fail}
           />

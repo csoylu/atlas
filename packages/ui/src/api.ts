@@ -1,4 +1,4 @@
-import type { Inbox, FileChange, RewindPreview, RewindResult, Doc, DocContent, DocRef, DocVersion, PanelTab, About, CreatePlanAccount, Notification, PlanProvider, UpdatePlanAccount, ChatUsage, UsageSummary, ChatGptModel, ChatGptStatus, UpdateChatGpt, ClaudePlanModel, ClaudePlanStatus, UpdateClaudePlan, Account, CreateAccount, UpdateAccount, LocalModel, LocalPull, LocalStatus, UpdateLocal, Agent, Canvas, CanvasNode, Card, CardStatus, CreateAgent, CreateCard, CreateModel, CreateSchedule, Memory, MemoryChange, MemoryProposal, MemoryQuery, UpdateMemory, Message, Model, ModelTest, Run, Schedule, Timeline, ToolCallTiming, ServerEvent, Settings, UpdateVoice, VoiceName, VoiceStatus, UpdateAgent, UpdateModel, UpdateSchedule } from '@atlas/shared';
+import type { ClearEvent, CompactResult, Inbox, FileChange, RewindPreview, RewindResult, Doc, DocContent, DocRef, DocVersion, PanelTab, About, CreatePlanAccount, Notification, PlanProvider, UpdatePlanAccount, ChatUsage, UsageSummary, ChatGptModel, ChatGptStatus, UpdateChatGpt, ClaudePlanModel, ClaudePlanStatus, UpdateClaudePlan, Account, CreateAccount, UpdateAccount, LocalModel, LocalPull, LocalStatus, UpdateLocal, Agent, Canvas, CanvasNode, Card, CardStatus, CreateAgent, CreateCard, CreateModel, CreateSchedule, Memory, MemoryChange, MemoryProposal, MemoryQuery, UpdateMemory, Message, Model, ModelTest, Run, Schedule, Timeline, ToolCallTiming, ServerEvent, Settings, UpdateVoice, VoiceName, VoiceStatus, UpdateAgent, UpdateModel, UpdateSchedule } from '@atlas/shared';
 
 /** HTTP error with the parsed body (e.g. 409 carries the current canvas). */
 export class ApiError extends Error {
@@ -64,13 +64,17 @@ export const api = {
   /** Rewind to your message `seq`, or (no seq) the turn the running run answers; null = the run was just stopped. */
   rewind: (id: string, seq?: number) => call<RewindResult | null>('POST', `/cards/${id}/rewind`, seq ? { seq } : {}),
   rewindPreview: (id: string, seq: number) => call<RewindPreview>('GET', `/cards/${id}/rewind?seq=${seq}`),
+  /** Composer slash commands (#99): /clear, /compact [focus]. A running agent is stopped first. */
+  command: (id: string, command: 'clear' | 'compact', arg?: string) =>
+    call<{ clear?: ClearEvent; compact?: CompactResult }>('POST', `/cards/${id}/command`, arg ? { command, arg } : { command }),
+  undoClear: (clearId: string) => call<{ cardId: string }>('POST', `/clears/${clearId}/undo`),
   undoRewind: (rewindId: string) => call<{ files: FileChange[]; filesError: string | null }>('POST', `/rewinds/${rewindId}/undo`),
   retry: (id: string) => call<Card>('POST', `/cards/${id}/retry`),
   agents: () => call<Agent[]>('GET', '/agents'),
   chats: () => call<Card[]>('GET', '/chats'),
   newChat: (agentId: string) => call<Card>('POST', `/agents/${agentId}/chats`),
   mainChat: (agentId: string) => call<Card>('POST', `/agents/${agentId}/main-chat`),
-  /** `/clear`: a fresh main chat; the previous one stays in History. */
+  /** A fresh main chat; the previous one stays in History (the composer's /clear clears the context instead, #99). */
   newMainChat: (agentId: string) => call<Card>('POST', `/agents/${agentId}/main-chat/new`),
   usage: (days = 30) => call<UsageSummary>('GET', `/usage?days=${days}`),
   cardUsage: (id: string) => call<ChatUsage>('GET', `/cards/${id}/usage`),

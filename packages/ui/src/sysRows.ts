@@ -1,4 +1,4 @@
-import { RESUME_KICK, TRIAGE_KICK, USER, WORK_KICK, type EndedRun, type FileChange, type Message, type RewindEvent, type Timeline } from '@atlas/shared';
+import { RESUME_KICK, TRIAGE_KICK, USER, WORK_KICK, type ClearEvent, type EndedRun, type FileChange, type Message, type RewindEvent, type Timeline } from '@atlas/shared';
 import type { RowTone } from './chatRow.ts';
 import { REWOUND } from './rewindText.ts';
 import type { RowIcon } from './toolRows.ts';
@@ -34,7 +34,9 @@ export type SysBody =
   /** The run's error, then Retry when it is the latest run and nothing runs. */
   | { kind: 'error'; text: string; retry: boolean; agent: string }
   /** What a rewind put back, then Undo while it still works. */
-  | { kind: 'files'; files: FileChange[]; error: string | null; undoId: string | null };
+  | { kind: 'files'; files: FileChange[]; error: string | null; undoId: string | null }
+  /** A /clear (#99): show or hide the messages before it, then Undo while it still works. */
+  | { kind: 'clear'; hidden: number; expanded: boolean; undoId: string | null };
 
 const firstLine = (s: string) => s.trim().split('\n')[0]!.trim();
 const plain = (s: string) => firstLine(s).replace(/\*\*|`/g, '');
@@ -120,10 +122,30 @@ export function rewindRow(e: RewindEvent): SysRow {
   };
 }
 
-/** The context summary point: `count` messages before it reach the model only through the summary. */
+/** The context summary point: `count` messages before it reach the model only through the summary. /compact says « by you ». */
 export function summaryRow(s: NonNullable<Timeline['summary']>, count: number): SysRow {
-  return { key: 'summary', icon: 'compress', tone: 'plain', verb: 'Earlier messages summarized', rest: 'to fit the context', meta: `${plural(count, 'message')} → 1 summary`, body: { kind: 'markdown', text: s.text } };
+  const meta = `${plural(count, 'message')} → 1 summary`;
+  if (s.byUser) return { key: 'summary', icon: 'compress', tone: 'acc', verb: 'Compacted by you', object: meta, rest: 'the agent reads the summary instead', body: { kind: 'markdown', text: s.text } };
+  return { key: 'summary', icon: 'compress', tone: 'plain', verb: 'Earlier messages summarized', rest: 'to fit the context', meta, body: { kind: 'markdown', text: s.text } };
 }
+
+/** A /clear in effect (#99). `expanded`: the messages before it are shown. It opens (Undo in reach) while undoable. */
+export function clearRow(e: ClearEvent, expanded: boolean): SysRow {
+  return {
+    key: e.id,
+    at: e.at,
+    icon: 'history',
+    tone: 'acc',
+    verb: 'Context cleared by you',
+    object: plural(e.hidden, 'earlier message'),
+    rest: 'the agent starts fresh from here',
+    open: e.undoable,
+    body: { kind: 'clear', hidden: e.hidden, expanded, undoId: e.undoable ? e.id : null },
+  };
+}
+
+/** Where the chat folds: the latest clear's point (messages and rows up to it are hidden until expanded), or 0. */
+export const clearPoint = (t: Timeline): number => (t.clears ?? []).reduce((m, c) => Math.max(m, c.uptoSeq), 0);
 
 /** A row and where it goes: after every message with seq ≤ `after`. */
 export interface Placed {
@@ -135,12 +157,20 @@ export interface Placed {
  * Every timeline row with its place. Runs go after the last message stored before they ended, rewinds where their
  * messages were, the summary after the last message it covers. `messages`: all of the chat's (tool results too).
  */
-export function timelineRows(t: Timeline, messages: Message[], o: { latestRunId: string | null; running: boolean; hhmm(iso: string): string }): Placed[] {
+export function timelineRows(
+  t: Timeline,
+  messages: Message[],
+  o: { latestRunId: string | null; running: boolean; hhmm(iso: string): string; expanded?: boolean },
+): Placed[] {
   const out: Placed[] = [];
+  const clears = t.clears ?? [];
   if (t.summary) {
     const upto = t.summary.uptoSeq;
-    out.push({ row: summaryRow(t.summary, messages.filter((m) => m.seq <= upto && m.author !== 'tool').length), after: upto });
+    // Counted from the clear before it (the agent never saw what came before that).
+    const from = clears.filter((c) => c.uptoSeq < upto).reduce((m, c) => Math.max(m, c.uptoSeq), 0);
+    out.push({ row: summaryRow(t.summary, messages.filter((m) => m.seq > from && m.seq <= upto && m.author !== 'tool').length), after: upto });
   }
+  for (const c of clears) out.push({ row: clearRow(c, !!o.expanded), after: c.uptoSeq });
   for (const r of t.runs) {
     const row = runRow(r, r.id === o.latestRunId && !o.running, o.hhmm);
     const end = r.endedAt ?? r.startedAt;
@@ -148,7 +178,13 @@ export function timelineRows(t: Timeline, messages: Message[], o: { latestRunId:
   }
   for (const e of t.rewinds) out.push({ row: rewindRow(e), after: e.fromSeq - 1 });
   // Same place: the summary first, then by time.
-  return out.sort((a, b) => a.after - b.after || (a.row.at ?? '').localeCompare(b.row.at ?? ''));
+  const sorted = out.sort((a, b) => a.after - b.after || (a.row.at ?? '').localeCompare(b.row.at ?? ''));
+  // Folded behind the latest clear: every row before it (the clear's own stop included), only that clear's row stays.
+  const fold = clearPoint(t);
+  if (!fold || o.expanded) return sorted;
+  const latest = clears.find((c) => c.uptoSeq === fold)!;
+  // Same place but later than the clear (a rewind to the first message after it): stays.
+  return sorted.filter((p) => p.after > fold || p.row.key === latest.id || (p.after === fold && (p.row.at ?? '') > latest.at));
 }
 
 /**
