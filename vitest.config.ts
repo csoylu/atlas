@@ -6,6 +6,7 @@ import { defineConfig } from 'vitest/config';
 //          one file at a time so they do not starve each other (parallel runs made the voice timing asserts flaky).
 //          `npm run test:full` runs both; CI / before a release / when you touched voice or the store.
 const include = ['packages/*/src/**/*.test.ts', 'packages/*/test/**/*.test.ts', 'apps/*/src/**/*.test.ts'];
+const e2e = ['e2e/**/*.e2e.test.ts'];
 const slow = [
   'packages/engine/test/crash.test.ts',
   'packages/voice/**/*.test.ts',
@@ -19,6 +20,8 @@ export default defineConfig({
     projects: [
       { test: { name: 'fast', include, exclude: [...slow, '**/node_modules/**'] } },
       { test: { name: 'slow', include: slow, fileParallelism: false, testTimeout: 120_000 } },
+      // Real engine + built UI + headless Chrome (e2e/). Needs Google Chrome; builds packages/ui first (E2E_SKIP_BUILD=1 skips).
+      { test: { name: 'e2e', include: e2e, globalSetup: ['e2e/setup.ts'], fileParallelism: false, testTimeout: 60_000, hookTimeout: 60_000 } },
     ],
   },
 });

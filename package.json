@@ -19,6 +19,7 @@
     "test": "vitest run --project fast",
     "test:full": "vitest run",
     "test:slow": "vitest run --project slow",
+    "test:e2e": "vitest run --project e2e",
     "test:changed": "vitest run --project fast --changed",
     "ui:check": "node scripts/ui-check/check.mjs",
     "app": "npm -w @atlas/desktop run app",
@@ -27,6 +28,7 @@
   "devDependencies": {
     "@types/node": "^26.6.6",
     "concurrently": "^10.0.7",
+    "playwright-core": "^1.65.1",
     "tsx": "^4.23.15",
     "typescript": "^7.0.2",
     "vitest": "^5.1.0",
