@@ -1,9 +1,9 @@
 import { useEffect, useMemo, useRef, useState, type ReactNode } from 'react';
+import { AgentFace } from './AgentFace.tsx';
 import Markdown from 'react-markdown';
 import remarkGfm from 'remark-gfm';
 import { cardRef, type Agent, type Card, type Inbox as InboxData, type InboxNeed, type Notification } from '@atlas/shared';
 import { api } from './api.ts';
-import { tint } from './agentTint.ts';
 import { Icon } from './ScreenHeader.tsx';
 import { StatusIcon } from './StatusIcon.tsx';
 import { CardDocs } from './DocPanel.tsx';
@@ -228,9 +228,7 @@ export function Inbox(props: {
           <span className="ni-l1">
             {refOf(i, numbers) && <span>{refOf(i, numbers)}</span>}
             {agent && (
-              <span className="dot-avatar" aria-hidden="true" style={tint(agent)}>
-                {agent.slice(0, 1).toUpperCase()}
-              </span>
+              <AgentFace id={agent} />
             )}
             <span>{k.label}</span>
             <span className="ni-when">{shortAgo(timeOf(i))}</span>
@@ -303,9 +301,7 @@ function Detail(props: {
         <div className="ibx-meta">
           {card?.assignee && (
             <>
-              <span className="dot-avatar" aria-hidden="true" style={tint(card.assignee)}>
-                {card.assignee.slice(0, 1).toUpperCase()}
-              </span>
+              <AgentFace id={card.assignee} />
               {card.assignee} ·
             </>
           )}{' '}

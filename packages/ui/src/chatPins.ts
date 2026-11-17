@@ -40,11 +40,11 @@ const clock = (ms: number) => {
   return h ? `${h}:${String(m).padStart(2, '0')}:${ss}` : `${m}:${ss}`;
 };
 
-/** The pin's live state: "running · 2:14", "done", "stopped by you", "needs your OK"… */
+/** The pin's live state: "Working · 2:14", "done", "stopped by you", "needs your OK"… */
 export function pinLabel(pin: Pick<Pin, 'kind' | 'since'>, now: number): string {
   switch (pin.kind) {
     case 'running':
-      return pin.since === null ? 'running' : `running · ${clock(now - pin.since)}`;
+      return pin.since === null ? 'Working' : `Working · ${clock(now - pin.since)}`;
     case 'waiting':
       return 'waiting';
     case 'blocked':
