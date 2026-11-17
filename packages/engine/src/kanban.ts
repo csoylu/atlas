@@ -50,6 +50,34 @@ interface MessageRow {
   rewind_id?: string | null;
 }
 
+interface AgentMessageRow {
+  id: number;
+  from_agent: string;
+  from_card: string;
+  to_agent: string;
+  to_card: string;
+  message_id: string;
+  seq: number;
+  at: string;
+  replied_at: string | null;
+  reply_seq: number | null;
+  reply_delivered_at: string | null;
+}
+/** An agent_message on its way: waiting for the target's answer (repliedAt null), or for the sender to read it. */
+export interface AgentMessage {
+  id: number;
+  from: string;
+  fromCard: string;
+  to: string;
+  toCard: string;
+  /** Its seq in the target's conversation. */
+  seq: number;
+  at: string;
+  repliedAt: string | null;
+  /** The answer's seq in the sender's conversation. */
+  replySeq: number | null;
+}
+
 export class NotFoundError extends Error {}
 /** A request that is understood but not allowed (cycle, unknown parent…): HTTP 409. */
 export class ConflictError extends Error {}
@@ -554,6 +582,96 @@ export class Kanban {
   /** The chat's agent has answered a report (or nothing is owed any more). */
   reportDelivered(id: number): void {
     this.db.prepare('UPDATE card_reports SET delivered_at = ? WHERE id = ? AND delivered_at IS NULL').run(new Date().toISOString(), id);
+  }
+
+  /**
+   * agent_message (#96): where a message to an agent lands. Its one active task (ready or running) if it has exactly
+   * one, else its main chat.
+   */
+  agentInbox(agentId: string): Card {
+    if (!this.db.prepare('SELECT 1 FROM agents WHERE id = ?').get(agentId)) throw new NotFoundError(`agent @${agentId} does not exist`);
+    const active = this.db
+      .prepare("SELECT id FROM cards WHERE board = 'main' AND assignee = ? AND status IN ('ready', 'running')")
+      .all(agentId) as { id: string }[];
+    return active.length === 1 ? this.get(active[0]!.id) : this.mainChat(agentId);
+  }
+
+  /**
+   * Post an agent's message in another agent's inbox, with its outbox row in the same transaction: the dispatcher
+   * wakes the target until it has answered, even after a restart (deliverAgentMessages). `fromCard`: the sender's
+   * conversation, where the answer goes.
+   */
+  sendAgentMessage(from: string, fromCard: string, to: string, text: string): Card {
+    if (to === from) throw new InvalidError('that is you: you cannot send a message to yourself');
+    if (!text.trim()) throw new InvalidError('empty message: give a text');
+    const target = this.agentInbox(to);
+    const source = this.get(fromCard);
+    const where = source.board === 'direct' ? 'main chat' : `task ${this.ref(fromCard)}`;
+    const content: ContentBlock[] = [{ type: 'text', text: `[message from @${from} (${where}); your answer is sent back to them] ${text}` }];
+    let messageId = '';
+    this.tx(() => {
+      messageId = this.insertMessage(target, 'user', from, content, null);
+      const { seq } = this.db.prepare('SELECT seq FROM messages WHERE id = ?').get(messageId) as { seq: number };
+      this.db
+        .prepare('INSERT INTO agent_messages (from_agent, from_card, to_agent, to_card, message_id, seq, at) VALUES (?, ?, ?, ?, ?, ?, ?)')
+        .run(from, fromCard, to, target.id, messageId, seq, new Date().toISOString());
+    });
+    this.emitMessage(messageId, target);
+    return target;
+  }
+
+  /** agent_message rows whose target hasn't answered yet, or whose answer the sender hasn't read yet (oldest first). */
+  pendingAgentMessages(): AgentMessage[] {
+    return (this.db.prepare('SELECT * FROM agent_messages WHERE reply_delivered_at IS NULL ORDER BY id').all() as AgentMessageRow[]).map((r) => ({
+      id: r.id,
+      from: r.from_agent,
+      fromCard: r.from_card,
+      to: r.to_agent,
+      toCard: r.to_card,
+      seq: r.seq,
+      at: r.at,
+      repliedAt: r.replied_at,
+      replySeq: r.reply_seq,
+    }));
+  }
+
+  /**
+   * The target's answer (or why there is none) as a system note in the sender's conversation, in one transaction with
+   * the outbox update. A sender that is gone: nothing to tell, the row is closed.
+   */
+  replyAgentMessage(id: number, text: string): void {
+    const row = this.db.prepare('SELECT * FROM agent_messages WHERE id = ? AND replied_at IS NULL').get(id) as AgentMessageRow | undefined;
+    if (!row) return;
+    const now = new Date().toISOString();
+    const chat = this.db.prepare('SELECT * FROM cards WHERE id = ?').get(row.from_card) as CardRow | undefined;
+    let messageId: string | null = null;
+    this.tx(() => {
+      if (chat) messageId = this.insertMessage(this.toCard(chat, []), 'user', 'system', [{ type: 'text', text }], null);
+      const seq = messageId ? (this.db.prepare('SELECT seq FROM messages WHERE id = ?').get(messageId) as { seq: number }).seq : null;
+      this.db.prepare('UPDATE agent_messages SET replied_at = ?, reply_seq = ?, reply_delivered_at = ? WHERE id = ?').run(now, seq, chat ? null : now, id);
+    });
+    if (messageId && chat) this.emitMessage(messageId, this.toCard(chat, []));
+  }
+
+  /**
+   * An agent's side of a message in a card's conversation: null if the card is gone; `seen` once the agent wrote a
+   * reply with that message in its view; `text`: the agent's last text after it.
+   */
+  answerTo(cardId: string, agentId: string, seq: number): { seen: boolean; text: string | null } | null {
+    const row = this.db.prepare('SELECT conversation_id FROM cards WHERE id = ?').get(cardId) as { conversation_id: string } | undefined;
+    if (!row) return null;
+    const replies = this.db
+      .prepare("SELECT content, context_upto FROM messages WHERE conversation_id = ? AND role = 'assistant' AND author = ? AND seq > ? AND rewind_id IS NULL ORDER BY seq")
+      .all(row.conversation_id, agentId, seq) as { content: string; context_upto: number | null }[];
+    const texts = replies
+      .map((r) => (JSON.parse(r.content) as ContentBlock[]).flatMap((b) => (b.type === 'text' ? [b.text] : [])).join('\n').trim())
+      .filter(Boolean);
+    return { seen: replies.some((r) => (r.context_upto ?? 0) >= seq), text: texts.at(-1) ?? null };
+  }
+
+  /** The sender's agent has read the answer (or nothing is owed any more). */
+  agentReplyDelivered(id: number): void {
+    this.db.prepare('UPDATE agent_messages SET reply_delivered_at = ? WHERE id = ? AND reply_delivered_at IS NULL').run(new Date().toISOString(), id);
   }
 
   /** Mark a direct chat as being named by the model (shown in the UI), or done. */

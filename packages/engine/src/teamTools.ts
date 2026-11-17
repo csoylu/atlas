@@ -121,6 +121,18 @@ export const TEAM_TOOLS = {
       return `message posted on ${ctx.kanban.ref(id)}`;
     },
   }),
+  agent_message: tool({
+    description:
+      'Write to another agent, even one with no task. It lands in its one active task if it has exactly one, else in ' +
+      'its main chat, and wakes it. When it has answered, its answer comes back here as a note ("reply from @agent: …").',
+    input: z.object({ agent: z.string().trim().min(1).describe('agent id, e.g. zurich'), text: z.string().trim().min(1) }),
+    run: ({ agent, text }, ctx) => {
+      const to = agent.replace(/^@/, '');
+      const target = ctx.kanban.sendAgentMessage(ctx.agentId, ctx.cardId, to, text);
+      ctx.deliver(target.id);
+      return `message sent to @${to} (${target.board === 'direct' ? 'its main chat' : `its task ${ctx.kanban.ref(target.id)}`}); its answer will come back here`;
+    },
+  }),
   schedule_list: tool({
     description: 'List schedules: what runs when, for which agent, and the task each one last posted on.',
     input: z.object({}),

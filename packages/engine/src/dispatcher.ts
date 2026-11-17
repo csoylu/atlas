@@ -105,6 +105,7 @@ export class Dispatcher {
         if (cur && cur.kind !== 'chat') this.runner.stop(c.id, 'task closed');
       }
       this.deliverReports();
+      this.deliverAgentMessages();
       // Refresh « why not moving » in the UI when it changed.
       for (const c of this.kanban.list()) {
         if (this.lastWaiting.get(c.id) !== c.waiting) {
@@ -136,6 +137,52 @@ export class Dispatcher {
         if (chat.assignee && !this.agentUsable(chat.assignee, chat.modelId)) this.runner.wake(r.chatId, { kind: 'chat' });
       }
     }
+  }
+
+  /**
+   * agent_message (#96), from the outbox, so a restart loses nothing: wake the target until a run of it has seen the
+   * message and ended; post its last text in the sender's conversation (or why it couldn't answer); then wake the sender
+   * until it has read that. One hop: the answer is a system note, never forwarded again.
+   */
+  private deliverAgentMessages(): void {
+    for (const m of this.kanban.pendingAgentMessages()) {
+      if (m.repliedAt) {
+        // The sender's side: read once one of its replies had the answer in view (or it can't any more).
+        if (this.nudge(m.fromCard, m.from, m.replySeq ?? 0, m.repliedAt, `The answer from @${m.to} is above.`).state !== 'busy')
+          this.kanban.agentReplyDelivered(m.id);
+        continue;
+      }
+      const t = this.nudge(m.toCard, m.to, m.seq, m.at, `Unread message from @${m.from} above: answer it.`);
+      if (t.state === 'busy') continue;
+      this.kanban.replyAgentMessage(
+        m.id,
+        t.state === 'gone'
+          ? `@${m.to} could not answer: the conversation your message went to was deleted.`
+          : t.state === 'failed'
+            ? `@${m.to} could not answer: ${t.text}.`
+            : `reply from @${m.to}: ${t.text ?? '(it answered without any text)'}`,
+      );
+      // Wake the sender now; a later tick marks the answer read.
+      this.nudge(m.fromCard, m.from, Number.MAX_SAFE_INTEGER, new Date().toISOString(), '');
+    }
+  }
+
+  /**
+   * Get `agentId` to answer the message at `seq` on a card: 'busy' while a run is on it or it is woken now (`kick` if
+   * nothing else is owed); 'answered' once it wrote a reply with the message in view and owes nothing; 'failed' if a run
+   * since `since` failed or was stopped; 'gone' if the card was deleted.
+   */
+  private nudge(cardId: string, agentId: string, seq: number, since: string, kick: string): { state: 'busy' | 'answered' | 'failed' | 'gone'; text: string | null } {
+    const answer = this.kanban.answerTo(cardId, agentId, seq);
+    if (!answer) return { state: 'gone', text: null };
+    if (this.runner.current(cardId)) return { state: 'busy', text: null };
+    const last = this.runner.runs(cardId)[0];
+    if (last && last.startedAt >= since && (last.status === 'failed' || last.status === 'stopped'))
+      return { state: 'failed', text: `its run ${last.status}${last.error ? `: ${last.error}` : ''}` };
+    if (answer.seen && !this.runner.owesReply(cardId)) return { state: 'answered', text: answer.text };
+    const c = this.kanban.get(cardId);
+    this.runner.wake(c.id, { kind: c.status === 'running' ? 'work' : 'chat', ...(answer.seen || !kick ? {} : { kick }) });
+    return { state: 'busy', text: null };
   }
 
   /** The user wrote on a card: answering a block or a review puts it back to work; otherwise the agent replies in chat. */

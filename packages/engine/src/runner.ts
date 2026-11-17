@@ -916,7 +916,7 @@ export class Runner {
       '',
       '# Team',
       roster,
-      'To reach another agent, write in its task with task_message.',
+      'To reach another agent, use agent_message (its answer comes back to you), or write in one of its tasks with task_message.',
       '',
       ...projectInstructions(workdir),
     ];
