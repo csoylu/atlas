@@ -192,6 +192,24 @@ describe('/compact', () => {
     expect(view).not.toContain('a1');
   });
 
+  it('stops a running agent first, then compacts, and does not restart the stopped job (zurich #100)', async () => {
+    const t = await setup([[{ type: 'tool_use', id: 't1', name: 'shell', input: { command: 'sleep 20' } }], text('S'), echo]);
+    const c = await t.chat();
+    await t.say(c.id, 'long job');
+    await expect.poll(() => t.e.db.prepare("SELECT COUNT(*) AS n FROM tool_calls WHERE status = 'running'").get(), { timeout: 8000 }).toEqual({ n: 1 });
+    const r = await t.command(c.id, 'compact');
+    expect(r.status).toBe(200);
+    await new Promise((res) => setTimeout(res, 300));
+    expect(t.e.runner.current(c.id)).toBeNull();
+    expect(t.e.runner.runs(c.id)).toHaveLength(1);
+    expect(t.e.runner.runs(c.id)[0]).toMatchObject({ status: 'stopped', error: 'stopped by you' });
+    // The next message is answered as usual, from the summary.
+    await t.say(c.id, 'next');
+    await t.idle(c.id);
+    expect(t.e.runner.runs(c.id)).toHaveLength(2);
+    expect(t.lastView()).toContain('S');
+  });
+
   it('after a clear, compacts only what came after it', async () => {
     let summaryReq: ModelRequest | null = null;
     const t = await setup([
