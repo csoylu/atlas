@@ -4,7 +4,7 @@ import type { ModelRequest } from './types.ts';
 
 describe('adaptiveThinking', () => {
   it('asks newer Claude models for summarized thinking, leaves older ones alone', () => {
-    for (const m of ['claude-opus-5-5', 'claude-opus-4-6', 'claude-sonnet-4-6-20260101', 'claude-opus-5', 'claude-haiku-5-1'])
+    for (const m of ['claude-opus-5-5', 'claude-opus-4-6', 'claude-sonnet-4-6-20260101', 'claude-opus-5', 'claude-haiku-5-1', 'claude-fable-5-2'])
       expect(adaptiveThinking(m), m).toBe(true);
     for (const m of ['claude-sonnet-4-5', 'claude-opus-4-5-20251101', 'claude-sonnet-4-20250514', 'claude-3-7-sonnet-latest', 'gpt-5', 'claude-opus-4-1'])
       expect(adaptiveThinking(m), m).toBe(false);

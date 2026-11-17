@@ -194,11 +194,11 @@ export function withCacheBreakpoints(messages: ModelRequest['messages']): unknow
 }
 
 /**
- * Models that take `thinking: { type: 'adaptive' }`: Claude 4.6 and later (opus/sonnet/haiku-<major>[-<minor>]).
+ * Models that take `thinking: { type: 'adaptive' }`: Claude 4.6 and later, any family (claude-<family>-<major>[-<minor>]).
  * Older or unrecognised names get no thinking parameter, as before (sending it to them is a 400).
  */
 export function adaptiveThinking(model: string): boolean {
-  const m = /claude-(?:opus|sonnet|haiku)-(\d+)(?:-(\d{1,2}))?(?:-|$)/.exec(model);
+  const m = /claude-[a-z]+-(\d+)(?:-(\d{1,2}))?(?:-|$)/.exec(model);
   if (!m) return false;
   const major = Number(m[1]), minor = Number(m[2] ?? 0);
   return major > 4 || (major === 4 && minor >= 6);
