@@ -70,18 +70,16 @@ for (const surface of SURFACES) {
       const [sum] = atlas.model.of('summary');
       expect(sum!.text).toContain('long job');
 
-      // Afterwards the agent answers from the summary.
+      // Afterwards the agent answers from the summary: the scripted model echoes the message it was sent, which now opens with it.
       await c.send('what now');
-      await expect(c.msg(/Reply \d+ to: what now/)).toBeVisible();
+      await expect(c.msg(/Reply \d+ to: Summary of the earlier part/)).toBeVisible();
+      expect(atlas.model.lastMain.text).toContain('what now');
       expect(atlas.model.lastMain.text).toContain('SUMMARY1');
     });
 
-    // FINDING F1 (#105): Runner.compactNow ends with wake(), which answers any reply still owed. The stopped request
-    // ('long job') counts as owed, so a few ms after /compact the agent starts a NEW run on it: the stop is undone.
-    // /clear doesn't (nothing is owed after it). Expected by the spec (« stops the run, then acts »): the run stays stopped.
-    // test.fail() = this passes while the bug exists and fails once it is fixed: then delete the line.
-    test('[F1] the agent does not resume by itself after /compact stopped it', async ({ atlas, page }) => {
-      test.fail();
+    // Found by this suite (#105, F1): Runner.compactNow ended with wake(), and the stopped request counted as owed, so a few
+    // ms after /compact the agent started a NEW run on it: the stop was undone. Fixed in 7ed9267; this keeps it fixed.
+    test('the agent does not resume by itself after /compact stopped it', async ({ atlas, page }) => {
       const c = await openSurface(atlas, page, surface);
       await atlas.converse(c.id, 'alpha topic');
       await startLongJob(c);

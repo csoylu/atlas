@@ -8,8 +8,9 @@ Every feature is run on both surfaces: a direct chat and a task chat (ticket mod
     cd e2e && npm i && npx playwright install chromium
     npx playwright test                # all;  npx playwright test slash-clear  # one file
 
+If Chromium isn't installed, use Google Chrome: `E2E_CHANNEL=chrome npx playwright test`.
 Use a checkout path without spaces (native modules fail to build in "Application Support").
 
 Specs: `slash-popup` (#99 step 1), `slash-compact` (2), `slash-clear` (3), `slash-running` (4), `slash-rewind` (5), `slash-restart` (6).
 `harness/conv.ts` = page object for one conversation (composer, popup, rows, toast); `harness/fixtures.ts` = `atlas` + `openSurface`.
-Tests marked `test.fail()` document a known bug: they go red when it is fixed, then remove the line.
+A test marked `test.fail()` documents a known bug: it goes red when the bug is fixed, then remove the line (none right now).

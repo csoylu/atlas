@@ -45,6 +45,21 @@ for (const surface of SURFACES) {
       await expect(c.compactRow).toContainText('[focus: keep the rewind design]');
     });
 
+    test('compacting again later moves the summary forward: it covers the old summary and what came after', async ({ atlas, page }) => {
+      const c = await openSurface(atlas, page, surface);
+      await atlas.converse(c.id, 'alpha topic');
+      expect(await c.command('/compact')).toBe(200);
+      await atlas.converse(c.id, 'beta topic');
+      expect(await c.command('/compact')).toBe(200);
+      const second = atlas.model.of('summary').at(-1)!;
+      expect(second.text).toContain('SUMMARY1'); // the first summary is an input of the second
+      expect(second.text).toContain('beta topic');
+      await atlas.converse(c.id, 'gamma topic');
+      const view = atlas.model.lastMain.text;
+      expect(view).toContain('SUMMARY2');
+      expect(view).not.toContain('SUMMARY1');
+    });
+
     test('a second /compact with nothing new is a 409 and a toast, and writes nothing', async ({ atlas, page }) => {
       const c = await openSurface(atlas, page, surface);
       await atlas.converse(c.id, 'alpha topic');

@@ -127,6 +127,21 @@ for (const surface of SURFACES) {
       expect(view).not.toContain('beta topic');
     });
 
+    test('a summary written before the clear is dropped too, and a compact after it only covers what came after', async ({ atlas, page }) => {
+      const c = await openSurface(atlas, page, surface);
+      await atlas.converse(c.id, 'alpha topic');
+      expect(await c.command('/compact')).toBe(200);
+      expect(await c.command('/clear')).toBe(200);
+      await atlas.converse(c.id, 'fresh start');
+      expect(atlas.model.lastMain.text).not.toContain('SUMMARY1');
+      expect(atlas.model.lastMain.text).not.toContain('alpha topic');
+      expect(await c.command('/compact')).toBe(200);
+      const last = atlas.model.of('summary').at(-1)!;
+      expect(last.text).toContain('fresh start');
+      expect(last.text).not.toContain('alpha topic');
+      expect(last.text).not.toContain('SUMMARY1');
+    });
+
     test('history_search still finds the cleared messages (append-only transcript) — and only through the tool', async ({ atlas, page }) => {
       const c = await openSurface(atlas, page, surface);
       await atlas.converse(c.id, 'alpha topic');
