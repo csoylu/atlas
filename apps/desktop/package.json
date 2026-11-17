@@ -45,7 +45,9 @@
     ],
     "asarUnpack": [
       "**/*.node",
-      "**/node_modules/sherpa-onnx-*/**"
+      "**/node_modules/sherpa-onnx-*/**",
+      "**/node_modules/sharp/**",
+      "**/node_modules/@img/**"
     ],
     "npmRebuild": true,
     "mac": {

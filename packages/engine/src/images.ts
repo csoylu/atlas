@@ -3,7 +3,23 @@
 // here, at send time, for the newest IMAGE_KEEP pictures of the view. Older ones become a text line.
 import { createHash } from 'node:crypto';
 import { readFile, stat } from 'node:fs/promises';
-import sharp, { type Metadata } from 'sharp';
+import type { Metadata, Sharp, SharpOptions } from 'sharp';
+
+/**
+ * sharp (native libvips) is loaded on first use: if its binary is missing for this platform, only pictures fail, with
+ * the reason, and the engine still starts.
+ */
+let lib: Promise<(input: Buffer, o?: SharpOptions) => Sharp> | null = null;
+const sharp = async (input: Buffer, o?: SharpOptions): Promise<Sharp> => {
+  lib ??= import('sharp').then(
+    (m) => m.default,
+    (e: unknown) => {
+      lib = null;
+      throw new Error(`images are unavailable: the image library (sharp) did not load on this machine (${e instanceof Error ? e.message.split('\n')[0] : String(e)})`);
+    },
+  );
+  return (await lib)(input, o);
+};
 import { IMAGE_KEEP, IMAGE_MAX_BYTES, type ContentBlock, type ImageBlock, type ImageMediaType } from '@atlas/shared';
 import type { ModelRequest } from './providers/types.ts';
 
@@ -39,7 +55,7 @@ export async function describeImage(path: string, buf: Buffer): Promise<ImageBlo
   if (!media_type) throw new Error(`${path} is not a png, jpeg, gif or webp image`);
   let meta: Metadata;
   try {
-    meta = await sharp(buf).metadata();
+    meta = await (await sharp(buf)).metadata();
   } catch (e) {
     throw new Error(`${path} could not be decoded as ${media_type}: ${e instanceof Error ? e.message : String(e)}`);
   }
@@ -80,7 +96,7 @@ export async function wireImage(b: ImageBlock): Promise<{ media_type: ImageMedia
   let out: { media_type: ImageMediaType; data: Buffer } = { media_type: b.media_type, data: buf };
   const big = Math.max(b.width, b.height) > MAX_SIDE || buf.length > MAX_SEND_BYTES || b.media_type === 'image/gif';
   if (big) {
-    const img = sharp(buf, { animated: false }).resize({ width: MAX_SIDE, height: MAX_SIDE, fit: 'inside', withoutEnlargement: true });
+    const img = (await sharp(buf, { animated: false })).resize({ width: MAX_SIDE, height: MAX_SIDE, fit: 'inside', withoutEnlargement: true });
     out =
       b.media_type === 'image/jpeg'
         ? { media_type: 'image/jpeg', data: await img.jpeg({ quality: 85 }).toBuffer() }
@@ -88,7 +104,7 @@ export async function wireImage(b: ImageBlock): Promise<{ media_type: ImageMedia
           ? { media_type: 'image/webp', data: await img.webp({ quality: 85 }).toBuffer() }
           : { media_type: 'image/png', data: await img.png().toBuffer() };
     if (out.data.length > MAX_SEND_BYTES)
-      out = { media_type: 'image/jpeg', data: await sharp(out.data).flatten({ background: '#ffffff' }).jpeg({ quality: 80 }).toBuffer() };
+      out = { media_type: 'image/jpeg', data: await (await sharp(out.data)).flatten({ background: '#ffffff' }).jpeg({ quality: 80 }).toBuffer() };
   }
   const wire = { media_type: out.media_type, data: out.data.toString('base64') };
   cache.set(key, wire);
