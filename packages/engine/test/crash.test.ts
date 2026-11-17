@@ -7,7 +7,7 @@ import { randomUUID } from 'node:crypto';
 import { startEngine } from '../src/index.ts';
 import { LEASE_MS, SlowProvider, STEPS } from './crash-fixture.ts';
 
-const KILLS = 50;
+const KILLS = Number(process.env.CRASH_KILLS ?? 50);
 const child = join(import.meta.dirname, 'crash-child.ts');
 
 function runChild(dbFile: string, dataDir: string, marker: string): Promise<void> {

@@ -35,7 +35,7 @@ apps/desktop      Electron main process: opens the UI window. Dev: loads Vite (:
 5. **Secrets** live in the OS keychain (Electron `safeStorage`) or env vars on the server, never in SQLite, logs,
    transcripts or the UI.
 6. **Tests:** `vitest`. Every engine module has tests; the restart test (rule 2) and the agent-loop test with a fake
-   provider must stay green. `npm run typecheck && npm test` before every commit.
+   provider must stay green. `npm run typecheck && npm test` before every commit (`npm test` = fast project, ~10 s; `npm run test:full` also runs the slow project: real voice models + the 50-SIGKILL crash test, `CRASH_KILLS=n` shortens it. Run it when you touch voice, the store, runs or leases).
 7. Shared types go in `packages/shared`; the UI never imports engine code directly, only the API.
 
 ## Commands
@@ -44,7 +44,7 @@ cp .env.example .env   # model keys (gitignored); see .env.example
 npm install
 npm run dev          # engine + UI with hot reload, opens http://localhost:5173
 npm run desktop      # Electron app in dev
-npm run typecheck && npm test
+npm run typecheck && npm test   # fast suite; test:full adds slow suites, test:changed only what your diff affects
 npm -w @atlas/desktop run install:mac   # build the Mac app and install it in /Applications (quits the running one)
 npm run ui:check     # responsive check of the real UI (below)
 node scripts/orb-check/check.mjs   # voice orb overlay: screenshots of every state, frame times, CPU, Esc, click-through, drag (→ shots/orb)

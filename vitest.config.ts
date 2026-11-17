@@ -7,7 +7,7 @@ import { defineConfig } from 'vitest/config';
 //          `npm run test:full` runs both; CI / before a release / when you touched voice or the store.
 const include = ['packages/*/src/**/*.test.ts', 'packages/*/test/**/*.test.ts', 'apps/*/src/**/*.test.ts'];
 const slow = [
-  '**/crash.test.ts',
+  'packages/engine/test/crash.test.ts',
   'packages/voice/**/*.test.ts',
   'apps/desktop/src/voice.test.ts',
   'packages/engine/src/voiceLoop.test.ts',
