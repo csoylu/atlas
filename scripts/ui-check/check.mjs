@@ -114,8 +114,10 @@ const fixture = (n, title, patch) => ({
   ...chat, id: `c_uicheck${n}`, title, body: '', board: 'main', originCard: chat.id, conversationId: `conv_c_uicheck${n}`,
   createdBy: chat.assignee ?? 'atlas', createdAt: now, updatedAt: now, block: null, waiting: null, parents: [], ...patch,
 });
+// A long brief: the `thread` screen opens this card beside the chat; the panel shows its first lines and « Show more ».
+const THREAD_BODY = '## Goal\n\nCheck every main screen at four widths with screenshots and OCR, so that cut or overlapping text is caught before Master sees it.\n\n' + Array.from({ length: 14 }, (_, i) => `- Step ${i + 1}: open the screen, wait for it, take the screenshot and read the key labels back.`).join('\n');
 const FIXTURE_CARDS = [
-  fixture(1, 'Responsive pass with screenshot + OCR test harness on the real UI', { status: 'running' }),
+  fixture(1, 'Responsive pass with screenshot + OCR test harness on the real UI', { status: 'running', body: THREAD_BODY }),
   fixture(2, 'Pick a storage layout for documents', { status: 'blocked', block: { kind: 'needs_input', reason: 'Which layout?', options: [] } }),
   fixture(3, 'Rewrite the scheduler tests', { status: 'blocked', block: { kind: 'needs_input', reason: 'Stopped by you', options: [] } }),
   fixture(4, 'A very long card title that must end in an ellipsis instead of pushing the layout wider than the screen', { status: 'review' }),
@@ -428,6 +430,8 @@ const SCREENS = [
   { name: 'chat-table', hash: `#/chat/${chat.id}`, ready: '.msg .md table .card-ref', table: true, then: { js: `[...document.querySelectorAll('.msg .md table')].at(-1).scrollIntoView({ block: 'center' });`, ready: '.msg .md table' }, keys: ['.msg .md td', '.msg .md th', '.msg .md td .card-ref'] },
   { name: 'chat-tools-live', hash: `#/chat/${chat.id}`, ready: '.chat-row.steps.running', tools: true, keys: ['.chat-row.steps.running > .chat-row-line .chat-row-verb', '.chat-row.plan .chat-row-obj', '.chat-row.plan .todo-list li'] },
   { name: 'modal', hash: `#/chat/${chat.id}?card=${modalCard.id}`, ready: '.card-modal', pins: true, keys: ['.cm-title', '.cm-pill', '.cm-h', '.cm-foot button'] },
+  // A task of this chat opened beside it (#107): the whole task, its description clamped, the conversation and composer in view.
+  { name: 'thread', hash: `#/chat/${chat.id}`, ready: '.chat-pin', pins: true, then: { js: `const pin = [...document.querySelectorAll('.chat-pin')].find((p) => p.textContent.includes('Responsive pass')); if (!pin) throw new Error('no fixture pin'); pin.querySelector('.chat-pin-open').click();`, ready: '.thread-panel .cm-more' }, keys: ['.thread-panel .cm-title', '.thread-panel .cm-pill', '.thread-panel .cm-more', '.thread-panel .cm-h', '.thread-panel .cm-foot button'] },
   { name: 'modal-blocked', hash: `#/chat/${chat.id}?card=${modalCard.id}`, ready: '.card-modal', blocked: true, keys: ['.cm-title', '.ask-kind', '.cm-foot button'] },
   { name: 'panel', hash: `#/chat/${chat.id}`, ready: '.side-doc', pins: true, panel: true, keys: ['.sd-tab', '.sd-ask', '.side-doc h1', '.side-doc h2', '.chat-pin-title'] },
   { name: 'board', hash: '#/board', ready: '.board', keys: ['.board .name', '.card-title', '.nav-item'] },
@@ -627,6 +631,16 @@ const CHECK = (devW, devH) => `((minFont, W, H) => {${VISIBLE_RECT}
     const cp = document.querySelector('.chat-view .chat-pane');
     if (sd.classList.contains('side') && cp && shown(cp) && meet(cp.getBoundingClientRect(), r)) issues.push('side panel overlaps the chat');
     if (r.width < Math.min(320, W)) issues.push('panel too narrow: ' + Math.round(r.width) + 'px');
+    // A task beside its chat (#107): the composer and the footer stay in view, the brief doesn't push them out.
+    if (sd.classList.contains('thread-panel')) {
+      for (const sel of ['.composer textarea', '.cm-foot', '.cm-head']) {
+        const el = sd.querySelector(sel), q = el && el.getBoundingClientRect();
+        if (!q || q.height < 1 || !inside(q) || q.right > r.right + 1) issues.push('thread panel: ' + sel + ' not in view');
+      }
+      const body = sd.querySelector('.cm-body'), desc = sd.querySelector('div.cm-desc');
+      if (body && desc && desc.getBoundingClientRect().height > body.clientHeight * 0.6) issues.push('thread panel: the description fills the panel');
+      if (sd.scrollWidth > sd.clientWidth + 1) issues.push('thread panel scrolls sideways');
+    }
   }
   // 5. Markdown table cells with prose stay readable: never narrower than ~10 characters, never broken inside a word.
   for (const td of document.querySelectorAll('.md td, .md th')) {
