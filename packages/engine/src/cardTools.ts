@@ -1,4 +1,5 @@
 import { searchSummary } from './context.ts';
+import { imageLine } from './images.ts';
 import { z } from 'zod';
 import { BLOCK_KINDS, cardRef, currentToolName, type Card } from '@atlas/shared';
 import type { Kanban } from './kanban.ts';
@@ -158,7 +159,8 @@ export const CARD_TOOLS = {
           .flatMap((b) => {
             if (b.type === 'text') return [b.text];
             if (b.type === 'tool_use') return own.has(b.id) ? [] : [`→ ${b.name} ${JSON.stringify(b.input)}`];
-            if (b.type === 'tool_result') return own.has(b.tool_use_id) ? [] : [`← ${b.content}`];
+            if (b.type === 'tool_result') return own.has(b.tool_use_id) ? [] : [`← ${b.content}`, ...(b.images ?? []).map(imageLine)];
+            if (b.type === 'image') return [imageLine(b)];
             if (b.type === 'server_tool_use') return [`→ ${b.name} ${JSON.stringify(b.input)}`];
             if (b.type === 'web_search_tool_result') return [`← ${searchSummary(b.content)}`];
             return [];

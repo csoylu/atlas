@@ -515,6 +515,33 @@ button.artifact:hover .art-open { color: var(--accent); }
 .send-btn:hover { background: var(--accent-hi); }
 .send-btn:disabled { opacity: 0.4; cursor: default; background: var(--accent); }
 
+/* images (#103): composer attachments, thumbnails in messages, the full-size view */
+.composer.dropping { border-color: var(--accent); border-style: dashed; background: var(--accent-soft); }
+.attach-btn {
+  flex: none; width: 26px; height: 26px; border-radius: 6px; border: 0; padding: 0; display: grid; place-items: center;
+  background: none; color: var(--muted); transition: background 0.12s, color 0.12s;
+}
+.attach-btn:hover { background: var(--sheet); color: var(--text); }
+.attach-strip { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; }
+.attach-thumb { position: relative; width: 56px; height: 56px; border-radius: 6px; overflow: hidden; border: 1px solid var(--line-2); background: var(--sheet); flex: none; }
+.attach-thumb img { width: 100%; height: 100%; object-fit: cover; display: block; }
+.attach-thumb.busy img { opacity: 0.5; }
+.attach-thumb.bad { border-color: var(--bad, #d33); }
+.attach-thumb .attach-err { position: absolute; left: 4px; bottom: 3px; font-weight: 700; color: var(--bad, #d33); font-size: 13px; }
+.attach-thumb button {
+  position: absolute; top: 2px; right: 2px; width: 20px; height: 20px; padding: 0; border: 0; border-radius: 50%;
+  background: rgba(0, 0, 0, 0.6); color: #fff; font-size: 14px; line-height: 1; display: grid; place-items: center;
+}
+.attach-note { font-size: 12px; color: var(--bad, #d33); min-width: 0; flex: 1 1 160px; }
+.msg-images { display: flex; flex-wrap: wrap; gap: 6px; margin: 2px 0 4px; }
+.msg-image { padding: 0; border: 1px solid var(--line-2); border-radius: 8px; overflow: hidden; background: var(--sheet); cursor: zoom-in; max-width: 100%; }
+.msg-image img { display: block; max-width: min(240px, 100%); max-height: 180px; width: auto; height: auto; object-fit: contain; }
+.lightbox { position: fixed; inset: 0; z-index: 1000; background: rgba(0, 0, 0, 0.82); display: flex; flex-direction: column; align-items: center; justify-content: center; padding: 16px; gap: 10px; cursor: zoom-out; }
+.lightbox img { max-width: 100%; max-height: calc(100% - 48px); object-fit: contain; border-radius: 4px; cursor: default; }
+.lightbox-bar { display: flex; align-items: center; gap: 14px; color: #eee; font-size: 13px; cursor: default; flex-wrap: wrap; justify-content: center; }
+.lightbox-bar a { color: #9cf; }
+.lightbox-bar .icon-btn { color: #eee; font-size: 20px; }
+
 /* markdown in messages and notes */
 .msg .text.md { white-space: normal; }
 .md > :first-child { margin-top: 0; }

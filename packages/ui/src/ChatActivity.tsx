@@ -7,6 +7,7 @@ import { endedOnFailure, groupSummary, groupTurn, shownNodes, type Segment, type
 import { CardRefLink, cardDetail, type DetailContext, type TurnCards } from './CardStepDetail.tsx';
 import { CanvasName, canvasDetail } from './CanvasStepDetail.tsx';
 import { fileDetail, isLiveShell } from './FileStepDetail.tsx';
+import { ImageThumbs } from './Images.tsx';
 import { webDetail } from './WebStepDetail.tsx';
 import { duration, type ToolOutcome } from './toolRows.ts';
 import type { MessageStream } from './useMessages.ts';
@@ -31,8 +32,9 @@ export function Turn(props: {
   onOpenArtifact?(ref: DocRef): void;
   /** Board cards: #N in a row opens its ticket, chips show the live status. */
   cards?: TurnCards;
+  cardId?: string;
 }) {
-  const ctx = useMemo(() => ({ renderText: props.renderText, cards: props.cards }), [props.renderText, props.cards]);
+  const ctx = useMemo(() => ({ renderText: props.renderText, cards: props.cards, cardId: props.cardId }), [props.renderText, props.cards, props.cardId]);
   const segments = groupTurn(props.messages, props.results, { live: props.live, details: (id) => props.timings.get(id)?.detail });
   const failedEnd = props.last && !props.live ? endedOnFailure(segments) : null;
   const now = useNow(props.live);
@@ -117,7 +119,12 @@ export function StepRow({ step, timing, now, at, nested, defaultOpen, forceOpen,
       autoOpen={isLiveShell(step)}
       className={'step' + (plan ? ' plan' : '') + (step.kind === 'tool' && isDangerous(step.name, step.input) ? ' danger' : '')}
     >
-      {bare ? null : stepDetail(step, ctx, timing)}
+      {bare ? null : (
+        <>
+          {ctx.cardId && step.result?.images?.length ? <ImageThumbs cardId={ctx.cardId} images={step.result.images} /> : null}
+          {stepDetail(step, ctx, timing)}
+        </>
+      )}
     </ChatRow>
   );
 }

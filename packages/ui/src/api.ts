@@ -1,4 +1,4 @@
-import type { Inbox, FileChange, RewindPreview, RewindResult, Doc, DocContent, DocRef, DocVersion, PanelTab, About, CreatePlanAccount, Notification, PlanProvider, UpdatePlanAccount, ChatUsage, UsageSummary, ChatGptModel, ChatGptStatus, UpdateChatGpt, ClaudePlanModel, ClaudePlanStatus, UpdateClaudePlan, Account, CreateAccount, UpdateAccount, LocalModel, LocalPull, LocalStatus, UpdateLocal, Agent, Canvas, CanvasNode, Card, CardStatus, CreateAgent, CreateCard, CreateModel, CreateSchedule, Memory, MemoryChange, MemoryProposal, MemoryQuery, UpdateMemory, Message, Model, ModelTest, Run, Schedule, Timeline, ToolCallTiming, ServerEvent, Settings, UpdateVoice, VoiceName, VoiceStatus, UpdateAgent, UpdateModel, UpdateSchedule } from '@atlas/shared';
+import type { Inbox, FileChange, RewindPreview, RewindResult, Doc, DocContent, DocRef, DocVersion, PanelTab, About, CreatePlanAccount, Notification, PlanProvider, UpdatePlanAccount, ChatUsage, UsageSummary, ChatGptModel, ChatGptStatus, UpdateChatGpt, ClaudePlanModel, ClaudePlanStatus, UpdateClaudePlan, Account, CreateAccount, UpdateAccount, LocalModel, LocalPull, LocalStatus, UpdateLocal, Agent, Canvas, CanvasNode, Card, CardStatus, CreateAgent, CreateCard, CreateModel, CreateSchedule, Memory, MemoryChange, MemoryProposal, MemoryQuery, UpdateMemory, Message, Model, ModelTest, Run, Schedule, Timeline, ToolCallTiming, ServerEvent, Settings, UpdateVoice, VoiceName, VoiceStatus, UpdateAgent, UpdateModel, UpdateSchedule, Upload } from '@atlas/shared';
 
 /** HTTP error with the parsed body (e.g. 409 carries the current canvas). */
 export class ApiError extends Error {
@@ -42,7 +42,20 @@ export const api = {
   moveCard: (id: string, status: CardStatus) => call<Card>('PATCH', `/cards/${id}`, { status }),
   deleteCard: (id: string) => call<void>('DELETE', `/cards/${id}`),
   messages: (id: string) => call<Message[]>('GET', `/cards/${id}/messages`),
-  postMessage: (id: string, text: string, ref?: DocRef) => call<Message>('POST', `/cards/${id}/messages`, ref ? { text, ref } : { text }),
+  postMessage: (id: string, text: string, ref?: DocRef, uploads?: string[]) =>
+    call<Message>('POST', `/cards/${id}/messages`, { text, ...(ref ? { ref } : {}), ...(uploads?.length ? { uploads } : {}) }),
+  /** Stage a pasted/dropped image; its id goes with the next message. */
+  uploadImage: async (id: string, file: File): Promise<Upload> => {
+    const res = await fetch(`/api/cards/${id}/uploads?name=${encodeURIComponent(file.name || 'image')}`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/octet-stream' },
+      body: file,
+      credentials: 'include',
+    });
+    const body = (await res.json().catch(() => ({}))) as Upload & { error?: string };
+    if (!res.ok) throw new ApiError(body.error || `upload failed: HTTP ${res.status}`, res.status, body as unknown as Record<string, unknown>);
+    return body;
+  },
   // ── Documents and the side panel ──
   documents: (cardId?: string) => call<Doc[]>('GET', '/documents' + (cardId ? `?card=${encodeURIComponent(cardId)}` : '')),
   document: (id: string, version?: number) => call<DocContent>('GET', `/documents/${id}` + (version === undefined ? '' : `?version=${version}`)),

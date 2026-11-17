@@ -24,6 +24,7 @@
   "dependencies": {
     "@atlas/engine": "*",
     "better-sqlite3": "^13.0.3",
+    "sharp": "^0.35.5",
     "sherpa-onnx-node": "^2.0.1"
   },
   "build": {
@@ -59,7 +60,7 @@
       ],
       "category": "public.app-category.developer-tools",
       "extendInfo": {
-        "NSMicrophoneUsageDescription": "Atlas listens for \u00ab Hi Atlas \u00bb and what you say next. Audio is processed on this Mac only."
+        "NSMicrophoneUsageDescription": "Atlas listens for « Hi Atlas » and what you say next. Audio is processed on this Mac only."
       }
     },
     "win": {

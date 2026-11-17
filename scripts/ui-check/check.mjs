@@ -333,6 +333,17 @@ const SYS_TIMELINE = {
 };
 // A markdown table with card-ref chips in columns 1 and 3 and long text in column 2 (#85): the text column must stay
 // readable (wrap at words, never crushed to a few letters by the chips).
+// Images (#103): a pasted screenshot in a user message and a picture a read_file returned; the files are served by the
+// harness (a generated png), uploads from the `chat-images` screen get a fixture answer (nothing is written).
+const IMG_PNG = Buffer.from(await (await import('sharp')).default({ create: { width: 640, height: 400, channels: 3, background: '#4a7bd0' } }).composite([{ input: Buffer.from('<svg width="640" height="400"><rect x="40" y="40" width="560" height="60" fill="#fff"/><text x="60" y="84" font-size="34" font-family="Helvetica">Fixture screenshot</text></svg>'), top: 0, left: 0 }]).png().toBuffer());
+const IMG = (name) => ({ type: 'image', path: `/Users/x/workspaces/${agent}/uploads/${name}`, media_type: 'image/png', width: 640, height: 400, bytes: IMG_PNG.length, sha256: 'f'.repeat(64) });
+const IMAGE_MSGS = [
+  { id: 'm_uicheckimg1', conversationId: chat.conversationId, seq: 4e6, role: 'user', author: 'user', at: now, content: [{ type: 'text', text: 'What is wrong in this screenshot?' }, IMG('2026-11-18-screenshot.png'), { type: 'text', text: '[attached: uploads/2026-11-18-screenshot.png]' }] },
+  { id: 'm_uicheckimg2', conversationId: chat.conversationId, seq: 4e6 + 1, role: 'assistant', author: agent, at: now, content: [{ type: 'tool_use', id: 'timg1', name: 'read_file', input: { path: 'shots/board-390.png' } }] },
+  { id: 'm_uicheckimg3', conversationId: chat.conversationId, seq: 4e6 + 2, role: 'user', author: 'tool', at: now, content: [{ type: 'tool_result', tool_use_id: 'timg1', content: '[image: shots/board-390.png (640×400 px, 9 KB)]', images: [IMG('board-390.png')] }] },
+  { id: 'm_uicheckimg4', conversationId: chat.conversationId, seq: 4e6 + 3, role: 'assistant', author: agent, at: now, content: [{ type: 'text', text: 'The title bar is cut at 390 px; my own screenshot shows the same.' }] },
+];
+let uploadSeq = 0;
 const TABLE_MSGS = [
   { id: 'm_uichecktbl1', conversationId: chat.conversationId, seq: 3e6, role: 'user', author: 'user', content: [{ type: 'text', text: 'What is left to do?' }], at: now },
   { id: 'm_uichecktbl2', conversationId: chat.conversationId, seq: 3e6 + 1, role: 'assistant', author: agent, at: now, content: [{ type: 'text', text: [
@@ -428,6 +439,9 @@ const SCREENS = [
   { name: 'chat-system', hash: `#/chat/${chat.id}`, ready: '.sys-row', system: true, then: { js: `for (const s of ['.sys-rewind', '.sys-msg']) document.querySelector(s + ' > .chat-row-line').click(); await new Promise((r) => setTimeout(r, 150)); document.querySelector('.sys-play').scrollIntoView({ block: 'start' });`, ready: '.sys-files' }, keys: ['.sys-row .chat-row-verb', '.sys-row .chat-row-obj', '.sys-foot .chat-row-open', '.sys-files .sys-file'] },
   { name: 'chat-system-end', hash: `#/chat/${chat.id}`, ready: '.sys-alert .sys-foot', system: true, keys: ['.sys-alert .chat-row-verb', '.sys-foot .chat-row-open'] },
   { name: 'chat-table', hash: `#/chat/${chat.id}`, ready: '.msg .md table .card-ref', table: true, then: { js: `[...document.querySelectorAll('.msg .md table')].at(-1).scrollIntoView({ block: 'center' });`, ready: '.msg .md table' }, keys: ['.msg .md td', '.msg .md th', '.msg .md td .card-ref'] },
+  // #103: paste one image and drop another into the composer (2 thumbnails, send enabled), then the transcript's
+  // thumbnails (a pasted screenshot, a read_file picture inside its step) and the full-size view.
+  { name: 'chat-images', hash: `#/chat/${chat.id}`, ready: '.msg-image img', images: true, then: { js: `const png = await (await fetch(document.querySelector('.msg-image img').src)).blob(); const file = (n) => new File([png], n, { type: 'image/png' }); const ta = document.querySelector('.composer textarea'); const dt1 = new DataTransfer(); dt1.items.add(file('pasted.png')); ta.dispatchEvent(new ClipboardEvent('paste', { clipboardData: dt1, bubbles: true, cancelable: true })); const dt2 = new DataTransfer(); dt2.items.add(file('dropped.png')); const form = ta.closest('form'); form.dispatchEvent(new DragEvent('dragover', { dataTransfer: dt2, bubbles: true, cancelable: true })); form.dispatchEvent(new DragEvent('drop', { dataTransfer: dt2, bubbles: true, cancelable: true })); await new Promise((r) => setTimeout(r, 400)); const thumbs = document.querySelectorAll('.composer .attach-thumb'); const bad = []; if (thumbs.length !== 2) bad.push(thumbs.length + ' thumbnails after a paste and a drop, want 2'); if (document.querySelector('.composer .attach-thumb.bad, .composer .attach-thumb.busy')) bad.push('an attachment failed or is still uploading: ' + (document.querySelector('.attach-note')?.textContent ?? '')); if (document.querySelector('.composer .send-btn').disabled) bad.push('send disabled with 2 images and no text'); if (!document.querySelector('.composer .attach-btn')) bad.push('no attach button'); const step = [...document.querySelectorAll('.chat-row.step')].find((r) => r.textContent.includes('board-390')); if (!step) bad.push('no read_file step for the picture'); else { step.querySelector('.chat-row-line').click(); await new Promise((r) => setTimeout(r, 150)); if (!step.querySelector('.msg-image img')) bad.push('the read_file step shows no picture when opened'); } if (bad.length) throw new Error('images (#103): ' + bad.join('; ')); document.querySelector('.msg-image').click(); await new Promise((r) => setTimeout(r, 150));`, ready: '.lightbox img' }, keys: ['.lightbox-bar span', '.lightbox-bar a'] },
   { name: 'chat-tools-live', hash: `#/chat/${chat.id}`, ready: '.chat-row.steps.running', tools: true, keys: ['.chat-row.steps.running > .chat-row-line .chat-row-verb', '.chat-row.plan .chat-row-obj', '.chat-row.plan .todo-list li'] },
   { name: 'modal', hash: `#/chat/${chat.id}?card=${modalCard.id}`, ready: '.card-modal', pins: true, keys: ['.cm-title', '.cm-pill', '.cm-h', '.cm-foot button'] },
   // A task of this chat opened beside it (#107): the whole task, its description clamped, the conversation and composer in view.
@@ -524,6 +538,14 @@ handlers.set('Fetch.requestPaused', async ({ requestId, request }) => {
     if (request.method === 'GET' && url.pathname === `/api/cards/${chat.id}/messages` && screen?.system) return await json([...(await get(`/cards/${chat.id}/messages`)), ...SYS_MSGS]);
     if (request.method === 'GET' && url.pathname === `/api/cards/${chat.id}/timeline` && screen?.system) return await json(SYS_TIMELINE);
     if (request.method === 'GET' && url.pathname === `/api/cards/${chat.id}/runs` && screen?.system) return await json([SYS_LATEST]);
+    if (request.method === 'GET' && url.pathname === `/api/cards/${chat.id}/messages` && screen?.images) return await json([...(await get(`/cards/${chat.id}/messages`)), ...IMAGE_MSGS]);
+    if (request.method === 'GET' && url.pathname === `/api/cards/${chat.id}/image` && screen?.images)
+      return await send('Fetch.fulfillRequest', { requestId, responseCode: 200, responseHeaders: [{ name: 'Content-Type', value: 'image/png' }], body: IMG_PNG.toString('base64') });
+    if (request.method === 'POST' && url.pathname === `/api/cards/${chat.id}/uploads` && screen?.images)
+      return await send('Fetch.fulfillRequest', {
+        requestId, responseCode: 201, responseHeaders: [{ name: 'Content-Type', value: 'application/json' }],
+        body: Buffer.from(JSON.stringify({ id: `up_uicheck-${uploadSeq++}`, name: url.searchParams.get('name') ?? 'image.png', media_type: 'image/png', width: 640, height: 400, bytes: IMG_PNG.length })).toString('base64'),
+      });
     if (request.method === 'GET' && url.pathname === '/api/cards' && screen?.table) return await json([...(await get('/cards')), ...TOOL_CARDS]);
     if (request.method === 'GET' && url.pathname === `/api/cards/${chat.id}/messages` && screen?.table) return await json([...(await get(`/cards/${chat.id}/messages`)), ...TABLE_MSGS]);
     if (request.method === 'GET' && url.pathname === '/api/cards' && screen?.tools) return await json([...(await get('/cards')), ...TOOL_CARDS]);

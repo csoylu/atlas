@@ -3,7 +3,8 @@ import { randomUUID } from 'node:crypto';
 import { mkdir, readFile, readdir, stat, writeFile } from 'node:fs/promises';
 import { dirname, isAbsolute, join, relative, resolve, sep } from 'node:path';
 import { z } from 'zod';
-import type { ToolCallDetail } from '@atlas/shared';
+import type { ImageBlock, ToolCallDetail } from '@atlas/shared';
+import { describeImage, extOf, imageLine, looksLikeImage, sniff } from './images.ts';
 import type { ToolSpec } from './providers/types.ts';
 import type { Background } from './background.ts';
 import { findSpans, replaceSpans, type Span } from './fuzzy.ts';
@@ -31,7 +32,12 @@ export interface ToolContext {
 interface Tool<S extends z.ZodType> {
   description: string;
   input: S;
-  run(input: z.infer<S>, ctx: ToolContext): Promise<string>;
+  /** Text, or text + pictures (read_file / web_fetch of an image). */
+  run(input: z.infer<S>, ctx: ToolContext): Promise<string | ToolOutput>;
+}
+export interface ToolOutput {
+  output: string;
+  images?: ImageBlock[];
 }
 const tool = <S extends z.ZodType>(t: Tool<S>) => t;
 
@@ -61,7 +67,7 @@ function readable(ctx: ToolContext, p: string): string {
 }
 
 /** Save a full output to the outputs folder; returns its path. */
-async function saveOutput(ctx: ToolContext, kind: string, text: string, ext = 'txt'): Promise<string> {
+async function saveOutput(ctx: ToolContext, kind: string, text: string | Buffer, ext = 'txt'): Promise<string> {
   await mkdir(ctx.outputsDir, { recursive: true });
   const path = join(ctx.outputsDir, `${kind}-${Date.now().toString(36)}-${randomUUID().slice(0, 6)}.${ext}`);
   await writeFile(path, text);
@@ -154,7 +160,9 @@ export const TOOLS = {
     description:
       'Read a UTF-8 text file, with line numbers (`N|text`; the `N|` prefix is not part of the file). Paths are relative ' +
       `to your working directory (or an absolute path Atlas gave you for a saved output). Reads ${READ_LINES} lines from ` +
-      '`offset` (1-based) by default; a footer says how to continue. Read a file before editing or overwriting it.',
+      '`offset` (1-based) by default; a footer says how to continue. Read a file before editing or overwriting it. ' +
+      'A png, jpeg, gif or webp file (up to 10 MB) comes back as the picture itself, so you can look at it (e.g. a ' +
+      'screenshot you took with headless Chrome).',
     input: z.object({
       path: z.string(),
       offset: z.number().int().min(1).default(1).describe('first line to read (1-based)'),
@@ -169,7 +177,11 @@ export const TOOLS = {
         await remember(ctx, full);
         return b;
       });
-      if (isBinary(buf)) throw new Error(`${path} is a binary file (${buf.length} bytes); read_file reads text only`);
+      if (sniff(buf) || looksLikeImage(full)) {
+        const image = await describeImage(full, buf);
+        return { output: imageLine(image), images: [image] };
+      }
+      if (isBinary(buf)) throw new Error(`${path} is a binary file (${buf.length} bytes); read_file reads text and png/jpeg/gif/webp images only`);
       return numberedPage(buf.toString('utf8'), offset, limit);
     },
   }),
@@ -306,13 +318,21 @@ export const TOOLS = {
   web_fetch: tool({
     description:
       'Fetch a web page or text URL as readable text (HTML converted to markdown). Long pages show the start and the end; ' +
-      'the full text is saved to a file you can read_file or grep.',
+      'the full text is saved to a file you can read_file or grep. A png, jpeg, gif or webp URL comes back as the picture ' +
+      '(saved to a file too).',
     input: z.object({
       url: z.string().min(1),
       max_chars: z.number().int().min(1000).max(100_000).default(15_000),
     }),
     run: async ({ url, max_chars }, ctx) => {
       const page = await fetchPage(url, ctx.signal, ctx.fetch);
+      if (page.image) {
+        const type = sniff(page.image);
+        if (!type) throw new Error(`${page.url} says it is an image (${page.contentType}) but is not a png, jpeg, gif or webp`);
+        const path = await saveOutput(ctx, 'image', page.image, extOf(type));
+        const image = await describeImage(path, page.image);
+        return { output: `URL: ${page.url}\n${imageLine(image)}`, images: [image] };
+      }
       const head = `URL: ${page.url}${page.title ? `\nTitle: ${page.title}` : ''}\n\n`;
       if (page.text.length <= max_chars) return head + page.text;
       const path = await saveOutput(ctx, 'web', head + page.text, 'md');
@@ -402,13 +422,14 @@ export function toolSpecs(): ToolSpec[] {
 }
 
 /** Execute a tool call. Errors are returned to the model as is_error results, not thrown. */
-export async function runTool(name: string, input: unknown, ctx: ToolContext): Promise<{ output: string; isError: boolean }> {
+export async function runTool(name: string, input: unknown, ctx: ToolContext): Promise<{ output: string; isError: boolean; images?: ImageBlock[] }> {
   const t = (TOOLS as Record<string, Tool<z.ZodType>>)[name];
   if (!t) return { output: `unknown tool ${name}`, isError: true };
   const parsed = t.input.safeParse(input);
   if (!parsed.success) return { output: `invalid input for ${name}: ${parsed.error.message}`, isError: true };
   try {
-    return { output: await t.run(parsed.data, ctx), isError: false };
+    const r = await t.run(parsed.data, ctx);
+    return typeof r === 'string' ? { output: r, isError: false } : { ...r, isError: false };
   } catch (e) {
     if (ctx.signal.aborted) throw e;
     return { output: e instanceof Error ? e.message : String(e), isError: true };

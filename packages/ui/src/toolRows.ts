@@ -1,4 +1,4 @@
-import { currentToolName, type ToolCallDetail } from '@atlas/shared';
+import { currentToolName, type ImageBlock, type ToolCallDetail } from '@atlas/shared';
 import { boardMeta, cardLine } from './cardRows.ts';
 import { diffCount, diffLines } from './fileRows.ts';
 import type { RowTone } from './chatRow.ts';
@@ -61,6 +61,8 @@ export interface Short {
 export interface ToolOutcome {
   content: string;
   isError: boolean;
+  /** Pictures the tool returned (read_file / web_fetch of an image). */
+  images?: ImageBlock[];
 }
 
 type Input = Record<string, unknown>;
