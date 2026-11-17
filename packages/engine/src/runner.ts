@@ -230,6 +230,9 @@ export class Runner {
     const card = this.kanban.get(cardId);
     if (!card.assignee) throw new InvalidError('assign an agent first: /compact uses its model');
     const { model, provider } = this.models.provider(card.modelId ?? this.agents.get(card.assignee).modelId);
+    // Only a message sent while the summary is written gets an answer afterwards: a reply the stop left owed (the
+    // caller stopped that run on purpose) does not restart the agent (#99, zurich #100).
+    const seqAtStart = this.lastSeq(card.conversationId);
     this.compactingCards.add(cardId);
     try {
       const transcript = this.transcript(card);
@@ -260,8 +263,14 @@ export class Runner {
       this.compactingCards.delete(cardId);
       const c = this.kanban.get(cardId);
       // A message sent while the summary was being written: answer it now.
-      this.wake(cardId, { kind: c.board !== 'direct' && c.status === 'running' ? 'work' : 'chat' });
+      if (this.lastSeq(c.conversationId) > seqAtStart) this.wake(cardId, { kind: c.board !== 'direct' && c.status === 'running' ? 'work' : 'chat' });
     }
+  }
+
+  /** The seq of the conversation's last visible message (0 if none). */
+  private lastSeq(conversationId: string): number {
+    const r = this.db.prepare('SELECT MAX(seq) AS m FROM messages WHERE conversation_id = ? AND rewind_id IS NULL').get(conversationId) as { m: number | null };
+    return r.m ?? 0;
   }
 
   /** Every tool call made on the card, oldest first: when each ran (the chat shows durations and live timers). */
