@@ -29,6 +29,14 @@ export function pillStatus(card: Pick<Card, 'status' | 'block'>, run: Pick<Run, 
   return card.status;
 }
 
+/** The task view's status as a coloured chip (#104): Working, Blocked, Done; null keeps the neutral pill. */
+export function statusChip(status: PillStatus): { kind: 'working' | 'blocked' | 'done'; label: string } | null {
+  if (status === 'running') return { kind: 'working', label: 'Working' };
+  if (status === 'blocked') return { kind: 'blocked', label: 'Blocked' };
+  if (status === 'done') return { kind: 'done', label: 'Done' };
+  return null;
+}
+
 const DANGEROUS_COMMANDS: RegExp[] = [
   /\brm\s+(-[a-zA-Z]*[rf][a-zA-Z]*\s+)+/, // rm -rf, rm -r, rm -f …
   /\bgit\s+push\b[^\n]*\s(--force\b|--force-with-lease\b|-f\b)/,

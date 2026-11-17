@@ -1,15 +1,15 @@
 import { forwardRef, useEffect, useLayoutEffect, useRef, useState, type ReactNode } from 'react';
+import { AgentFace } from './AgentFace.tsx';
 import Markdown from 'react-markdown';
 import remarkGfm from 'remark-gfm';
 import { CARD_STATUSES, cardRef, type Doc, type Agent, type Card, type Model } from '@atlas/shared';
 import { api } from './api.ts';
 import type { MessageStream } from './useMessages.ts';
 import { Activity, CardComposer, CardNotices, RunLine, useCardConversation } from './CardPanel.tsx';
-import { pillStatus } from './cardModal.ts';
+import { pillStatus, statusChip } from './cardModal.ts';
 import { CardDocs } from './DocPanel.tsx';
 import { RewindConfirm, RewindNote, useRewind } from './Rewind.tsx';
 import { StatusIcon, STATUS_LABEL } from './StatusIcon.tsx';
-import { tint } from './agentTint.ts';
 
 export interface CardViewProps {
   card: Card;
@@ -59,6 +59,7 @@ export const CardView = forwardRef<HTMLTextAreaElement, CardViewProps & { close:
 
     const save = (patch: Partial<Card>) => api.updateCard(card.id, patch).catch(onError);
     const status = pillStatus(card, convo.run);
+    const chip = statusChip(status);
     const running = card.status === 'running' || convo.run?.status === 'running';
     const byId = new Map(props.cards.map((c) => [c.id, c]));
     const children = props.cards.filter((c) => c.parents.includes(card.id));
@@ -75,13 +76,19 @@ export const CardView = forwardRef<HTMLTextAreaElement, CardViewProps & { close:
         <header className="cm-head">
           <div className="cm-row">
             <span className="id cm-id" title={card.id}>{cardRef(card)}</span>
-            <span className={'cm-pill ' + status} title="Status (live)">
-              <StatusIcon status={status === 'stopped' ? 'failed' : status} />
-              {status === 'stopped' ? 'Stopped by you' : STATUS_LABEL[status]}
-            </span>
+            {chip ? (
+              <span className={'cm-pill st-chip ' + chip.kind} title="Status (live)">
+                {chip.label}
+              </span>
+            ) : (
+              <span className={'cm-pill ' + status} title="Status (live)">
+                <StatusIcon status={status === 'stopped' ? 'failed' : status} />
+                {status === 'stopped' ? 'Stopped by you' : STATUS_LABEL[status]}
+              </span>
+            )}
             <label className="prop-pill" title="Assignee">
               {card.assignee ? (
-                <span className="dot-avatar" style={tint(card.assignee)} aria-hidden="true">{card.assignee.slice(0, 1).toUpperCase()}</span>
+                <AgentFace id={card.assignee} />
               ) : (
                 <span className="avatar-none" />
               )}

@@ -1,5 +1,5 @@
 import { useEffect, useState, type DragEvent } from 'react';
-import { tint } from './agentTint.ts';
+import { AgentFace } from './AgentFace.tsx';
 import { cardRef, type Agent, type Card, type CardStatus, type CreateCard } from '@atlas/shared';
 import { HeaderActions, Icon } from './ScreenHeader.tsx';
 import { StatusIcon, STATUS_LABEL } from './StatusIcon.tsx';
@@ -340,9 +340,7 @@ function Labels({ card: c, cards }: { card: Card; cards: Card[] }) {
 
 export function Avatar({ id }: { id: string }) {
   return (
-    <span className="dot-avatar" style={tint(id)} title={'@' + id} aria-hidden="true">
-      {id.slice(0, 1).toUpperCase()}
-    </span>
+    <AgentFace id={id} title={'@' + id} />
   );
 }
 

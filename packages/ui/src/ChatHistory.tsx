@@ -1,7 +1,7 @@
 import { useEffect, useLayoutEffect, useRef, useState, type KeyboardEvent as ReactKeyboardEvent } from 'react';
+import { AgentFace } from './AgentFace.tsx';
 import { createPortal } from 'react-dom';
 import type { Card } from '@atlas/shared';
-import { tint } from './agentTint.ts';
 import { menuPosition } from './chatHistoryMenu.ts';
 
 export function ChatHistory({ chats, selected, onSelect, onArchive, onDelete }: {
@@ -88,7 +88,7 @@ export function ChatHistory({ chats, selected, onSelect, onArchive, onDelete }: 
         const rect = e.currentTarget.getBoundingClientRect();
         setMenu({ chat: c, x: rect.left + 12, y: rect.bottom, trigger: e.currentTarget });
       }}>
-      <span className="dot-avatar" aria-hidden="true" style={tint(c.assignee ?? '')}>{(c.assignee ?? '?').slice(0, 1).toUpperCase()}</span>
+      <AgentFace id={c.assignee} />
       <span className="chat-hist-title">{c.naming ? <span className="chat-naming">Generating chat name…</span> : c.title}</span>
       <span className="chat-hist-when">{ago(c.updatedAt)}</span>
     </button>)}

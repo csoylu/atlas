@@ -38,9 +38,9 @@ describe('pinKind / pinLabel', () => {
     expect(pinKind(card('a', { status: 'closed' }))).toBe('closed');
   });
   it('says how long it has been running', () => {
-    expect(pinLabel({ kind: 'running', since: T0 }, T0 + 134_000)).toBe('running · 2:14');
-    expect(pinLabel({ kind: 'running', since: T0 }, T0 + 3_725_000)).toBe('running · 1:02:05');
-    expect(pinLabel({ kind: 'running', since: null }, T0)).toBe('running');
+    expect(pinLabel({ kind: 'running', since: T0 }, T0 + 134_000)).toBe('Working · 2:14');
+    expect(pinLabel({ kind: 'running', since: T0 }, T0 + 3_725_000)).toBe('Working · 1:02:05');
+    expect(pinLabel({ kind: 'running', since: null }, T0)).toBe('Working');
     expect(pinLabel({ kind: 'stopped', since: null }, T0)).toBe('stopped by you');
     expect(pinLabel({ kind: 'blocked', since: null }, T0)).toBe('needs your OK');
     expect(pinLabel({ kind: 'done', since: null }, T0)).toBe('done');
