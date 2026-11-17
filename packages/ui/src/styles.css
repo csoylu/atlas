@@ -506,7 +506,7 @@ button.artifact:hover .art-open { color: var(--accent); }
 }
 .composer:focus-within { border-color: var(--accent); box-shadow: var(--composer-shadow), 0 0 0 3px var(--accent-soft); }
 .composer textarea {
-  flex: 1; resize: none; height: 48px; background: none; border: 0; outline: none; padding: 2px 0; line-height: 1.5; font-size: 13.5px;
+  flex: none; resize: none; min-height: calc(4 * 1.5em + 4px); max-height: 40vh; max-height: 40dvh; overflow-y: hidden; background: none; border: 0; outline: none; padding: 2px 0; line-height: 1.5; font-size: 13.5px;
 }
 .send-btn {
   flex: none; width: 26px; height: 26px; border-radius: 6px; border: 0; padding: 0; display: grid; place-items: center;
@@ -1072,7 +1072,7 @@ div.cm-desc h1, div.cm-desc h2, div.cm-desc h3 { font-size: 14px; margin: 0.8em 
 .cm-notices .waiting-line { border-bottom: 0; padding: 6px 20px; }
 .cm-notices .run-status { padding: 6px 20px; }
 .card-modal .composer { margin: 8px 20px 10px; flex: none; }
-.card-modal .composer textarea { height: 44px; }
+.card-modal .composer textarea { min-height: calc(3 * 1.5em + 4px); }
 .cm-foot { display: flex; align-items: center; gap: 6px; padding: 8px 12px 8px 20px; border-top: 1px solid var(--line); flex: none; }
 .cm-btn {
   height: 26px; padding: 0 9px; border-radius: 6px; border: 1px solid var(--line-2); background: var(--raised); color: var(--text);
@@ -1828,7 +1828,7 @@ button.msg-quote:hover { color: var(--text); }
 .thread-panel .tp-title { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--text); font-size: 13px; font-weight: 500; }
 .thread-panel .tp-activity { flex: 1; min-height: 0; overflow-y: auto; }
 .thread-panel .composer { margin: 8px 16px 10px; flex: none; }
-.thread-panel .composer textarea { height: 44px; }
+
 /* Sidebar: running tasks. */
 .side-running { margin-top: 12px; }
 .running-item { gap: 8px; }

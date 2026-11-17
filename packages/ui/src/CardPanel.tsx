@@ -19,6 +19,7 @@ import { HeaderActions, Icon } from './ScreenHeader.tsx';
 import { StatusIcon } from './StatusIcon.tsx';
 import type { Quote } from './DocPanel.tsx';
 import { draftKey, readDraft, useDraft, writeDraft } from './drafts.ts';
+import { useAutoGrow } from './useAutoGrow.ts';
 import { RewindConfirm, RewindIcon, RewindNote, useRewind, type Rewind } from './Rewind.tsx';
 import { distribute, messageRow, timelineRows, type SysRow } from './sysRows.ts';
 import { SystemRow } from './SystemRow.tsx';
@@ -525,6 +526,7 @@ export const CardComposer = forwardRef<
     const draftId = draftKey('card', card.id);
     const [text, setText] = useDraft(draftId);
     const box = useRef<HTMLTextAreaElement | null>(null);
+    useAutoGrow(box, text);
     // A rewind put the message back (or its undo took it away): fill the box, cursor at the end.
     const fill = rewind?.fill;
     useEffect(() => {
