@@ -92,6 +92,31 @@ describe('background memory review (v3)', () => {
     expect(reviews).toBe(1);
   });
 
+  it('names the user’s language from their own latest messages, even when the task has none and memories are French (#108)', async () => {
+    const fake = new FakeProvider([[use('task_complete', { summary: 'Cloned.' })], text('{"changes":[]}')]);
+    const e = (engine = await start(fake));
+    e.memories.add({ kind: 'rule', scope: 'agent:atlas', text: 'Toujours faire git pull --rebase avant le travail, puis push.' }, 'review:atlas');
+    const chat = e.kanban.newChat('atlas');
+    e.kanban.appendMessage(chat.id, 'user', 'user', text('please keep the clone in sync with main'));
+    // A task the agent works alone: its transcript holds no message of the user.
+    const card = e.kanban.create({ title: 'Sync', assignee: 'atlas', status: 'running' }, 'atlas');
+    e.kanban.appendMessage(card.id, 'user', 'system', text('This task is ready and assigned to you. Do it.'));
+    e.runner.wake(card.id, { kind: 'work' });
+    await e.runner.settled(card.id);
+    await e.review.idle;
+    const req = fake.calls[1]!;
+    expect(req.tools).toEqual([]);
+    const user = e.settings.user().name;
+    expect(req.system).toContain(`in the language of ${user}'s own messages`);
+    expect(req.system).toContain(`rewritten in ${user}'s`);
+    expect(req.system).toContain('- "please keep the clone in sync with main"');
+    expect(req.system).not.toMatch(/[«»]/); // no French typography to imitate
+    const prompt = (req.messages[0]!.content[0] as { text: string }).text;
+    expect(prompt).toContain('Toujours faire git pull');
+    expect(prompt.endsWith(`Your JSON ("language" first: the language of ${user}'s own messages; every text in it):`)).toBe(true);
+    expect(req.system).toContain(`{"language":"<${user}'s language>","changes":[...]}`);
+  });
+
   it('picks the model: the setting, else a Sonnet, else the agent’s own', async () => {
     const e = (engine = await start(new FakeProvider([])));
     expect(e.review.modelFor('opus')).toBe('sonnet');
@@ -102,6 +127,7 @@ describe('background memory review (v3)', () => {
 
   it('parses the reply and spots secrets', () => {
     expect(parseReply('Sure:\n{"changes":[]}')).toEqual([]);
+    expect(parseReply('{"language":"English","changes":[]}')).toEqual([]);
     expect(() => parseReply('nothing to add')).toThrow(/no JSON/);
     expect(() => parseReply('{"changes":[{"action":"add"}]}')).toThrow(/unexpected reply/);
     expect(looksSecret('token: ghp_abcdefghijklmnop1234')).toBe(true);
