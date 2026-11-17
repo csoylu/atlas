@@ -38,6 +38,15 @@ apps/desktop      Electron main process: opens the UI window. Dev: loads Vite (:
    provider must stay green. `npm run typecheck && npm test` before every commit (`npm test` = fast project, ~10 s; `npm run test:full` also runs the slow project: real voice models + the 50-SIGKILL crash test, `CRASH_KILLS=n` shortens it. Run it when you touch voice, the store, runs or leases).
 7. Shared types go in `packages/shared`; the UI never imports engine code directly, only the API.
 
+## E2E tests
+`e2e/` drives the real UI in headless Chrome (playwright-core, no browser download) against a real engine (in-memory SQLite,
+`startEngine` with a scripted model, `e2e/provider.ts`, which answers from what it was actually sent: `RECALL` lists the
+agent's view, `SEARCH x` calls history_search, `HANG` keeps a run going). `npm run test:e2e` builds `packages/ui` first
+(`E2E_SKIP_BUILD=1` to skip). One file per feature (`*.e2e.test.ts`), shared lifecycle in `e2e/fixtures.ts` (`useChat()`), page
+helpers in `e2e/chat.ts`, retrying assertions in `e2e/see.ts`. Every test ends by asserting the page raised no error. Run it when
+you change the composer, the chat rows, rewind, or the runner's stop/compact/clear paths. Covered: slash popup, /compact, /clear,
+commands during a run, rewind across a clear.
+
 ## Commands
 ```
 cp .env.example .env   # model keys (gitignored); see .env.example
@@ -46,6 +55,7 @@ npm run dev          # engine + UI with hot reload, opens http://localhost:5173
 npm run desktop      # Electron app in dev
 npm run typecheck && npm test   # fast suite; test:full adds slow suites, test:changed only what your diff affects
 npm -w @atlas/desktop run install:mac   # build the Mac app and install it in /Applications (quits the running one)
+npm run test:e2e     # browser E2E (e2e/): real engine + built UI + headless Chrome, scripted model; needs Google Chrome (CHROME_PATH), ~20 s
 npm run ui:check     # responsive check of the real UI (below)
 node scripts/orb-check/check.mjs   # voice orb overlay: screenshots of every state, frame times, CPU, Esc, click-through, drag (→ shots/orb)
 ```

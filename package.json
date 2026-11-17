@@ -15,7 +15,7 @@
     "desktop": "concurrently -k -n engine,ui,desktop -c blue,magenta,green \"npm -w @atlas/engine run dev\" \"npm -w @atlas/ui run dev\" \"wait-on http://localhost:5173 http-get://localhost:4317/api/health && npm -w @atlas/desktop run dev\"",
     "build": "npm -w @atlas/ui run build",
     "start": "npm -w @atlas/engine run start",
-    "typecheck": "tsc -p packages/shared && tsc -p packages/engine && tsc -p packages/ui && tsc -p apps/desktop && tsc -p packages/voice",
+    "typecheck": "tsc -p packages/shared && tsc -p packages/engine && tsc -p packages/ui && tsc -p apps/desktop && tsc -p packages/voice && tsc -p e2e",
     "test": "vitest run --project fast",
     "test:full": "vitest run",
     "test:slow": "vitest run --project slow",
