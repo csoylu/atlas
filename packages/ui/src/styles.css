@@ -2320,3 +2320,68 @@ a.pop-row[aria-disabled='true'] { opacity: 0.5; pointer-events: none; }
   .wf-onoff > span:first-child { display: none; }
   .wf-onoff { padding: 0 4px; }
 }
+
+/* ── Settings → Secrets (#209, mockup #205 by paris) and secret values hidden in a chat ── */
+.sec-store { display: flex; flex-wrap: wrap; align-items: center; gap: 6px 10px; margin: -8px 0 16px; font-size: var(--fs-small); color: var(--muted); line-height: var(--lh-tight); }
+.sec-store b { color: var(--text); font-weight: var(--fw-medium); }
+.sec-name { font-family: var(--mono); font-size: var(--fs-base); font-weight: var(--fw-medium); color: var(--text); overflow-wrap: anywhere; }
+.sec-desc { font-size: var(--fs-base); color: var(--muted); line-height: var(--lh-normal); }
+.sec-who { display: inline-flex; align-items: center; gap: 4px; white-space: nowrap; }
+.sec-who .dot-avatar { width: 14px; height: 14px; }
+.sec-grant { display: inline-flex; align-items: center; gap: 4px; padding: 1px 7px 1px 4px; border-radius: 4px; background: var(--raised); color: var(--muted); font-size: var(--fs-small); font-weight: var(--fw-regular); line-height: var(--lh-tight); white-space: nowrap; }
+.sec-grant .dot-avatar { width: 14px; height: 14px; }
+.sec-grant.all { padding-left: 7px; background: var(--accent-soft); color: var(--text); }
+.sec-grant.none { padding-left: 7px; }
+.sec-lockic { width: 14px; height: 14px; flex: none; color: var(--muted); }
+.sec-row .model-actions { flex: none; }
+.sec-row .model-detail > span { display: inline-flex; align-items: center; gap: 4px; }
+.sec-opt { font-weight: var(--fw-regular); color: var(--muted); }
+.sec-row.sec-missing { border-style: dashed; }
+.sec-row.sec-locked .sec-name { color: var(--muted); }
+.sec-inline { flex-basis: 100%; display: flex; flex-direction: column; gap: 8px; padding-top: 10px; border-top: 1px solid var(--rule); }
+.sec-inline .actions { flex-wrap: wrap; align-items: center; }
+.sec-inline .confirm-text { font-size: var(--fs-base); color: var(--text); line-height: var(--lh-normal); }
+.sec-inline .confirm-text code { font-size: var(--fs-small); background: var(--code); padding: 1px 6px; border-radius: 4px; }
+.sec-row.wrap { flex-wrap: wrap; }
+.sec-row .key-form input { min-width: 0; }
+/* the add / edit form: today's .model-row.new with fields stacked */
+.sec-form { flex-direction: column; align-items: stretch !important; gap: 14px; }
+.sec-form .field-row { flex-wrap: wrap; }
+.sec-form .field-row .field { min-width: 200px; }
+.sec-form .field input.mono { text-transform: uppercase; }
+.sec-form .form-note { margin: 0; line-height: var(--lh-normal); }
+.sec-form .form-note code, .sec-form .muted code { font-size: var(--fs-small); background: var(--code); padding: 1px 6px; border-radius: 4px; }
+.sec-form .actions { align-items: center; }
+.sec-value-set { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; font-weight: var(--fw-regular); color: var(--text); font-size: var(--fs-base); min-height: 34px; }
+.sec-dots { font-family: var(--mono); letter-spacing: 2px; color: var(--muted); }
+.sec-form .segmented { align-self: flex-start; max-width: 100%; }
+.sec-pick { display: flex; flex-wrap: wrap; gap: 6px; }
+.sec-pick label { display: inline-flex; align-items: center; gap: 6px; height: 30px; padding: 0 10px 0 8px; border: 1px solid var(--line-2); border-radius: 8px; background: var(--sheet); color: var(--text); font-size: var(--fs-base); font-weight: var(--fw-regular); cursor: pointer; }
+.sec-pick label.on { border-color: var(--accent); box-shadow: 0 0 0 1px var(--accent); }
+.sec-pick input { margin: 0; accent-color: var(--accent); }
+.sec-pick .dot-avatar { width: 16px; height: 16px; }
+.sec-pick .sec-role { color: var(--muted); font-size: var(--fs-small); }
+/* server mode: locked */
+.sec-lock { display: flex; gap: 14px; align-items: flex-start; background: var(--sheet); border: 1px solid var(--st-orange); border-radius: 12px; padding: 16px; margin-bottom: 16px; }
+.sec-lock .sec-lock-ic { width: 32px; height: 32px; border-radius: 9px; display: grid; place-items: center; background: var(--warn-bg); color: var(--warn-ink); flex: none; }
+.sec-lock-main { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 10px; }
+.sec-lock h3 { margin: 0; font-size: var(--fs-large); font-weight: var(--fw-bold); line-height: var(--lh-tight); }
+.sec-lock p { margin: 0; color: var(--muted); font-size: var(--fs-base); line-height: var(--lh-normal); max-width: 760px; }
+.sec-lock .key-form { max-width: 460px; }
+.sec-lock .key-form input { font-family: var(--font); }
+.sec-lock ul { margin: 0; padding-left: 18px; color: var(--text); font-size: var(--fs-base); line-height: var(--lh-normal); }
+.sec-lock ul li::marker { color: var(--faint); }
+.sec-lock .sec-paused { font-size: var(--fs-small); font-weight: var(--fw-medium); color: var(--muted); }
+.sec-lock code { font-size: var(--fs-small); background: var(--code); padding: 1px 6px; border-radius: 4px; }
+/* redacted value in a tool output and in a message */
+.sec-redacted { border-radius: 4px; padding: 0 4px; background: rgba(232, 198, 109, 0.14); color: #e8c66d; box-shadow: inset 0 0 0 1px rgba(232, 198, 109, 0.35); }
+.text .sec-redacted, .fv-note .sec-redacted { font-family: var(--mono); font-size: var(--fs-small); background: var(--warn-bg); color: var(--warn-ink); box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--st-orange) 40%, transparent); }
+@media (max-width: 640px) {
+  /* actions move under the text on a phone, like the workflow rows */
+  .sec-row { flex-wrap: wrap; }
+  .sec-row .model-main { flex-basis: 100%; }
+  .sec-row .model-actions { width: 100%; justify-content: flex-start; margin-left: -8px; }
+  .sec-lock { flex-direction: column; }
+  .sec-inline .confirm-text { flex-basis: 100%; }
+  .sec-form .field-row .field { min-width: 100%; }
+}

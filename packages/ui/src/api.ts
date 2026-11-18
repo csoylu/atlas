@@ -1,4 +1,4 @@
-import type { About, Account, Agent, Card, CardStatus, ChatGptModel, ChatGptStatus, ChatUsage, ClaudePlanModel, ClaudePlanStatus, ClearEvent, CompactResult, CreateAccount, CreateAgent, CreateCard, CreateModelRequest, CreatePlanAccount, CreateWorkflow, Doc, DocContent, DocHit, DocRef, DocVersion, FileChange, Folder, Inbox, LocalModel, LocalPull, LocalStatus, Memory, MemoryChange, MemoryProposal, MemoryQuery, Message, Model, ModelTest, Notification, PanelTab, PlanProvider, RewindPreview, RewindResult, Run, SaveWorkflowGraph, ServerEvent, Settings, Timeline, ToolCallTiming, UpdateAccount, UpdateAgent, UpdateChatGpt, UpdateClaudePlan, UpdateLocal, UpdateMemory, UpdateModelRequest, UpdatePlanAccount, UpdateStatus, UpdateVoice, Upload, UsageSummary, VoiceName, VoiceStatus, TriggerPreview, UpdateWorkflow, Workflow, WorkflowRun } from '@atlas/shared';
+import type { About, Account, Agent, Card, CardStatus, ChatGptModel, ChatGptStatus, ChatUsage, ClaudePlanModel, ClaudePlanStatus, ClearEvent, CompactResult, CreateAccount, CreateAgent, CreateCard, CreateModelRequest, CreatePlanAccount, CreateWorkflow, Doc, DocContent, DocHit, DocRef, DocVersion, FileChange, Folder, Inbox, LocalModel, LocalPull, LocalStatus, Memory, MemoryChange, MemoryProposal, MemoryQuery, Message, Model, ModelTest, Notification, PanelTab, PlanProvider, RewindPreview, RewindResult, Run, CreateSecret, SecretInfo, SecretList, SecretStoreStatus, UpdateSecret, SaveWorkflowGraph, ServerEvent, Settings, Timeline, ToolCallTiming, UpdateAccount, UpdateAgent, UpdateChatGpt, UpdateClaudePlan, UpdateLocal, UpdateMemory, UpdateModelRequest, UpdatePlanAccount, UpdateStatus, UpdateVoice, Upload, UsageSummary, VoiceName, VoiceStatus, TriggerPreview, UpdateWorkflow, Workflow, WorkflowRun } from '@atlas/shared';
 
 /** HTTP error with the parsed body (e.g. a 409's details). */
 export class ApiError extends Error {
@@ -144,9 +144,16 @@ export const api = {
   updateModel: (id: string, patch: UpdateModelRequest) => call<Model>('PATCH', `/models/${id}`, patch),
   deleteModel: (id: string) => call<void>('DELETE', `/models/${id}`),
   testModel: (id: string) => call<ModelTest>('POST', `/models/${id}/test`),
-  secrets: () => call<{ store: string | null; names: string[] }>('GET', '/secrets'),
+  secrets: () => call<SecretList>('GET', '/secrets'),
   setSecret: (name: string, value: string) => call<void>('PUT', `/secrets/${name}`, { value }),
   deleteSecret: (name: string) => call<void>('DELETE', `/secrets/${name}`),
+  // ── Secrets (#206–#209): metadata only, values go in and never come back ──
+  createSecret: (s: CreateSecret) => call<SecretInfo>('POST', '/secrets', s),
+  updateSecret: (name: string, patch: UpdateSecret) => call<SecretInfo>('PATCH', `/secrets/${name}`, patch),
+  secretsStatus: () => call<SecretStoreStatus>('GET', '/secrets/status'),
+  unlockSecrets: (password: string) => call<SecretStoreStatus>('POST', '/secrets/unlock', { password }),
+  lockSecrets: () => call<SecretStoreStatus>('POST', '/secrets/lock'),
+  secretsPassword: (p: { current?: string; next: string }) => call<SecretStoreStatus>('POST', '/secrets/password', p),
   settings: () => call<Settings>('GET', '/settings'),
   about: () => call<About>('GET', '/about'),
   // ── App updates (#123) ──

@@ -231,6 +231,7 @@ const TOOL_MSGS = [
     call('tf9', 'shell', { command: 'npm run dev', background: true }),
     call('tf10', 'shell_output', { id: 'bg_831f7700' }),
     call('tf11', 'shell_kill', { id: 'bg_831f7700' }),
+    call('tf12', 'shell', { command: 'curl -sv "https://api.etherscan.io/api?module=account&action=balance&address=$TREASURY&apikey=$ETHERSCAN_KEY"' }),
   ]),
   tmsg('user', 'tool', [
     res('tf1', Array.from({ length: 40 }, (_, i) => `${String(i + 280).padStart(4)}|${i % 7 === 0 ? `  // ${'a long comment line that must scroll sideways '.repeat(3)}` : `  const v${i} = row(${i});`}`).join('\n') + '\n\n[showing lines 280–319 of 600; use offset=320 to continue]'),
@@ -244,6 +245,8 @@ const TOOL_MSGS = [
     res('tf9', 'started bg_831f7700 in the background (pid 4242); its output goes to /Users/x/Library/Application Support/Atlas/data/outputs/atlas/bg_831f7700.log. shell_output(id) reads it; shell_kill(id) stops it'),
     res('tf10', 'bg_831f7700: running (pid 4242, since 2026-11-14T18:20:00.000Z)\n[output bytes 0–120 of 120]\n\x1b[36m  VITE v6.0.0\x1b[39m  ready in 312 ms\n\n  ➜  Local:   \x1b[36mhttp://localhost:5173/\x1b[39m\n'),
     res('tf11', 'sent SIGTERM to bg_831f7700 (pid 4242); its log stays at /Users/x/outputs/bg_831f7700.log'),
+    // A secret's value in the output (#209): the engine put [secret NAME] in its place; the row says « 1 secret hidden ».
+    res('tf12', 'exit 0\n* Connected to api.etherscan.io (104.22.14.57) port 443\n> GET /api?module=account&action=balance&apikey=[secret ETHERSCAN_KEY] HTTP/2\n< HTTP/2 200\n{"status":"1","message":"OK","result":"1204370000000000000000"}'),
   ]),
   // Web (#65): one group with a provider-run web search (8 results, long titles and URLs), a failed one, a fetched page
   // (cut to its start and end) and a fetch that got HTTP 403 (the `chat-tools-web` screen opens them all + Show all).
@@ -284,6 +287,7 @@ const TOOL_TIMINGS = [
   { ...timing('tf3', 'write_file', 94, 94), detail: { kind: 'write', created: false, before: FILE_BEFORE } },
   { ...timing('tf4', 'edit_file', 93, 93), detail: { kind: 'edit', lines: [284] } },
   timing('tf8', 'shell', 92, 86),
+  { ...timing('tf12', 'shell', 85, 84), secretsHidden: 1 },
   timing('tu1', 'read_file', 70, 70), timing('tu2', 'edit_file', 69, 69), timing('tu3', 'read_file', 68, 68), timing('tu4', 'edit_file', 67, 67),
   timing('tu5', 'grep', 66, 66), timing('tu6', 'shell', 65, 61), timing('tu7', 'panel_open', 60, 60),
   timing('tu8', 'todo_write', 20, 20), timing('tu9', 'read_file', 19, 19), { ...timing('tu10', 'shell', 12, null), tail: '\x1b[2mengine on :61234 · widths 1440 1100 900 390\x1b[22m\n1440 chat … \x1b[32mok\x1b[39m\n1440 chat-reports … \x1b[32mok\x1b[39m\n1100 chat …' },
@@ -477,6 +481,21 @@ const panelTabs = () =>
 
 // Memory has its own screens below (fixtures, edit, deep links).
 const SETTINGS = ['agents', 'board', 'subscriptions', 'api-keys', 'local', 'model-list', 'usage', 'profile', 'appearance', 'voice', 'about'];
+// Settings → Secrets (#209): every row kind (granted to some, to all, to none, made by an agent, waiting for a value,
+// model keys) on the desktop keychain, then the same list on a locked server (the sidebar badge, the unlock panel).
+const secretRow = (name, o) => ({ name, description: '', kind: 'agent', grant: 'none', agents: [], project: null, hasValue: true, createdBy: 'user', createdCard: null, createdAt: secAgo(86400 * 6), updatedAt: secAgo(86400 * 6), updatedBy: 'user', lastUsedAt: null, lastUsedBy: null, waitingCard: null, ...o });
+const SECRET_ROWS = [
+  secretRow('ALCHEMY_RPC_URL', { description: 'Ethereum mainnet JSON-RPC (Alchemy). The key is part of the URL.', grant: 'all', lastUsedAt: secAgo(840), lastUsedBy: agent }),
+  secretRow('ETHERSCAN_KEY', { description: 'Etherscan API, free tier: balances, transactions, contract ABIs', grant: 'agents', agents: [agent], lastUsedAt: secAgo(7200), lastUsedBy: agent }),
+  secretRow('A_DELIBERATELY_VERY_LONG_SECRET_NAME_THAT_MUST_WRAP_ON_A_PHONE', { description: 'A long description that must wrap inside the row on a phone screen instead of pushing the page wider than the screen.', createdBy: agent, grant: 'agents', agents: [agent] }),
+  secretRow('DUNE_API_KEY', { description: 'Dune Analytics API, to run the saved holder queries', hasValue: false, createdBy: agent, grant: 'agents', agents: [agent], waitingCard: 'c_uicheck_none' }),
+  secretRow('ANTHROPIC_API_KEY', { kind: 'model_key' }),
+  secretRow('OPENROUTER_API_KEY', { kind: 'model_key' }),
+];
+const SECRET_STATUS = { kind: 'keychain', exists: true, locked: false, since: null, source: null, error: null };
+const SECRET_LOCKED = { kind: 'file', exists: true, locked: true, since: secAgo(3600), source: null, error: null };
+const secretList = (status) => ({ store: status.kind === 'keychain' ? 'macOS Keychain' : 'Encrypted file', status, names: SECRET_ROWS.filter((r) => r.hasValue).map((r) => r.name), secrets: SECRET_ROWS });
+
 /** name, hash, selector that means "loaded", fixtures on, key labels to OCR. */
 const SCREENS = [
   { name: 'chat', hash: `#/chat/${chat.id}`, ready: '.chat-pin', pins: true, keys: ['.chat-pin-title', '.chat-pin-state', '.msg .who', '.nav-item'] },
@@ -485,7 +504,7 @@ const SCREENS = [
   { name: 'chat-reports', hash: `#/chat/${chat.id}`, ready: '.card-report', reports: true, then: { js: `const row = [...document.querySelectorAll('.card-report')].find((r) => r.querySelector('.chat-row-ref')?.textContent === '#9157'); if (!row) throw new Error('no #9157 report row: ' + document.querySelectorAll('.card-report').length + ' report rows, ' + location.hash + ' ' + document.body.innerText.slice(0, 400)); if (row.querySelector('.chat-row-body')) throw new Error('#9157 expands: a task note is one row (#143)'); if (!row.querySelector('.tn-sum')) throw new Error('#9157 has no summary line'); if (row.tagName !== 'A' || !row.getAttribute('href').startsWith('#/inbox/task')) throw new Error('#9157 is not a link to its Inbox entry: ' + row.outerHTML.slice(0, 200)); const mem = [...document.querySelectorAll('.sys-row.mem-quiet')].at(-1); if (!mem || !mem.textContent.includes('3 memories changed')) throw new Error('the two fixture notes are not one « 3 memories changed » row: ' + mem?.textContent); mem.querySelector('.chat-row-line').click(); await new Promise((r) => setTimeout(r, 100)); const list = mem.querySelector('.mem-list'); if (!list || list.children.length !== 3) throw new Error('memory row: want 3 lines, got ' + (list?.children.length ?? 'none')); list.scrollIntoView({ block: 'center' });`, ready: '.mem-list' }, keys: ['.chat-row-ref', '.chat-row-verb', '.card-report .chat-row-obj', '.tn-sum', '.mem-quiet .chat-row-verb'] },
   { name: 'chat-tools', hash: `#/chat/${chat.id}`, ready: '.chat-row.steps', tools: true, then: { js: `const grp = [...document.querySelectorAll('.chat-row.steps:not(.running)')].filter((g) => g.querySelector(':scope > .chat-row-line .chat-pill.bad')).at(-1); const g = grp.querySelector(':scope > .chat-row-line'); g.click(); await new Promise((r) => setTimeout(r, 100)); const f = grp.querySelector('.chat-row.nested.tone-bad > .chat-row-line'); f.click(); await new Promise((r) => setTimeout(r, 100)); g.scrollIntoView({ block: 'start' });`, ready: '.chat-row.nested.tone-bad .chat-row-body' }, keys: ['.chat-row.steps > .chat-row-line .chat-row-verb', '.chat-row.steps > .chat-row-line .chat-row-rest', '.chat-row.nested .chat-row-obj', '.chat-pill', '.artifact .art-title'] },
   { name: 'chat-tools-cards', hash: `#/chat/${chat.id}`, ready: '.chat-row.steps', tools: true, then: { js: `const grp = [...document.querySelectorAll('.chat-row.steps')].filter((g) => g.querySelector(':scope > .chat-row-line .row-ic.rowic-cardp')).at(-1); const g = grp.querySelector(':scope > .chat-row-line'); g.click(); await new Promise((r) => setTimeout(r, 100)); for (const l of grp.querySelectorAll('.chat-row.nested > .chat-row-line.expandable')) l.click(); await new Promise((r) => setTimeout(r, 150)); g.scrollIntoView({ block: 'start' });`, ready: '.step-chip' }, keys: ['.chat-row.nested .chat-row-ref', '.chat-row.nested .chat-row-obj', '.step-chip-title', '.step-chip small', '.step-board-st', '.step-hit-t'] },
-  { name: 'chat-tools-files', hash: `#/chat/${chat.id}`, ready: '.chat-row.steps', tools: true, then: { js: `const grp = [...document.querySelectorAll('.chat-row.steps')].find((g) => g.querySelector(':scope > .chat-row-line').textContent.includes('11 steps')); const g = grp.querySelector(':scope > .chat-row-line'); g.click(); await new Promise((r) => setTimeout(r, 100)); for (const l of grp.querySelectorAll('.chat-row.nested > .chat-row-line.expandable')) l.click(); await new Promise((r) => setTimeout(r, 150)); g.scrollIntoView({ block: 'start' });`, ready: '.fv-term' }, keys: ['.fv-head .fv-name', '.fv-gpath .fv-name', '.fv-btn', '.fv-exit .chat-pill'] },
+  { name: 'chat-tools-files', hash: `#/chat/${chat.id}`, ready: '.chat-row.steps', tools: true, then: { js: `const grp = [...document.querySelectorAll('.chat-row.steps')].find((g) => g.querySelector(':scope > .chat-row-line').textContent.includes('12 steps')); const g = grp.querySelector(':scope > .chat-row-line'); g.click(); await new Promise((r) => setTimeout(r, 100)); for (const l of grp.querySelectorAll('.chat-row.nested > .chat-row-line.expandable')) l.click(); await new Promise((r) => setTimeout(r, 150)); g.scrollIntoView({ block: 'start' });`, ready: '.fv-term' }, keys: ['.fv-head .fv-name', '.fv-gpath .fv-name', '.fv-btn', '.fv-exit .chat-pill'] },
   { name: 'chat-tools-memory', hash: `#/chat/${chat.id}`, ready: '.chat-row.steps', tools: true, then: { js: `const grp = [...document.querySelectorAll('.chat-row.steps')].filter((g) => g.querySelector(':scope > .chat-row-line .row-ic.rowic-mem')).at(-1); const g = grp.querySelector(':scope > .chat-row-line'); g.click(); await new Promise((r) => setTimeout(r, 100)); for (const l of grp.querySelectorAll('.chat-row.nested > .chat-row-line.expandable')) l.click(); await new Promise((r) => setTimeout(r, 150)); g.scrollIntoView({ block: 'start' });`, ready: '.step-foot' }, keys: ['.chat-row.nested .chat-row-obj', '.step-list-t', '.step-kv > span', '.step-foot'] },
   { name: 'chat-tools-web', hash: `#/chat/${chat.id}`, ready: '.chat-row.steps', tools: true, then: { js: `const grp = [...document.querySelectorAll('.chat-row.steps')].filter((g) => g.querySelector(':scope > .chat-row-line .row-ic.rowic-globe, :scope > .chat-row-line .row-ic.rowic-link')).at(-1); const g = grp.querySelector(':scope > .chat-row-line'); g.click(); await new Promise((r) => setTimeout(r, 100)); for (const l of grp.querySelectorAll('.chat-row.nested > .chat-row-line.expandable')) l.click(); await new Promise((r) => setTimeout(r, 150)); grp.querySelector('.web-results + .chat-row-open')?.click(); await new Promise((r) => setTimeout(r, 100)); g.scrollIntoView({ block: 'start' });`, ready: '.web-excerpt' }, keys: ['.chat-row.nested .chat-row-obj', '.web-hit-t', '.web-open', '.chat-row.nested.tone-bad .chat-row-rest'] },
   { name: 'chat-tools-pins', hash: `#/chat/${chat.id}`, tools: true, ready: '.artifact .art-upd', then: { js: `document.querySelector('.artifact .art-upd').closest('.artifact').scrollIntoView({ block: 'center' });`, ready: '.artifact' }, keys: ['.artifact .art-title', '.artifact .art-meta', '.chat-row.step .chat-row-verb'] },
@@ -544,6 +563,9 @@ const SCREENS = [
   { name: 'workflow-edit', hash: '#/workflows/wf_uicheck', ready: '.wf-node, .wf-phone', workflows: true, then: { js: `document.querySelector('.wf-plane .wf-node[data-id="validate"]')?.dispatchEvent(new PointerEvent('pointerdown', { bubbles: true, button: 0, isPrimary: true })); document.querySelector('.wf-plane .wf-node[data-id="validate"]')?.dispatchEvent(new PointerEvent('pointerup', { bubbles: true, button: 0, isPrimary: true })); await new Promise((r) => setTimeout(r, 200)); document.body.dataset.wfSel = '1';`, ready: 'body[data-wf-sel]' }, keys: ['.wf-title', '.wf-kind', '.wf-out', '.wf-side .sd-head b', '.wf-side .field > span'] },
   { name: 'workflow-runs', hash: '#/workflows/wf_uicheck/runs/wr_uicheck2', ready: '.wf-run, .wf-phone', workflows: true, keys: ['.wf-title', '.wf-run .st-chip', '.wf-steps-log .t', '.wf-runs button'] },
   { name: 'workflow-off', hash: '#/workflows/wf_uicheckoff', ready: '.wf-off', workflows: true, keys: ['.wf-off', '.wf-title'] },
+  { name: 'settings-secrets', hash: '#/settings/secrets', ready: '.sec-row', secrets: SECRET_STATUS, keys: ['.settings-group-title', '.sec-grant.all', '.sec-desc', '.sec-row .badge', '.sec-row .model-actions button', '.section-head h2'] },
+  { name: 'settings-secrets-add', hash: '#/settings/secrets', ready: '.sec-row', secrets: SECRET_STATUS, then: { js: `[...document.querySelectorAll('.model-row.add')].find((b) => b.textContent.includes('Add a secret')).click(); await new Promise((r) => setTimeout(r, 100)); document.querySelector('.segmented [role=radio]:nth-child(2)').click(); await new Promise((r) => setTimeout(r, 100)); document.querySelector('.sec-form').scrollIntoView({ block: 'start' });`, ready: '.sec-pick label' }, keys: ['.sec-form .field', '.segmented button', '.sec-pick label', '.sec-form .actions button'] },
+  { name: 'settings-secrets-locked', hash: '#/settings/secrets', ready: '.sec-lock', secrets: SECRET_LOCKED, keys: ['.sec-lock h3', '.sec-lock .sec-paused', '.update-badge-label', '.update-badge-v'] },
   ...SETTINGS.map((p) => ({ name: 'settings-' + p, hash: '#/settings/' + p, ready: '.settings', keys: ['.settings-group-title', '.settings-nav button', 'h2'] })),
 ].filter((s) => !ONLY?.length || ONLY.some((o) => s.name.startsWith(o)));
 if (!doc) console.warn('No document in the workspace: the panel screen is skipped.');
@@ -611,6 +633,8 @@ handlers.set('Fetch.requestPaused', async ({ requestId, request }) => {
     const memId = request.method === 'GET' && screen?.memory && /^\/api\/memories\/m?(\d+)$/.exec(url.pathname);
     if (memId) return await json(MEMORIES.find((m) => m.id === Number(memId[1])));
     if (request.method === 'GET' && /^\/api\/agents\/[^/]+\/memory-budget$/.test(url.pathname) && screen?.memory) return await json({ used: 1509, limit: 3000 });
+    if (screen?.secrets && request.method === 'GET' && url.pathname === '/api/secrets') return await json(secretList(screen.secrets));
+    if (screen?.secrets && request.method === 'GET' && url.pathname === '/api/secrets/status') return await json(screen.secrets);
     if (screen?.workflows && request.method === 'GET') {
       const W = [WORKFLOW, WORKFLOW_OFF];
       if (url.pathname === '/api/workflows') return await json([...W, ...(await get('/workflows'))]);
