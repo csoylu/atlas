@@ -120,9 +120,14 @@ with `process.env` directly: take `ctx.env()`.
   then fix and push; the task goes back to ready). The script refuses a base other than main, a head that moved, red
   CI and a PR without exactly one changelog entry. A `qa/*` PR (zurich's own) is validated by atlas. `--list` shows the
   PRs still waiting. Master can validate from a terminal too (`--as master`). Each merge moves the changelog top, so the
-  other open PRs then conflict there: the validator merges the oldest PR first, and an author whose PR conflicts rebases
-  (new entry back on top) and sends the new head. The gate guards against accidents, not misuse: `--as` is a name
-  anyone can type.
+  other open PRs then conflict there: the validator merges the oldest PR first. When CHANGELOG.md is the PR's **only**
+  conflict, `--ok … --merge` rebases it by itself (#188, `scripts/pr/rebase-changelog.mjs`): it replays the commits
+  onto main in a throwaway worktree, puts the PR's entry back on top (main's entries byte-identical), checks that every
+  other file equals git's own merge and the PR's changed lines are unchanged, pushes the branch with
+  `--force-with-lease` (never main), waits for CI `test` on the new head (red: `qa/validated` = failure, no merge),
+  validates and merges that head, and prints the old → new head. It refuses (author rebases by hand) when another file
+  conflicts, the PR has merge commits or edits older changelog text, or the head moved since the review. The gate
+  guards against accidents, not misuse: `--as` is a name anyone can type.
 - **Done means on main** (#126): before `task_complete` or `task_request_review`, run `git fetch` and then
   `git log --oneline origin/main..origin/<branch>` for every branch of the task (`git branch -r | grep '/<N>-'`).
   If any branch has commits not on main, the task isn't done: merge the PR first, or `task_block` and say which branch
@@ -192,7 +197,9 @@ Project how-tos live in this file, not in agent memory. Add one here (through a 
 
 **CI and merging**
 - The changelog check wants the new entry on top with older entries untouched (a fix to an old entry fails: add a new
-  one). Main moves often: fetch, rebase, put your entry back on top.
+  one). Main moves often: a conflict in CHANGELOG.md alone needs no hand rebase (the validator's `--merge` does it, and
+  your branch's head changes: `git pull --rebase` before adding commits); any other conflict: fetch, rebase, put your
+  entry back on top, push, send the new head.
 - Before merging, check the PR's base (`gh pr view N --json baseRefName`); after, `git merge-base --is-ancestor <commit> origin/main`.
 - A push to main runs test, changelog, mac (arm64, x64), windows, release; about 8 min from merge to release. In windows
   jobs, commands with `-c.x=y` flags need `shell: bash` (PowerShell splits them).
