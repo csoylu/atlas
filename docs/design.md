@@ -256,6 +256,12 @@ Statuses: `triage → todo → ready → running → (blocked | review) → done
   window, big tool outputs/inputs become « omitted … history_search can read it (seq n) » stubs and identical outputs
   are deduped (`prune_upto_seq`, view only). A prune breaks the prompt cache, so it happens only if it reclaims ≥ 5 % of
   the window; if the view is then under 50 % no summary is made, else the summary runs as above.
+- Provider web searches (#144): Anthropic can answer a client tool + a web search in one turn and put the search's
+  result at the start of the next answer, after the tool_result. On the view (pruned, folded or degraded), every
+  `web_search_tool_result` goes right after its `server_tool_use` in one assistant message (the request is moved to
+  it); a half whose other half was pruned or folded becomes its line of text; a request with no result stays only in
+  the last assistant message (a turn the provider continues). A view still invalid stops the run with the message and
+  block (rule 3) instead of a 400 on every retry.
 - Prompt caching (Anthropic): the system prompt is a stable prefix (role, rules, workspace, team, project files) with a
   breakpoint, then a volatile tail (memory, card, date); breakpoints on the last two user messages too (3 of 4). None
   on one-shot calls (title, summary, model test).
