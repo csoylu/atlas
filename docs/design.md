@@ -514,7 +514,22 @@ the diagram « Secrets in Atlas: flow » and the mockup « Settings → Secrets 
     badge), `POST /api/secrets/unlock {password}`, `POST /api/secrets/lock`, `POST /api/secrets/password {current?,
     next}` (no file yet: creates it; else checks `current`, re-encrypts with a new salt). Passwords: 8+ characters.
   - Plan sign-ins (ChatGPT, Claude) stay desktop-only: the server store does not take them. Desktop keeps the Keychain.
-- Still to come (#205 series): the Settings → Secrets page (and its unlock form), the agents' `secret_set` tool.
+- **Agents write secrets** (#207, `engine/src/secretTools.ts`): `secret_set({name, description?, command | value})`.
+  `command` runs in the agent's workdir with its shell env (60 s max); its trimmed stdout is the value and never goes
+  to the model, the transcript or the logs (result: « stored NAME, N chars »; a non-zero exit or empty stdout stores
+  nothing, the error shows only the redacted end of stderr). `value`: stored, and replaced by `[secret NAME]` in the
+  tool call as stored (messages, `tool_calls.input`) before anything else sees it; the provider already saw it in its
+  own answer, so the tool description says to prefer `command`. A new secret is created by the agent, from its task,
+  granted to it only. An agent overwrites (`secret_set`) or deletes (`secret_delete`) only a secret it created, never
+  the user's, another agent's, a model key or a shell basic (`PATH`…). No tool reads a value; names are in the
+  instructions.
+- **« Needs secret X »** (#207): `task_block({kind: capability | needs_input, secret: NAME, secret_description?})`
+  creates (or reuses) a row without a value, granted to the agent, `created_card` = `waiting_card` = the task
+  (migration 0047), then blocks; the block reason says which secret. When the value is there and granted to the
+  task's agent (PUT value, PATCH grant, or an agent's `secret_set`), `Secrets.resume()` adds a note to the thread,
+  moves the task to ready and clears `waiting_card`, in one transaction; it also runs at engine start, so a crash
+  between the value's write and the move only delays it. Dismiss = `DELETE /api/secrets/:name`.
+- Still to come (#205 series): the Settings → Secrets page (and its unlock form).
 
 ## 11. Artifacts (replaced canvases, #120, 18 Nov 2026)
 - An artifact is a file in an agent's workspace: markdown (`docs/*.md`), html (`pages/*.html`), svg (`diagrams/*.svg`)

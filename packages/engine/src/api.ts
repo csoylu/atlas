@@ -507,6 +507,7 @@ export function createApi(deps: {
   });
   app.patch('/api/secrets/:name', (req, res) => {
     res.json(deps.secrets.update(req.params.name, UpdateSecret.parse(req.body), { by: 'user' }));
+    dispatcher.tick(); // a grant may let a task waiting on this secret go back to work (#207)
   });
   // A new value: an agent secret's rotation, or a model key (created here when new, like before #206).
   app.put('/api/secrets/:name', (req, res) => {

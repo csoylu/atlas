@@ -4,6 +4,7 @@ import { z } from 'zod';
 import { BLOCK_KINDS, cardRef, currentToolName, type Card } from '@atlas/shared';
 import type { Kanban } from './kanban.ts';
 import type { ToolSpec } from './providers/types.ts';
+import type { Secrets } from './secrets.ts';
 
 /** How a card tool ended the run, if it did (design §4: a work run ends only through one of these). */
 export type Terminal = 'complete' | 'block' | 'review' | null;
@@ -13,6 +14,8 @@ export interface CardToolContext {
   agentId: string;
   /** The card this run works on. */
   cardId: string;
+  /** « Needs secret X » on task_block (#207); omitted = the field is refused. */
+  secrets?: Secrets;
 }
 
 interface CardTool<S extends z.ZodType> {
@@ -113,16 +116,30 @@ export const CARD_TOOLS = {
       'access or tool), dependency (waiting on other Atlas tasks: give waits_on, e.g. ["#12"]; the task waits in todo and ' +
       'restarts by itself when they are done), transient (retry later by itself; set retry_in_minutes). Only needs_input ' +
       'and capability reach the user: if the work you wait on is not a task yet, create it (task_create) first; if only ' +
-      'the user can clear it, use needs_input.',
+      'the user can clear it, use needs_input. Missing a secret (API key, token) only the user can give: kind capability ' +
+      'with secret: "NAME" (and secret_description): the user sees it in Settings → Secrets, and the task restarts by ' +
+      'itself once they add the value.',
     input: z.object({
       kind: z.enum(BLOCK_KINDS),
       question: z.string().min(1),
       options: z.array(z.string()).max(4).default([]),
       retry_in_minutes: z.number().positive().max(24 * 60).optional(),
       waits_on: z.array(CardId).optional(),
+      secret: z.string().optional().describe('the env var name of a secret you need and cannot make (A-Z, 0-9, _), e.g. DUNE_API_KEY'),
+      secret_description: z.string().max(500).optional().describe('what the secret is, shown to the user'),
     }),
     terminal: 'block',
-    run: ({ kind, question, options, retry_in_minutes, waits_on }, { kanban, agentId, cardId }) => {
+    run: ({ kind, question, options, retry_in_minutes, waits_on, secret, secret_description }, { kanban, agentId, cardId, secrets }) => {
+      if (secret !== undefined) {
+        if (kind !== 'capability' && kind !== 'needs_input') throw new Error('secret goes with kind capability (or needs_input): only the user can add a value');
+        if (!secrets) throw new Error('secrets are not available here');
+        if (kanban.get(cardId).board === 'direct') throw new Error('a direct chat does not block: ask the user for the secret in the chat (Settings → Secrets)');
+        // The row first (idempotent): a crash before the block re-runs the task, which blocks again on the same row.
+        secrets.need(agentId, cardId, secret, secret_description);
+        const reason = `${question}\n\nNeeds secret ${secret}: add its value in Settings → Secrets; the task restarts by itself.`;
+        kanban.block(cardId, { kind, reason, options, until: null }, agentId);
+        return `task blocked (${kind}) until the user adds the value of ${secret} in Settings → Secrets; it restarts by itself then`;
+      }
       if (kind === 'dependency') {
         if (!waits_on?.length)
           throw new Error('kind=dependency needs waits_on: the task number(s) this one waits on, e.g. ["#12"]. Create a task for that work first, or use needs_input if only the user can clear it.');

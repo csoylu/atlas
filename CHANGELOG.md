@@ -6,6 +6,10 @@ computed by `scripts/release/changelog.mjs` from the oldest entry to the newest,
 `Fixed` → patch, `Added` or `Changed` → minor, `Breaking` (data or settings stop working without action) → major.
 Never type a version number.
 
+## Added · #207 · Agents can store a secret themselves without seeing it, and ask you for one they can't make
+
+Secrets 2/4 (engine). New tool `secret_set`: with `command`, Atlas runs the command and keeps its output as the secret's value without the agent, the transcript or the model ever seeing it; with `value`, the value is replaced by `[secret NAME]` in the stored conversation. A secret an agent makes is granted to that agent only, and an agent can change or delete (`secret_delete`) only its own secrets, never yours, another agent's or a model key. When an agent needs a key only you have, it blocks naming it (`task_block` with `secret`): a « no value » entry appears in Secrets, and the task restarts by itself once you add the value; deleting the entry dismisses it.
+
 ## Added · #208 · A server engine keeps its secrets in an encrypted secrets.enc, unlocked with a password at start or from the UI
 
 Secrets 3/4. On a server, model keys typed in Settings and agent secrets go in `<data dir>/secrets.enc` (AES-256-GCM, key from scrypt of a secrets password, written atomically, mode 0600); the password and key are never written anywhere. `ATLAS_SECRETS_PASSWORD` unlocks it at start, so a restart resumes runs that need secrets; without it the store stays locked until unlocked through `POST /api/secrets/unlock` (the Settings → Secrets page comes with 4/4). While locked, commands that use a secret, models whose key is in the file and new secrets stop with « secret store locked: unlock it in Settings → Secrets »; everything else, env-var keys included, keeps working. New routes: status, unlock, lock now, set or change the password. A wrong password answers after a 1 s delay; a tampered file is refused. The desktop app keeps the Keychain.
