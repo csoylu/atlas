@@ -6,6 +6,10 @@ computed by `scripts/release/changelog.mjs` from the oldest entry to the newest,
 `Fixed` → patch, `Added` or `Changed` → minor, `Breaking` (data or settings stop working without action) → major.
 Never type a version number.
 
+## Fixed · #140 · Task numbers inside message text are plain #112 links with the title on hover, no more chips
+
+In message text, summaries and tables a task reference is now a link-coloured « #112 » in the text's own size and line height, so lines stay evenly spaced. The task's title and status show on hover and are read by screen readers; a click or tap still opens the task. Chips that stand alone (pins, sidebar, cards, tool rows, Library, Memory) are unchanged. ui-check has a new `chat-refs` screen that checks line spacing, size, contrast and the hover title. No migration.
+
 ## Fixed · #132 · A [memory] note lists each changed memory once, with its latest text
 
 A memory changed several times between two turns was listed once per change; now it is one line with its latest text. A memory added then forgotten, changed then changed back, or pinned then unpinned is not listed at all, and a memory already shown in an earlier note comes back only if it changed again. The chat row counts distinct memories ("2 memories changed") and no longer repeats ids, also for older notes. No migration.
