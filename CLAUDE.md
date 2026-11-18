@@ -33,8 +33,11 @@ apps/desktop      Electron main process: opens the UI window. Dev: loads Vite (:
    and in the UI, never a silent fallback. No `catch {}` that swallows an error.
 4. **Migrations only** for schema changes (`packages/engine/src/store/migrations/NNNN_name.sql`), never edit an
    applied one.
-5. **Secrets** live in the OS keychain (Electron `safeStorage`) or env vars on the server, never in SQLite, logs,
-   transcripts or the UI.
+5. **Secrets** (model keys and agent secrets) have their values in the OS keychain (Electron `safeStorage`) or env vars
+   on the server, never in SQLite, logs, transcripts, the UI or an API response; SQLite keeps only their metadata
+   (table `secrets`, #206). Agents get only the secrets granted to them, as env vars of their shell commands, never a
+   model key; every tool output passes the redactor (`Secrets.redact`, values → `[secret NAME]`) before it is stored or
+   sent to a model. Never spawn an agent command or store a tool output around those two (design §10b).
 6. **Tests:** `vitest`. Every engine module has tests; the restart test (rule 2) and the agent-loop test with a fake
    provider must stay green. `npm run typecheck && npm test` before every commit (`npm test` = fast project, ~10 s; `npm run test:full` also runs the slow project: real voice models + the 50-SIGKILL crash test, `CRASH_KILLS=n` shortens it. Run it when you touch voice, the store, runs or leases).
 7. Shared types go in `packages/shared`; the UI never imports engine code directly, only the API.

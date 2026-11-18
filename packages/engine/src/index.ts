@@ -18,7 +18,7 @@ import { workdirOf } from './agents.ts';
 import { Memories } from './memory.ts';
 import { MemoryCleanup } from './cleanup.ts';
 import { MemoryReview } from './memoryReview.ts';
-import { envWithSecrets, type SecretStore } from './secrets.ts';
+import { envWithSecrets, Secrets, type SecretStore } from './secrets.ts';
 import { createApi } from './api.ts';
 import { Workflows } from './workflows.ts';
 import { Auth, isLoopbackHost } from './auth.ts';
@@ -116,6 +116,7 @@ export interface Engine {
   voiceChat: VoiceChat | null;
   updater: Updater;
   prs: Prs;
+  secrets: Secrets;
   url: string;
   stop(): Promise<void>;
 }
@@ -146,6 +147,8 @@ export async function startEngine(opts: EngineOptions): Promise<Engine> {
   const workflows = new Workflows(db, bus, kanban);
   const cleanup = new MemoryCleanup(db, bus, memories);
   const settings = new Settings(db);
+  const secrets = new Secrets(db, bus, opts.secrets, env);
+  secrets.sync();
   const shellEnv = new ShellEnv(typeof opts.shellPath === 'object' ? opts.shellPath : { mode: opts.shellPath ?? 'engine' });
   const voice = opts.voice ? new Voice(db, bus, opts.voice) : null;
   let url = '';
@@ -155,7 +158,7 @@ export async function startEngine(opts: EngineOptions): Promise<Engine> {
   const review = new MemoryReview(db, kanban, memories, models, agents, settings, usage);
   if (opts.memoryReview === false) review.after = () => {};
   const effects = new SideEffects(db, kanban, memories, workflows);
-  const runner = new Runner(db, bus, kanban, agents, models, memories, workflows, { fileLog, effects, dataDir: opts.dataDir, leaseMs: opts.leaseMs, maxTurns: opts.maxTurns, usage, user: () => settings.user(), documents, cleanup, review, isVoiceChat: voiceChat ? (id) => voiceChat.isVoiceChat(id) : undefined, engine: () => ({ url, cookie: () => (auth.enabled ? auth.issue().token : null), answer: (method, path) => screenshotAnswer(kanban, method, path) }), shellEnv });
+  const runner = new Runner(db, bus, kanban, agents, models, memories, workflows, { fileLog, effects, dataDir: opts.dataDir, leaseMs: opts.leaseMs, maxTurns: opts.maxTurns, usage, user: () => settings.user(), documents, cleanup, review, isVoiceChat: voiceChat ? (id) => voiceChat.isVoiceChat(id) : undefined, engine: () => ({ url, cookie: () => (auth.enabled ? auth.issue().token : null), answer: (method, path) => screenshotAnswer(kanban, method, path) }), shellEnv, secrets });
   const rewinds = new Rewinds(db, bus, kanban, agents, runner, opts.dataDir, fileLog, effects);
   const dispatcher = new Dispatcher(bus, kanban, agents, models, settings, runner);
   const slash = new Slash(db, bus, kanban, runner);
@@ -204,7 +207,7 @@ export async function startEngine(opts: EngineOptions): Promise<Engine> {
     dataDir: opts.dataDir,
     version: opts.version ?? 'dev',
     uiDir: opts.uiDir,
-    secrets: opts.secrets,
+    secrets,
     env,
     auth,
   });
@@ -237,6 +240,7 @@ export async function startEngine(opts: EngineOptions): Promise<Engine> {
   url = `http://127.0.0.1:${port}`;
   return {
     db,
+    secrets,
     bus,
     kanban,
     agents,

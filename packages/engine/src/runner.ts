@@ -43,6 +43,7 @@ import { workdirOf } from './agents.ts';
 import type { FileLog } from './fileLog.ts';
 import { Background, exitNote, type BgProcess } from './background.ts';
 import type { ShellEnv } from './shellEnv.ts';
+import type { Secrets } from './secrets.ts';
 
 interface RunRow {
   id: string;
@@ -85,6 +86,8 @@ export interface RunnerOptions {
   engine?: () => Omit<EngineAccess, 'agentId'>;
   /** Environment of agent shells (#136); omitted = the engine's own (tests). */
   shellEnv?: ShellEnv;
+  /** Agent secrets (#206): given to shells as env vars, listed in instructions, hidden from every tool output. */
+  secrets?: Secrets;
   /** Documents and side panels (panel_open / panel_close; file tools re-index the workspace). */
   documents?: Documents;
   /** The weekly memory cleanup (#83): its cards get memory_review and memory_propose. */
@@ -160,10 +163,27 @@ export class Runner {
     return join(this.opts.dataDir, 'outputs', agentId);
   }
 
+  /** Secret values in a text replaced by [secret NAME] (#206). Throws when the store can't be read. */
+  private redact(text: string): { text: string; hidden: number } {
+    return this.opts.secrets ? this.opts.secrets.redact(text) : { text, hidden: 0 };
+  }
+
+  /** The environment of one shell command: login PATH and git author (#136), the agent's granted secrets (#206). */
+  private async shellEnvFor(agentId: string, command: string): Promise<NodeJS.ProcessEnv> {
+    const base = this.opts.shellEnv ? await this.opts.shellEnv.for(agentId) : process.env;
+    return this.opts.secrets ? this.opts.secrets.envFor(agentId, base, command) : base;
+  }
+
   /** A background process ended by itself (or was lost in a restart): a system note in its conversation wakes the agent. */
   private backgroundEnded(p: BgProcess): void {
     try {
-      this.kanban.appendMessage(p.cardId, 'user', 'system', [{ type: 'text', text: exitNote(p) }]);
+      let text: string;
+      try {
+        text = this.redact(exitNote(p)).text;
+      } catch (e) {
+        text = `Background process ${p.id} ended. Its output is withheld: the secret store could not be read to hide secret values in it (${e instanceof Error ? e.message : String(e)}).`;
+      }
+      this.kanban.appendMessage(p.cardId, 'user', 'system', [{ type: 'text', text }]);
     } catch (e) {
       console.error(`note for background process ${p.id} failed`, e);
       return;
@@ -286,7 +306,7 @@ export class Runner {
     return (
       this.db
         .prepare(
-          `SELECT t.tool_use_id, t.name, t.status, t.started_at, t.ended_at, t.detail FROM tool_calls t JOIN runs r ON r.id = t.run_id
+          `SELECT t.tool_use_id, t.name, t.status, t.started_at, t.ended_at, t.detail, t.secrets_hidden FROM tool_calls t JOIN runs r ON r.id = t.run_id
             WHERE r.card_id = ? ORDER BY t.id`,
         )
         .all(cardId) as ToolCallRow[]
@@ -584,10 +604,20 @@ export class Runner {
                   onDetail: (d) => (detail = d),
                   onOutput: live.push,
                   ...(this.opts.engine ? { engine: { ...this.opts.engine(), agentId: agent.id } } : {}),
-                  ...(this.opts.shellEnv ? { env: () => this.opts.shellEnv!.for(agent.id) } : {}),
+                  ...(this.opts.shellEnv || this.opts.secrets ? { env: (command: string) => this.shellEnvFor(agent.id, command) } : {}),
+                  ...(this.opts.secrets ? { redact: (t: string) => this.redact(t).text } : {}),
                 });
               const log = this.opts.fileLog;
               r = await (log ? log.track(cardId, workdir, u.name, u.input, exec) : exec()).finally(live.stop);
+            }
+            // Secret values never reach the transcript, the chat, the logs or the model (#206): one choke point for every tool.
+            let hidden = 0;
+            try {
+              const red = this.redact(r.output);
+              hidden = red.hidden;
+              r = { ...r, output: red.text };
+            } catch (e) {
+              r = { output: `output withheld: the secret store could not be read to hide secret values in it (${e instanceof Error ? e.message : String(e)})`, isError: true };
             }
             if (mark && !r.isError) {
               try {
@@ -599,8 +629,8 @@ export class Runner {
             // Files written by the agent become new document versions (a « changed » mark in open panels).
             if (this.opts.documents && WRITES_FILES.has(u.name)) this.opts.documents.sync(agent.id, agent.id, workCard);
             this.db
-              .prepare('UPDATE tool_calls SET status = ?, output = ?, ended_at = ?, detail = ? WHERE id = ?')
-              .run(r.isError ? 'error' : 'done', r.output, new Date().toISOString(), detail ? JSON.stringify(detail) : null, lastInsertRowid);
+              .prepare('UPDATE tool_calls SET status = ?, output = ?, ended_at = ?, detail = ?, secrets_hidden = ? WHERE id = ?')
+              .run(r.isError ? 'error' : 'done', r.output, new Date().toISOString(), detail ? JSON.stringify(detail) : null, hidden, lastInsertRowid);
             this.emitCalls([Number(lastInsertRowid)]);
             return { type: 'tool_result' as const, tool_use_id: u.id, content: r.output, ...(r.isError ? { is_error: true } : {}), ...(r.images?.length ? { images: r.images } : {}) };
           }),
@@ -856,8 +886,15 @@ export class Runner {
     const send = () => {
       timer = null;
       if (stopped) return;
-      const row = this.db.prepare('SELECT t.tool_use_id, t.name, t.status, t.started_at, t.ended_at, t.detail FROM tool_calls t WHERE t.id = ?').get(id) as ToolCallRow | undefined;
-      if (row?.status === 'running') this.bus.emit({ type: 'toolcall.updated', cardId, call: { ...toTiming(row), tail: tailOf(out) } });
+      const row = this.db.prepare('SELECT t.tool_use_id, t.name, t.status, t.started_at, t.ended_at, t.detail, t.secrets_hidden FROM tool_calls t WHERE t.id = ?').get(id) as ToolCallRow | undefined;
+      if (row?.status !== 'running') return;
+      let tail: string;
+      try {
+        tail = this.redact(tailOf(out)).text;
+      } catch (e) {
+        tail = `(output hidden: the secret store could not be read: ${e instanceof Error ? e.message : String(e)})`;
+      }
+      this.bus.emit({ type: 'toolcall.updated', cardId, call: { ...toTiming(row), tail } });
     };
     return {
       push: (chunk) => {
@@ -875,7 +912,7 @@ export class Runner {
   private emitCalls(ids: number[]): void {
     for (const id of ids) {
       const row = this.db
-        .prepare('SELECT t.tool_use_id, t.name, t.status, t.started_at, t.ended_at, t.detail, r.card_id FROM tool_calls t JOIN runs r ON r.id = t.run_id WHERE t.id = ?')
+        .prepare('SELECT t.tool_use_id, t.name, t.status, t.started_at, t.ended_at, t.detail, t.secrets_hidden, r.card_id FROM tool_calls t JOIN runs r ON r.id = t.run_id WHERE t.id = ?')
         .get(id) as (ToolCallRow & { card_id: string }) | undefined;
       if (row) this.bus.emit({ type: 'toolcall.updated', cardId: row.card_id, call: toTiming(row) });
     }
@@ -943,6 +980,19 @@ export class Runner {
       if (note) this.kanban.appendMessage(card.id, 'user', 'system', [{ type: 'text', text: note }]);
       this.db.prepare('UPDATE conversations SET memory_seen = ? WHERE id = ?').run(changes.at(-1)!.change.id, card.conversationId);
     })();
+  }
+
+  /** The secrets this agent may use (#206): names and descriptions, never a value. */
+  private secretsBlock(agentId: string): string[] {
+    const mine = this.opts.secrets?.granted(agentId) ?? [];
+    if (!mine.length) return [];
+    return [
+      '',
+      '# Secrets',
+      `Your shell commands get these as environment variables. Use them as $NAME in commands (e.g. curl "…?apikey=$${mine[0]!.name}");`,
+      'never print, echo, log, write to a file or paste a value: tool output shows a value as [secret NAME].',
+      ...mine.map((s) => `- $${s.name}${s.description ? `: ${s.description}` : ''}${s.hasValue ? '' : ` (no value yet: ${this.user().name} must add it in Settings → Secrets)`}`),
+    ];
   }
 
   private systemPrompt(agent: Agent, card: Card, kind: RunKind, workdir: string): { text: string; stable: number } {
@@ -1040,6 +1090,7 @@ export class Runner {
             'is asking about (path, version, section): answer that, and update it if asked.',
           ]
         : []),
+      ...this.secretsBlock(agent.id),
       '',
       '# Team',
       roster,
@@ -1166,6 +1217,7 @@ interface ToolCallRow {
   started_at: string;
   ended_at: string | null;
   detail: string | null;
+  secrets_hidden: number;
 }
 const toTiming = (r: ToolCallRow): ToolCallTiming => ({
   toolUseId: r.tool_use_id,
@@ -1174,6 +1226,7 @@ const toTiming = (r: ToolCallRow): ToolCallTiming => ({
   startedAt: r.started_at,
   endedAt: r.ended_at,
   ...(r.detail ? { detail: JSON.parse(r.detail) as ToolCallDetail } : {}),
+  ...(r.secrets_hidden ? { secretsHidden: r.secrets_hidden } : {}),
 });
 
 /** Lines of a running shell command's output sent to the chat, and how often. */

@@ -354,6 +354,8 @@ export interface ToolCallTiming {
   detail?: ToolCallDetail;
   /** The last lines of a running foreground shell command: live events only, never stored. */
   tail?: string;
+  /** Secret values replaced by [secret NAME] in this call's output (#206): the chat's « 1 secret hidden ». */
+  secretsHidden?: number;
 }
 
 /**
@@ -806,7 +808,9 @@ export type ServerEvent =
   /** Notifications were read or archived: reload the Inbox. */
   | { type: 'inbox.changed' }
   | { type: 'voice.updated'; status: VoiceStatus }
-  | { type: 'update.updated'; status: UpdateStatus };
+  | { type: 'update.updated'; status: UpdateStatus }
+  /** A secret was added, edited, rotated, deleted or used: reload Settings → Secrets (names and metadata only). */
+  | { type: 'secrets.updated' };
 
 /* ── Voice mode (desktop only): « Hi Atlas », all local (docs/voice-research.md) ─────────────────────── */
 
@@ -1206,6 +1210,58 @@ export const UpdateAccount = z
   .partial()
   .strict();
 export type UpdateAccount = z.infer<typeof UpdateAccount>;
+
+/**
+ * Secrets (#206): API keys, tokens and URLs agents use in shell commands as $NAME, and the model keys Atlas itself uses.
+ * The value lives only in the secret store (OS keychain); this is the metadata (table `secrets`). No route returns a value.
+ */
+export const SECRET_NAME_RE = /^[A-Z][A-Z0-9_]{1,63}$/;
+export type SecretKind = 'model_key' | 'agent';
+/** Who gets an agent secret: nobody (default), the listed agents, or every agent. Model keys are always 'none'. */
+export type SecretGrant = 'none' | 'agents' | 'all';
+export interface SecretInfo {
+  name: string;
+  description: string;
+  kind: SecretKind;
+  grant: SecretGrant;
+  /** The agents of grant 'agents' (empty otherwise). */
+  agents: string[];
+  /** Null = global (every secret today). Later: the project that owns it, injected only into that project's tasks. */
+  project: string | null;
+  /** False when the row exists but the store holds no value (a crash between the two writes, or an agent's request). */
+  hasValue: boolean;
+  /** 'user' or an agent id. */
+  createdBy: string;
+  createdCard: string | null;
+  createdAt: string;
+  updatedAt: string;
+  updatedBy: string;
+  lastUsedAt: string | null;
+  lastUsedBy: string | null;
+}
+export interface SecretList {
+  /** Where values are kept ('macOS Keychain'), or null: this engine has no store (keys come from its environment). */
+  store: string | null;
+  /** Names with a stored value (plan sign-ins excluded), for the API keys and Model list pages. */
+  names: string[];
+  secrets: SecretInfo[];
+}
+export const CreateSecret = z
+  .object({
+    name: z.string().regex(SECRET_NAME_RE, 'letters A-Z, digits and _, starting with a letter'),
+    description: z.string().trim().max(500).default(''),
+    value: z.string().trim().min(1),
+    grant: z.enum(['none', 'agents', 'all']).default('none'),
+    agents: z.array(z.string()).default([]),
+  })
+  .strict();
+export type CreateSecret = z.infer<typeof CreateSecret>;
+/** Names are fixed after creation; the value changes through PUT /api/secrets/:name only. */
+export const UpdateSecret = z
+  .object({ description: z.string().trim().max(500), grant: z.enum(['none', 'agents', 'all']), agents: z.array(z.string()) })
+  .partial()
+  .strict();
+export type UpdateSecret = z.infer<typeof UpdateSecret>;
 
 /** Pre-v3 transcripts call the task tools card_* (card_create…): the same tool under its current task_* name. */
 export const currentToolName = (name: string): string => (name.startsWith('card_') ? `task_${name.slice(5)}` : name);

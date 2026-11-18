@@ -1,3 +1,8 @@
+import { CreateSecret, UpdateSecret, type SecretGrant, type SecretInfo, type SecretKind, type SecretList } from '@atlas/shared';
+import type { Bus } from './events.ts';
+import { ConflictError, NotFoundError } from './kanban.ts';
+import type { Db } from './store/db.ts';
+
 /**
  * Where model keys come from (CLAUDE.md rule 5). The desktop app passes a store backed by the OS keychain
  * (Electron safeStorage); a server reads keys from its environment only. Values never go to SQLite, logs or the UI.
@@ -25,3 +30,306 @@ export function envWithSecrets(base: NodeJS.ProcessEnv, store?: SecretStore): No
   for (const n of store?.names() ?? []) if (!isTokenEntry(n)) env[n] = store!.get(n);
   return env;
 }
+
+// ── Secrets (#206): metadata in SQLite, values in the store, given to agents' shells, hidden from every output ──────
+
+/** Values shorter than this are not hidden (they would match everywhere); the UI says so. */
+export const REDACT_MIN = 8;
+/** Never in an agent's shell, even when the engine's own environment has them (server mode). */
+const ENGINE_ONLY = ['ATLAS_PASSWORD', 'ATLAS_SECRETS_PASSWORD', 'ATLAS_CLAUDE_CLIENT_SECRET'];
+
+/** Variables a shell relies on: a secret by that name would replace them. */
+const RESERVED = ['PATH', 'HOME', 'SHELL', 'USER', 'LOGNAME', 'TMPDIR', 'PWD', 'LANG', 'TERM', 'GIT_AUTHOR_NAME', 'GIT_COMMITTER_NAME'];
+
+interface SecretRow {
+  name: string;
+  description: string;
+  kind: SecretKind;
+  grant_to: SecretGrant;
+  agents: string;
+  project: string | null;
+  created_by: string;
+  created_card: string | null;
+  created_at: string;
+  updated_at: string;
+  updated_by: string;
+  last_used_at: string | null;
+  last_used_by: string | null;
+}
+
+/** Who writes: 'user' (Settings) or an agent id, and the task it worked on. */
+export interface SecretActor {
+  by: string;
+  card?: string | null;
+}
+
+/** `$NAME` or `${NAME}` (also `${NAME:-x}`) in a command. */
+const mentions = (command: string, name: string) => new RegExp(`\\$\\{?${name}(?![A-Za-z0-9_])`).test(command);
+
+export class Secrets {
+  constructor(
+    private db: Db,
+    private bus: Bus,
+    readonly store: SecretStore | undefined,
+    /** The engine's environment (server mode: model keys come from it). */
+    private env: NodeJS.ProcessEnv,
+  ) {}
+
+  /** Env names of model credentials: models' credential_env and Anthropic accounts' keys. */
+  private modelKeyNames(): string[] {
+    return (
+      this.db
+        .prepare("SELECT credential_env AS n FROM models WHERE credential_env IS NOT NULL UNION SELECT secret AS n FROM accounts")
+        .all() as { n: string }[]
+    ).map((r) => r.n);
+  }
+
+  private stored(): Set<string> {
+    return new Set(this.store?.names() ?? []);
+  }
+
+  /**
+   * Rows for what is in the store (rule 2: the store and SQLite are two writes). A stored name without a row is a model
+   * key: before #206 the store held only those, and every agent secret gets its row before its value. A model key row
+   * whose value is gone was deleted (API keys page). An agent row without a value stays: it shows « no value ».
+   */
+  sync(): void {
+    if (!this.store) return;
+    const names = this.stored();
+    const rows = new Map((this.db.prepare('SELECT name, kind FROM secrets').all() as { name: string; kind: SecretKind }[]).map((r) => [r.name, r.kind]));
+    const now = new Date().toISOString();
+    let changed = false;
+    this.db.transaction(() => {
+      for (const n of names) {
+        if (isTokenEntry(n) || rows.has(n)) continue;
+        this.db
+          .prepare("INSERT INTO secrets (name, kind, created_by, created_at, updated_at, updated_by) VALUES (?, 'model_key', 'user', ?, ?, 'user')")
+          .run(n, now, now);
+        changed = true;
+      }
+      for (const [n, kind] of rows)
+        if (kind === 'model_key' && !names.has(n)) {
+          this.db.prepare('DELETE FROM secrets WHERE name = ?').run(n);
+          changed = true;
+        }
+    })();
+    if (changed) this.bus.emit({ type: 'secrets.updated' });
+  }
+
+  list(): SecretList {
+    this.sync();
+    const names = this.stored();
+    const rows = this.db.prepare('SELECT * FROM secrets ORDER BY kind DESC, name').all() as SecretRow[];
+    return {
+      store: this.store?.label ?? null,
+      names: [...names].filter((n) => !isTokenEntry(n)),
+      secrets: rows.filter((r) => !isTokenEntry(r.name)).map((r) => toInfo(r, names.has(r.name))),
+    };
+  }
+
+  get(name: string): SecretInfo {
+    const r = this.db.prepare('SELECT * FROM secrets WHERE name = ?').get(name) as SecretRow | undefined;
+    if (!r || isTokenEntry(name)) throw new NotFoundError(`no secret ${name}`);
+    return toInfo(r, this.stored().has(name));
+  }
+
+  private needStore(): SecretStore {
+    if (!this.store) throw new ConflictError('this engine has no secret store: its keys come from its environment');
+    return this.store;
+  }
+
+  private checkGrant(kind: SecretKind, grant: SecretGrant, agents: string[]): string[] {
+    if (kind === 'model_key' && grant !== 'none') throw new ConflictError('model keys are never given to agents');
+    if (grant !== 'agents') return [];
+    const list = [...new Set(agents)];
+    if (!list.length) throw new ConflictError('pick at least one agent, or grant it to no agent');
+    for (const a of list) if (!this.db.prepare('SELECT 1 FROM agents WHERE id = ?').get(a)) throw new ConflictError(`agent ${a} does not exist`);
+    return list;
+  }
+
+  /** A new agent secret: its row first, then its value (a crash in between leaves a row with « no value »). */
+  create(input: CreateSecret, who: SecretActor): SecretInfo {
+    const c = CreateSecret.parse(input);
+    const store = this.needStore();
+    if (isTokenEntry(c.name)) throw new ConflictError(`${c.name} belongs to a sign-in (ChatGPT or Claude plan)`);
+    if (this.modelKeyNames().includes(c.name) || ENGINE_ONLY.includes(c.name)) throw new ConflictError(`${c.name} is a model key's name: pick another name`);
+    if (RESERVED.includes(c.name)) throw new ConflictError(`${c.name} is a variable every shell needs: pick another name`);
+    if (this.db.prepare('SELECT 1 FROM secrets WHERE name = ?').get(c.name) || store.names().includes(c.name))
+      throw new ConflictError(`a secret named ${c.name} already exists`);
+    const agents = this.checkGrant('agent', c.grant, c.agents);
+    const now = new Date().toISOString();
+    this.db
+      .prepare(
+        "INSERT INTO secrets (name, description, kind, grant_to, agents, created_by, created_card, created_at, updated_at, updated_by) VALUES (?, ?, 'agent', ?, ?, ?, ?, ?, ?, ?)",
+      )
+      .run(c.name, c.description, c.grant, JSON.stringify(agents), who.by, who.card ?? null, now, now, who.by);
+    try {
+      store.set(c.name, c.value);
+    } catch (e) {
+      this.db.prepare('DELETE FROM secrets WHERE name = ?').run(c.name);
+      throw e;
+    }
+    this.bus.emit({ type: 'secrets.updated' });
+    return this.get(c.name);
+  }
+
+  /** Description and grant; the name never changes. */
+  update(name: string, input: UpdateSecret, who: SecretActor): SecretInfo {
+    const p = UpdateSecret.parse(input);
+    const cur = this.get(name);
+    const grant = p.grant ?? cur.grant;
+    const agents = this.checkGrant(cur.kind, grant, p.agents ?? cur.agents);
+    this.db
+      .prepare('UPDATE secrets SET description = ?, grant_to = ?, agents = ?, updated_at = ?, updated_by = ? WHERE name = ?')
+      .run(p.description ?? cur.description, grant, JSON.stringify(agents), new Date().toISOString(), who.by, name);
+    this.bus.emit({ type: 'secrets.updated' });
+    return this.get(name);
+  }
+
+  /**
+   * A new value (rotation, or the value of a row that has none). A name without a row is a model key (the API keys
+   * page, PUT /api/secrets/:name): its row goes first, like create.
+   */
+  setValue(name: string, value: string, who: SecretActor): void {
+    const store = this.needStore();
+    if (!SECRET_NAME.test(name)) throw new ConflictError(`${name} is not a valid variable name (A-Z, 0-9, _)`);
+    if (isTokenEntry(name)) throw new ConflictError(`${name} belongs to a sign-in (ChatGPT or Claude plan)`);
+    const v = value.trim();
+    if (!v) throw new ConflictError('the value is empty');
+    const now = new Date().toISOString();
+    const known = this.db.prepare('SELECT 1 FROM secrets WHERE name = ?').get(name);
+    if (!known)
+      this.db
+        .prepare("INSERT INTO secrets (name, kind, created_by, created_card, created_at, updated_at, updated_by) VALUES (?, 'model_key', ?, ?, ?, ?, ?)")
+        .run(name, who.by, who.card ?? null, now, now, who.by);
+    store.set(name, v);
+    this.db.prepare('UPDATE secrets SET updated_at = ?, updated_by = ? WHERE name = ?').run(now, who.by, name);
+    this.bus.emit({ type: 'secrets.updated' });
+  }
+
+  /** The value first, then the row: a crash in between leaves a row with « no value », never a value without a row. */
+  delete(name: string): void {
+    const store = this.needStore();
+    if (isTokenEntry(name)) throw new ConflictError('sign out instead (Settings → Subscriptions)');
+    if (store.names().includes(name)) store.delete(name);
+    this.db.prepare('DELETE FROM secrets WHERE name = ?').run(name);
+    this.bus.emit({ type: 'secrets.updated' });
+  }
+
+  /** The agent secrets an agent may use (names and descriptions, for its instructions). */
+  granted(agentId: string): SecretInfo[] {
+    return this.list().secrets.filter((s) => grantedTo(s, agentId));
+  }
+
+  /**
+   * The environment of one command of `agentId`: the base (login PATH, git author) without any model key or engine
+   * password, plus the agent's granted secrets, read now (a rotation applies to the next command). Throws, so the
+   * command does not run, when the store can't be read or the command uses a secret it can't have.
+   */
+  envFor(agentId: string, base: NodeJS.ProcessEnv, command: string): NodeJS.ProcessEnv {
+    const env = { ...base };
+    for (const n of [...this.modelKeyNames(), ...ENGINE_ONLY]) delete env[n];
+    const rows = this.db.prepare('SELECT * FROM secrets').all() as SecretRow[];
+    for (const r of rows) if (r.kind === 'model_key') delete env[r.name];
+    for (const n of Object.keys(env)) if (isTokenEntry(n)) delete env[n];
+    const mine = rows.filter((r) => r.kind === 'agent' && grantedTo(toInfo(r, false), agentId));
+    for (const r of rows)
+      if (r.kind === 'agent' && !mine.includes(r) && mentions(command, r.name))
+        throw new Error(`secret ${r.name} is not granted to ${agentId}: ask the user to grant it in Settings → Secrets`);
+    if (!mine.length) return env;
+    if (!this.store) throw new Error('secrets are not available: this engine has no secret store');
+    let names: Set<string>;
+    try {
+      names = this.stored();
+    } catch (e) {
+      throw new Error(`the secret store (${this.store.label}) is unavailable: ${e instanceof Error ? e.message : String(e)}`);
+    }
+    const used: string[] = [];
+    for (const r of mine) {
+      if (!names.has(r.name)) {
+        if (mentions(command, r.name)) throw new Error(`secret ${r.name} has no value: add it in Settings → Secrets`);
+        continue;
+      }
+      let v: string | undefined;
+      try {
+        v = this.store.get(r.name);
+      } catch (e) {
+        throw new Error(`the secret store (${this.store.label}) could not read ${r.name}: ${e instanceof Error ? e.message : String(e)}`);
+      }
+      if (v === undefined) {
+        if (mentions(command, r.name)) throw new Error(`secret ${r.name} has no value: add it in Settings → Secrets`);
+        continue;
+      }
+      env[r.name] = v;
+      if (mentions(command, r.name)) used.push(r.name);
+    }
+    if (used.length) {
+      const now = new Date().toISOString();
+      const mark = this.db.prepare('UPDATE secrets SET last_used_at = ?, last_used_by = ? WHERE name = ?');
+      this.db.transaction(() => used.forEach((n) => mark.run(now, agentId, n)))();
+      this.bus.emit({ type: 'secrets.updated' });
+    }
+    return env;
+  }
+
+  /**
+   * Every secret value Atlas knows, longest first: all stored secrets (agent secrets, model keys, the tokens inside plan
+   * sign-ins) and the model keys and passwords of the engine's environment (server mode). Read at each call: a rotated
+   * value is hidden from the next output on. Throws when the store can't be read (the caller withholds the output).
+   */
+  private values(): { name: string; value: string }[] {
+    const out = new Map<string, string>();
+    const add = (name: string, value: unknown) => {
+      if (typeof value === 'string' && value.length >= REDACT_MIN && !out.has(value)) out.set(value, name);
+    };
+    for (const n of this.store?.names() ?? []) {
+      const v = this.store!.get(n);
+      if (v === undefined) continue;
+      if (!isTokenEntry(n)) {
+        add(n, v);
+        continue;
+      }
+      // A plan sign-in: a JSON object; its tokens are the secret parts.
+      try {
+        const o = JSON.parse(v) as Record<string, unknown>;
+        for (const [k, x] of Object.entries(o)) if (/token|secret|key/i.test(k)) add(n, x);
+      } catch {
+        add(n, v);
+      }
+    }
+    for (const n of [...this.modelKeyNames(), ...ENGINE_ONLY]) add(n, this.env[n]);
+    return [...out].map(([value, name]) => ({ name, value })).sort((a, b) => b.value.length - a.value.length);
+  }
+
+  /** Replace every secret value in `text` by [secret NAME]; `hidden` = how many were replaced. */
+  redact(text: string): { text: string; hidden: number } {
+    let hidden = 0;
+    for (const { name, value } of this.values()) {
+      if (!text.includes(value)) continue;
+      const parts = text.split(value);
+      hidden += parts.length - 1;
+      text = parts.join(`[secret ${name}]`);
+    }
+    return { text, hidden };
+  }
+}
+
+const grantedTo = (s: Pick<SecretInfo, 'kind' | 'grant' | 'agents'>, agentId: string) =>
+  s.kind === 'agent' && (s.grant === 'all' || (s.grant === 'agents' && s.agents.includes(agentId)));
+
+const toInfo = (r: SecretRow, hasValue: boolean): SecretInfo => ({
+  name: r.name,
+  description: r.description,
+  kind: r.kind,
+  grant: r.grant_to,
+  agents: JSON.parse(r.agents) as string[],
+  project: r.project,
+  hasValue,
+  createdBy: r.created_by,
+  createdCard: r.created_card,
+  createdAt: r.created_at,
+  updatedAt: r.updated_at,
+  updatedBy: r.updated_by,
+  lastUsedAt: r.last_used_at,
+  lastUsedBy: r.last_used_by,
+});
