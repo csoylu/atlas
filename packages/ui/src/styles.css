@@ -1222,15 +1222,16 @@ div.cm-desc.cut { -webkit-mask-image: linear-gradient(to bottom, #000 65%, trans
 /* ── Compact chat row: icon · label · summary · time · › , expands inline (card reports #58, tool calls #59) ── */
 /* Compact chat rows (#58, #59; docs/chat-activity.md): icon · verb · object · rest · meta · time · ›. The verb is muted,
    the object bright, meta faint; a tone colours the icon (and the verb for warn/bad), never the whole row. */
-.chat-row { align-self: stretch; min-width: 0; border: 1px solid var(--line); border-radius: 8px; font-size: var(--fs-base); }
+/* --row-pad-x / --row-ic: the icon's place in a row; the steps timeline (#145) is drawn from the same values. */
+.chat-row { --row-pad-x: 11px; --row-ic: 16px; align-self: stretch; min-width: 0; border: 1px solid var(--line); border-radius: 8px; font-size: var(--fs-base); }
 .msg-body > .chat-row + .chat-row { margin-top: 6px; }
 .msg-body > .text + .chat-row, .msg-body > .chat-row + .text, .msg-body > .chat-row + .artifact, .msg-body > .artifact + .chat-row { margin-top: 8px; }
-.chat-row-line { display: flex; align-items: center; gap: 9px; min-height: 36px; padding: 0 11px; color: var(--muted); border-radius: 7px; min-width: 0; }
+.chat-row-line { display: flex; align-items: center; gap: 9px; min-height: 36px; padding: 0 var(--row-pad-x); color: var(--muted); border-radius: 7px; min-width: 0; }
 .chat-row-line.expandable { cursor: pointer; transition: background 0.12s, color 0.12s; }
 .chat-row-line.expandable:hover { background: var(--hover); }
 .chat-row-line:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; }
 .chat-row.open > .chat-row-line { border-bottom: 1px solid var(--line); border-radius: 7px 7px 0 0; }
-.chat-row-icon { flex: none; width: 16px; height: 16px; display: grid; place-items: center; color: var(--faint); }
+.chat-row-icon { flex: none; width: var(--row-ic); height: var(--row-ic); display: grid; place-items: center; color: var(--faint); }
 .row-ic { width: 15px; height: 15px; stroke: currentColor; fill: none; stroke-width: 1.6; stroke-linecap: round; stroke-linejoin: round; }
 .chat-row-verb { flex: none; color: var(--muted); white-space: nowrap; }
 .chat-row-obj { flex: 0 1 auto; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--text); font-weight: var(--fw-medium); }
@@ -1290,11 +1291,18 @@ span.chat-row-ref { cursor: inherit; }
 .chat-row.steps > .chat-row-line .chat-row-icon { width: auto; }
 .chat-row.steps > .chat-row-line .chat-row-rest { color: var(--text); }
 .chat-row.steps > .chat-row-body { padding: 4px 4px 6px; }
-.steps-tl { position: relative; display: flex; flex-direction: column; }
-.steps-tl::before { content: ''; position: absolute; left: 17px; top: 14px; bottom: 14px; width: 1px; background: var(--line-2); }
-.chat-row.nested { border: 0; border-radius: 6px; }
-.chat-row.nested > .chat-row-line { min-height: 28px; }
-.chat-row.nested > .chat-row-line .chat-row-icon { background: var(--panel); position: relative; z-index: 1; }
+.steps-tl { display: flex; flex-direction: column; }
+.chat-row.nested { --row-h: 28px; --tl-w: 1px; position: relative; border: 0; border-radius: 6px; }
+.chat-row.nested > .chat-row-line { min-height: var(--row-h); }
+/* The timeline (#145): each row draws the line above its icon (::before) and below it (::after), centred on the icon and
+   computed from the row's own padding and icon size, so it never runs under an icon and has no tail past the first/last. */
+.steps-tl > .chat-row.nested::before, .steps-tl > .chat-row.nested::after {
+  content: ''; position: absolute; left: calc(var(--row-pad-x) + (var(--row-ic) - var(--tl-w)) / 2); width: var(--tl-w);
+  background: var(--line-2); pointer-events: none;
+}
+.steps-tl > .chat-row.nested::before { top: 0; height: calc((var(--row-h) - var(--row-ic)) / 2); }
+.steps-tl > .chat-row.nested::after { top: calc((var(--row-h) + var(--row-ic)) / 2); bottom: 0; }
+.steps-tl > .chat-row.nested:first-child::before, .steps-tl > .chat-row.nested:last-child::after { content: none; }
 .chat-row.nested.open > .chat-row-line { border-bottom: 0; }
 .chat-row.nested > .chat-row-body { padding: 4px 8px 10px 34px; }
 .chat-row.nested.tone-bad { background: color-mix(in srgb, var(--neg-bg) 50%, transparent); }
@@ -1358,7 +1366,8 @@ a.web-hit:hover { background: var(--hover); }
 @media (max-width: 520px) {
   .chat-row-body { padding-left: 14px; }
   .chat-row:not(.steps) > .chat-row-line .chat-row-rest:empty { display: none; }
-  .chat-row-line { gap: 6px; padding: 0 8px; }
+  .chat-row { --row-pad-x: 8px; }
+  .chat-row-line { gap: 6px; }
   .chat-row.steps > .chat-row-line .chat-row-rest { white-space: nowrap; }
   .chat-row-time { display: none; }
   .step-board { grid-template-columns: 1fr; gap: 2px; }

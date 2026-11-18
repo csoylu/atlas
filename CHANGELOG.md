@@ -6,6 +6,12 @@ computed by `scripts/release/changelog.mjs` from the oldest entry to the newest,
 `Fixed` → patch, `Added` or `Changed` → minor, `Breaking` (data or settings stop working without action) → major.
 Never type a version number.
 
+## Fixed · #145 · In an expanded « N steps » group, the timeline line now runs through the middle of every row icon.
+
+The line sat 1.5 px left of the icons (3 px on a phone). Each step row now draws its own piece of the line from its icon's
+position, so it stays centred, never shows through an icon, and stops at the first and last icon. E2E test:
+e2e/tests/steps-timeline.spec.ts.
+
 ## Fixed · #146 · The "Add images" button of a task without images shows its icon and label on one line, aligned with the description.
 
 In the New task dialog and on an existing task, the empty-state button was a grid: the icon sat above the label, indented, and the label touched the selects row.
