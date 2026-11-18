@@ -322,6 +322,18 @@ const SYS_MSGS = [
   smsg('assistant', agent, [{ type: 'text', text: 'Running it.' }], sysAt(31)),
 ];
 const sysRun = (id, status, error, start, end, next = null) => ({ id, cardId: chat.id, agentId: agent, kind: 'chat', status, error, startedAt: sysAt(start), endedAt: sysAt(end), next: next === null ? null : sysAt(next) });
+// What the rewound part did elsewhere (#138): undone and kept, with a long label and a long reason.
+const SYS_EFFECTS = [
+  { kind: 'task', label: '#9131 Mockup: artifacts library', cardId: 'c_uicheck9131', outcome: 'undone', action: 'closed', why: null },
+  { kind: 'message', label: '@zurich', cardId: 'c_uicheck9132', outcome: 'undone', action: 'withdrawn', why: null },
+  { kind: 'memory', label: `m104 « Library tiles show the real rendered content ${'A_very_long_unbroken_memory_token_'.repeat(2)} »`, cardId: null, outcome: 'undone', action: 'archived', why: null },
+  { kind: 'schedule', label: 'Daily board digest', cardId: null, outcome: 'undone', action: 'turned off', why: null },
+  { kind: 'task', label: '#9130 Fix tile contrast', cardId: 'c_uicheck9130', outcome: 'kept', action: 'stays', why: '@munih already worked on it' },
+  { kind: 'message', label: '@atlas', cardId: 'c_uicheck9133', outcome: 'kept', action: 'stays', why: 'already read' },
+  { kind: 'memory_change', label: 'm88 changed', cardId: null, outcome: 'kept', action: 'stays', why: null },
+  { kind: 'canvas', label: 'Library mockup edited', cardId: null, outcome: 'kept', action: 'stays', why: null },
+  { kind: 'push', label: 'git push origin feat/138-rewind-side-effects', cardId: null, outcome: 'kept', action: 'stays', why: null },
+];
 const SYS_TIMELINE = {
   runs: [
     sysRun('r_uichecks1', 'stopped', 'stopped by you', 11, 12, 20),
@@ -329,7 +341,7 @@ const SYS_TIMELINE = {
     sysRun('r_uichecks3', 'failed', `Expected ',' or '}' after property value in JSON at position 460 (line 1 column 461) ${'A_very_long_unbroken_error_token_'.repeat(3)}`, 31, 32),
   ],
   rewinds: [{
-    id: 'rw_uicheck1', fromSeq: 2e6 + 8, at: sysAt(25), hidden: 13, filesError: null, undoable: true,
+    id: 'rw_uicheck1', fromSeq: 2e6 + 8, at: sysAt(25), hidden: 13, filesError: null, undoable: true, effects: SYS_EFFECTS,
     files: [{ path: 'apps/desktop/src/main.ts', change: 'restored' }, { path: LONG_PATH, change: 'deleted' }, { path: 'docs/notes/old.md', change: 'recreated' }, ...Array.from({ length: 19 }, (_, i) => ({ path: `packages/ui/src/file${i}.ts`, change: 'restored' }))],
   }],
   summary: { uptoSeq: 2e6, text: 'Summary of the earlier part of this conversation: #58 built **ChatRow**; #59 designed the activity rows.' },
@@ -446,7 +458,10 @@ const SCREENS = [
   { name: 'chat-tools-canvas', hash: `#/chat/${chat.id}`, ready: '.chat-row.steps', tools: true, then: { js: `const grp = [...document.querySelectorAll('.chat-row.steps')].filter((g) => g.querySelector(':scope > .chat-row-line .row-ic.rowic-mem')).at(-1); const g = grp.querySelector(':scope > .chat-row-line'); g.click(); await new Promise((r) => setTimeout(r, 100)); for (const l of grp.querySelectorAll('.chat-row.nested > .chat-row-line.expandable')) l.click(); await new Promise((r) => setTimeout(r, 150)); g.scrollIntoView({ block: 'start' });`, ready: '.cv-thumb svg' }, keys: ['.chat-row.nested .chat-row-obj', '.cv-foot .chat-row-open', '.step-list-t', '.step-kv > span', '.step-foot'] },
   { name: 'chat-tools-web', hash: `#/chat/${chat.id}`, ready: '.chat-row.steps', tools: true, then: { js: `const grp = [...document.querySelectorAll('.chat-row.steps')].filter((g) => g.querySelector(':scope > .chat-row-line .row-ic.rowic-globe, :scope > .chat-row-line .row-ic.rowic-link')).at(-1); const g = grp.querySelector(':scope > .chat-row-line'); g.click(); await new Promise((r) => setTimeout(r, 100)); for (const l of grp.querySelectorAll('.chat-row.nested > .chat-row-line.expandable')) l.click(); await new Promise((r) => setTimeout(r, 150)); grp.querySelector('.web-results + .chat-row-open')?.click(); await new Promise((r) => setTimeout(r, 100)); g.scrollIntoView({ block: 'start' });`, ready: '.web-excerpt' }, keys: ['.chat-row.nested .chat-row-obj', '.web-hit-t', '.web-open', '.chat-row.nested.tone-bad .chat-row-rest'] },
   { name: 'chat-tools-pins', hash: `#/chat/${chat.id}`, tools: true, ready: '.inline-canvas', then: { js: `[...document.querySelectorAll('.inline-canvas')].at(-1).previousElementSibling.scrollIntoView({ block: 'start' });`, ready: '.inline-canvas .ic-board' }, keys: ['.ic-title', '.artifact .art-title', '.chat-row.step .chat-row-verb'] },
-  { name: 'chat-system', hash: `#/chat/${chat.id}`, ready: '.sys-row', system: true, then: { js: `for (const s of ['.sys-rewind', '.sys-msg']) document.querySelector(s + ' > .chat-row-line').click(); await new Promise((r) => setTimeout(r, 150)); document.querySelector('.sys-play').scrollIntoView({ block: 'start' });`, ready: '.sys-files' }, keys: ['.sys-row .chat-row-verb', '.sys-row .chat-row-obj', '.sys-foot .chat-row-open', '.sys-files .sys-file'] },
+  { name: 'chat-system', hash: `#/chat/${chat.id}`, ready: '.sys-row', system: true, then: { js: `for (const s of ['.sys-rewind', '.sys-msg']) document.querySelector(s + ' > .chat-row-line').click(); await new Promise((r) => setTimeout(r, 150)); document.querySelector('.sys-play').scrollIntoView({ block: 'start' });`, ready: '.rw-groups' }, keys: ['.sys-row .chat-row-verb', '.sys-row .chat-row-obj', '.sys-foot .chat-row-open', '.rw-groups .rw-what'] },
+  // #138: « Rewind to here » on the user's message: the dialog lists files and side effects, undone and kept.
+  { name: 'chat-rewind', hash: `#/chat/${chat.id}`, ready: '.sys-row', system: true, then: { js: `document.querySelectorAll('.msg-action[aria-label="Rewind to here"]')[0].click();`, ready: '.rewind-confirm .rw-groups' }, keys: ['.rewind-confirm h2', '.rewind-confirm .rw-head', '.rewind-confirm .rw-what', '.rewind-confirm .rw-act'] },
+  { name: 'chat-rewind-row', hash: `#/chat/${chat.id}`, ready: '.sys-rewind', system: true, then: { js: `document.querySelector('.sys-rewind > .chat-row-line').click(); await new Promise((r) => setTimeout(r, 150)); document.querySelector('.sys-rewind').scrollIntoView({ block: 'start' });`, ready: '.sys-rewind .rw-groups' }, keys: ['.sys-rewind .chat-row-verb', '.sys-rewind .rw-head', '.sys-rewind .rw-what', '.sys-rewind .sys-foot .chat-row-open'] },
   { name: 'chat-system-end', hash: `#/chat/${chat.id}`, ready: '.sys-alert .sys-foot', system: true, keys: ['.sys-alert .chat-row-verb', '.sys-foot .chat-row-open'] },
   { name: 'chat-table', hash: `#/chat/${chat.id}`, ready: '.msg .md table .card-ref', table: true, then: { js: `[...document.querySelectorAll('.msg .md table')].at(-1).scrollIntoView({ block: 'center' });`, ready: '.msg .md table' }, keys: ['.msg .md td', '.msg .md th', '.msg .md td .card-ref'] },
   // #103: paste one image and drop another into the composer (2 thumbnails, send enabled), then the transcript's
@@ -555,6 +570,8 @@ handlers.set('Fetch.requestPaused', async ({ requestId, request }) => {
     if (request.method === 'GET' && url.pathname === `/api/cards/${chat.id}/messages` && screen?.system) return await json([...(await get(`/cards/${chat.id}/messages`)), ...SYS_MSGS]);
     if (request.method === 'GET' && url.pathname === `/api/cards/${chat.id}/timeline` && screen?.system) return await json(SYS_TIMELINE);
     if (request.method === 'GET' && url.pathname === `/api/cards/${chat.id}/runs` && screen?.system) return await json([SYS_LATEST]);
+    if (request.method === 'GET' && url.pathname === `/api/cards/${chat.id}/rewind` && screen?.system)
+      return await json({ seq: Number(url.searchParams.get('seq')), hidden: 7, files: SYS_TIMELINE.rewinds[0].files.slice(0, 3), filesError: null, effects: SYS_EFFECTS });
     // Fixture pictures (paths under /Users/x/) on any screen: messages' and tasks' thumbnails.
     if (request.method === 'GET' && /^\/api\/cards\/[^/]+\/image$/.test(url.pathname) && (url.searchParams.get('path') ?? '').startsWith('/Users/x/'))
       return await send('Fetch.fulfillRequest', { requestId, responseCode: 200, responseHeaders: [{ name: 'Content-Type', value: 'image/png' }], body: IMG_PNG.toString('base64') });

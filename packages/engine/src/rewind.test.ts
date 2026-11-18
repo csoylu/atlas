@@ -166,7 +166,7 @@ describe('rewind', () => {
     await t.idle(c.id);
     const second = t.e.kanban.messages(c.id).filter((m) => m.author === 'user').at(-1)!;
     const r = (await t.rewind(c.id, second.seq))!;
-    expect((await timeline()).rewinds).toEqual([{ id: r.id, fromSeq: second.seq, at: expect.any(String), hidden: 3, files: [{ path: 'a.txt', change: 'deleted' }], filesError: null, undoable: true }]);
+    expect((await timeline()).rewinds).toEqual([{ id: r.id, fromSeq: second.seq, at: expect.any(String), hidden: 3, files: [{ path: 'a.txt', change: 'deleted' }], filesError: null, effects: [], undoable: true }]);
     expect((await t.undo(r.id)).status).toBe(200);
     expect((await timeline()).rewinds).toEqual([]);
   });
@@ -303,5 +303,106 @@ describe('rewind', () => {
     const rb = (await t.rewind(b.id, t.e.kanban.messages(b.id)[0]!.seq))!;
     expect(rb).toMatchObject({ files: [{ path: 'b.txt', change: 'deleted' }], filesError: null });
     expect(t.file('b.txt')).toBeNull();
+  });
+
+  // #138: what the rewound part did outside the chat and its files.
+  const call = (name: string, input: Record<string, unknown>) => ({ type: 'tool_use' as const, id: 't' + Math.random().toString(36).slice(2, 8), name, input });
+  it('lists every side effect of the rewound part; closes a task nobody started and Undo reopens it; what was acted on is kept', async () => {
+    const t = await setup([
+      [
+        call('task_create', { title: 'Fresh task', status: 'todo' }),
+        call('task_create', { title: 'Worked task', status: 'todo' }),
+        call('memory_add', { kind: 'fact', text: 'the build lives in dist' }),
+        call('schedule_create', { prompt: 'digest', title: 'Daily digest', cron: '0 9 * * *' }),
+        call('canvas_create', { name: 'Sketch' }),
+        ...write('echo git push origin main'),
+      ],
+      text('did things'),
+      [call('task_message', { id: '1', text: 'not read yet' })],
+      text('sent'),
+    ]);
+    const c = await t.chat();
+    await t.say(c.id, 'do things');
+    await t.idle(c.id);
+    const fresh = t.e.kanban.list().find((k) => k.title === 'Fresh task')!;
+    const worked = t.e.kanban.list().find((k) => k.title === 'Worked task')!;
+    expect(fresh.number).toBe(1);
+    await t.say(c.id, 'tell it');
+    await t.idle(c.id);
+    // Someone already worked on the second task: it can't be taken back.
+    t.e.db.prepare("INSERT INTO runs (id, card_id, agent_id, status, started_at, ended_at) VALUES ('run_w', ?, 'atlas', 'done', ?, ?)").run(worked.id, new Date().toISOString(), new Date().toISOString());
+    const first = t.e.kanban.messages(c.id)[0]!;
+
+    const preview = (await (await fetch(t.u + `/cards/${c.id}/rewind?seq=${first.seq}`)).json()) as RewindPreview;
+    expect(preview.effects.map((e) => [e.kind, e.outcome, e.action])).toEqual([
+      ['task', 'undone', 'closed'],
+      ['task', 'kept', 'stays'],
+      ['memory', 'undone', 'archived'],
+      ['schedule', 'undone', 'turned off'],
+      ['canvas', 'kept', 'stays'],
+      ['push', 'kept', 'stays'],
+      ['message', 'undone', 'withdrawn'],
+    ]);
+    expect(preview.effects[0]).toMatchObject({ label: '#1 Fresh task', cardId: fresh.id });
+    expect(preview.effects[1]).toMatchObject({ why: '@atlas already worked on it' });
+    // The preview changes nothing.
+    expect(t.e.kanban.get(fresh.id).status).toBe('todo');
+
+    const r = (await t.rewind(c.id, first.seq))!;
+    expect(r.effects).toEqual(preview.effects);
+    const memory = t.e.db.prepare("SELECT id, status FROM memories WHERE text = 'the build lives in dist'").get() as { id: number; status: string };
+    const sched = () => (t.e.db.prepare("SELECT enabled FROM schedules WHERE title = 'Daily digest'").get() as { enabled: number }).enabled;
+    expect([t.e.kanban.get(fresh.id).status, t.e.kanban.get(worked.id).status, memory.status, sched()]).toEqual(['closed', 'todo', 'archived', 0]);
+    expect(t.e.kanban.messages(fresh.id).some((m) => m.content.some((b) => b.type === 'text' && b.text.includes('not read yet')))).toBe(false);
+    const tl = (await (await fetch(t.u + `/cards/${c.id}/timeline`)).json()) as Timeline;
+    expect(tl.rewinds[0]!.effects).toEqual(preview.effects);
+
+    expect((await t.undo(r.id)).status).toBe(200);
+    const mem2 = t.e.db.prepare('SELECT status FROM memories WHERE id = ?').get(memory.id) as { status: string };
+    expect([t.e.kanban.get(fresh.id).status, mem2.status, sched()]).toEqual(['todo', 'active', 1]);
+    expect(t.e.kanban.messages(fresh.id).some((m) => m.content.some((b) => b.type === 'text' && b.text.includes('not read yet')))).toBe(true);
+    // A rewind again lists them again (the records are free once undone).
+    const again = (await (await fetch(t.u + `/cards/${c.id}/rewind?seq=${first.seq}`)).json()) as RewindPreview;
+    expect(again.effects).toHaveLength(7);
+  });
+
+  it('a restart after a rewind keeps what it did; Undo still brings it back (one transaction, rule 2)', async () => {
+    const dataDir = mkdtempSync(join(tmpdir(), 'atlas-rw-'));
+    const dbFile = join(dataDir, 'k.db');
+    let t = await setup([[call('task_create', { title: 'Fresh task', status: 'todo' })], text('made')], { dataDir, dbFile });
+    const c = await t.chat();
+    await t.say(c.id, 'make');
+    await t.idle(c.id);
+    const fresh = t.e.kanban.list().find((k) => k.title === 'Fresh task')!;
+    const r = (await t.rewind(c.id, t.e.kanban.messages(c.id)[0]!.seq))!;
+    expect(t.e.kanban.get(fresh.id).status).toBe('closed');
+    await t.e.stop();
+    engine = undefined;
+    t = await setup([], { dataDir, dbFile });
+    expect(t.e.kanban.get(fresh.id).status).toBe('closed');
+    expect(((await (await fetch(t.u + `/cards/${c.id}/timeline`)).json()) as Timeline).rewinds[0]).toMatchObject({ undoable: true, effects: [{ kind: 'task', outcome: 'undone' }] });
+    expect((await t.undo(r.id)).status).toBe(200);
+    expect(t.e.kanban.get(fresh.id).status).toBe('todo');
+  });
+
+  it('two rewinds in a row are one row in the chat, and its Undo undoes both', async () => {
+    const t = await setup([write('echo one > a.txt'), text('one'), [call('task_create', { title: 'T', status: 'todo' })], text('two')]);
+    const c = await t.chat();
+    await t.say(c.id, 'first');
+    await t.idle(c.id);
+    await t.say(c.id, 'second');
+    await t.idle(c.id);
+    const [m1, m2] = t.e.kanban.messages(c.id).filter((m) => m.author === 'user');
+    const r2 = (await t.rewind(c.id, m2!.seq))!;
+    const r1 = (await t.rewind(c.id, m1!.seq))!;
+    const tl = (await (await fetch(t.u + `/cards/${c.id}/timeline`)).json()) as Timeline;
+    expect(tl.rewinds).toHaveLength(1);
+    expect(tl.rewinds[0]).toMatchObject({ id: r1.id, fromSeq: m1!.seq, hidden: 6, undoable: true, files: [{ path: 'a.txt', change: 'deleted' }], effects: [{ kind: 'task', action: 'closed' }] });
+    expect(r2.effects).toHaveLength(1);
+    expect((await t.undo(r1.id)).status).toBe(200);
+    expect(userTexts(t.e.kanban.messages(c.id))).toEqual(['first', 'second']);
+    expect(t.file('a.txt')).toBe('one\n');
+    expect(t.e.kanban.list().find((k) => k.title === 'T')!.status).toBe('todo');
+    expect((await (await fetch(t.u + `/cards/${c.id}/timeline`)).json() as Timeline).rewinds).toEqual([]);
   });
 });

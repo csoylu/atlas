@@ -2,8 +2,7 @@ import { useState, type ReactNode } from 'react';
 import { ChatRow, RowIconSvg } from './ChatRow.tsx';
 import { CardRefLink, type TurnCards } from './CardStepDetail.tsx';
 import type { SysRow } from './sysRows.ts';
-
-const changeLabel = { restored: 'restored', recreated: 'brought back', deleted: 'removed' } as const;
+import { RewindGroups } from './RewindGroups.tsx';
 
 /**
  * A system event between turns (#66): start prompt, message from a card, scheduled run, stopped / failed / interrupted
@@ -89,32 +88,23 @@ function SysBodyView({ row, renderText, onRetry, onUndo, onToggleEarlier, onUndo
         </div>
       </>
     );
-  const more = b.files.length - SHOWN;
   return (
     <>
       {b.error && <pre className="step-out err">{b.error}</pre>}
-      {b.files.length > 0 && (
-        <ul className="sys-files">
-          {b.files.slice(0, SHOWN).map((f) => (
-            <li key={f.path}>
-              <span className={'rewind-change ' + f.change}>{changeLabel[f.change]}</span>
-              <span className="sys-file" title={f.path}>
-                {f.path}
-              </span>
-            </li>
-          ))}
-          {more > 0 && <li className="sys-more">… {more} more</li>}
-        </ul>
+      {(b.files.length > 0 || b.effects.length > 0) && (
+        <div className="rw-groups">
+          <RewindGroups files={b.files} effects={b.effects} keptHead="Kept" />
+        </div>
       )}
       {b.undoId && onUndo && (
         <div className="sys-foot">
           <button type="button" className="chat-row-open" disabled={busy} onClick={() => act(() => onUndo(b.undoId!))}>
             Undo rewind
           </button>
+          <span>Brings back the messages{b.files.length || b.effects.some((e) => e.outcome === 'undone') ? ' and everything undone above' : ''}.</span>
         </div>
       )}
     </>
   );
 }
 
-const SHOWN = 12;

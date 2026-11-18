@@ -1,5 +1,5 @@
 import { randomUUID } from 'node:crypto';
-import { USER, parseDocRef, type Block, type CardStatus, type FileChange, type Message, type RewindEvent, type RewindPreview, type RewindResult } from '@atlas/shared';
+import { USER, parseDocRef, type Block, type CardStatus, type FileChange, type Message, type RewindEvent, type RewindPreview, type RewindResult, type SideEffect } from '@atlas/shared';
 import type { Db } from './store/db.ts';
 import type { Bus } from './events.ts';
 import { ConflictError, InvalidError, NotFoundError, type Kanban } from './kanban.ts';
@@ -8,6 +8,7 @@ import type { Runner } from './runner.ts';
 import type { FileState, Snapshots } from './snapshots.ts';
 import { same, type FileLog } from './fileLog.ts';
 import { buildMessages, needsTurn } from './context.ts';
+import type { DoneEffect, SideEffects } from './sideEffects.ts';
 
 /**
  * Rewind (card #34). Before each user message the card's state is noted (`checkpoints`). Rewinding to a user message —
@@ -66,6 +67,7 @@ interface RewindRow {
   files_error: string | null;
   card_before: string;
   ops: string | null;
+  effects: string | null;
   state: 'restoring' | 'done' | 'undoing' | 'undone';
 }
 interface ChangeRow {
@@ -129,6 +131,7 @@ export class Rewinds {
     private runner: Runner,
     private dataDir: string,
     private fileLog: FileLog,
+    private effects: SideEffects,
   ) {
     this.snapshots = fileLog.snapshots;
   }
@@ -174,7 +177,8 @@ export class Rewinds {
     const target = this.target(cardId, seq);
     const hidden = this.hiddenCount(cardId, target.seq);
     const plan = await this.plan(cardId, target.at);
-    return { seq, hidden, files: plan.conflicts.length ? [] : plan.ops.map(changeOf), filesError: planError(plan) };
+    const effects = this.effects.plan(cardId, target.at).map(shown);
+    return { seq, hidden, files: plan.conflicts.length ? [] : plan.ops.map(changeOf), filesError: planError(plan), effects };
   }
 
   /**
@@ -208,6 +212,7 @@ export class Rewinds {
     const id = 'rw_' + randomUUID().slice(0, 8);
     const hidden = this.hiddenCount(cardId, target.seq);
     const cardBefore = this.state(cardId);
+    let done: DoneEffect[] = [];
     this.db.transaction(() => {
       const upto = (this.db.prepare('SELECT MAX(seq) AS m FROM messages WHERE conversation_id = ?').get(card.conversationId) as { m: number }).m;
       this.db
@@ -236,35 +241,65 @@ export class Rewinds {
       const settled = settle(back, 'Rewound by you. Write what to do next.');
       this.kanban.restoreState(cardId, settled.status, settled.block, { kind: 'rewound', payload: { by: USER, seq: target.seq, rewind: id, hidden } });
       if (cp) this.db.prepare('UPDATE conversations SET todos = ? WHERE id = ?').run(cp.todos, card.conversationId);
+      // What the rewound part did elsewhere (#138): taken back where nobody acted on it yet, in this same transaction.
+      done = this.effects.apply(id, cardId, target.at);
+      this.db.prepare('UPDATE rewinds SET effects = ? WHERE id = ?').run(JSON.stringify(done), id);
     })();
     this.changed(cardId);
+    for (const other of this.effects.touched(done)) if (other !== cardId) this.changed(other);
 
     let files: FileChange[] = [];
     if (ops.length) {
       ({ files, error: filesError } = await this.finish(id, ops, 'done', filesError));
       this.changed(cardId); // the chat's rewind row now lists the files
     }
-    return { id, seq: target.seq, text: userText(target), hidden, files, filesError };
+    return { id, seq: target.seq, text: userText(target), hidden, files, filesError, effects: done.map(shown) };
   }
 
-  /** The rewinds in effect on a card (not undone), oldest first: a row each in the chat, with Undo on the one it works for. */
+  /**
+   * The rewinds in effect on a card (not undone), oldest first: a row each in the chat, with Undo on the one it works for.
+   * Rewinds in a row (nothing written between them: Stop, then « Rewind to here » further up) are one row (#138), whose
+   * Undo undoes them all.
+   */
   events(cardId: string): RewindEvent[] {
     const card = this.kanban.get(cardId);
     const rows = this.db.prepare("SELECT * FROM rewinds WHERE card_id = ? ORDER BY at, rowid").all(cardId) as (RewindRow & { at: string })[];
-    const latest = rows.at(-1);
+    const latest = rows.filter((r) => r.state !== 'undone').at(-1);
     const moved = latest ? !!this.db.prepare('SELECT 1 FROM messages WHERE conversation_id = ? AND seq > ?').get(card.conversationId, latest.upto_seq) : true;
-    const count = this.db.prepare("SELECT COUNT(*) AS n FROM messages WHERE rewind_id = ? AND author != 'tool'");
-    return rows
-      .filter((r) => r.state === 'done' || r.state === 'restoring')
-      .map((r) => ({
+    const count = this.db.prepare("SELECT COUNT(*) AS n FROM messages WHERE rewind_id = ? AND conversation_id = ? AND author != 'tool'");
+    const out: (RewindEvent & { upto: number })[] = [];
+    let prev: RewindRow | null = null;
+    for (const r of rows) {
+      const live = r.state === 'done' || r.state === 'restoring';
+      if (!live) {
+        prev = null;
+        continue;
+      }
+      const e = {
         id: r.id,
         fromSeq: r.from_seq,
         at: r.at,
-        hidden: (count.get(r.id) as { n: number }).n,
+        hidden: (count.get(r.id, card.conversationId) as { n: number }).n,
         files: r.files === null ? null : (JSON.parse(r.files) as FileChange[]),
         filesError: r.files_error,
+        effects: r.effects ? (JSON.parse(r.effects) as DoneEffect[]).map(shown) : [],
         undoable: r === latest && r.state === 'done' && !moved,
-      }));
+        upto: r.upto_seq,
+      };
+      const last = out.at(-1);
+      if (prev && last && last.upto === r.upto_seq) {
+        out[out.length - 1] = {
+          ...e,
+          fromSeq: Math.min(last.fromSeq, e.fromSeq),
+          hidden: last.hidden + e.hidden,
+          files: last.files === null || e.files === null ? null : [...last.files, ...e.files],
+          filesError: [last.filesError, e.filesError].filter(Boolean).join('; ') || null,
+          effects: [...last.effects, ...e.effects],
+        };
+      } else out.push(e);
+      prev = r;
+    }
+    return out.map(({ upto: _upto, ...e }) => e);
   }
 
   /**
@@ -274,7 +309,18 @@ export class Rewinds {
    */
   async undo(id: string): Promise<{ cardId: string; files: FileChange[]; filesError: string | null; resume: boolean }> {
     const res = await this.undoFiles(id);
-    const r = this.db.prepare('SELECT card_id, card_before FROM rewinds WHERE id = ?').get(id) as { card_id: string; card_before: string };
+    let r = this.db.prepare('SELECT card_id, card_before, upto_seq FROM rewinds WHERE id = ?').get(id) as { card_id: string; card_before: string; upto_seq: number };
+    // The rewinds just before it, in a row with it (one row in the chat), are undone with it (#138).
+    for (;;) {
+      const before = this.db.prepare("SELECT id, card_id, card_before, upto_seq, state FROM rewinds WHERE card_id = ? AND state != 'undone' ORDER BY at DESC, rowid DESC LIMIT 1").get(r.card_id) as
+        | { id: string; card_id: string; card_before: string; upto_seq: number; state: string }
+        | undefined;
+      if (!before || before.state !== 'done' || before.upto_seq !== r.upto_seq) break;
+      const more = await this.undoFiles(before.id);
+      res.files.push(...more.files);
+      res.filesError = [res.filesError, more.filesError].filter(Boolean).join('; ') || null;
+      r = before;
+    }
     // A direct chat is always open (its status stays 'done' between replies); a work card only if it wasn't finished.
     const open = this.kanban.get(r.card_id).board === 'direct' || !['done', 'review', 'closed', 'archived'].includes((JSON.parse(r.card_before) as CardState).status);
     return { cardId: r.card_id, ...res, resume: open && needsTurn(buildMessages(this.kanban.messages(r.card_id))) };
@@ -284,7 +330,7 @@ export class Rewinds {
     const r = this.db.prepare('SELECT * FROM rewinds WHERE id = ?').get(id) as RewindRow | undefined;
     if (!r) throw new NotFoundError(`rewind ${id} not found`);
     if (r.state !== 'done') throw new ConflictError(r.state === 'undone' ? 'this rewind was already undone' : 'this rewind is still being done');
-    const latest = this.db.prepare('SELECT id FROM rewinds WHERE card_id = ? ORDER BY at DESC, rowid DESC LIMIT 1').get(r.card_id) as { id: string };
+    const latest = this.db.prepare("SELECT id FROM rewinds WHERE card_id = ? AND state != 'undone' ORDER BY at DESC, rowid DESC LIMIT 1").get(r.card_id) as { id: string };
     if (latest.id !== id) throw new ConflictError('a later rewind was made on this chat: undo that one first');
     const card = this.kanban.get(r.card_id);
     if (this.db.prepare('SELECT 1 FROM messages WHERE conversation_id = ? AND seq > ?').get(card.conversationId, r.upto_seq))
@@ -292,6 +338,8 @@ export class Rewinds {
     if (this.runner.current(r.card_id)) throw new ConflictError('the agent is working: stop it first');
     // The files the rewind put back, back as they were before it, only if nothing changed them since (never overwrite).
     const ops = r.ops ? (JSON.parse(r.ops) as FileOp[]).map(reverse) : [];
+    const effects = r.effects ? (JSON.parse(r.effects) as DoneEffect[]) : [];
+    let left: string[] = [];
     const changed: string[] = [];
     for (const op of ops) if (!same(await this.snapshots.state(op.workdir, op.path), op.from)) changed.push(op.path);
     if (changed.length) throw new ConflictError(`can't undo: ${changed.join(', ')} changed since the rewind, so putting the files back would overwrite that`);
@@ -305,15 +353,18 @@ export class Rewinds {
       const settled = settle(back, 'Stopped by you. Write what to do next.');
       this.kanban.restoreState(r.card_id, settled.status, settled.block, { kind: 'rewind_undone', payload: { by: USER, rewind: id } });
       this.db.prepare('UPDATE conversations SET todos = ? WHERE id = ?').run(back.todos, card.conversationId);
+      left = this.effects.undo(id, effects);
     })();
     this.changed(r.card_id);
+    for (const other of this.effects.touched(effects)) if (other !== r.card_id) this.changed(other);
+    const note = left.length ? left.join('; ') : null;
     if (!ops.length)
       return {
         files: [],
-        filesError: r.ops === null && r.before_commit ? 'the files were kept: this rewind was made before rewinds tracked their own files' : null,
+        filesError: [r.ops === null && r.before_commit ? 'the files were kept: this rewind was made before rewinds tracked their own files' : null, note].filter(Boolean).join('; ') || null,
       };
     const done = await this.finish(id, ops, 'undone', null);
-    return { files: done.files, filesError: done.error };
+    return { files: done.files, filesError: [done.error, note].filter(Boolean).join('; ') || null };
   }
 
   /** At start: finish file operations a stopped engine left half done (rule 2). */
@@ -349,6 +400,7 @@ export class Rewinds {
       this.db.prepare("UPDATE rewinds SET before_commit = NULL WHERE before_commit IS NOT NULL AND state IN ('done', 'undone') AND at < ?").run(iso(now - UNDO_KEEP_MS));
       // A rewind reaches back as far as the oldest file change kept (30 days, like the snapshots).
       this.db.prepare('DELETE FROM file_changes WHERE ended_at < ?').run(iso(now - KEEP_MS));
+      this.effects.prune(iso(now - KEEP_MS));
       this.db.prepare("UPDATE rewinds SET ops = '[]' WHERE ops IS NOT NULL AND ops != '[]' AND state IN ('done', 'undone') AND at < ?").run(iso(now - KEEP_MS));
     })();
     await this.dropUnused(now);
@@ -522,6 +574,9 @@ export class Rewinds {
     return agent ? workdirOf(agent, this.dataDir) : null;
   }
 }
+
+/** A side effect as the chat shows it (without what Undo needs). */
+const shown = ({ sid: _sid, undo: _undo, ...e }: DoneEffect): SideEffect => e;
 
 const sameChange = (a: ChangeRow, b: ChangeRow) =>
   same(stateOf(a.before_sha, a.before_mode), stateOf(b.before_sha, b.before_mode)) && same(stateOf(a.after_sha, a.after_mode), stateOf(b.after_sha, b.after_mode));
