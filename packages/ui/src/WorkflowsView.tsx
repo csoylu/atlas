@@ -1,11 +1,11 @@
 import { useEffect, useMemo, useState } from 'react';
-import { type Agent, type Card, type CreateWorkflow, type Workflow, type WorkflowNode } from '@atlas/shared';
+import { type Agent, type Card, type CreateWorkflow, type TriggerConfig, type Workflow, type WorkflowNode } from '@atlas/shared';
 import { api } from './api.ts';
 import { AgentFace } from './AgentFace.tsx';
 import { HeaderActions } from './ScreenHeader.tsx';
 import type { MessageStream } from './useMessages.ts';
 import { WorkflowCanvas } from './WorkflowCanvas.tsx';
-import { BROWSER_TZ, RUN_LABEL, chainOf, chipClass, describeTrigger, nodeRunState, nodeTitle, refOf, relative, runTask, STATE_LABEL, when } from './workflowView.ts';
+import { BROWSER_TZ, RUN_LABEL, chainOf, describeTrigger, listGroup, nodeTitle, refOf, relative, runStrip, runTask, STATE_LABEL, TEMPLATES, type ListGroup, type Template, when } from './workflowView.ts';
 
 /**
  * The Workflows page (#171, replaces Schedules; mockup /api/files/paris/pages/workflows-165.html): the list of workflows
@@ -79,12 +79,16 @@ function WorkflowList(props: {
     const t = setInterval(() => tick((n) => n + 1), 30_000); // keep « in 5 min » fresh
     return () => clearInterval(t);
   }, []);
-  const sorted = useMemo(
-    () => props.workflows.slice().sort((a, b) => +b.enabled - +a.enabled || (a.nextRunAt ?? '~').localeCompare(b.nextRunAt ?? '~') || a.createdAt.localeCompare(b.createdAt)),
-    [props.workflows],
-  );
+  const [pastOpen, setPastOpen] = useState(false);
+  const groups = useMemo(() => {
+    const sorted = props.workflows.slice().sort((a, b) => (a.nextRunAt ?? '~').localeCompare(b.nextRunAt ?? '~') || a.createdAt.localeCompare(b.createdAt));
+    const g: Record<ListGroup, Workflow[]> = { on: [], off: [], past: [] };
+    for (const w of sorted) g[listGroup(w)].push(w);
+    return g;
+  }, [props.workflows]);
+  const row = (w: Workflow) => <WorkflowRow key={w.id} w={w} cards={props.cards} onOpen={() => props.go('#/workflows/' + w.id)} onOpenCard={props.onOpenCard} onError={props.onError} />;
   return (
-    <div className="agents-view schedules-view">
+    <div className="wfl-view">
       {!props.creating && (
         <HeaderActions>
           <button className="primary small" onClick={() => props.setCreating(true)}>
@@ -92,41 +96,103 @@ function WorkflowList(props: {
           </button>
         </HeaderActions>
       )}
-      <section>
-        <header className="section-head">
-          <div>
-            <p>
-              A trigger starts a chain of steps: an agent does a task, you approve, a condition picks the next step. Runs missed while Atlas was off happen once when
-              it starts.
-            </p>
-          </div>
-        </header>
+      <div className="wfl-inner">
         {props.creating && <NewWorkflow onCancel={() => props.setCreating(false)} onCreated={props.onCreated} onError={props.onError} />}
-        <div className="model-list">
-          {sorted.map((w) => (
-            <WorkflowRow key={w.id} w={w} cards={props.cards} onOpen={() => props.go('#/workflows/' + w.id)} onOpenCard={props.onOpenCard} onError={props.onError} />
-          ))}
-          {!sorted.length && !props.creating && (
-            <div className="empty-note">No workflows yet. Examples: a morning report on weekdays at 09:00; a task for an agent, then your approval, then a second agent.</div>
-          )}
-        </div>
-      </section>
+        {!props.workflows.length && !props.creating && <EmptyWorkflows agents={props.agents} onCreated={props.onCreated} onScratch={() => props.setCreating(true)} onError={props.onError} />}
+        {groups.on.length > 0 && (
+          <section className="wfl-group">
+            <div className="wfl-ghead">
+              <span>On</span>
+              <span className="n">{groups.on.length}</span>
+            </div>
+            <div className="wfl-list">
+              <div className="wfl-cols" aria-hidden="true">
+                <span>Workflow</span>
+                <span>Last runs</span>
+                <span>Next run</span>
+                <span />
+              </div>
+              {groups.on.map(row)}
+            </div>
+          </section>
+        )}
+        {groups.off.length > 0 && (
+          <section className="wfl-group">
+            <div className="wfl-ghead">
+              <span>Off</span>
+              <span className="n">{groups.off.length}</span>
+            </div>
+            <div className="wfl-list">{groups.off.map(row)}</div>
+          </section>
+        )}
+        {groups.past.length > 0 && (
+          <section className={'wfl-group' + (pastOpen ? '' : ' folded')}>
+            <button className="wfl-ghead" aria-expanded={pastOpen} onClick={() => setPastOpen(!pastOpen)}>
+              <svg className="chev" viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+                <path d="m4 6 4 4 4-4" />
+              </svg>
+              <span>Past</span>
+              <span className="n">{groups.past.length}</span>
+              <span className="wfl-hint">· one-off workflows that already ran</span>
+            </button>
+            {pastOpen && <div className="wfl-list">{groups.past.map(row)}</div>}
+          </section>
+        )}
+      </div>
     </div>
   );
 }
 
-/** One token of a list row's chain. */
-function ChainStep({ n, nodes, one }: { n: WorkflowNode; nodes: WorkflowNode[]; one: string | null }) {
+const TRIG_ICON = {
+  clock: (
+    <svg viewBox="0 0 16 16" width="13" height="13" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+      <circle cx="8" cy="8" r="6" />
+      <path d="M8 4.8V8l2.2 1.4" />
+    </svg>
+  ),
+  once: (
+    <svg viewBox="0 0 16 16" width="13" height="13" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+      <rect x="2.5" y="3.5" width="11" height="10" rx="2" />
+      <path d="M2.5 6.5h11M5.5 2v3M10.5 2v3" />
+    </svg>
+  ),
+  hand: (
+    <svg viewBox="0 0 16 16" width="13" height="13" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+      <path d="M5 3.2v9.6L12.6 8z" />
+    </svg>
+  ),
+};
+const PLAY = (
+  <svg className="icon" viewBox="0 0 16 16" width="14" height="14" fill="none" stroke="currentColor" strokeWidth="1.4" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+    <path d="M5 3.2v9.6L12.6 8z" />
+  </svg>
+);
+
+/** The trigger in plain words with its icon. */
+function TriggerText({ t }: { t: TriggerConfig | null }) {
+  if (!t) return <span className="part trig">no trigger</span>;
+  const icon = t.kind === 'manual' ? TRIG_ICON.hand : t.repeat === 'at' ? TRIG_ICON.once : TRIG_ICON.clock;
+  return (
+    <span className="part trig">
+      {icon}
+      {t.kind === 'manual' ? 'By hand' : describeTrigger(t)}
+      {t.kind === 'time' && t.repeat === 'cron' && t.timezone !== BROWSER_TZ && <span className="muted">({t.timezone})</span>}
+    </span>
+  );
+}
+
+/** One token of a row's chain: an agent's face and @id (or the step's title when it has no agent), « your OK », a condition's title. */
+function ChainStep({ n, nodes }: { n: WorkflowNode; nodes: WorkflowNode[] }) {
   if (n.kind === 'agent')
-    return (
-      <span className="tok">
-        {n.config.agentId && <AgentFace id={n.config.agentId} />}
-        {n.config.agentId ? `@${n.config.agentId} · ` : ''}
-        {one ?? nodeTitle(n, nodes)}
+    return n.config.agentId ? (
+      <span className="who">
+        <AgentFace id={n.config.agentId} />@{n.config.agentId}
       </span>
+    ) : (
+      <span>{nodeTitle(n, nodes)}</span>
     );
-  if (n.kind === 'approval') return <span className="tok">your OK · {nodeTitle(n, nodes)}</span>;
-  return <span className="tok">{nodeTitle(n, nodes)}</span>;
+  if (n.kind === 'approval') return <span>your OK</span>;
+  return <span>{nodeTitle(n, nodes)}</span>;
 }
 
 function WorkflowRow(props: { w: Workflow; cards: Card[]; onOpen(): void; onOpenCard(id: string): void; onError(e: unknown): void }) {
@@ -134,91 +200,175 @@ function WorkflowRow(props: { w: Workflow; cards: Card[]; onOpen(): void; onOpen
   const [busy, setBusy] = useState(false);
   const trigger = w.nodes.find((n) => n.kind === 'trigger');
   const t = trigger?.kind === 'trigger' ? trigger.config : null;
+  const group = listGroup(w);
   const chain = chainOf(w);
-  const steps = w.nodes.length - 1;
-  // A one-step workflow named after its step (every migrated schedule): the step says how it runs instead.
-  const only = steps === 1 && chain.steps[0]?.kind === 'agent' ? chain.steps[0] : null;
-  const one = only && only.kind === 'agent' && nodeTitle(only) === w.name ? (only.config.newTaskEachRun ? 'new task each run' : 'one task, keeps history') : null;
+  const only = chain.steps.length === 1 && chain.more === 0 && chain.steps[0]?.kind === 'agent' ? chain.steps[0] : null;
+  const how = only?.kind === 'agent' ? (only.config.newTaskEachRun ? 'new task each run' : 'one task, keeps history') : null;
   const run = w.lastRun;
   const task = runTask(run);
   const open = run && (run.state === 'running' || run.state === 'waiting');
   const current = open ? run.steps?.findLast((s) => s.state === 'running' || s.state === 'waiting') : undefined;
   const currentNode = current ? w.nodes.find((n) => n.id === current.nodeId) : undefined;
-  const pastOnce = t?.kind === 'time' && t.repeat === 'at' && !!t.at && new Date(t.at) < new Date();
-  const status = w.lastError ? 'bad' : w.enabled ? 'ok' : 'unknown';
+  const failure = w.lastError ?? (run?.state === 'failed' ? run.reason : null);
+  const strip = runStrip(w.recentRuns ?? []);
   return (
-    <div className={'model-row wf-row ' + status + (w.enabled ? '' : ' off')} onClick={(e) => !(e.target as HTMLElement).closest('button, label, a, input') && props.onOpen()}>
-      <span className="dot-status" title={w.lastError ?? (w.enabled ? 'on' : 'off')} />
-      <div className="model-main">
-        <div className="model-title">
-          <b>{w.name}</b>
-          {t && <span className="badge">{describeTrigger(t)}</span>}
-          {t?.kind === 'time' && t.repeat === 'cron' && t.timezone !== BROWSER_TZ && <span className="muted">({t.timezone})</span>}
-          {w.origin === 'schedules' && <span className="muted">from Schedules</span>}
+    <div className={'wfl-row wf-row ' + group} tabIndex={0} onClick={(e) => !(e.target as HTMLElement).closest('button, label, a, input') && props.onOpen()} onKeyDown={(e) => e.key === 'Enter' && e.target === e.currentTarget && props.onOpen()}>
+      <div className="wfl-main">
+        <div className="wfl-name" title={w.name}>
+          {w.name}
         </div>
-        <div className="wf-chain" aria-label="Steps">
-          <span className="tok">Trigger</span>
-          {chain.steps.map((n) => (
-            <span key={n.id} className="tok">
-              <span className="arr" aria-hidden="true">→</span>
-              <ChainStep n={n} nodes={w.nodes} one={one} />
-            </span>
-          ))}
-          {chain.more > 0 && <span className="tok muted">+{chain.more} more</span>}
-          {!chain.steps.length && <span className="tok"><span className="arr" aria-hidden="true">→</span>no step yet</span>}
-        </div>
-        <div className="model-detail">
-          {w.enabled && w.nextRunAt ? (
-            <span title={new Date(w.nextRunAt).toLocaleString()}>
-              next <b>{when(w.nextRunAt)}</b> <span className="muted">· {relative(w.nextRunAt)}</span>
-            </span>
-          ) : t?.kind === 'manual' ? null : (
-            <span className="muted">{pastOnce && w.lastFiredAt ? 'done' : 'off'}</span>
-          )}
-          {run && (
-            <span className={'st-chip ' + chipClass(open && current ? nodeRunState(run, current.nodeId).state : run.state)}>
-              {open && current ? `${current.state === 'waiting' ? STATE_LABEL.waiting : 'Running'} · ${currentNode ? nodeTitle(currentNode, w.nodes) : current.nodeId}` : RUN_LABEL[run.state]}
-            </span>
-          )}
-          {run &&
-            (task ? (
-              <button className="linklike" title={`Run ${run.number}, ${new Date(run.startedAt).toLocaleString()}: open its task`} onClick={() => props.onOpenCard(task)}>
-                run {run.number} · {relative(run.startedAt)} → {refOf(task, props.cards)}
-              </button>
-            ) : (
-              <span className="muted">run {run.number} · {relative(run.startedAt)}</span>
+        <div className="wfl-sub">
+          <TriggerText t={t} />
+          <span className="part" aria-label="Steps">
+            {chain.steps.map((n, i) => (
+              <span key={n.id} className="tok">
+                {i > 0 && <span className="arr" aria-hidden="true">→</span>}
+                <ChainStep n={n} nodes={w.nodes} />
+              </span>
             ))}
-          {steps > 1 && <span className="muted">{steps} steps</span>}
+            {chain.more > 0 && <span className="sep">+{chain.more} more</span>}
+            {!chain.steps.length && <span>no step yet</span>}
+            {how && (
+              <>
+                <span className="sep">·</span>
+                <span>{how}</span>
+              </>
+            )}
+          </span>
         </div>
-        {(w.lastError ?? (run?.state === 'failed' ? run.reason : null)) && <div className="model-error">Last run failed: {w.lastError ?? run?.reason}</div>}
+        {failure && (
+          <div className="wfl-err">
+            <b>{w.lastError ? 'Could not start.' : 'Last run failed.'}</b> {failure}
+          </div>
+        )}
       </div>
-      <div className="model-actions">
-        <label className="switch" title={w.enabled ? 'Turn off' : 'Turn on'}>
-          <input type="checkbox" aria-label={w.enabled ? 'Turn off' : 'Turn on'} checked={w.enabled} disabled={pastOnce && !w.enabled} onChange={(e) => api.updateWorkflow(w.id, { enabled: e.target.checked }).catch(onError)} />
-          <span />
-        </label>
-        <button
-          className="tool"
-          disabled={busy}
-          title="Start a run now; the planned runs stay"
-          onClick={() => {
-            setBusy(true);
-            api
-              .runWorkflow(w.id)
-              .then((r) => {
-                if (r.state === 'skipped' || r.state === 'failed') return onError(new Error(r.reason ?? `run ${r.state}`));
-                // Like Run now on a schedule: open the task it started.
-                const task = runTask(r);
-                if (task) props.onOpenCard(task);
-              }, onError)
-              .finally(() => setBusy(false));
-          }}
-        >
-          {busy ? 'Starting…' : 'Run now'}
+      <div className="wfl-runs">
+        <div className="wfl-strip" role="img" aria-label={`Last ${w.recentRuns?.length ?? 0} runs`}>
+          {strip.map((s, i) => (
+            <i key={i} className={s ?? ''} title={s ? RUN_LABEL[s] : undefined} />
+          ))}
+        </div>
+        {run ? (
+          <div className="wfl-last">
+            <span className={'st ' + run.state}>{open && current?.state === 'waiting' ? STATE_LABEL.waiting : RUN_LABEL[run.state]}</span>
+            {open && current && currentNode && run.steps && run.steps.length > 0 ? (
+              <span title={nodeTitle(currentNode, w.nodes)}>{nodeTitle(currentNode, w.nodes)}</span>
+            ) : (
+              <span title={new Date(run.startedAt).toLocaleString()}>{relative(run.startedAt)}</span>
+            )}
+            {task && (
+              <button className="linklike" title={`Run ${run.number}: open its task`} onClick={() => props.onOpenCard(task)}>
+                → {refOf(task, props.cards)}
+              </button>
+            )}
+            {open && current?.state === 'waiting' && current.cardId && (
+              <button className="wfl-cta" onClick={() => props.onOpenCard(current.cardId!)}>
+                Review
+              </button>
+            )}
+          </div>
+        ) : (
+          <div className="wfl-last">
+            <span className="none">No runs yet</span>
+          </div>
+        )}
+      </div>
+      <div className="wfl-next">
+        {group === 'past' ? (
+          <span>Ran once, finished</span>
+        ) : !w.enabled ? (
+          <span>Off: turn it on to plan runs</span>
+        ) : w.nextRunAt ? (
+          <>
+            <b title={new Date(w.nextRunAt).toLocaleString()}>{when(w.nextRunAt)}</b>
+            <span>{relative(w.nextRunAt)}</span>
+          </>
+        ) : t?.kind === 'manual' ? (
+          <span>Only when you click ▶</span>
+        ) : null}
+      </div>
+      <div className="wfl-acts">
+        {group !== 'past' && (
+          <>
+            <button
+              className="icon-btn"
+              disabled={busy}
+              title="Run now (the planned runs stay)"
+              aria-label="Run now"
+              onClick={() => {
+                setBusy(true);
+                api
+                  .runWorkflow(w.id)
+                  .then((r) => {
+                    if (r.state === 'skipped' || r.state === 'failed') return onError(new Error(r.reason ?? `run ${r.state}`));
+                    // Like Run now on a schedule: open the task it started.
+                    const task = runTask(r);
+                    if (task) props.onOpenCard(task);
+                  }, onError)
+                  .finally(() => setBusy(false));
+              }}
+            >
+              {PLAY}
+            </button>
+            <label className="switch" title={w.enabled ? 'Turn off' : 'Turn on'}>
+              <input type="checkbox" aria-label={w.enabled ? 'Turn off' : 'Turn on'} checked={w.enabled} onChange={(e) => api.updateWorkflow(w.id, { enabled: e.target.checked }).catch(onError)} />
+              <span />
+            </label>
+          </>
+        )}
+      </div>
+    </div>
+  );
+}
+
+/** No workflow yet: what a workflow is, three examples to start from, or from scratch (#234). */
+function EmptyWorkflows(props: { agents: Agent[]; onCreated(w: Workflow): void; onScratch(): void; onError(e: unknown): void }) {
+  const [saving, setSaving] = useState<string | null>(null);
+  const ids = props.agents.map((a) => a.id);
+  const create = (tpl: Template) => {
+    setSaving(tpl.key);
+    const g = tpl.build(ids);
+    const manual = g.nodes.some((n) => n.kind === 'trigger' && n.config.kind === 'manual');
+    api
+      .createWorkflow({ ...g, enabled: manual })
+      .then(props.onCreated, props.onError)
+      .finally(() => setSaving(null));
+  };
+  return (
+    <div className="wfl-empty">
+      <div>
+        <h2>Nothing runs on its own yet</h2>
+        <p>A workflow starts at set times or when you click ▶, gives a task to an agent, and can stop for your OK before the next step. Start from an example and change it, or from scratch.</p>
+      </div>
+      <div className="wfl-tpls">
+        {TEMPLATES.map((tpl) => {
+          const g = tpl.build(ids);
+          const t = g.nodes.find((n) => n.kind === 'trigger');
+          const steps = chainOf(g).steps;
+          return (
+            <button key={tpl.key} className="wfl-tpl" disabled={!!saving} onClick={() => create(tpl)}>
+              <b>{saving === tpl.key ? 'Creating…' : tpl.name}</b>
+              <span className="desc">{tpl.description}</span>
+              <div className="wfl-sub">
+                <TriggerText t={t?.kind === 'trigger' ? t.config : null} />
+                <span className="part">
+                  {steps.map((n, i) => (
+                    <span key={n.id} className="tok">
+                      {i > 0 && <span className="arr" aria-hidden="true">→</span>}
+                      <ChainStep n={n} nodes={g.nodes} />
+                    </span>
+                  ))}
+                </span>
+              </div>
+            </button>
+          );
+        })}
+      </div>
+      <div className="wfl-empty-foot">
+        <button className="tool" onClick={props.onScratch}>
+          Start from scratch
         </button>
-        <button className="ghost" onClick={props.onOpen}>
-          Open
-        </button>
+        <span>Runs missed while Atlas was off happen once when it starts.</span>
       </div>
     </div>
   );

@@ -442,7 +442,7 @@ const WF_RUN = {
 const WF_RUN1 = { ...WF_RUN, id: 'wr_uicheck1', number: 1, state: 'failed', reason: '« Validate the PR » failed: the branch is gone (nothing is linked to « failed »)', startedAt: wfAgo(1500), endedAt: wfAgo(1490), steps: [WF_STEP(1, 'trigger', 'trigger', 1, 'done', 'start', null, 'run by hand', 1500), WF_STEP(2, 'validate', 'agent', 1, 'failed', 'failed', wfCard(0), 'the branch is gone', 1499)] };
 const WORKFLOW = {
   id: 'wf_uicheck', name: 'Validate, fix, approve and merge a pull request (a deliberately long workflow name)', enabled: true, origin: null, revision: 3,
-  nextRunAt: null, lastFiredAt: wfAgo(42), lastError: null, lastRun: WF_RUN, createdBy: 'user', createdAt: wfAgo(3000), updatedAt: wfAgo(60),
+  nextRunAt: null, lastFiredAt: wfAgo(42), lastError: null, lastRun: WF_RUN, recentRuns: ['done', 'done', 'stopped', 'failed', 'waiting'], createdBy: 'user', createdAt: wfAgo(3000), updatedAt: wfAgo(60),
   nodes: [
     { id: 'trigger', kind: 'trigger', x: 40, y: 120, config: { kind: 'manual' } },
     { id: 'validate', kind: 'agent', x: 290, y: 120, config: { title: 'Validate the PR', agentId: 'zurich', prompt: 'Validate {{previous.summary}}', newTaskEachRun: true } },
@@ -456,7 +456,7 @@ const WORKFLOW = {
     { from: 'fix', exit: 'done', to: 'again' }, { from: 'again', exit: 'yes', to: 'validate' }, { from: 'ok', exit: 'approved', to: 'merge' },
   ],
 };
-const WORKFLOW_OFF = { ...WORKFLOW, id: 'wf_uicheckoff', name: 'Weekly funding-rate digest', enabled: false, origin: 'schedules', lastRun: null,
+const WORKFLOW_OFF = { ...WORKFLOW, id: 'wf_uicheckoff', name: 'Weekly funding-rate digest', enabled: false, origin: 'schedules', lastRun: null, recentRuns: [],
   nodes: [{ id: 'trigger', kind: 'trigger', x: 40, y: 120, config: { kind: 'time', repeat: 'cron', cron: '0 9 * * 1', at: null, timezone: 'Europe/Paris' } }, { id: 'step1', kind: 'agent', x: 300, y: 120, config: { title: 'Weekly funding-rate digest', agentId: 'atlas', prompt: 'Digest', newTaskEachRun: true } }],
   edges: [{ from: 'trigger', exit: 'start', to: 'step1' }] };
 
@@ -565,7 +565,7 @@ const SCREENS = [
   { name: 'shortcuts', hash: '#/board', ready: '.board', then: { js: `window.dispatchEvent(new KeyboardEvent('keydown', { key: '?', shiftKey: true, bubbles: true }));`, ready: '.keys-sheet' }, keys: ['.keys-head h2', '.keys-row > span:first-child', '.pal-sec'] },
   // Workflows (#171): the list (fixtures on top of the real ones), the canvas in Edit with a step selected, the canvas in
   // Runs with the waiting run; on a phone the canvas screens show the steps as a list.
-  { name: 'workflows', hash: '#/workflows', ready: '.wf-row', workflows: true, keys: ['.wf-row .model-name', '.wf-chain', '.st-chip', '.wf-row .head-btn'] },
+  { name: 'workflows', hash: '#/workflows', ready: '.wf-row', workflows: true, keys: ['.wfl-name', '.wfl-sub .trig', '.wfl-last .st', '.wfl-ghead', '.wfl-cols'] },
   { name: 'workflow-edit', hash: '#/workflows/wf_uicheck', ready: '.wf-node, .wf-phone', workflows: true, then: { js: `document.querySelector('.wf-plane .wf-node[data-id="validate"]')?.dispatchEvent(new PointerEvent('pointerdown', { bubbles: true, button: 0, isPrimary: true })); document.querySelector('.wf-plane .wf-node[data-id="validate"]')?.dispatchEvent(new PointerEvent('pointerup', { bubbles: true, button: 0, isPrimary: true })); await new Promise((r) => setTimeout(r, 200)); document.body.dataset.wfSel = '1';`, ready: 'body[data-wf-sel]' }, keys: ['.wf-title', '.wf-kind', '.wf-out', '.wf-side .sd-head b', '.wf-side .field > span'] },
   { name: 'workflow-runs', hash: '#/workflows/wf_uicheck/runs/wr_uicheck2', ready: '.wf-run, .wf-phone', workflows: true, keys: ['.wf-title', '.wf-run .st-chip', '.wf-steps-log .t', '.wf-runs button'] },
   { name: 'workflow-off', hash: '#/workflows/wf_uicheckoff', ready: '.wf-off', workflows: true, keys: ['.wf-off', '.wf-title'] },

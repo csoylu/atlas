@@ -740,6 +740,7 @@ export class Workflows {
       lastFiredAt: r.last_fired_at,
       lastError: r.last_error,
       lastRun: last ? { ...toRun(last), steps: this.steps(last.id).map(toStep) } : null,
+      recentRuns: (this.db.prepare("SELECT state FROM workflow_runs WHERE workflow_id = ? AND state != 'skipped' ORDER BY number DESC LIMIT 10").all(r.id) as { state: WorkflowRunState }[]).map((x) => x.state).reverse(),
       createdBy: r.created_by,
       createdAt: r.created_at,
       updatedAt: r.updated_at,

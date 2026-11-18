@@ -191,7 +191,7 @@ test.describe('U · screens (Playwright, real UI, scripted model)', () => {
     const wf = (await call(atlas, 'GET', '/workflows')).body.find((x: any) => x.name === 'Ping the team');
     await expect.poll(async () => (await call(atlas, 'GET', `/workflows/${wf.id}`)).body.nodes.find((n: any) => n.id === 'step1').config.prompt).toBe('Ping the team');
     await page.goto(atlas.url + '/#/workflows');
-    const row = page.locator('.model-list > *').filter({ hasText: 'Ping the team' }).first();
+    const row = page.locator('.wfl-row').filter({ hasText: 'Ping the team' }).first();
     await expect(row).toBeVisible();
     await row.getByRole('button', { name: 'Run now' }).click();
     await expect.poll(async () => (await call(atlas, 'GET', '/cards')).body.length).toBeGreaterThan(0);
@@ -201,7 +201,8 @@ test.describe('U · screens (Playwright, real UI, scripted model)', () => {
     await row.locator('label.switch').click();
     await expect.poll(async () => (await call(atlas, 'GET', `/workflows/${wf.id}`)).body.enabled).toBe(false);
     // delete: from the trigger's panel
-    await row.getByRole('button', { name: 'Open' }).click();
+    await expect(row).toContainText('Off: turn it on to plan runs'); // it moved to the Off group
+    await row.locator('.wfl-name').click(); // the row opens the workflow
     await page.locator('.wf-node[data-id="trigger"]').click();
     await page.getByRole('button', { name: 'Delete workflow' }).click();
     await expect.poll(async () => (await call(atlas, 'GET', '/workflows')).body.some((x: any) => x.id === wf.id)).toBe(false);

@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
-import type { WorkflowEdge, WorkflowNode, WorkflowRun, WorkflowRunStep } from '@atlas/shared';
-import { chainOf, cronOf, describeTrigger, edgePath, exitTarget, exitsOf, freeSpot, newNodeId, nodeRunState, nodeTitle, patternOf, runTask, stepOrder, takenEdges, timeDraftOf, triggerOf, wire, withoutNode } from './workflowView.ts';
+import type { Workflow, WorkflowEdge, WorkflowNode, WorkflowRun, WorkflowRunStep } from '@atlas/shared';
+import { chainOf, groupCount, listGroup, runStrip, TEMPLATES, cronOf, describeTrigger, edgePath, exitTarget, exitsOf, freeSpot, newNodeId, nodeRunState, nodeTitle, patternOf, runTask, stepOrder, takenEdges, timeDraftOf, triggerOf, wire, withoutNode } from './workflowView.ts';
 
 const trigger: WorkflowNode = { id: 'trigger', kind: 'trigger', x: 40, y: 120, config: { kind: 'time', repeat: 'cron', cron: '0 9 * * 1-5', at: null, timezone: 'Europe/Paris' } };
 const agent = (id: string, title: string, x = 300, y = 120): WorkflowNode => ({ id, kind: 'agent', x, y, config: { title, agentId: 'zurich', prompt: 'do it', newTaskEachRun: true } });
@@ -100,4 +100,31 @@ describe('workflow view helpers (#171)', () => {
     expect(w.nodes.some((n) => n.id === 'fix')).toBe(false);
     expect(w.edges.some((e) => e.from === 'fix' || e.to === 'fix')).toBe(false);
   });
+
+  it('the list groups (#234): on, off, past one-offs; the header count; the run strip; the templates', () => {
+    const now = new Date('2026-11-19T10:00:00Z');
+    const wf = (enabled: boolean, config: Extract<WorkflowNode, { kind: 'trigger' }>['config']): Workflow =>
+      ({ id: 'w', name: 'W', enabled, nodes: [{ ...trigger, config }], edges: [] }) as unknown as Workflow;
+    const once = (at: string) => ({ kind: 'time' as const, repeat: 'at' as const, cron: null, at, timezone: 'Europe/Paris' });
+    const on = wf(true, trigger.config as never);
+    const off = wf(false, trigger.config as never);
+    const past = wf(false, once('2026-11-14T17:55:00Z'));
+    const comingOff = wf(false, once('2026-12-01T09:00:00Z'));
+    expect([on, off, past, comingOff].map((w) => listGroup(w, now))).toEqual(['on', 'off', 'past', 'off']);
+    // a past one-off still on (missed while Atlas was off: it runs once at start) stays On
+    expect(listGroup(wf(true, once('2026-11-14T17:55:00Z')), now)).toBe('on');
+    expect(groupCount([on, on, off, past], now)).toBe('2 on · 1 off · 1 past');
+    expect(groupCount([on], now)).toBe('1 on');
+    expect(groupCount([], now)).toBe('');
+
+    expect(runStrip(['done', 'failed'], 4)).toEqual([null, null, 'done', 'failed']);
+    expect(runStrip(['done', 'done', 'failed', 'waiting', 'running'], 3)).toEqual(['failed', 'waiting', 'running']);
+
+    expect(TEMPLATES.map((t) => t.name)).toEqual(['Morning report', 'Weekly check', 'Task with your OK']);
+    const g = TEMPLATES[2]!.build(['munih', 'zurich']);
+    expect(chainOf(g).steps.map((n) => n.kind)).toEqual(['agent', 'approval', 'agent']);
+    expect(g.nodes.filter((n) => n.kind === 'agent').map((n) => (n.config as { agentId: string | null }).agentId)).toEqual(['munih', 'zurich']);
+    expect(TEMPLATES[0]!.build([]).nodes[1]!.config).toMatchObject({ agentId: null });
+  });
 });
+

@@ -29,6 +29,7 @@ import { HeaderSlot, Icon } from './ScreenHeader.tsx';
 import { Palette, ShortcutsSheet, type PaletteContext } from './Palette.tsx';
 import { GO_HASH, globalKey, nextRow } from './keys.ts';
 import { LAST_AGENT, TOGGLE_PANEL } from './ChatView.tsx';
+import { groupCount } from './workflowView.ts';
 
 /**
  * Route in the URL hash, so reloads and the Electron window keep the place: #/inbox/<item>, #/board, #/library/<docId>,
@@ -383,7 +384,6 @@ export function App() {
   ];
   const openChat = route.view === 'chat' ? chats.find((c) => c.id === route.target) : undefined;
   const badge = shownInbox?.badge ?? 0;
-  const activeWorkflows = workflows.filter((s) => s.enabled).length;
   const openWorkflow = route.view === 'workflows' && route.target ? workflows.find((w) => w.id === route.target) : undefined;
   /** An agent is busy while one of its cards runs or one of its chats is answering. */
   const busy = (id: string) => cards.some((c) => c.assignee === id && c.status === 'running') || chats.some((c) => c.assignee === id && c.working);
@@ -423,7 +423,7 @@ export function App() {
           : route.view === 'workflows'
             ? route.target
               ? { parts: [<a key="w" className="crumb-link" href="#/workflows">Workflows</a>], title: openWorkflow?.name ?? 'Workflow' }
-              : { parts: [], title: 'Workflows', sub: `${activeWorkflows} on · ${workflows.length} total` }
+              : { parts: [], title: 'Workflows', sub: groupCount(workflows) }
             : route.view === 'settings'
               ? { parts: [<span key="s" className="crumb-part">Settings</span>], title: settingsLabel(route.target as SettingsPage) }
               : { parts: [], title: 'Document' };
