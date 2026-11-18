@@ -19,6 +19,7 @@ import { ChatPins } from './ChatPins.tsx';
 import { ChatRow } from './ChatRow.tsx';
 import { parseReport, rowTime } from './chatRow.ts';
 import { taskKey } from './inboxView.ts';
+import { deleteChatQuestion } from './chatHistoryMenu.ts';
 import { HeaderActions, Icon } from './ScreenHeader.tsx';
 import { StatusIcon, STATUS_LABEL } from './StatusIcon.tsx';
 import type { Quote } from './DocPanel.tsx';
@@ -164,7 +165,8 @@ export function CardPanel(props: {
           aria-label="Delete chat"
           title="Delete chat"
           onClick={() => {
-            if (confirm(`Delete the chat “${card.title}”?`)) api.deleteCard(card.id).then(props.onClose, onError);
+            const isMain = props.agents.some((a) => a.mainChat === card.id);
+            if (confirm(deleteChatQuestion(card, isMain))) api.deleteCard(card.id).then(props.onClose, onError);
           }}
         >
           <Icon.trash />
