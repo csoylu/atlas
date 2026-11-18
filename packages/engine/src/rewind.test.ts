@@ -5,6 +5,7 @@ import { join } from 'node:path';
 import type { Card, Message, RewindPreview, RewindResult, Timeline } from '@atlas/shared';
 import { startEngine, type Engine } from './index.ts';
 import { FakeProvider } from './providers/fake.ts';
+import { eventually } from '../test/kit/index.ts';
 import { buildMessages } from './context.ts';
 import type { ModelRequest } from './providers/types.ts';
 
@@ -282,7 +283,7 @@ describe('rewind', () => {
 
   it('another chat\'s write during this chat\'s command is not taken for this chat\'s change', async () => {
     const t = await setup([
-      write('sleep 1.5'),
+      write('touch ../../ready; while [ ! -f ../../gate ]; do sleep 0.02; done'),
       [{ type: 'tool_use', id: 'w1', name: 'write_file', input: { path: 'b.txt', content: 'B' } }],
       text('B done'),
       text('A done'),
@@ -290,9 +291,12 @@ describe('rewind', () => {
     const a = await t.chat();
     const b = await t.chat();
     await t.say(a.id, 'wait');
-    await expect.poll(() => t.e.db.prepare("SELECT COUNT(*) AS n FROM tool_calls WHERE status = 'running'").get(), { timeout: 8000 }).toEqual({ n: 1 });
+    // The command touches `ready` once it runs, i.e. after the engine took its « before » snapshot: B must write after that.
+    await eventually(() => existsSync(join(t.dataDir, 'ready')), { timeout: 8000, what: "A's command to start" });
     await t.say(b.id, 'write b');
     await t.idle(b.id);
+    // A's command ends only now, so it is certain to have seen b.txt appear (no timing guess: it waited for this gate).
+    writeFileSync(join(t.dataDir, 'gate'), '');
     await t.idle(a.id);
     // A's command saw b.txt appear; it was B's write.
     expect(t.e.db.prepare("SELECT COUNT(*) AS n FROM file_changes WHERE card_id = ? AND path = 'b.txt'").get(a.id)).toEqual({ n: 1 });

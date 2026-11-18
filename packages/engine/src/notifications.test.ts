@@ -6,6 +6,7 @@ import type { ContentBlock, Inbox, ServerEvent } from '@atlas/shared';
 import { startEngine, type Engine } from './index.ts';
 import { FakeProvider } from './providers/fake.ts';
 import { ModelError } from './providers/types.ts';
+import { until } from '../test/kit/index.ts';
 
 let engine: Engine | undefined;
 afterEach(async () => {
@@ -25,13 +26,6 @@ async function setup(o: { dbFile?: string; dataDir?: string; fake?: FakeProvider
     ...(o.fake ? { providers: () => o.fake! } : {}),
   });
   return engine;
-}
-async function until(cond: () => boolean, what: string, ms = 3000) {
-  const end = Date.now() + ms;
-  while (!cond()) {
-    if (Date.now() > end) throw new Error(`timed out waiting for ${what}`);
-    await new Promise((r) => setTimeout(r, 10));
-  }
 }
 const use = (name: string, input: unknown): ContentBlock => ({ type: 'tool_use', id: 't_' + Math.random().toString(36).slice(2, 8), name, input });
 

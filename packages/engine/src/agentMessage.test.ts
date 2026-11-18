@@ -6,6 +6,7 @@ import type { ContentBlock } from '@atlas/shared';
 import { startEngine, type Engine } from './index.ts';
 import type { ModelRequest, ModelResponse, OnDelta, Provider } from './providers/types.ts';
 import { runTeamTool, type TeamToolContext } from './teamTools.ts';
+import { until } from '../test/kit/index.ts';
 
 /** agent_message (#96). The fake model answers from one script per agent (runs of different agents overlap). */
 type Step = ContentBlock[] | ((req: ModelRequest) => ContentBlock[]);
@@ -45,13 +46,6 @@ async function setup(fake: Provider, o: { dbFile?: string; dataDir?: string; dis
   });
   engines.push(e);
   return e;
-}
-async function until(cond: () => boolean, what: string, ms = 3000) {
-  const end = Date.now() + ms;
-  while (!cond()) {
-    if (Date.now() > end) throw new Error(`timed out waiting for ${what}`);
-    await new Promise((r) => setTimeout(r, 10));
-  }
 }
 
 describe('agent_message', () => {

@@ -10,16 +10,11 @@ import { Bus } from './events.ts';
 import { openDb, type Db } from './store/db.ts';
 import { compareSemver, parseSums, Updater, zipName, type UpdaterOptions } from './updater.ts';
 import { startEngine } from './index.ts';
+import { until } from '../test/kit/index.ts';
 
 const mac = process.platform === 'darwin';
 const sha = (b: Buffer) => createHash('sha256').update(b).digest('hex');
-const wait = async (ok: () => boolean, ms = 10_000) => {
-  const end = Date.now() + ms;
-  while (!ok()) {
-    if (Date.now() > end) throw new Error('timed out');
-    await new Promise((r) => setTimeout(r, 50));
-  }
-};
+const wait = (ok: () => boolean, ms = 10_000) => until(ok, 'the condition', ms);
 
 /** A fake Atlas.app (just an Info.plist with its version), zipped the way CI's electron-builder zip is. */
 function fakeApp(dir: string, version: string): string {

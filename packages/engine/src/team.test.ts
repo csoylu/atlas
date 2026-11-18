@@ -6,6 +6,7 @@ import { join } from 'node:path';
 import type { ContentBlock } from '@atlas/shared';
 import { startEngine, type Engine } from './index.ts';
 import { FakeProvider } from './providers/fake.ts';
+import { until } from '../test/kit/index.ts';
 
 let engine: Engine | undefined;
 afterEach(async () => {
@@ -14,13 +15,6 @@ afterEach(async () => {
 });
 const use = (name: string, input: unknown): ContentBlock => ({ type: 'tool_use', id: 't_' + Math.random().toString(36).slice(2, 8), name, input });
 const text = (t: string): ContentBlock[] => [{ type: 'text', text: t }];
-async function until(cond: () => boolean, what: string) {
-  const end = Date.now() + 3000;
-  while (!cond()) {
-    if (Date.now() > end) throw new Error('timed out waiting for ' + what);
-    await new Promise((r) => setTimeout(r, 10));
-  }
-}
 
 describe('team: memory, messages between cards, agent and model management', () => {
   it('keeps memory in the instructions and lets agents edit it', async () => {

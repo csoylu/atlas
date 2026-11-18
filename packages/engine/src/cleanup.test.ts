@@ -7,6 +7,7 @@ import { startEngine, type Engine } from './index.ts';
 import { FakeProvider } from './providers/fake.ts';
 import type { ModelRequest } from './providers/types.ts';
 import { CLEANUP_BY, CLEANUP_SCHEDULE } from './cleanup.ts';
+import { until } from '../test/kit/index.ts';
 
 let engines: Engine[] = [];
 afterEach(async () => {
@@ -26,13 +27,6 @@ async function setup(fake: FakeProvider, o: { dbFile?: string; dataDir?: string;
   });
   engines.push(e);
   return e;
-}
-async function until(cond: () => boolean, what: string, ms = 5000) {
-  const end = Date.now() + ms;
-  while (!cond()) {
-    if (Date.now() > end) throw new Error(`timed out waiting for ${what}`);
-    await new Promise((r) => setTimeout(r, 10));
-  }
 }
 let n = 0;
 const use = (name: string, input: unknown): ContentBlock => ({ type: 'tool_use', id: `t${++n}`, name, input });

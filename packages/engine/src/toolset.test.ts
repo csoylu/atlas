@@ -7,6 +7,7 @@ import { startEngine, type Engine } from './index.ts';
 import { FakeProvider } from './providers/fake.ts';
 import type { ModelRequest } from './providers/types.ts';
 import { PROJECT_FILE_CAP, projectInstructions } from './runner.ts';
+import { until as waitUntil } from '../test/kit/index.ts';
 
 let engines: Engine[] = [];
 afterEach(async () => {
@@ -24,13 +25,7 @@ const text = (t: string): ContentBlock[] => [{ type: 'text', text: t }];
 const lastText = (req: ModelRequest) =>
   req.messages.at(-1)!.content.flatMap((b) => (b.type === 'text' ? [b.text] : b.type === 'tool_result' ? [b.content] : [])).join('\n');
 
-async function until(cond: () => boolean, ms = 5000): Promise<void> {
-  const end = Date.now() + ms;
-  while (!cond()) {
-    if (Date.now() > end) throw new Error('timed out');
-    await new Promise((r) => setTimeout(r, 20));
-  }
-}
+const until = (cond: () => boolean, ms = 5000) => waitUntil(cond, 'the condition', ms);
 
 const alive = (pid: number) => {
   try {

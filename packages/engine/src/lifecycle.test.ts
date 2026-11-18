@@ -7,6 +7,7 @@ import type { ContentBlock } from '@atlas/shared';
 import { startEngine, type Engine } from './index.ts';
 import type { ModelRequest, ModelResponse, OnDelta, Provider } from './providers/types.ts';
 import { runCardTool } from './cardTools.ts';
+import { until } from '../test/kit/index.ts';
 
 /**
  * Card lifecycle from a chat (design §16): origin chat, 'closed', Stop, report back. The fake model answers by
@@ -50,13 +51,6 @@ async function setup(fake: Provider, o: { dbFile?: string; dataDir?: string; dis
   return e;
 }
 
-async function until(cond: () => boolean, what: string, ms = 3000) {
-  const end = Date.now() + ms;
-  while (!cond()) {
-    if (Date.now() > end) throw new Error(`timed out waiting for ${what}`);
-    await new Promise((r) => setTimeout(r, 10));
-  }
-}
 
 const use = (name: string, input: unknown): ContentBlock => ({ type: 'tool_use', id: 't_' + Math.random().toString(36).slice(2, 8), name, input });
 const text = (t: string): ContentBlock[] => [{ type: 'text', text: t }];

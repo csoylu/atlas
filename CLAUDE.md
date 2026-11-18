@@ -53,6 +53,13 @@ Same scale as OpenCode (packages/ui/src/styles/theme.css). Enforced by `packages
   (`--faint` is the floor). Placeholders and disabled text may be lower.
 - **@font-face** only through the fontsource imports in `main.tsx`.
 
+**Writing tests** (`packages/engine/test/kit`): never write your own sleep loop. `eventually(fn, {timeout, what})` waits for
+the thing you need (a returned value, or an assertion that stops throwing); `retry(fn, {times, retryIf})` re-runs a flaky
+operation; `launch({ script | provider, ...startEngineOptions })` gives a throwaway engine with every dependency injected
+(the model, `updates.fetch`, `dbFile`, `leaseMs`…) that stops itself after the test. To order two things, make the first
+signal the second (a marker file, an event), never `sleep(1500)`. A failed test is retried once and shown as retried: a
+test that needs it is broken, fix it. Reproduce a timing flake under load: `yes > /dev/null &` ×8 and loop the test.
+
 ## Commands
 ```
 cp .env.example .env   # model keys (gitignored); see .env.example
