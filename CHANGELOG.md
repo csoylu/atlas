@@ -8,7 +8,7 @@ Never type a version number.
 
 ## Added · #148 · `npm run ui:check:fast` runs the UI check at the four widths in parallel (about 80 s instead of 3 min)
 
-`scripts/ui-check/parallel.mjs` starts one `check.mjs` per width (1440, 1100, 900, 390), each with its own Chrome and output folder, and exits 1 if any width reports an issue. Same flags as `ui:check`, except `--widths` and `--out`. Test tooling only: no change in the app.
+`scripts/ui-check/parallel.mjs` starts one `check.mjs` per width (1440, 1100, 900, 390), each with its own Chrome and output folder, and exits 1 if any width reports an issue or dies (killed by a signal, or never started), and names the signal. Same flags as `ui:check`, except `--widths` and `--out`, which it refuses (exit 2). Test tooling only: no change in the app.
 
 ## Changed · #126 · Tests: one shared kit, a stable rewind test, retries that show
 
