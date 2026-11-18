@@ -104,18 +104,32 @@ export const CARD_TOOLS = {
   }),
   task_block: tool({
     description:
-      'Stop and wait. kind: needs_input (a question for the user; give options, recommended first), dependency (waiting ' +
-      'on other work), capability (missing access or tool), transient (retry later; set retry_in_minutes).',
+      'Stop and wait. kind: needs_input (a question for the user; give options, recommended first), capability (missing ' +
+      'access or tool), dependency (waiting on other Atlas tasks: give waits_on, e.g. ["#12"]; the task waits in todo and ' +
+      'restarts by itself when they are done), transient (retry later by itself; set retry_in_minutes). Only needs_input ' +
+      'and capability reach the user: if the work you wait on is not a task yet, create it (task_create) first; if only ' +
+      'the user can clear it, use needs_input.',
     input: z.object({
       kind: z.enum(BLOCK_KINDS),
       question: z.string().min(1),
       options: z.array(z.string()).max(4).default([]),
       retry_in_minutes: z.number().positive().max(24 * 60).optional(),
+      waits_on: z.array(CardId).optional(),
     }),
     terminal: 'block',
-    run: ({ kind, question, options, retry_in_minutes }, { kanban, agentId, cardId }) => {
-      const until = kind === 'transient' ? new Date(Date.now() + (retry_in_minutes ?? 15) * 60_000).toISOString() : null;
-      kanban.block(cardId, { kind, reason: question, options, until }, agentId);
+    run: ({ kind, question, options, retry_in_minutes, waits_on }, { kanban, agentId, cardId }) => {
+      if (kind === 'dependency') {
+        if (!waits_on?.length)
+          throw new Error('kind=dependency needs waits_on: the task number(s) this one waits on, e.g. ["#12"]. Create a task for that work first, or use needs_input if only the user can clear it.');
+        const c = kanban.waitOn(cardId, waits_on, question, agentId);
+        return `task waits in todo on ${c.parents.map((p) => kanban.ref(p)).join(', ')}; it restarts by itself when they are done`;
+      }
+      if (kind === 'transient') {
+        const at = new Date(Date.now() + (retry_in_minutes ?? 15) * 60_000).toISOString();
+        kanban.retryLater(cardId, { reason: question, at }, agentId);
+        return `task waits in todo and retries at ${at}`;
+      }
+      kanban.block(cardId, { kind, reason: question, options, until: null }, agentId);
       return `task blocked (${kind})`;
     },
   }),

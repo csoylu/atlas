@@ -362,10 +362,11 @@ describe('Claude plan (Atlas’s own approved OAuth client)', () => {
     const workReset = clock.t + 3600_000;
     an.messages = [limited(workReset)];
     const card = engine!.kanban.create({ title: 'Board work', status: 'ready', assignee: 'atlas' }, 'user');
-    await expect.poll(() => engine!.kanban.get(card.id).status, { timeout: 5000 }).toBe('blocked');
+    // Not the user's problem (#131): it waits in todo with the retry time, not blocked.
+    await expect.poll(() => engine!.kanban.get(card.id).retry, { timeout: 5000 }).not.toBeNull();
     const blocked = engine!.kanban.get(card.id);
-    expect(blocked.block).toMatchObject({ kind: 'transient', until: new Date(workReset).toISOString() });
-    expect(blocked.block!.reason).toMatch(/every Claude subscription reached its usage limit \(Main, Work\); work waits until/);
+    expect(blocked).toMatchObject({ status: 'todo', block: null, retry: { at: new Date(workReset).toISOString() } });
+    expect(blocked.retry!.reason).toMatch(/every Claude subscription reached its usage limit \(Main, Work\); work waits until/);
     expect(blocked.waiting).toMatch(/^retrying at /);
     expect(engine!.notifications.list()[0]).toMatchObject({ kind: 'plan.exhausted' });
     expect((await status()).pausedUntil).toBe(new Date(workReset).toISOString());

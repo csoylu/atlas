@@ -15,6 +15,7 @@ const card = (n: number, over: Partial<Card> = {}): Card => ({
   board: 'main',
   parents: [],
   block: null,
+  retry: null,
   waiting: null,
   conversationId: `v_${n}`,
   createdBy: 'user',

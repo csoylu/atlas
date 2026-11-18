@@ -565,7 +565,9 @@ export class Rewinds {
   private state(cardId: string): CardState {
     const card = this.kanban.get(cardId);
     const t = this.db.prepare('SELECT todos FROM conversations WHERE id = ?').get(card.conversationId) as { todos: string | null } | undefined;
-    return { status: card.status, block: card.block, todos: t?.todos ?? null };
+    // A retry waiting in todo (#131) lives in the block columns too: keep it, so a rewind puts it back as it was.
+    const block = card.block ?? (card.retry ? { kind: 'transient' as const, reason: card.retry.reason, options: [], until: card.retry.at } : null);
+    return { status: card.status, block, todos: t?.todos ?? null };
   }
 
   private workdir(agentId: string | null): string | null {
@@ -592,5 +594,5 @@ function planError(p: Plan): string | null {
 /** A card isn't put back to work by a rewind or its undo: a status that would start (or seem to run) a run waits for the user. */
 function settle(s: CardState, reason: string): { status: CardStatus; block: Block | null } {
   if (s.status === 'running' || s.status === 'ready') return { status: 'blocked', block: { kind: 'needs_input', reason, options: [], until: null } };
-  return { status: s.status, block: s.status === 'blocked' ? s.block : null };
+  return { status: s.status, block: s.status === 'blocked' || (s.status === 'todo' && s.block?.kind === 'transient') ? s.block : null };
 }
