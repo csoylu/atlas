@@ -126,7 +126,9 @@ with `process.env` directly: take `ctx.env()`.
   other file equals git's own merge and the PR's changed lines are unchanged, pushes the branch with
   `--force-with-lease` (never main), waits for CI `test` on the new head (red: `qa/validated` = failure, no merge),
   validates and merges that head, and prints the old → new head. It refuses (author rebases by hand) when another file
-  conflicts, the PR has merge commits or edits older changelog text, or the head moved since the review. The gate
+  conflicts, the PR has merge commits or edits older changelog text, or the head moved since the review. GitHub runs no
+  CI on a conflicting head, so there CI that never ran on the old head is not required (#195); CI red or still running
+  on it is still refused. The gate
   guards against accidents, not misuse: `--as` is a name anyone can type.
 - **Done means on main** (#126): before `task_complete` or `task_request_review`, run `git fetch` and then
   `git log --oneline origin/main..origin/<branch>` for every branch of the task (`git branch -r | grep '/<N>-'`).

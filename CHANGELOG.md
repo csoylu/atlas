@@ -6,6 +6,10 @@ computed by `scripts/release/changelog.mjs` from the oldest entry to the newest,
 `Fixed` → patch, `Added` or `Changed` → minor, `Breaking` (data or settings stop working without action) → major.
 Never type a version number.
 
+## Fixed · #195 · The validation script's automatic changelog rebase now starts on a conflicting PR, which GitHub runs no CI on
+
+`validate.mjs --ok … --merge` on a PR that conflicts with main in CHANGELOG.md only refused with « CI job "test" has not run … yet », because GitHub does not run CI on a conflicting head, so the #188 rebase never started. In that case CI that never ran on the old head is no longer required: the rebase already waits for CI `test` on the new head and merges only when it is green. CI that did run on the old head and is red or still running is refused as before, and so are a conflicting PR without `--merge` and a non-conflicting PR without CI.
+
 ## Fixed · #192 · A document chip in a task's thread opens the document again, from the task window and from the task beside a chat
 
 In the task window, a chip (or a row of the task's Artifacts) shows the document over the whole window at the chip's
