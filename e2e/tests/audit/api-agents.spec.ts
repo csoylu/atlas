@@ -80,8 +80,7 @@ test.describe('A · agents, chats, models, settings (API)', () => {
     expect((await call(atlas, 'POST', '/models/ghost/test')).body.ok).toBe(false);
   });
 
-  test('[M02] provider claude_code cannot be created (design §5: removed in 0018, rows readable, never runnable) - BUG B2: API accepts it', async ({ atlas }) => {
-    test.fail(); // known bug: remove when fixed
+  test('[M02] provider claude_code cannot be created (design §5: removed in 0018, rows readable, never runnable)', async ({ atlas }) => {
     const r = await call(atlas, 'POST', '/models', { id: 'cc', provider: 'claude_code', name: 'x' });
     expect(r.status).toBeGreaterThanOrEqual(400);
   });
