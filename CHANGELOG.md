@@ -6,6 +6,10 @@ computed by `scripts/release/changelog.mjs` from the oldest entry to the newest,
 `Fixed` → patch, `Added` or `Changed` → minor, `Breaking` (data or settings stop working without action) → major.
 Never type a version number.
 
+## Changed · #131 · A task waiting on another task or retrying later waits in Todo, not Blocked: Blocked now always means it needs you
+
+`task_block` with kind `dependency` now takes `waits_on` (task numbers): those tasks become the card's parents, the card waits in Todo with « waiting on #112 (running) » and starts by itself when they are done, with a note telling the agent so. A dependency with no task is refused (the agent creates the task first, or asks you). Temporary failures (rate limits, 5xx, every subscription paused until a reset, an agent's « retry later ») also wait in Todo with « retrying at 14:05 · why » and restart at that time. Neither shows the orange « ! », goes to the Inbox, or is reported to the chat. Both survive a restart. Cards already blocked as « waiting on other work » stay as they are. No migration.
+
 ## Fixed · #140 · Task numbers inside message text are plain #112 links with the title on hover, no more chips
 
 In message text, summaries and tables a task reference is now a link-coloured « #112 » in the text's own size and line height, so lines stay evenly spaced. The task's title and status show on hover and are read by screen readers; a click or tap still opens the task. Chips that stand alone (pins, sidebar, cards, tool rows, Library, Memory) are unchanged. ui-check has a new `chat-refs` screen that checks line spacing, size, contrast and the hover title. No migration.
