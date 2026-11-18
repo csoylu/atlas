@@ -121,3 +121,66 @@ fails after 15 s naming what never appeared, and returns page errors + refused w
     then `startEngine({ dbFile: '/tmp/x/atlas.db', dataDir: '/tmp/x', port: 4388, dispatch: false, env: {}, uiDir: 'packages/ui/dist' })`
     (`dispatch: false` so it starts no runs and no schedules).
   - E2E: `e2e/` (Playwright, scripted model) on a local build.
+
+## How-tos (moved here from agent memory, 18 Nov 2026)
+Project how-tos live in this file, not in agent memory. Add one here (through a PR) when you learn it the hard way.
+
+**Setup and shells**
+- `npm ci`, never `npm install`: install rewrites package-lock.json and drops the optional
+  `@rolldown/binding-darwin-arm64`, so vitest fails with "Cannot find native binding". If the lockfile changed:
+  `git checkout package-lock.json && npm ci`.
+- Agent shells have no `gh`, `node` or `npx` on PATH (background and nohup shells get only `/usr/bin:/bin:/usr/sbin:/sbin`)
+  until #136: start with `export PATH=/opt/homebrew/bin:$HOME/.nvm/versions/node/v24.7.0/bin:$PATH`. `gh` is installed
+  and logged in. A restart of Atlas kills foreground tools: detach long runs with `nohup … < /dev/null & disown`.
+- Each agent works in its own git clone inside its workspace (atlas and paris: `publish-atlas/`, munih and zurich:
+  `atlas/`). Other copies of the code (the root of atlas's workspace, `~/Desktop/perso/atlas`) are stale: don't edit them.
+- If your clone holds another run's uncommitted work, don't mix: `git worktree add ../atlas-N origin/main -b <branch>`,
+  `npm ci` inside it (no symlinked node_modules), push the branch, open the PR, then `git worktree remove --force`.
+- A commit message starting with `#107 …` is dropped as a comment by `rebase --continue`: use `git commit --cleanup=verbatim`.
+
+**Live data**
+- The live database is `~/Library/Application Support/Atlas/data/atlas.db`: read it with `sqlite3 -readonly`, never write.
+- The engine's HTTP port changes at every launch: `lsof -nP -iTCP -sTCP:LISTEN -a -c Atlas`, then
+  `http://127.0.0.1:<port>/api/…`. A curl on an old port gives code 000.
+- UI against the live data without installing: `ATLAS_ENGINE=http://127.0.0.1:<port> npm -w @atlas/ui run dev` (Vite on :5173).
+- A branch against real data: `.backup` the database to `/tmp/<dir>/`; in the copy set `agents.workdir = null`, reset
+  running cards and runs, delete schedules; then `ATLAS_DATA_DIR=/tmp/<dir> ATLAS_PORT=4399 npx tsx packages/engine/src/main.ts`
+  (shell with `background: true`; it does not stay up under nohup). `ui-check --port 4399` points at it.
+- An engine started from a clone cannot decrypt the plan tokens (Electron safeStorage): checks against the real Claude
+  or ChatGPT models need the installed app's engine.
+- `POST /api/cards` in status `triage` wakes atlas. Throwaway test cards: status `todo`, no assignee.
+- Installed build: the UI is in `/Applications/Atlas.app/Contents/Resources/ui/assets/index-*.js` (not in app.asar).
+
+**Tests**
+- Under load (several agents, load average ~30) `npm test` fails at random (changelog, dispatcher, lifecycle, rewind,
+  runner), and in `test:full` the voiceLoop barge-in test too. Rerun the failing files alone
+  (`npx vitest run --project fast <files>`, `--project slow` for voice) before calling it a regression.
+- Engine tests with a scripted FakeProvider call `startEngine({ memoryReview: false, … })`, or the background memory
+  review eats the script.
+- E2E: `npm run build`, then in `e2e/`: `E2E_CHANNEL=chrome npx playwright test --reporter=line` (~20–50 s).
+
+**UI**
+- Styles are global: a class named after data (`card`, `board`, `panel`) collides with the board's CSS. Prefix dynamic
+  class names (`rowic-<name>`) and update the selectors in `scripts/ui-check` when renaming.
+- The task view is `packages/ui/src/CardView.tsx`, shared by `CardModal.tsx` and `ThreadPanel.tsx`: edit it for both.
+- `ui-check` tests the built UI (`npm run build` first: a stale `packages/ui/dist` gives false errors) and needs
+  `npm ci` once in the clone ("Cannot find package 'sharp'" otherwise). Several runs at once give false failures
+  (layout width, "never showed .settings"): check `pgrep -fl check.mjs`, rerun the failing screens alone with `--only`
+  and `--widths`. The OCR reading "All" as "AIl" on the Memory page is a known quirk.
+- An HTML mockup in the side panel gets the panel's width, so a page with a 640 px breakpoint shows its phone layout
+  there: judge the desktop layout full size (`/api/files/<agent>/pages/<file>.html`).
+
+**Files and pictures**
+- File tools read the workspace and the temp folders, and write only in the workspace. Another agent's file is refused:
+  copy it into your workspace first.
+- The picture viewer (`read_file` on a png) caches by path: after overwriting a screenshot, copy it under a new name.
+
+**CI and merging**
+- The changelog check wants the new entry on top with older entries untouched (a fix to an old entry fails: add a new
+  one). Main moves often: fetch, rebase, put your entry back on top.
+- Before merging, check the PR's base (`gh pr view N --json baseRefName`); after, `git merge-base --is-ancestor <commit> origin/main`.
+- A push to main runs test, changelog, mac (arm64, x64), windows, release; about 8 min from merge to release. In windows
+  jobs, commands with `-c.x=y` flags need `shell: bash` (PowerShell splits them).
+- Direct API calls atlas uses for Master: `PATCH /api/cards/:id {"status":"archived"}` (a direct chat accepts only
+  that), `DELETE /api/cards/:id` (removes the task, its thread and messages for good: only when Master asks),
+  `PATCH /api/agents/:id {"modelId":"…"}` (verify in `model_usage`).

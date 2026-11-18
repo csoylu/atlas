@@ -6,6 +6,10 @@ computed by `scripts/release/changelog.mjs` from the oldest entry to the newest,
 `Fixed` → patch, `Added` or `Changed` → minor, `Breaking` (data or settings stop working without action) → major.
 Never type a version number.
 
+## Changed · #142 · Project how-tos moved from agent memory into CLAUDE.md
+
+Master's rule (18 Nov 2026): working how-tos about one project belong in its CLAUDE.md, not in memory. CLAUDE.md gets a How-tos section (setup and shells, live data, tests, UI, files, CI and merging) with the notes agents had saved as shared memories; those memories are archived. No code change, no migration.
+
 ## Fixed · #140 · Task numbers inside message text are plain #112 links with the title on hover, no more chips
 
 In message text, summaries and tables a task reference is now a link-coloured « #112 » in the text's own size and line height, so lines stay evenly spaced. The task's title and status show on hover and are read by screen readers; a click or tap still opens the task. Chips that stand alone (pins, sidebar, cards, tool rows, Library, Memory) are unchanged. ui-check has a new `chat-refs` screen that checks line spacing, size, contrast and the hover title. No migration.
