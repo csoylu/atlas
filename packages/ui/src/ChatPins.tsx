@@ -7,7 +7,7 @@ import { StatusIcon } from './StatusIcon.tsx';
 
 /**
  * The cards this chat created, pinned at its top-left with their live state (mockup `mockups/workflow.html`).
- * Click opens the ticket modal; finished pins fade out after FADE_MS (hover pauses), any non-running pin can be unpinned.
+ * Click opens the task in the side panel; finished pins fade out after FADE_MS (hover pauses), any non-running pin can be unpinned.
  */
 export function ChatPins(props: { chatId: string; cards: Card[]; stream: MessageStream; onOpen(id: string): void; onError(e: unknown): void }) {
   const { chatId, cards } = props;

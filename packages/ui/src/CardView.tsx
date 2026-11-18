@@ -29,18 +29,17 @@ export interface CardViewProps {
   onOpenDoc(doc: Doc): void;
   /**
    * A chip in the thread (#192): show that version and section somewhere else (the thread panel: the chat's documents
-   * panel). Without it (the ticket modal) the document opens over the task, filling the modal.
+   * panel). Without it (elsewhere) the document opens over the task, filling the panel.
    */
   onOpenRef?(ref: MessageRef): void;
-  /** Leave the view (modal or thread panel): after Close task and Delete too. */
+  /** Leave the view (close the task panel): after Close task and Delete too. */
   onClose(): void;
   onError(e: unknown): void;
 }
 
 /**
  * The whole task (#107): ref, live status, assignee, origin, Move to, title, description, relations, documents,
- * activity, notices, composer and footer. One implementation, shown by two shells: the ticket modal (CardModal) and
- * the thread panel beside the chat a task came from (ThreadPanel). `close` is the shell's own close controls, at the
+ * activity, notices, composer and footer. Shown in one shell: the task panel on the right of any screen (ThreadPanel, #222). `close` is the shell's own close controls, at the
  * end of the first header row. `clamp` (the panel): a long description shows its first lines and « Show more », so
  * the latest messages and the composer stay in view.
  */
@@ -211,7 +210,7 @@ export const CardView = forwardRef<HTMLTextAreaElement, CardViewProps & { close:
               onBlur={leaveEditing}
               onKeyDown={(e) => {
                 if (e.key !== 'Escape') return;
-                // Esc only leaves editing: the modal or the panel stays open, the chat's Esc (stop) doesn't fire.
+                // Esc only leaves editing: the panel stays open, the chat's Esc (stop) doesn't fire.
                 e.preventDefault();
                 e.stopPropagation();
                 leaveEditing();

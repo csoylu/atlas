@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { activeTab, byline, CHAT_MIN, diagramWidth, PANEL_MIN, panelBounds, panelKey, panelMode, panelWidth, parsePanelWidth } from './docPanel.ts';
+import { activeTab, byline, CHAT_MIN, diagramWidth, PANEL_MIN, panelBounds, panelKey, panelMode, panelWidth, parsePanelWidth, SCREEN_MIN, taskPanelMode } from './docPanel.ts';
 import type { PanelTab } from '@atlas/shared';
 
 describe('side panel helpers', () => {
@@ -26,6 +26,9 @@ describe('side panel helpers', () => {
     // A view too small for both: the panel keeps its minimum, never more than the view allows.
     expect(panelWidth(900, 600, 'side')).toBe(PANEL_MIN);
     expect(panelBounds(300, 'overlay')).toEqual({ min: 300, max: 300, def: 300 });
+    // A two-pane screen beside the task panel keeps SCREEN_MIN (#222).
+    expect(panelBounds(1100, 'side', SCREEN_MIN).max).toBe(1100 - SCREEN_MIN);
+    expect(panelWidth(800, 1100, 'side', SCREEN_MIN)).toBe(1100 - SCREEN_MIN);
   });
 
   it('reads the stored width and moves it with the keyboard', () => {
@@ -61,5 +64,17 @@ describe('side panel helpers', () => {
     expect(activeTab([t('a', false), t('b', true), t('c', false)])!.doc.id).toBe('b');
     expect(activeTab([t('a', false), t('c', false)])!.doc.id).toBe('c');
     expect(activeTab([])).toBeUndefined();
+  });
+});
+
+describe('taskPanelMode (#222)', () => {
+  it('sits beside the screen when both minimum widths fit, else over it from the right; phones stay full screen', () => {
+    expect(taskPanelMode('side', 1380, CHAT_MIN)).toBe('side');
+    expect(taskPanelMode('side', 1030, SCREEN_MIN)).toBe('side');
+    expect(taskPanelMode('side', 990, SCREEN_MIN)).toBe('overlay');
+    expect(taskPanelMode('side', 700, CHAT_MIN)).toBe('overlay');
+    expect(taskPanelMode('side', 0, CHAT_MIN)).toBe('side'); // not measured yet
+    expect(taskPanelMode('overlay', 1400, CHAT_MIN)).toBe('overlay');
+    expect(taskPanelMode('full', 1400, CHAT_MIN)).toBe('full');
   });
 });

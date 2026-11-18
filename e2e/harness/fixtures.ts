@@ -18,7 +18,7 @@ export const test = base.extend<{ atlas: TestAtlas }>({
 });
 
 /**
- * Opens a conversation as the user sees it: a direct chat (#/chat/<id>) or a task's chat (the ticket modal on the board).
+ * Opens a conversation as the user sees it: a direct chat (#/chat/<id>) or a task's chat (the task panel beside the board).
  * A task starts with one scripted turn that ends by asking the user, so it waits for the user's messages like a chat.
  */
 export async function openSurface(atlas: TestAtlas, page: Page, surface: Surface): Promise<Conv> {

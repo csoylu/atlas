@@ -107,7 +107,6 @@ export const SPEC_AUDIT = (W, scale, exceptions, minContrast) => `((W, SCALE, EX
   want('.chat-row.steps > .chat-row-line, .chat-row.nested > .chat-row-line', 'h', matchMedia('(pointer: coarse)').matches ? 44 : 36, 'step row height', 1.5);
   want('.chat-pin', 'h', matchMedia('(pointer: coarse)').matches ? 44 : 40, 'pinned task height');
   if (!phone) want('.column:not(.folded)', 'w', 300, 'board lane width'); // empty lanes fold to a 40 px rail
-  if (W > 760) want('.card-modal', 'w', 720, 'task view width');
   if (!phone) for (const e of document.querySelectorAll('.chat-pane .composer')) { if (shown(e) && e.getBoundingClientRect().width > 781) { issues.push('composer wider than the 780 px column: ' + Math.round(e.getBoundingClientRect().width)); break; } }
 
   // ── 5: status words are chips

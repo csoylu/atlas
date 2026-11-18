@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState } from 'react';
 import { usePanelResize } from './PanelResizer.tsx';
-import { cardRef, type Agent, type Card, type Model } from '@atlas/shared';
+import { type Agent, type Card, type Model } from '@atlas/shared';
 import { ThreadPanel } from './ThreadPanel.tsx';
 import { api } from './api.ts';
 import { CardPanel } from './CardPanel.tsx';
@@ -32,6 +32,9 @@ export function ChatView(props: {
   /** Open an agent's main chat (App: creates it if needed, refreshes the agents, navigates). */
   onOpenMain(agentId: string): void;
   onOpenCard(id: string): void;
+  /** The task open in the side panel (`?card=` in the route, #222), and closing it. */
+  openCard: Card | null;
+  onCloseCard(): void;
   onError(e: unknown): void;
 }) {
   const { agents, onError } = props;
@@ -67,14 +70,10 @@ function ChatWithPanel(props: Parameters<typeof ChatView>[0] & { chat: Card }) {
   // An agent opening or focusing a tab shows the panel again.
   const lastFocus = tabs.reduce((m, t) => (t.focusedAt > m ? t.focusedAt : m), '');
   useEffect(() => setHidden(false), [lastFocus]);
-  // v3: a task created from this chat opens beside it, the whole task (others in the ticket modal).
-  const [threadId, setThreadId] = useState<string | null>(null);
-  const thread = threadId ? props.cards.find((c) => c.id === threadId && c.board !== 'direct') : undefined;
-  const openCard = (ref: string) => {
-    const c = props.cards.find((x) => x.id === ref || cardRef(x) === ref);
-    if (c && c.originCard === chat.id && c.board !== 'direct') setThreadId(c.id);
-    else props.onOpenCard(ref);
-  };
+  // Every task opens beside the chat (#107, #222), in the documents panel's place: `?card=` in the route.
+  const thread = props.openCard && props.openCard.board !== 'direct' ? props.openCard : undefined;
+  const openCard = props.onOpenCard;
+  const closeThread = props.onCloseCard;
   const show = tabs.length > 0 && !hidden && !thread;
   // ⌘\ (App) and the palette toggle the panel of the chat on screen.
   const hasTabs = tabs.length > 0;
@@ -121,21 +120,22 @@ function ChatWithPanel(props: Parameters<typeof ChatView>[0] & { chat: Card }) {
           plan={thread.modelId ? props.models.find((m) => m.id === thread.modelId)?.provider === 'chatgpt' : props.planAgents.has(thread.assignee ?? '')}
           mode={mode}
           resize={resize}
+          back="Chat"
           stream={stream}
           userName={props.userName}
           onOpen={openCard}
-          onOpenChat={(id) => (id === chat.id ? setThreadId(null) : props.onOpenChat(id))}
+          onOpenChat={(id) => (id === chat.id ? closeThread() : props.onOpenChat(id))}
           // A document of the task opens in this chat's documents panel, in the thread's place.
-          onOpenDoc={(doc) => api.panelOpen(chat.id, doc.id).then(() => (setThreadId(null), setHidden(false)), onError)}
+          onOpenDoc={(doc) => api.panelOpen(chat.id, doc.id).then(() => (closeThread(), setHidden(false)), onError)}
           // A chip in the task's thread (#192): its version and section, in the same panel.
           onOpenRef={(r) =>
             api.panelOpen(chat.id, r.docId, r.section).then(() => {
               setWant({ docId: r.docId, version: r.version, key: String(Date.now()) });
-              setThreadId(null);
+              closeThread();
               setHidden(false);
             }, onError)
           }
-          onClose={() => setThreadId(null)}
+          onClose={closeThread}
           onError={onError}
         />
       )}

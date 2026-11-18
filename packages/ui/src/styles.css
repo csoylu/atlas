@@ -789,6 +789,9 @@ button.tool .icon { color: var(--muted); font-family: var(--mono); }
 
 /* ── Chat (direct chats with agents) ──────────────────────────────────────── */
 .chat-view { flex: 1; display: flex; min-width: 0; min-height: 0; }
+/* A screen with the task panel on its right (#222): the screen keeps the room left (the board scrolls sideways in it). */
+.task-split { flex: 1; display: flex; min-width: 0; min-height: 0; position: relative; }
+.task-split > :not(.side-doc) { min-width: 0; }
 /* The chat's actions (Documents · N, delete) sit in the screen header (CardPanel → HeaderActions). */
 @media (pointer: coarse) {
   .screen-head .icon-btn, .screen-head .head-btn { min-width: 36px; height: 36px; }
@@ -1109,12 +1112,7 @@ button.tool .icon { color: var(--muted); font-family: var(--mono); }
 .modal.welcome { width: min(460px, 100%); }
 .error-text { margin: 0; color: var(--neg-ink); font-size: var(--fs-small); }
 
-/* ── Ticket modal: centred, taller than wide (mockup workflow.html, scenario 3) ── */
-.card-scrim { position: fixed; inset: 0; z-index: 40; background: var(--scrim); display: flex; align-items: center; justify-content: center; }
-.card-modal {
-  width: min(720px, 94vw); height: min(88vh, 980px); background: var(--panel); border: 1px solid var(--line-2); border-radius: 12px;
-  box-shadow: var(--float-shadow); display: flex; flex-direction: column; overflow: hidden; animation: cm-in 0.18s ease;
-}
+/* ── The task view (CardView), in the side panel (ThreadPanel, #222) ── */
 @keyframes cm-in { from { opacity: 0; transform: translateY(6px); } }
 .cm-head { padding: 12px 12px 12px 22px; border-bottom: 1px solid var(--line); flex: none; }
 .cm-row { display: flex; align-items: center; gap: 7px; flex-wrap: wrap; font-size: var(--fs-small); color: var(--muted); }
@@ -1176,7 +1174,6 @@ div.cm-desc.cut { -webkit-mask-image: linear-gradient(to bottom, #000 65%, trans
 .prose-ref:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; border-radius: 2px; }
 .status-icon { flex: none; display: inline-block; vertical-align: middle; }
 @media (max-width: 760px) {
-  .card-modal { width: 100vw; height: 100%; border-radius: 0; border: 0; }
   .cm-head { padding: 10px 10px 10px 16px; }
   .cm-body { padding: 12px 16px 10px; }
   .cm-title { font-size: var(--fs-xl); }
@@ -1689,8 +1686,7 @@ button.msg-quote:hover { color: var(--text); }
 .sd-path { font-family: var(--mono); font-size: var(--fs-small); color: var(--faint); min-width: 0; overflow: hidden; text-overflow: ellipsis; }
 .sd-src pre { margin: 0; padding: 16px 20px; font: var(--fs-small)/var(--lh-normal) var(--mono); white-space: pre-wrap; overflow-wrap: anywhere; color: var(--text); }
 .cm-doc.on { border-color: var(--accent); }
-/* A document read from the ticket modal (#192): fills the modal over the task, which stays mounted underneath. */
-.card-modal { position: relative; }
+/* A document read from the task panel (#192): fills the panel over the task, which stays mounted underneath. */
 .cm-reader { position: absolute; inset: 0; z-index: 2; display: flex; flex-direction: column; background: var(--panel); outline: none; }
 .cm-doc-icon .kind-icon { display: block; }
 
