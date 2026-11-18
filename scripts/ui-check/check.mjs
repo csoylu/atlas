@@ -451,6 +451,8 @@ const SCREENS = [
   { name: 'thread', hash: `#/chat/${chat.id}`, ready: '.chat-pin', pins: true, then: { js: `const pin = [...document.querySelectorAll('.chat-pin')].find((p) => p.textContent.includes('Responsive pass')); if (!pin) throw new Error('no fixture pin'); pin.querySelector('.chat-pin-open').click();`, ready: '.thread-panel .cm-more' }, keys: ['.thread-panel .cm-title', '.thread-panel .cm-pill', '.thread-panel .cm-more', '.thread-panel .cm-h', '.thread-panel .cm-foot button'] },
   { name: 'modal-blocked', hash: `#/chat/${chat.id}?card=${modalCard.id}`, ready: '.card-modal', blocked: true, keys: ['.cm-title', '.ask-kind', '.cm-foot button'] },
   { name: 'panel', hash: `#/chat/${chat.id}`, ready: '.side-doc', pins: true, panel: true, keys: ['.sd-tab', '.sd-ask', '.side-doc h1', '.side-doc h2', '.chat-pin-title'] },
+  // The phone drawer (hamburger): sidebar rows 40 / 44 px, faces, 13 px labels.
+  { name: 'drawer', hash: `#/chat/${chat.id}`, ready: '.menu-btn', then: { js: `document.querySelector('.menu-btn').click(); await new Promise((r) => setTimeout(r, 400));`, ready: '.scrim' }, keys: ['.nav-item', '.side-group'] },
   { name: 'board', hash: '#/board', ready: '.board', keys: ['.board .name', '.card-title', '.nav-item'] },
   { name: 'inbox', hash: `#/inbox/${INBOX_CARDS[0].id}`, ready: '.ibx-q', inbox: true, keys: ['.ibx-det h2', '.ibx-opt b', '.ibx-k', '.ni-l2', '.nav-item'] },
   { name: 'inbox-list', hash: '#/inbox', ready: '.ni', inbox: true, keys: ['.ni-l2', '.ni-l3', '.ibx-group', '.tabbtn'] },
