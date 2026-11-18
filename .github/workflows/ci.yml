@@ -1,10 +1,11 @@
 name: CI
 
-# One push to main = one CHANGELOG.md entry = one release (docs/updater.md, card #123).
-#  - pull requests: typecheck + tests only.
-#  - push to main: the push must add exactly one changelog entry; tests; build the Mac app (arm64 + x64: dmg + zip +
-#    SHA256SUMS.txt); tag v<version> and publish a GitHub release whose notes are that entry. No release when a step
-#    fails. Then the Windows installer is built and added to the release (a Windows failure does not block the Mac).
+# One push to main = one changelog entry = one release (docs/updater.md, card #123; one file per PR in changelog/, #223).
+#  - pull requests: typecheck + tests only (the QA gate, scripts/pr/validate.mjs, checks the PR's changelog entry).
+#  - push to main: the push must add exactly one entry file to changelog/ and change no other; tests; build the Mac
+#    app (arm64 + x64: dmg + zip + SHA256SUMS.txt); tag v<version> and publish a GitHub release whose notes are that
+#    entry, with the whole changelog (generated, never committed) as CHANGELOG.md. No release when a step fails.
+#    Then the Windows installer is built and added to the release (a Windows failure does not block the Mac).
 #  - workflow_dispatch on a branch: the same build as a pre-release v<version>-test.<run> (the app's updater ignores
 #    pre-releases), to try the pipeline without touching main.
 on:
@@ -17,7 +18,8 @@ permissions:
   contents: read
 
 jobs:
-  # The version and the release notes come from CHANGELOG.md (scripts/release/changelog.mjs); nobody types a number.
+  # The version and the release notes come from changelog/ (scripts/release/changelog.mjs); nobody types a number.
+  # The entries' order is the order they reached main in git history: every job that reads it needs fetch-depth: 0.
   changelog:
     if: github.event_name != 'pull_request'
     runs-on: ubuntu-latest
@@ -104,6 +106,8 @@ jobs:
       contents: write
     steps:
       - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
       - uses: actions/download-artifact@v4
         with:
           path: out
@@ -117,6 +121,7 @@ jobs:
           cat out/SHA256SUMS-*.txt > out/SHA256SUMS.txt && rm out/SHA256SUMS-*.txt
           cat out/SHA256SUMS.txt
           node scripts/release/changelog.mjs notes > "$RUNNER_TEMP/notes.md"
+          node scripts/release/changelog.mjs full > out/CHANGELOG.md
           pre=""; [ "$PRE" = "true" ] && pre="--prerelease"
           gh release create "v$V" out/* --target "$GITHUB_SHA" --title "Atlas $V" --notes-file "$RUNNER_TEMP/notes.md" $pre
 

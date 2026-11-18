@@ -104,12 +104,19 @@ engine's PATH. A failure is logged and shown in Settings → About & data, never
 with `process.env` directly: take `ctx.env()`.
 
 ## Releases (#123, docs/updater.md)
-- **One push to main = one CHANGELOG.md entry = one release.** Whoever pushes to main adds exactly one entry at the
-  top: `## Fixed|Added|Changed|Breaking · #task · One plain sentence for Master`, then optional details. The version
-  is computed from the entries (`node scripts/release/changelog.mjs version`; Fixed → patch, Added/Changed → minor,
-  Breaking → major): never type a number. CI (`.github/workflows/ci.yml`) refuses a push to main without exactly one
-  new top entry, runs the tests, builds the Mac app (arm64 + x64 zip and dmg, SHA256SUMS.txt), tags `v<version>` and
-  publishes the GitHub release with that entry as its notes. No release when tests fail.
+- **One push to main = one changelog entry = one release; one file per PR** (#223). Each PR adds exactly one new file
+  `changelog/<task>-<slug>.md` (lower case, the task's number first) whose first line is
+  `## Fixed|Added|Changed|Breaking · #task · One plain sentence for Master` (the same task as the file name), then
+  optional details (`###` for sub-headings: a second `## ` line is refused). It changes no other changelog file: an
+  existing entry is never edited, and `changelog/history.md` (the frozen entries from before #223, the former
+  CHANGELOG.md) never changes. Two PRs never touch the same file, so the changelog never conflicts. The order of the
+  entries is the order their files reached main in git history (`git log --first-parent`); the version is computed
+  from 0.3.0 through history.md then the files in that order (`node scripts/release/changelog.mjs version`; Fixed →
+  patch, Added/Changed → minor, Breaking → major; needs the full history, not a shallow clone): never type a number.
+  `changelog.mjs full` prints the whole changelog with each version, generated, never committed. CI
+  (`.github/workflows/ci.yml`) refuses a push to main that does not add exactly one entry file or changes another,
+  runs the tests, builds the Mac app (arm64 + x64 zip and dmg, SHA256SUMS.txt), tags `v<version>` and publishes the
+  GitHub release with that entry as its notes and the full changelog as `CHANGELOG.md`. No release when tests fail.
 - **Every change reaches main through a pull request** (Master, 18 Nov 2026): no direct push to main, for anyone, docs
   included. Work goes to a branch (`<type>/<task number>-<slug>`), then a PR whose base is main (check a stacked PR's
   base before merging). One merged PR = one push to main = one changelog entry = one release. main refuses
@@ -129,24 +136,14 @@ with `process.env` directly: take `ctx.env()`.
   (same gate, same code). Atlas moves the task by itself: **merged → Done**; **CI red, a conflict
   or a failed validation → Ready** for the builder, with the reason as a note in the thread; the builder fixes, pushes and calls
   `task_request_review` again. Blocked only ever means "needs Master". When GitHub can't be read (gh logged out,
-  offline) nothing moves; the card says why. The script refuses a base other than main, a head that moved, red
-  CI and a PR without exactly one changelog entry. `--list` shows the
-  PRs still waiting. Master can validate from a terminal too (`--as master`). Each merge moves the changelog top, so the
-  other open PRs then conflict there: the validator merges the oldest PR first. When CHANGELOG.md is the PR's **only**
-  conflict, `--ok … --merge` rebases it by itself (#188, `scripts/pr/rebase-changelog.mjs`): it replays the commits
-  onto main in a throwaway worktree, puts the PR's entry back on top (main's entries byte-identical), checks that every
-  other file equals git's own merge and the PR's changed lines are unchanged, pushes the branch with
-  `--force-with-lease` (never main), waits for CI `test` on the new head (red: `qa/validated` = failure, no merge),
-  validates and merges that head, and prints the old → new head. It refuses (author rebases by hand) when another file
-  conflicts, the PR has merge commits or edits older changelog text, or the head moved since the review. GitHub runs no
-  CI on a conflicting head, so there CI that never ran on the old head is not required (#195); CI red or still running
-  on it is still refused. The gate
-  guards against accidents, not misuse: `--as` is a name anyone can type.
+  offline) nothing moves; the card says why. The script refuses a base other than main, a head that moved, a conflict
+  with main (the builder rebases), red CI and a PR that does not add exactly one entry file to `changelog/` or changes
+  another changelog file. `--list` shows the PRs still waiting. Master can validate from a terminal too
+  (`--as master`). The gate guards against accidents, not misuse: `--as` is a name anyone can type.
 - **Other projects (#216).** The same flow works for any project with a GitHub repo (Datinel: datinel/datinel). The gate
   comes from the task's project: `repo`, `ciJob` (the check that must be green; empty = every check run on the head
-  green: success, neutral or skipped) and `changelog` (exactly one new CHANGELOG.md entry, and the changelog-only
-  auto-rebase above). Atlas: csoylu/atlas, `test`, on. A new project: no CI job, changelog off (a conflict is refused:
-  the builder rebases). Set them with `PATCH /api/projects/:id {"ciJob": "…", "changelog": true}`.
+  green: success, neutral or skipped) and `changelog` (exactly one new entry file in `changelog/`, the rule above).
+  Atlas: csoylu/atlas, `test`, on. A new project: no CI job, changelog off. Set them with `PATCH /api/projects/:id {"ciJob": "…", "changelog": true}`.
   `task_request_review` refuses a PR of another repo than the task's project's (and a project without a repo). The
   reviewer must be a member of the project (its review runs in its workspace for that project); otherwise nothing
   starts and the card says « review agent @X is not a member of project Y ». The auto-rebase uses the reviewer's clone of
@@ -220,10 +217,12 @@ Project how-tos live in this file, not in agent memory. Add one here (through a 
 - The picture viewer (`read_file` on a png) caches by path: after overwriting a screenshot, copy it under a new name.
 
 **CI and merging**
-- The changelog check wants the new entry on top with older entries untouched (a fix to an old entry fails: add a new
-  one). Main moves often: a conflict in CHANGELOG.md alone needs no hand rebase (the validator's `--merge` does it, and
-  your branch's head changes: `git pull --rebase` before adding commits); any other conflict: fetch, rebase, put your
-  entry back on top, push, send the new head.
+- Your entry is your own file, `changelog/<task>-<slug>.md`: never edit another one or `changelog/history.md` (a fix
+  to an old entry fails: add a new file). Two entries in one PR fail too, so one PR per task (a second PR for the
+  same task needs another slug and its own entry). A conflict with main is in code, never in the changelog: fetch,
+  rebase, push, then `task_request_review` again with the new head.
+- `changelog.mjs version|full` read git history: in a shallow clone they refuse (`git fetch --unshallow`). A file
+  not committed yet counts as the newest entry.
 - Before merging, check the PR's base (`gh pr view N --json baseRefName`); after, `git merge-base --is-ancestor <commit> origin/main`.
 - A push to main runs test, changelog, mac (arm64, x64), windows, release; about 8 min from merge to release. In windows
   jobs, commands with `-c.x=y` flags need `shell: bash` (PowerShell splits them).

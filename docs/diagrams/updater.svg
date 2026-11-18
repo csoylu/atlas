@@ -28,7 +28,7 @@
   <rect class="box" x="450" y="50" width="250" height="84" rx="10"/>
   <text x="466" y="78" class="t">One push = one entry = one release</text>
   <text x="466" y="100" class="s">the agent adds an entry on top of</text>
-  <text x="466" y="118" class="s">CHANGELOG.md; CI gives the number</text>
+  <text x="466" y="118" class="s">changelog/ file; CI gives the number</text>
 
   <text x="790" y="84" class="s">No agent builds or installs the app.</text>
   <text x="790" y="104" class="s">No restart while they work.</text>

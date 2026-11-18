@@ -1,17 +1,14 @@
 import { describe, expect, it } from 'vitest';
-import { execFileSync } from 'node:child_process';
-import { mkdirSync, mkdtempSync } from 'node:fs';
-import { tmpdir } from 'node:os';
-import { join } from 'node:path';
+import { mkdirSync } from 'node:fs';
 import { launch, until } from '../test/kit/index.ts';
-import { findClone, prToolSpecs, repoOfUrl, runPrTool } from './prTools.ts';
+import { prToolSpecs, runPrTool } from './prTools.ts';
 
 const SHA = 'a'.repeat(40);
-const NEW = 'e'.repeat(40);
-const head = '# Changelog\n\n';
+const ENTRY = 'changelog/3-new.md';
+type File = { filename: string; status: string };
 
-/** A fake `gh` for one repo: the PR, its check runs, CHANGELOG.md, statuses and the merge; every call recorded. */
-function fakeGh(repo: string, number: number, over: { pr?: Record<string, unknown>; checks?: unknown[]; checksNew?: unknown[]; after?: string } = {}) {
+/** A fake `gh` for one repo: the PR, its check runs, its changed files, the entry file, statuses and the merge; every call recorded. */
+function fakeGh(repo: string, number: number, over: { pr?: Record<string, unknown>; checks?: unknown[]; files?: File[] } = {}) {
   const calls: string[][] = [];
   const gh = async (args: string[]) => {
     calls.push(args);
@@ -20,11 +17,9 @@ function fakeGh(repo: string, number: number, over: { pr?: Record<string, unknow
     if (path.endsWith(`/pulls/${number}`))
       return JSON.stringify({ state: 'open', draft: false, merged: false, mergeable: true, base: { ref: 'main' }, head: { sha: SHA, ref: 'feat/3-x', repo: { full_name: repo } }, number, ...over.pr });
     if (path.endsWith(`/pulls/${number}/merge`)) return JSON.stringify({ sha: 'b'.repeat(40), merged: true });
-    if (path.includes(`commits/${NEW}/check-runs`)) return JSON.stringify({ check_runs: over.checksNew ?? [] });
     if (path.includes('/check-runs')) return JSON.stringify({ check_runs: over.checks ?? [{ id: 1, name: 'test', status: 'completed', conclusion: 'success' }] });
-    if (path.includes('/compare/')) return JSON.stringify({ merge_base_commit: { sha: 'c'.repeat(40) } });
-    if (/contents\/CHANGELOG\.md\?ref=c+$/.test(path)) return head + '## Fixed · #1 · old\n';
-    if (path.includes('contents/CHANGELOG.md')) return over.after ?? head + '## Added · #3 · new\n\n## Fixed · #1 · old\n';
+    if (path.includes('/compare/')) return JSON.stringify({ merge_base_commit: { sha: 'c'.repeat(40) }, files: over.files ?? [{ filename: 'src/a.ts', status: 'modified' }, { filename: ENTRY, status: 'added' }] });
+    if (path.includes(`contents/${ENTRY}?ref=${SHA}`)) return '## Added · #3 · new\n';
     if (path.includes('/statuses/')) return '{}';
     throw new Error(`unexpected gh call: ${args.join(' ')}`);
   };
@@ -42,8 +37,8 @@ async function setup() {
     e.kanban.requestReview(c.id, [url], assignee, 'built');
     return e.kanban.get(c.id);
   };
-  const run = (cardId: string, input: unknown, gh: (args: string[]) => Promise<string>, o: { agentId?: string; rebase?: never } = {}) =>
-    runPrTool('pr_validate', input, { db: e.db, kanban: e.kanban, agentId: o.agentId ?? 'zurich', cardId, workdir: tmpdir(), signal: new AbortController().signal, env: async () => process.env, gh, wait: { sleep: () => {}, everyMs: 0 } });
+  const run = (cardId: string, input: unknown, gh: (args: string[]) => Promise<string>, o: { agentId?: string } = {}) =>
+    runPrTool('pr_validate', input, { db: e.db, kanban: e.kanban, agentId: o.agentId ?? 'zurich', cardId, env: async () => process.env, gh });
   return { e, inReview, run };
 }
 
@@ -52,13 +47,13 @@ describe('pr_validate (#216)', () => {
     const { e, inReview, run } = await setup();
     const c = inReview('datinel', 'https://github.com/datinel/datinel/pull/3');
     expect(e.db.prepare("SELECT ci_job, changelog FROM projects WHERE id = 'datinel'").get()).toEqual({ ci_job: null, changelog: 0 });
-    const f = fakeGh('datinel/datinel', 3, { checks: [{ id: 1, name: 'build', status: 'completed', conclusion: 'success' }, { id: 2, name: 'lint', status: 'completed', conclusion: 'skipped' }], after: head });
+    const f = fakeGh('datinel/datinel', 3, { checks: [{ id: 1, name: 'build', status: 'completed', conclusion: 'success' }, { id: 2, name: 'lint', status: 'completed', conclusion: 'skipped' }], files: [{ filename: 'src/a.ts', status: 'modified' }] });
     const r = await run(c.id, { pr: 3, verdict: 'ok', sha: SHA, reason: 'tests green, read the diff' }, f.gh);
     expect(r).toMatchObject({ isError: false, output: expect.stringContaining('merged PR #3') });
     expect(f.statuses()).toHaveLength(1);
     expect(f.statuses()[0]![1]).toBe(`repos/datinel/datinel/statuses/${SHA}`);
     expect(f.statuses()[0]!.join(' ')).toMatch(/state=success.*description=zurich: tests green/);
-    expect(f.calls.some((a) => a[1]!.includes('CHANGELOG'))).toBe(false);
+    expect(f.calls.some((a) => /compare|contents/.test(a[1]!))).toBe(false);
     expect(f.merges()[0]).toContain(`sha=${SHA}`);
   });
 
@@ -87,7 +82,7 @@ describe('pr_validate (#216)', () => {
     expect(f.merges()).toHaveLength(0);
   });
 
-  it('a conflict in a project without a changelog is refused (no auto-rebase)', async () => {
+  it('a conflicting PR is refused, changelog or not', async () => {
     const { inReview, run } = await setup();
     const c = inReview('datinel', 'https://github.com/datinel/datinel/pull/3');
     const f = fakeGh('datinel/datinel', 3, { pr: { mergeable: false } });
@@ -99,8 +94,12 @@ describe('pr_validate (#216)', () => {
     const { e, inReview, run } = await setup();
     const c = inReview('atlas', 'https://github.com/csoylu/atlas/pull/3');
     expect(e.projects.get('atlas')).toMatchObject({ repo: 'csoylu/atlas', ciJob: 'test', changelog: true });
-    const none = fakeGh('csoylu/atlas', 3, { after: head + '## Fixed · #1 · old\n' });
-    expect(await run(c.id, { pr: 3, verdict: 'ok', sha: SHA, reason: 'r' }, none.gh)).toMatchObject({ isError: true, output: expect.stringMatching(/adds no CHANGELOG\.md entry/) });
+    const none = fakeGh('csoylu/atlas', 3, { files: [{ filename: 'src/a.ts', status: 'modified' }] });
+    expect(await run(c.id, { pr: 3, verdict: 'ok', sha: SHA, reason: 'r' }, none.gh)).toMatchObject({ isError: true, output: expect.stringMatching(/no new changelog entry/) });
+    const edited = fakeGh('csoylu/atlas', 3, { files: [{ filename: ENTRY, status: 'added' }, { filename: 'changelog/1-old.md', status: 'modified' }] });
+    expect(await run(c.id, { pr: 3, verdict: 'ok', sha: SHA, reason: 'r' }, edited.gh)).toMatchObject({ isError: true, output: expect.stringMatching(/changelog\/1-old\.md is changed/) });
+    const conflict = fakeGh('csoylu/atlas', 3, { pr: { mergeable: false } });
+    expect(await run(c.id, { pr: 3, verdict: 'ok', sha: SHA, reason: 'r' }, conflict.gh)).toMatchObject({ isError: true, output: expect.stringMatching(/conflicts with main: rebase it/) });
     const other = fakeGh('csoylu/atlas', 3, { checks: [{ id: 1, name: 'build', status: 'completed', conclusion: 'success' }] });
     expect(await run(c.id, { pr: 3, verdict: 'ok', sha: SHA, reason: 'r' }, other.gh)).toMatchObject({ isError: true, output: expect.stringMatching(/CI job "test" has not run/) });
     const good = fakeGh('csoylu/atlas', 3);
@@ -133,27 +132,13 @@ describe('pr_validate (#216)', () => {
     expect(prToolSpecs(c, 'munih')).toEqual([]);
     expect(prToolSpecs(e.kanban.create({ title: 'y', status: 'ready', assignee: 'munih' }, 'user'), 'zurich')).toEqual([]);
   });
-
-  it('finds the reviewer’s clone of the repo in its workspace for the changelog-only rebase', async () => {
-    expect(repoOfUrl('git@github.com:csoylu/atlas.git')).toBe('csoylu/atlas');
-    expect(repoOfUrl('https://github.com/Datinel/Datinel')).toBe('datinel/datinel');
-    expect(repoOfUrl('https://gitlab.com/a/b.git')).toBe(null);
-    const ws = mkdtempSync(join(tmpdir(), 'prtools-'));
-    for (const [dir, url] of [['other', 'git@github.com:csoylu/atlas.git'], ['datinel', 'git@github.com:datinel/datinel.git']]) {
-      mkdirSync(join(ws, dir!));
-      execFileSync('git', ['init', '-q', join(ws, dir!)]);
-      execFileSync('git', ['-C', join(ws, dir!), 'remote', 'add', 'origin', url!]);
-    }
-    expect(await findClone(ws, 'datinel/datinel', process.env)).toBe(join(ws, 'datinel'));
-    await expect(findClone(ws, 'datinel/other', process.env)).rejects.toThrow(/needs a clone of datinel\/other in your workspace/);
-  });
 });
 
 describe('pr_validate in a reviewer run (#216)', () => {
   it('the reviewer’s run calls it and the status lands on the project’s repo', async () => {
-    const f = fakeGh('datinel/datinel', 3, { after: head });
+    const f = fakeGh('datinel/datinel', 3);
     const call = { type: 'tool_use' as const, id: 't_v', name: 'pr_validate', input: { pr: 3, verdict: 'ok', sha: SHA, reason: 'read it' } };
-    const t = await launch({ script: [[call], [{ type: 'text', text: 'validated' }]], dispatch: false, prs: { read: async () => Promise.reject(new Error('no poll')), intervalMs: false, validate: { gh: f.gh, wait: { sleep: () => {}, everyMs: 0 } } }, projects: { clone: async (_r, dir) => void mkdirSync(dir, { recursive: true }) } });
+    const t = await launch({ script: [[call], [{ type: 'text', text: 'validated' }]], dispatch: false, prs: { read: async () => Promise.reject(new Error('no poll')), intervalMs: false, validate: { gh: f.gh } }, projects: { clone: async (_r, dir) => void mkdirSync(dir, { recursive: true }) } });
     const e = t.engine;
     for (const id of ['zurich', 'munih']) if (!e.agents.list().some((a) => a.id === id)) e.agents.create({ id, modelId: e.agents.get('atlas').modelId });
     e.settings.update({ reviewAgent: 'zurich', triageAgent: 'atlas' });

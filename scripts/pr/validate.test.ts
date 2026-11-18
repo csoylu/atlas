@@ -3,12 +3,12 @@ import { describe, expect, it } from 'vitest';
 import { CONTEXT, parseArgs, pending, validate } from './validate.mjs';
 
 const SHA = 'a'.repeat(40);
-const head = '# Changelog\n\nIntro.\n\n';
-const oldLog = head + '## Fixed · #1 · old\n';
-const newLog = head + '## Added · #2 · new\n\n## Fixed · #1 · old\n';
+const ENTRY = 'changelog/2-new.md';
+type File = { filename: string; status: string; previous_filename?: string };
+const code = { filename: 'src/x.ts', status: 'modified' };
+const added = (filename = ENTRY) => ({ filename, status: 'added' });
 
-type Over = { pr?: Record<string, unknown>; ci?: unknown[]; ciNew?: unknown[][]; before?: string | null; after?: string; mergeFails?: boolean };
-const NEW = 'e'.repeat(40);
+type Over = { pr?: Record<string, unknown>; ci?: unknown[]; files?: File[]; entry?: string; mergeFails?: boolean };
 
 /** A fake `gh`: answers the API paths validate.mjs asks for and records every call. */
 function fakeGh(over: Over = {}) {
@@ -26,14 +26,9 @@ function fakeGh(over: Over = {}) {
       if (over.mergeFails) throw new Error('409 head changed');
       return JSON.stringify({ sha: 'b'.repeat(40), merged: true });
     }
-    if (path.includes(`commits/${NEW}/check-runs`)) return JSON.stringify({ check_runs: over.ciNew?.shift() ?? [] }); // one answer per poll
     if (/check-runs/.test(path)) return JSON.stringify({ check_runs: ci });
-    if (/\/compare\//.test(path)) return JSON.stringify({ merge_base_commit: { sha: 'c'.repeat(40) } });
-    if (/contents\/CHANGELOG\.md\?ref=c+$/.test(path)) {
-      if (over.before === null) throw new Error('404');
-      return over.before ?? oldLog;
-    }
-    if (/contents\/CHANGELOG\.md/.test(path)) return over.after ?? newLog;
+    if (/\/compare\/[^/]+\.\.\.a+$/.test(path)) return JSON.stringify({ merge_base_commit: { sha: 'c'.repeat(40) }, files: over.files ?? [code, added()] });
+    if (path.startsWith(`repos/csoylu/atlas/contents/changelog/`) && path.endsWith(`?ref=${SHA}`)) return over.entry ?? '## Added · #2 · new\n\nDetails.\n';
     if (/\/statuses\//.test(path)) return '{}';
     throw new Error(`unexpected gh call: ${args.join(' ')}`);
   };
@@ -108,7 +103,8 @@ describe('validate.mjs --ok', () => {
   });
   it('refuses a PR that conflicts with its base, or whose mergeability is not known yet, and sets nothing', async () => {
     const f = fakeGh({ pr: { mergeable: false } });
-    await expect(validate(ok(), f.gh)).rejects.toThrow(/conflicts with main: rebase it.*--merge rebases it by itself/);
+    await expect(validate(ok(), f.gh)).rejects.toThrow(/conflicts with main: rebase it, push, then validate the new head$/);
+    await expect(validate(ok({ merge: true }), fakeGh({ pr: { mergeable: false } }).gh)).rejects.toThrow(/conflicts with main/); // no auto-rebase any more (#223)
     expect(f.statuses()).toHaveLength(0);
     await expect(validate(ok(), fakeGh({ pr: { mergeable: null } }).gh)).rejects.toThrow(/still working out/);
   });
@@ -129,82 +125,34 @@ describe('validate.mjs --ok', () => {
     ];
     await expect(validate(ok(), fakeGh({ ci }).gh)).resolves.toBeDefined();
   });
-  it('refuses a PR without exactly one new CHANGELOG entry', async () => {
-    await expect(validate(ok(), fakeGh({ after: oldLog }).gh)).rejects.toThrow(/adds no CHANGELOG\.md entry/);
-    const two = head + '## Added · #3 · b\n\n## Added · #2 · a\n\n## Fixed · #1 · old\n';
-    await expect(validate(ok(), fakeGh({ after: two }).gh)).rejects.toThrow(/adds 2 CHANGELOG\.md entries/);
+  it('changelog (#223): accepts one new entry file, refuses none, two, an edited, removed or renamed old one, a bad file', async () => {
+    const refused = async (over: Over, why: RegExp) => {
+      const f = fakeGh(over);
+      await expect(validate(ok(), f.gh)).rejects.toThrow(why);
+      expect(f.statuses()).toHaveLength(0);
+    };
+    await refused({ files: [code] }, /changelog: no new changelog entry: add one file changelog\/<task>-<slug>\.md/);
+    await refused({ files: [code, added(), added('changelog/3-other.md')] }, /2 new changelog entries/);
+    await refused({ files: [added(), { filename: 'changelog/1-old.md', status: 'modified' }] }, /changelog\/1-old\.md is changed: existing changelog files never change/);
+    await refused({ files: [added(), { filename: 'changelog/1-old.md', status: 'removed' }] }, /changelog\/1-old\.md is removed/);
+    await refused({ files: [{ filename: ENTRY, previous_filename: 'changelog/1-old.md', status: 'renamed' }] }, /changelog\/1-old\.md is removed/);
+    await refused({ files: [added(), { filename: 'changelog/history.md', status: 'modified' }] }, /history\.md is changed/);
+    await refused({ entry: '## Added · #9 · wrong task\n' }, /must be the file's number, #2/);
+    await refused({ entry: 'Added · #2 · no heading\n' }, /first line must be the heading/);
+    await refused({ entry: '## Added · #2 · a\n\n## Details\n' }, /unknown kind « Details »/);
+    await refused({ files: [added('changelog/Two.md')] }, /not an entry file name/);
+    await refused({ files: Array.from({ length: 300 }, (_, i) => ({ filename: `f${i}`, status: 'added' })) }, /GitHub lists only 300/);
+    await expect(validate(ok(), fakeGh().gh)).resolves.toBeDefined();
+  });
+  it('changelog: the PR that starts the folder may add history.md (CHANGELOG.md renamed into it)', async () => {
+    const files = [{ filename: 'changelog/history.md', previous_filename: 'CHANGELOG.md', status: 'renamed' }, added('changelog/223-changelog-folder.md')];
+    const entry = '## Changed · #223 · One file per PR\n';
+    await expect(validate({ ...ok(), pr: 2 }, fakeGh({ files, entry }).gh)).resolves.toBeDefined();
   });
   it("refuses a QA PR validated by its author, accepts it from atlas", async () => {
     const pr = { head: { sha: SHA, ref: 'qa/141-pr-gate' } };
     await expect(validate(ok(), fakeGh({ pr }).gh)).rejects.toThrow(/someone else validates it/);
     await expect(validate(ok({ as: 'atlas' }), fakeGh({ pr }).gh)).resolves.toBeDefined();
-  });
-});
-
-describe('validate.mjs --ok --merge on a PR that conflicts with main (#188)', () => {
-  const green = { id: 9, name: 'test', status: 'completed', conclusion: 'success' };
-  const rebased = { oldHead: SHA, newHead: NEW, onto: 'f'.repeat(40), commits: 1, lines: ['fix/2-x conflicted with main in CHANGELOG.md only: …', `head changed aaaaaaa → eeeeeee …`] };
-  const deps = (rebase = (_: unknown) => rebased) => {
-    const asked: unknown[] = [];
-    const slept: number[] = [];
-    return {
-      asked, slept,
-      d: { rebase: (a: unknown) => (asked.push(a), rebase(a)), wait: { sleep: (ms: number) => slept.push(ms), everyMs: 5, now: () => 0 }, log: () => {} },
-    };
-  };
-
-  it('rebases, waits for CI on the new head, validates and merges the new head, and says the head changed', async () => {
-    const f = fakeGh({ pr: { mergeable: false }, ciNew: [[], [{ id: 9, name: 'test', status: 'in_progress' }], [green]] });
-    const x = deps();
-    const out = (await validate(ok({ merge: true }), f.gh, x.d)).join('\n');
-    expect(x.asked).toEqual([{ branch: 'fix/2-x', sha: SHA, base: 'main' }]);
-    expect(x.slept).toHaveLength(2); // not run yet, running, green
-    expect(f.statuses()).toHaveLength(1);
-    expect(f.statuses()[0][1]).toBe(`repos/csoylu/atlas/statuses/${NEW}`);
-    expect(f.statuses()[0].join(' ')).toMatch(/state=success.*auto-rebased from aaaaaaa/);
-    expect(f.calls.find((c) => /\/merge$/.test(c[1]))).toContain(`sha=${NEW}`);
-    expect(out).toMatch(/head changed aaaaaaa → eeeeeee/);
-    expect(out).toMatch(/merged PR #2/);
-  });
-
-  it('CI red on the new head: no merge, qa/validated = failure on the new head with the reason', async () => {
-    const f = fakeGh({ pr: { mergeable: false }, ciNew: [[{ ...green, conclusion: 'failure' }]] });
-    await expect(validate(ok({ merge: true }), f.gh, deps().d)).rejects.toThrow(/not merged: .*rebased onto main .*is failure on eeeeeee/);
-    expect(f.statuses()).toHaveLength(1);
-    expect(f.statuses()[0][1]).toBe(`repos/csoylu/atlas/statuses/${NEW}`);
-    expect(f.statuses()[0]).toContain('state=failure');
-    expect(f.calls.some((c) => /\/merge$/.test(c[1]))).toBe(false);
-  });
-
-  it('CI never finishes: gives up after the timeout, no merge', async () => {
-    let t = 0;
-    const f = fakeGh({ pr: { mergeable: false }, ciNew: Array.from({ length: 50 }, () => []) });
-    const d = { rebase: () => rebased, wait: { sleep: () => (t += 60e3), timeoutMs: 5 * 60e3, now: () => t }, log: () => {} };
-    await expect(validate(ok({ merge: true }), f.gh, d)).rejects.toThrow(/did not finish on eeeeeee within 5 min/);
-    expect(f.calls.some((c) => /\/merge$/.test(c[1]))).toBe(false);
-  });
-
-  it('a refused rebase (another file conflicts, head moved) sets nothing and merges nothing', async () => {
-    const f = fakeGh({ pr: { mergeable: false } });
-    const x = deps(() => {
-      throw new Error('refused: conflicts with main in b.txt (and CHANGELOG.md): rebase it by hand');
-    });
-    await expect(validate(ok({ merge: true }), f.gh, x.d)).rejects.toThrow(/b\.txt.*by hand/);
-    expect(f.statuses()).toHaveLength(0);
-    expect(f.calls.some((c) => /\/merge$/.test(c[1]))).toBe(false);
-  });
-
-  it('the usual checks still come first: a head that moved since the review is refused before any rebase', async () => {
-    const f = fakeGh({ pr: { mergeable: false, head: { sha: 'd'.repeat(40), ref: 'fix/2-x' } } });
-    const x = deps();
-    await expect(validate(ok({ merge: true }), f.gh, x.d)).rejects.toThrow(/pushed after your review/);
-    expect(x.asked).toHaveLength(0);
-  });
-
-  it('without --merge a conflicting PR is still refused (no rebase)', async () => {
-    const x = deps();
-    await expect(validate(ok(), fakeGh({ pr: { mergeable: false } }).gh, x.d)).rejects.toThrow(/conflicts with main/);
-    expect(x.asked).toHaveLength(0);
   });
 });
 
@@ -215,14 +163,11 @@ describe('validate.mjs for another project (#216)', () => {
     expect(parseArgs(['2', '--fail', '--as', 'zurich', 'x', '--ci-job', 'ci'])).toMatchObject({ ciJob: 'ci' });
     expect(() => parseArgs(['2', '--fail', '--as', 'zurich', 'x', '--repo', 'nope'])).toThrow(/owner\/name/);
   });
-  it('without a changelog: no CHANGELOG.md read, no auto-rebase on a conflict, no release wording', async () => {
-    const f = fakeGh({ after: oldLog });
+  it('without a changelog: no changed files read, no entry needed, no release wording', async () => {
+    const f = fakeGh({ files: [code] });
     const out = await validate(ok({ merge: true, changelog: false }), f.gh);
-    expect(f.calls.some((c) => c[1].includes('CHANGELOG'))).toBe(false);
+    expect(f.calls.some((c) => /compare|contents/.test(c[1]))).toBe(false);
     expect(out.join('\n')).not.toMatch(/release/);
-    let rebased = false;
-    await expect(validate(ok({ merge: true, changelog: false }), fakeGh({ pr: { mergeable: false } }).gh, { rebase: () => ((rebased = true), {}) })).rejects.toThrow(/conflicts with main: rebase it, push, then validate the new head$/);
-    expect(rebased).toBe(false);
   });
 });
 

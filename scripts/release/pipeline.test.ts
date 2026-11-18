@@ -4,7 +4,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { describe, expect, it } from 'vitest';
 // @ts-expect-error plain JS module (run by CI with node before npm ci)
-import { versionOf } from './changelog.mjs';
+import { versionOf, versionAt } from './changelog.mjs';
 import { zipName } from '../../packages/engine/src/updater.ts';
 
 /**
@@ -71,9 +71,11 @@ describe('CI job graph (docs/updater.md step 3)', () => {
     expect(j.changelog!.text).toMatch(/refs\/tags\/v\$v[\s\S]*already exists/);
   });
 
-  it('the release notes are the newest entry, and the version given to the build is the changelog\'s', () => {
+  it('the release notes are the newest entry, the whole changelog is a release file, and the version given to the build is the changelog\'s', () => {
     expect(j.release!.text).toContain('node scripts/release/changelog.mjs notes');
     expect(j.release!.text).toContain('--notes-file');
+    expect(j.release!.text).toContain('node scripts/release/changelog.mjs full > out/CHANGELOG.md');
+    expect(j.release!.text).toContain('fetch-depth: 0'); // the entries' order comes from git history (#223)
     expect(j.mac!.text).toContain('extraMetadata.version=${{ needs.changelog.outputs.version }}');
   });
 
@@ -93,7 +95,10 @@ describe('CI job graph (docs/updater.md step 3)', () => {
   });
 });
 
-/** A throwaway repo that has the real release scripts, and a changelog that grows one push at a time. */
+/**
+ * A throwaway repo that has the real release scripts, a frozen history (one entry: 0.4.0) and a changelog/ folder that
+ * grows one file per push (#223).
+ */
 function repo() {
   const dir = mkdtempSync(join(tmpdir(), 'atlas-pipeline-'));
   const git = (...a: string[]) => execFileSync('git', a, { cwd: dir, encoding: 'utf8' }).trim();
@@ -101,130 +106,193 @@ function repo() {
   git('config', 'user.email', 'qa@test');
   git('config', 'user.name', 'qa');
   mkdirSync(join(dir, 'scripts/release'), { recursive: true });
+  mkdirSync(join(dir, 'changelog'));
   for (const f of ['changelog.mjs', 'check-push.sh']) writeFileSync(join(dir, 'scripts/release', f), readFileSync(join(root, 'scripts/release', f)), { mode: 0o755 });
-  const log = join(dir, 'CHANGELOG.md');
-  writeFileSync(log, '# Changelog\n\nIntro.\n\n## Added · #1 · The first entry\n');
+  writeFileSync(join(dir, 'changelog/history.md'), '# History\n\nFrozen.\n\n## Added · #1 · The first entry\n');
   git('add', '-A');
   git('commit', '-qm', 'start');
   const sha = () => git('rev-parse', 'HEAD');
-  /** A push: new content, one commit; returns { before, after, check, version }. */
-  const push = (edit: (text: string) => string, message = 'push') => {
-    const before = sha();
-    writeFileSync(log, edit(readFileSync(log, 'utf8')));
+  let n = 99; // entry() numbers; tests that name a task use smaller ones
+  /** One entry file: changelog/<n>-x.md. */
+  const entry = (kind: string, title = 'something', task = ++n) => ({ [`changelog/${task}-x.md`]: `## ${kind} · #${task} · ${title}\n` });
+  /** Write (or delete: null) files and commit them. */
+  const write = (files: Record<string, string | null>) => {
+    for (const [f, text] of Object.entries(files)) {
+      if (text == null) git('rm', '-q', f);
+      else writeFileSync(join(dir, f), text);
+    }
     git('add', '-A');
-    git('commit', '-qm', message);
-    const check = spawnSync('scripts/release/check-push.sh', [before], { cwd: dir, encoding: 'utf8' });
-    const v = spawnSync('node', ['scripts/release/changelog.mjs', 'version'], { cwd: dir, encoding: 'utf8' });
-    return { before, after: sha(), check, version: v.stdout.trim() };
   };
-  const entry = (kind: string, title: string) => (t: string) => t.replace('## ', `## ${kind} · ${title}\n\n## `);
-  return { dir, git, push, entry, log };
+  const check = (before: string) => spawnSync('scripts/release/check-push.sh', [before], { cwd: dir, encoding: 'utf8' });
+  const cli = (...a: string[]) => spawnSync('node', ['scripts/release/changelog.mjs', ...a], { cwd: dir, encoding: 'utf8' });
+  /** A push: files, one commit; returns { before, after, check, version }. */
+  const push = (files: Record<string, string | null>, message = 'push') => {
+    const before = sha();
+    write(files);
+    git('commit', '-qm', message, '--allow-empty');
+    return { before, after: sha(), check: check(before), version: cli('version').stdout.trim() };
+  };
+  return { dir, git, push, entry, write, check, cli, sha };
 }
 
 // Real git repos + bash: slow when the machine is loaded (load 50-90 gave >5 s), so a generous timeout for the whole block.
-describe('releases from real git history (docs/updater.md steps 1-3)', { timeout: 60_000 }, () => {
-  it('a push with exactly one entry passes and gets the next version; the notes are that entry', () => {
+describe('releases from real git history (docs/updater.md steps 1-3, #223)', { timeout: 60_000 }, () => {
+  it('a push with exactly one entry file passes and gets the next version; the notes are that entry', () => {
     const r = repo();
-    const p = r.push(r.entry('Fixed', '#2 · Something is fixed'));
+    const p = r.push(r.entry('Fixed', 'Something is fixed', 2));
+    expect(p.check.stderr).toBe('');
     expect(p.check.status).toBe(0);
     expect(p.version).toBe('0.4.1');
-    const notes = spawnSync('node', ['scripts/release/changelog.mjs', 'notes'], { cwd: r.dir, encoding: 'utf8' }).stdout;
-    expect(notes).toBe('## Fixed · #2 · Something is fixed\n');
+    expect(r.cli('notes').stdout).toBe('## Fixed · #2 · Something is fixed\n');
+    expect(r.cli('full').stdout).toMatch(/## 0\.4\.1 · Fixed · #2 · Something is fixed\n\n## 0\.4\.0 · Added · #1 · The first entry\n/);
   });
 
-  it('a push with no entry fails, a push with two entries fails (even if both are valid), a push that only edits the intro fails', () => {
+  it('refused: no entry, two entries, an edited old entry, a removed one, an edited history, a bad file', () => {
     const r = repo();
-    const none = r.push((t) => t + '\nmore body text\n');
+    const first = r.push(r.entry('Fixed', 'a', 2));
+    expect(first.check.status).toBe(0);
+    const none = r.push({ 'other.txt': 'x' });
     expect(none.check.status).toBe(1);
-    expect(none.check.stderr).toMatch(/adds no CHANGELOG.md entry/);
-    const intro = r.push((t) => t.replace('Intro.', 'A new intro.'));
-    expect(intro.check.status).toBe(1);
-    const two = r.push((t) => r.entry('Fixed', 'b')(r.entry('Fixed', 'a')(t)));
+    expect(none.check.stderr).toMatch(/this push: no new changelog entry/);
+    const two = r.push({ ...r.entry('Fixed'), ...r.entry('Fixed') });
     expect(two.check.status).toBe(1);
-    expect(two.check.stderr).toMatch(/adds 2 CHANGELOG.md entries/);
+    expect(two.check.stderr).toMatch(/2 new changelog entries/);
+    const edited = r.push({ ...r.entry('Fixed'), 'changelog/2-x.md': '## Fixed · #2 · a, reworded\n' });
+    expect(edited.check.status).toBe(1);
+    expect(edited.check.stderr).toMatch(/changelog\/2-x\.md is changed: existing changelog files never change/);
+    const removed = r.push({ ...r.entry('Fixed'), 'changelog/2-x.md': null });
+    expect(removed.check.stderr).toMatch(/changelog\/2-x\.md is removed/);
+    const history = r.push({ ...r.entry('Fixed'), 'changelog/history.md': '# History\n\n## Fixed · #1 · rewritten\n' });
+    expect(history.check.stderr).toMatch(/changelog\/history\.md is changed/);
+    const kind = r.push(r.entry('Improved'));
+    expect(kind.check.status).toBe(1);
+    expect(kind.check.stderr).toMatch(/unknown kind « Improved »/);
+    const sub = r.push({ 'changelog/40-x.md': '## Fixed · #40 · With details\n\n## Details\n\ntext\n' });
+    expect(sub.check.stderr).toMatch(/unknown kind « Details »/); // agents: ### for sub-headings
+    const name = r.push({ 'changelog/Notes.md': '## Fixed · #41 · x\n' });
+    expect(name.check.stderr).toMatch(/not an entry file name/);
   });
 
-  it('a push that deletes CHANGELOG.md, or leaves a heading with an unknown kind, fails with a message', () => {
+  it('each kind raises the right part: Fixed patch, Added and Changed minor (patch back to 0), Breaking major', () => {
     const r = repo();
-    const bad = r.push(r.entry('Improved', 'x'));
-    expect(bad.check.status).toBe(1);
-    expect(bad.check.stderr).toMatch(/unknown kind « Improved »/);
-    r.git('reset', '-q', '--hard', 'HEAD~1');
-    r.git('rm', '-q', 'CHANGELOG.md');
-    r.git('commit', '-qm', 'rm');
-    const before = r.git('rev-parse', 'HEAD~1');
-    const del = spawnSync('scripts/release/check-push.sh', [before], { cwd: r.dir, encoding: 'utf8' });
-    expect(del.status).not.toBe(0);
+    const seen = ['Fixed', 'Fixed', 'Added', 'Fixed', 'Changed', 'Breaking', 'Added'].map((k) => r.push(r.entry(k)).version);
+    expect(seen).toEqual(['0.4.1', '0.4.2', '0.5.0', '0.5.1', '0.6.0', '1.0.0', '1.1.0']);
   });
 
-  it('a heading level 2 inside an entry\'s body is read as a new entry: the push fails and says why (agents: use ###)', () => {
+  it('pushes close together: every push gets its own version, strictly increasing in merge order, recomputed from each commit', () => {
     const r = repo();
-    const p = r.push(r.entry('Fixed', '#3 · With details\n\n## Details\n\ntext'));
-    expect(p.check.status).toBe(1);
-    expect(p.check.stderr).toMatch(/unknown kind « Details »/);
-  });
-
-  it('each kind raises the right part: Fixed patch, Added and Changed minor (patch back to 0), Breaking major (minor and patch back to 0)', () => {
-    const r = repo();
-    const seen: Record<string, string> = {};
-    seen.start = r.push(r.entry('Fixed', 'a')).version; // 0.4.0 → 0.4.1
-    seen.fixed = r.push(r.entry('Fixed', 'b')).version;
-    seen.added = r.push(r.entry('Added', 'c')).version;
-    seen.fixedAgain = r.push(r.entry('Fixed', 'd')).version;
-    seen.changed = r.push(r.entry('Changed', 'e')).version;
-    seen.breaking = r.push(r.entry('Breaking', 'f')).version;
-    seen.afterBreaking = r.push(r.entry('Added', 'g')).version;
-    expect(seen).toEqual({ start: '0.4.1', fixed: '0.4.2', added: '0.5.0', fixedAgain: '0.5.1', changed: '0.6.0', breaking: '1.0.0', afterBreaking: '1.1.0' });
-  });
-
-  it('pushes close together: every push gets its own version, strictly increasing in merge order, whichever build finishes first', () => {
-    const r = repo();
-    const pushes = [r.push(r.entry('Fixed', 'a')), r.push(r.entry('Added', 'b')), r.push(r.entry('Fixed', 'c')), r.push(r.entry('Fixed', 'd'))];
+    const pushes = ['Fixed', 'Added', 'Fixed', 'Fixed'].map((k) => r.push(r.entry(k)));
     expect(pushes.every((p) => p.check.status === 0)).toBe(true);
     const versions = pushes.map((p) => p.version);
-    expect(new Set(versions).size).toBe(4);
     expect(versions).toEqual(['0.4.1', '0.5.0', '0.5.1', '0.5.2']);
-    // CI recomputes the version from the pushed commit's own file: builds finishing in another order change nothing
-    const fromTree = pushes.map((p) => versionOf(r.git('show', `${p.after}:CHANGELOG.md`)));
+    // CI recomputes the version from the pushed commit's own history: builds finishing in another order change nothing
+    const fromTree = pushes.map((p) => (r.git('checkout', '-q', p.after), versionAt(r.dir)));
     expect(fromTree).toEqual(versions);
-    // and the order is the order of the numbers, so « latest » is the newest push whatever the release timestamps say
-    const num = (v: string) => v.split('.').map(Number).reduce((a, n) => a * 1000 + n, 0);
-    expect([...versions].sort((a, b) => num(a) - num(b))).toEqual(versions);
   });
 
-  it('two branches that each add an entry on top cannot both merge: the second conflicts, so its author re-bases and gets the next version', () => {
-    const r = repo();
-    r.git('checkout', '-q', '-b', 'a');
-    writeFileSync(r.log, r.entry('Fixed', 'from a')(readFileSync(r.log, 'utf8')));
-    r.git('commit', '-qam', 'a');
-    r.git('checkout', '-q', 'main');
-    r.git('checkout', '-q', '-b', 'b');
-    writeFileSync(r.log, r.entry('Fixed', 'from b')(readFileSync(r.log, 'utf8')));
-    r.git('commit', '-qam', 'b');
-    r.git('checkout', '-q', 'main');
-    r.git('merge', '-q', '--no-ff', '-m', 'merge a', 'a');
-    const merge = spawnSync('git', ['merge', '--no-ff', '-m', 'merge b', 'b'], { cwd: r.dir, encoding: 'utf8' });
-    expect(merge.status).not.toBe(0);
-    expect(merge.stdout + merge.stderr).toMatch(/CONFLICT/);
+  it('two branches that each add an entry merge without conflict, in either order; the order of the merges is the order of the entries', () => {
+    for (const order of [['a', 'b'], ['b', 'a']]) {
+      const r = repo();
+      r.git('checkout', '-q', '-b', 'a');
+      r.write({ 'changelog/10-from-a.md': '## Added · #10 · from a\n', 'a.txt': 'a' });
+      r.git('commit', '-qm', 'a');
+      r.git('checkout', '-q', 'main');
+      r.git('checkout', '-q', '-b', 'b');
+      r.write({ 'changelog/9-from-b.md': '## Fixed · #9 · from b\n', 'b.txt': 'b' });
+      r.git('commit', '-qm', 'b');
+      r.git('checkout', '-q', 'main');
+      const versions: string[] = [];
+      for (const branch of order) {
+        const before = r.sha();
+        const merge = spawnSync('git', ['merge', '--no-ff', '-m', `merge ${branch}`, branch], { cwd: r.dir, encoding: 'utf8' });
+        expect(merge.status).toBe(0);
+        const check = r.check(before);
+        expect(check.status).toBe(0);
+        versions.push(r.cli('version').stdout.trim());
+        expect(r.cli('notes').stdout).toBe(branch === 'a' ? '## Added · #10 · from a\n' : '## Fixed · #9 · from b\n');
+      }
+      // a then b: 0.5.0 (Added) → 0.5.1 (Fixed). b then a: 0.4.1 (Fixed) → 0.5.0 (Added). Same files, merge order decides.
+      expect(versions).toEqual(order[0] === 'a' ? ['0.5.0', '0.5.1'] : ['0.4.1', '0.5.0']);
+    }
   });
 
-  it('a pull request merged with a merge commit that carries three branch commits, each with an entry, is three entries: refused', () => {
+  it('a branch that merged main in, then merges back: main\'s entries stay where they reached main, the branch\'s is newest', () => {
     const r = repo();
     r.git('checkout', '-q', '-b', 'feature');
-    for (const t of ['x', 'y', 'z']) {
-      writeFileSync(r.log, r.entry('Fixed', t)(readFileSync(r.log, 'utf8')));
-      r.git('commit', '-qam', t);
-    }
+    r.write({ 'changelog/20-feature.md': '## Added · #20 · feature\n' });
+    r.git('commit', '-qm', 'feature');
     r.git('checkout', '-q', 'main');
-    const before = r.git('rev-parse', 'HEAD');
+    r.push({ 'changelog/21-fix.md': '## Fixed · #21 · fix\n' });
+    r.git('checkout', '-q', 'feature');
+    r.git('merge', '-q', '--no-ff', '-m', 'main into feature', 'main');
+    r.git('checkout', '-q', 'main');
+    const before = r.sha();
     r.git('merge', '-q', '--no-ff', '-m', 'merge feature', 'feature');
-    const check = spawnSync('scripts/release/check-push.sh', [before], { cwd: r.dir, encoding: 'utf8' });
-    expect(check.status).toBe(1);
-    expect(check.stderr).toMatch(/adds 3 CHANGELOG.md entries/);
+    expect(r.check(before).status).toBe(0);
+    expect(r.cli('notes').stdout).toBe('## Added · #20 · feature\n');
+    expect(r.cli('version').stdout.trim()).toBe('0.5.0'); // 0.4.0 → fix 0.4.1 → feature 0.5.0
   });
 
-  it('the real CHANGELOG.md of this repo: dropping the newest entry always lowers the version (a push never goes backwards or repeats)', () => {
-    const parts = readFileSync(join(root, 'CHANGELOG.md'), 'utf8').split(/^(?=## )/m);
+  it('a merge that carries three branch commits, each with an entry, is three entries: refused', () => {
+    const r = repo();
+    r.git('checkout', '-q', '-b', 'feature');
+    for (const t of [30, 31, 32]) {
+      r.write(r.entry('Fixed', 'x', t));
+      r.git('commit', '-qm', String(t));
+    }
+    r.git('checkout', '-q', 'main');
+    const before = r.sha();
+    r.git('merge', '-q', '--no-ff', '-m', 'merge feature', 'feature');
+    const check = r.check(before);
+    expect(check.status).toBe(1);
+    expect(check.stderr).toMatch(/3 new changelog entries/);
+  });
+
+  it('a file not committed yet counts as the newest (a local build); a shallow clone is refused, not guessed', () => {
+    const r = repo();
+    r.push(r.entry('Added', 'merged', 2));
+    writeFileSync(join(r.dir, 'changelog/3-mine.md'), '## Fixed · #3 · mine\n');
+    expect(r.cli('version').stdout.trim()).toBe('0.5.1');
+    const shallow = mkdtempSync(join(tmpdir(), 'atlas-shallow-'));
+    execFileSync('git', ['clone', '-q', '--depth', '1', `file://${r.dir}`, shallow]);
+    const v = spawnSync('node', ['scripts/release/changelog.mjs', 'version'], { cwd: shallow, encoding: 'utf8' });
+    expect(v.status).toBe(1);
+    expect(v.stderr).toMatch(/shallow/);
+  });
+
+  it('the push that starts the folder (CHANGELOG.md moved to changelog/history.md, one entry added) passes and continues the version', () => {
+    const dir = mkdtempSync(join(tmpdir(), 'atlas-start-'));
+    const git = (...a: string[]) => execFileSync('git', a, { cwd: dir, encoding: 'utf8' }).trim();
+    git('init', '-q', '-b', 'main');
+    git('config', 'user.email', 'qa@test');
+    git('config', 'user.name', 'qa');
+    mkdirSync(join(dir, 'scripts/release'), { recursive: true });
+    writeFileSync(join(dir, 'scripts/release/changelog.mjs'), '// the old script');
+    writeFileSync(join(dir, 'CHANGELOG.md'), '# Changelog\n\n## Fixed · #2 · b\n\n## Added · #1 · a\n');
+    git('add', '-A');
+    git('commit', '-qm', 'old world');
+    const before = git('rev-parse', 'HEAD');
+    const old = versionOf(readFileSync(join(dir, 'CHANGELOG.md'), 'utf8'));
+    for (const f of ['changelog.mjs', 'check-push.sh']) writeFileSync(join(dir, 'scripts/release', f), readFileSync(join(root, 'scripts/release', f)), { mode: 0o755 });
+    mkdirSync(join(dir, 'changelog'));
+    git('mv', 'CHANGELOG.md', 'changelog/history.md');
+    writeFileSync(join(dir, 'changelog/3-folder.md'), '## Changed · #3 · one file per PR\n');
+    git('add', '-A');
+    git('commit', '-qm', 'new world');
+    const check = spawnSync('scripts/release/check-push.sh', [before], { cwd: dir, encoding: 'utf8' });
+    expect(check.stderr).toBe('');
+    expect(check.status).toBe(0);
+    expect(old).toBe('0.4.1');
+    expect(versionAt(dir)).toBe('0.5.0');
+  });
+
+  it('first release and new-branch pushes: nothing to compare with', () => {
+    const r = repo();
+    expect(r.check('0000000000000000000000000000000000000000').stdout).toContain('first release');
+  });
+
+  it('the real history of this repo: dropping the newest entry always lowers the version (a push never goes backwards or repeats)', () => {
+    const parts = readFileSync(join(root, 'changelog/history.md'), 'utf8').split(/^(?=## )/m);
     const [intro, ...entries] = parts as [string, ...string[]];
     expect(entries.length).toBeGreaterThan(10);
     const num = (v: string) => v.split('.').map(Number).reduce((x, n) => x * 1000 + n, 0);

@@ -55,7 +55,7 @@ export interface Project {
    * check run on the head green. Atlas: « test ».
    */
   ciJob: string | null;
-  /** Each PR must add exactly one CHANGELOG.md entry (and a changelog-only conflict is rebased by the gate). Atlas: on. */
+  /** Each PR must add exactly one entry file to changelog/ and change no other changelog file (#223). Atlas: on. */
   changelog: boolean;
   /** Gets the project's new tasks (triage); always a member. null = nobody triages. */
   lead: string | null;
