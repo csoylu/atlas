@@ -8,6 +8,7 @@ import { FakeProvider } from './providers/fake.ts';
 import type { ModelRequest } from './providers/types.ts';
 import { CLEANUP_BY, CLEANUP_SCHEDULE } from './cleanup.ts';
 import { until } from '../test/kit/index.ts';
+import { oneStep } from './workflows.ts';
 
 let engines: Engine[] = [];
 afterEach(async () => {
@@ -51,14 +52,17 @@ describe('weekly memory cleanup (#83)', () => {
     const dataDir = mkdtempSync(join(tmpdir(), 'atlas-'));
     const dbFile = join(dataDir, 'c.db');
     const first = await setup(new FakeProvider([]), { dbFile, dataDir });
-    expect(first.schedules.get(CLEANUP_SCHEDULE)).toMatchObject({ agentId: 'atlas', kind: 'cron', cron: '0 9 * * 1', createCard: true, enabled: true, title: 'Memory cleanup' });
+    const w = first.workflows.get(CLEANUP_SCHEDULE);
+    expect(w).toMatchObject({ enabled: true, name: 'Memory cleanup' });
+    expect(oneStep(w)!.trigger.config).toMatchObject({ kind: 'time', repeat: 'cron', cron: '0 9 * * 1' });
+    expect(oneStep(w)!.step.config).toMatchObject({ agentId: 'atlas', newTaskEachRun: true });
     // The user may turn it off: a restart doesn't recreate or re-enable it.
-    first.schedules.update(CLEANUP_SCHEDULE, { enabled: false });
+    first.workflows.update(CLEANUP_SCHEDULE, { enabled: false });
     await first.stop();
     engines = [];
     const second = await setup(new FakeProvider([]), { dbFile, dataDir });
-    expect(second.schedules.list().filter((s) => s.id === CLEANUP_SCHEDULE)).toHaveLength(1);
-    expect(second.schedules.get(CLEANUP_SCHEDULE).enabled).toBe(false);
+    expect(second.workflows.list().filter((s) => s.id === CLEANUP_SCHEDULE)).toHaveLength(1);
+    expect(second.workflows.get(CLEANUP_SCHEDULE).enabled).toBe(false);
   });
 
   it('a run files proposals, lands in the Inbox as one item; approve applies, reject leaves memory untouched', async () => {
@@ -91,7 +95,7 @@ describe('weekly memory cleanup (#83)', () => {
     e.kanban.update(m.c.cardId!, { status: 'done' }, 'user'); // m.c goes stale
     const before = e.memories.list();
 
-    const card = e.schedules.runNow(CLEANUP_SCHEDULE);
+    const card = e.kanban.get(e.workflows.runNow(CLEANUP_SCHEDULE).steps!.find((s) => s.kind === 'agent')!.cardId!);
     expect(card.createdBy).toBe(CLEANUP_BY);
     await until(() => e.kanban.get(card.id).status === 'done', 'cleanup card done', 3000);
     expect(fake.calls[0]!.tools.map((t) => t.name)).toEqual(expect.arrayContaining(['memory_review', 'memory_propose']));
@@ -183,9 +187,9 @@ describe('weekly memory cleanup (#83)', () => {
     // First process: the run filed one proposal and died during its second memory_propose call.
     const first = await setup(new FakeProvider([]), { dbFile, dataDir, dispatch: false });
     const m = seed(first);
-    first.cleanup.ensureSchedule(first.schedules, first.agents);
-    first.schedules.update(CLEANUP_SCHEDULE, { enabled: false }); // only the card below
-    const card = first.schedules.runNow(CLEANUP_SCHEDULE);
+    first.cleanup.ensureSchedule(first.workflows, first.agents);
+    first.workflows.update(CLEANUP_SCHEDULE, { enabled: false }); // only the card below
+    const card = first.kanban.get(first.workflows.runNow(CLEANUP_SCHEDULE).steps!.find((s) => s.kind === 'agent')!.cardId!);
     first.kanban.update(card.id, { status: 'running' }, 'dispatcher');
     first.kanban.appendMessage(card.id, 'assistant', 'atlas', [
       { type: 'tool_use', id: 'k1', name: 'memory_propose', input: { action: 'archive', ids: [m.c.id], reason: 'card done' } },

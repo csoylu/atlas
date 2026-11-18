@@ -20,7 +20,7 @@ import { MemoryCleanup } from './cleanup.ts';
 import { MemoryReview } from './memoryReview.ts';
 import { envWithSecrets, type SecretStore } from './secrets.ts';
 import { createApi } from './api.ts';
-import { Schedules } from './schedules.ts';
+import { Workflows } from './workflows.ts';
 import { Auth, isLoopbackHost } from './auth.ts';
 import { screenshotAnswer } from './screenshot.ts';
 import { Local } from './local.ts';
@@ -100,7 +100,7 @@ export interface Engine {
   cleanup: MemoryCleanup;
   review: MemoryReview;
   models: Models;
-  schedules: Schedules;
+  workflows: Workflows;
   local: Local;
   accounts: Accounts;
   chatgpt: ChatGpt;
@@ -139,7 +139,7 @@ export async function startEngine(opts: EngineOptions): Promise<Engine> {
   models.setClaude(claude);
   const usage = new Usage(db, bus);
   const memories = new Memories(db, bus);
-  const schedules = new Schedules(db, bus, kanban);
+  const workflows = new Workflows(db, bus, kanban);
   const cleanup = new MemoryCleanup(db, bus, memories);
   const settings = new Settings(db);
   const shellEnv = new ShellEnv(typeof opts.shellPath === 'object' ? opts.shellPath : { mode: opts.shellPath ?? 'engine' });
@@ -150,8 +150,8 @@ export async function startEngine(opts: EngineOptions): Promise<Engine> {
   const fileLog = new FileLog(db, new Snapshots(join(opts.dataDir, 'checkpoints')));
   const review = new MemoryReview(db, kanban, memories, models, agents, settings, usage);
   if (opts.memoryReview === false) review.after = () => {};
-  const effects = new SideEffects(db, kanban, memories, schedules);
-  const runner = new Runner(db, bus, kanban, agents, models, memories, schedules, { fileLog, effects, dataDir: opts.dataDir, leaseMs: opts.leaseMs, maxTurns: opts.maxTurns, usage, user: () => settings.user(), documents, cleanup, review, isVoiceChat: voiceChat ? (id) => voiceChat.isVoiceChat(id) : undefined, engine: () => ({ url, cookie: () => (auth.enabled ? auth.issue().token : null), answer: (method, path) => screenshotAnswer(kanban, method, path) }), shellEnv });
+  const effects = new SideEffects(db, kanban, memories, workflows);
+  const runner = new Runner(db, bus, kanban, agents, models, memories, workflows, { fileLog, effects, dataDir: opts.dataDir, leaseMs: opts.leaseMs, maxTurns: opts.maxTurns, usage, user: () => settings.user(), documents, cleanup, review, isVoiceChat: voiceChat ? (id) => voiceChat.isVoiceChat(id) : undefined, engine: () => ({ url, cookie: () => (auth.enabled ? auth.issue().token : null), answer: (method, path) => screenshotAnswer(kanban, method, path) }), shellEnv });
   const rewinds = new Rewinds(db, bus, kanban, agents, runner, opts.dataDir, fileLog, effects);
   const dispatcher = new Dispatcher(bus, kanban, agents, models, settings, runner);
   const slash = new Slash(db, bus, kanban, runner);
@@ -179,7 +179,7 @@ export async function startEngine(opts: EngineOptions): Promise<Engine> {
     documents,
     memories,
     cleanup,
-    schedules,
+    workflows,
     local,
     accounts,
     chatgpt,
@@ -216,9 +216,9 @@ export async function startEngine(opts: EngineOptions): Promise<Engine> {
   if (opts.manageLocal ?? (opts.dispatch !== false && opts.dbFile !== ':memory:')) void local.startWatching();
   if (opts.dispatch !== false) {
     dispatcher.start();
-    // Built-in schedules come with the scheduler (tests without a dispatcher start from an empty list).
-    cleanup.ensureSchedule(schedules, agents);
-    schedules.start();
+    // Built-in workflows come with the trigger clock (tests without a dispatcher start from an empty list).
+    cleanup.ensureSchedule(workflows, agents);
+    workflows.start();
   }
   voice?.start();
   updater.start();
@@ -239,7 +239,7 @@ export async function startEngine(opts: EngineOptions): Promise<Engine> {
     cleanup,
     review,
     models,
-    schedules,
+    workflows,
     local,
     accounts,
     chatgpt,
@@ -253,7 +253,7 @@ export async function startEngine(opts: EngineOptions): Promise<Engine> {
     url,
     stop: async () => {
       updater.stop();
-      schedules.stop();
+      workflows.stop();
       voice?.stop();
       dispatcher.stop();
       await runner.shutdown();

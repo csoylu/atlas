@@ -606,69 +606,132 @@ export function isTimeZone(tz: string): boolean {
   }
 }
 
-/**
- * A schedule (design §9): at a cron time or once at a given instant, give an agent a prompt. Either a new card each
- * time (createCard), or the prompt is posted on the schedule's own card, reopened each time, so the agent keeps the
- * history between runs (chatCardId).
- */
-export interface Schedule {
-  id: string;
-  agentId: string;
-  title: string;
-  kind: ScheduleKind;
+/* ── Workflows (#170, design §9): a trigger wired to agent steps, approvals and conditions. They replaced schedules. ── */
+
+export const WORKFLOW_NODE_KINDS = ['trigger', 'agent', 'approval', 'condition'] as const;
+export type WorkflowNodeKind = (typeof WORKFLOW_NODE_KINDS)[number];
+/** The named exits of each kind of node: one edge per exit at most. */
+export const WORKFLOW_EXITS = {
+  trigger: ['start'],
+  agent: ['done', 'failed'],
+  approval: ['approved', 'rejected'],
+  condition: ['yes', 'no'],
+} as const satisfies Record<WorkflowNodeKind, readonly string[]>;
+/** Exits that end a run as Failed when nothing is wired to them; every other unwired exit ends it Done. */
+export const WORKFLOW_FAILING_EXITS = ['failed', 'rejected'] as const;
+
+/** At set times (a cron in a time zone, or once at an instant: what schedules had) or only by hand (Run now). */
+export const TimeTrigger = z.object({
+  kind: z.literal('time'),
+  repeat: z.enum(SCHEDULE_KINDS),
   /** 5-field cron (or 6 with seconds), evaluated in `timezone`. */
-  cron: string | null;
-  /** One-shot instant, ISO 8601. */
-  at: string | null;
-  prompt: string;
-  createCard: boolean;
-  timezone: string;
+  cron: z.string().trim().min(1).nullable().default(null),
+  /** Once, at this instant (ISO 8601 with offset). */
+  at: z.iso.datetime({ offset: true }).nullable().default(null),
+  timezone: z.string().refine(isTimeZone, 'unknown time zone (use an IANA name like Europe/Paris)'),
+});
+export const TriggerConfig = z.discriminatedUnion('kind', [TimeTrigger, z.object({ kind: z.literal('manual') })]);
+export type TriggerConfig = z.infer<typeof TriggerConfig>;
+/** An agent gets the prompt as a task: a new task each run, or one task reopened each run that keeps the history. */
+export const AgentStepConfig = z.object({
+  title: z.string().trim().max(200).default(''),
+  /** null: not chosen yet (a run reaching it fails and says so). */
+  agentId: z.string().min(1).nullable().default(null),
+  /** Variables: {{run.id}}, {{previous.summary}}, {{previous.task}}. */
+  prompt: z.string().max(20_000).default(''),
+  newTaskEachRun: z.boolean().default(false),
+});
+/** A task blocked on Master in the Inbox, with Approve / Reject. */
+export const ApprovalConfig = z.object({ title: z.string().trim().max(200).default(''), question: z.string().max(5_000).default('') });
+/** Two tests only, nothing judged by a model. `node`: the step counted. */
+export const ConditionConfig = z.discriminatedUnion('test', [
+  z.object({ test: z.literal('ranFewer'), title: z.string().trim().max(200).default(''), node: z.string().min(1), times: z.number().int().min(1).max(100) }),
+  z.object({ test: z.literal('summaryContains'), title: z.string().trim().max(200).default(''), text: z.string().min(1).max(500) }),
+]);
+const nodeBase = { id: z.string().trim().min(1).max(40), x: z.number().finite(), y: z.number().finite() };
+export const WorkflowNode = z.discriminatedUnion('kind', [
+  z.object({ ...nodeBase, kind: z.literal('trigger'), config: TriggerConfig }),
+  z.object({ ...nodeBase, kind: z.literal('agent'), config: AgentStepConfig }),
+  z.object({ ...nodeBase, kind: z.literal('approval'), config: ApprovalConfig }),
+  z.object({ ...nodeBase, kind: z.literal('condition'), config: ConditionConfig }),
+]);
+export type WorkflowNode = z.infer<typeof WorkflowNode>;
+export type WorkflowNodeInput = z.input<typeof WorkflowNode>;
+export const WorkflowEdge = z.object({ from: z.string().min(1), exit: z.string().min(1), to: z.string().min(1) });
+export type WorkflowEdge = z.infer<typeof WorkflowEdge>;
+export const WorkflowGraph = z.object({ nodes: z.array(WorkflowNode).max(100), edges: z.array(WorkflowEdge).max(300) });
+export type WorkflowGraph = z.infer<typeof WorkflowGraph>;
+
+export const WORKFLOW_RUN_STATES = ['running', 'waiting', 'done', 'failed', 'stopped', 'skipped'] as const;
+/** waiting: the current step waits for Master (an approval, or an agent's task blocked on you or in review). */
+export type WorkflowRunState = (typeof WORKFLOW_RUN_STATES)[number];
+export type WorkflowStepState = 'running' | 'waiting' | 'done' | 'failed' | 'stopped';
+
+export interface WorkflowRunStep {
+  id: number;
+  nodeId: string;
+  kind: WorkflowNodeKind;
+  /** 1 the first time this node runs in the run, 2 the second (a loop)… */
+  round: number;
+  state: WorkflowStepState;
+  /** The exit taken, once finished. */
+  exit: string | null;
+  cardId: string | null;
+  summary: string | null;
+  startedAt: string;
+  endedAt: string | null;
+}
+export interface WorkflowRun {
+  id: string;
+  workflowId: string;
+  /** Run 1, 2, 3… within its workflow. */
+  number: number;
+  state: WorkflowRunState;
+  trigger: 'time' | 'manual';
+  /** Why it ended (failed, stopped, skipped) or how (the exit that ended it). */
+  reason: string | null;
+  startedAt: string;
+  endedAt: string | null;
+  /** Only in GET /api/workflow-runs/:id and the workflow.run event. */
+  steps?: WorkflowRunStep[];
+}
+
+export interface Workflow extends WorkflowGraph {
+  id: string;
+  name: string;
+  /** Off: the trigger doesn't fire; Run now still works. */
   enabled: boolean;
-  /** Next firing; null once a one-shot has fired. */
+  /** 'schedules': migrated from a schedule (#170). */
+  origin: 'schedules' | null;
+  /** Bumped by every graph save: a save from an older revision is refused. */
+  revision: number;
   nextRunAt: string | null;
   lastFiredAt: string | null;
-  lastCardId: string | null;
-  chatCardId: string | null;
-  /** Why the last firing failed; cleared by the next success. */
+  /** Why the trigger last failed to start a run; cleared by the next start. */
   lastError: string | null;
+  /** The latest run (any state), for lists. */
+  lastRun: WorkflowRun | null;
   createdBy: string;
   createdAt: string;
   updatedAt: string;
 }
 
-const ScheduleFields = {
-  agentId: z.string().min(1),
-  title: z.string().trim().min(1).max(200),
-  kind: z.enum(SCHEDULE_KINDS),
-  cron: z.string().trim().min(1).nullable(),
-  at: z.iso.datetime({ offset: true }).nullable(),
-  prompt: z.string().trim().min(1).max(20_000),
-  createCard: z.boolean(),
-  timezone: z.string().refine(isTimeZone, 'unknown time zone (use an IANA name like Europe/Paris)'),
-  enabled: z.boolean(),
-};
-const needsWhen = (s: { kind?: ScheduleKind; cron?: string | null; at?: string | null }, ctx: z.RefinementCtx) => {
-  if (s.kind === 'cron' && !s.cron) ctx.addIssue({ code: 'custom', path: ['cron'], message: 'a cron schedule needs a cron expression' });
-  if (s.kind === 'at' && !s.at) ctx.addIssue({ code: 'custom', path: ['at'], message: 'a one-shot schedule needs a time' });
-};
-export const CreateSchedule = z
-  .object({
-    ...ScheduleFields,
-    /** Defaults to the prompt's first line. */
-    title: ScheduleFields.title.optional(),
-    cron: ScheduleFields.cron.default(null),
-    at: ScheduleFields.at.default(null),
-    createCard: ScheduleFields.createCard.default(false),
-    /** Defaults to the engine machine's time zone. */
-    timezone: ScheduleFields.timezone.optional(),
-    enabled: ScheduleFields.enabled.default(true),
-  })
-  .superRefine(needsWhen);
-export type CreateSchedule = z.input<typeof CreateSchedule>;
-/** Edits: only the fields sent change (no defaults). Kind/cron/at consistency is checked on the merged result. */
-export const UpdateSchedule = z.object(ScheduleFields).partial();
-export type UpdateSchedule = z.input<typeof UpdateSchedule>;
-export const ScheduleWhen = z.object({ kind: ScheduleFields.kind, cron: ScheduleFields.cron, at: ScheduleFields.at }).superRefine(needsWhen);
+/** POST /api/workflows/preview: the next firings of a draft time trigger (time zone: the engine's if not given). */
+export const TriggerPreview = z.object({
+  repeat: z.enum(SCHEDULE_KINDS),
+  cron: z.string().trim().min(1).nullable().default(null),
+  at: z.iso.datetime({ offset: true }).nullable().default(null),
+  timezone: z.string().optional(),
+});
+export type TriggerPreview = z.input<typeof TriggerPreview>;
+
+export const CreateWorkflow = z.object({ name: z.string().trim().min(1).max(200), enabled: z.boolean().default(true), nodes: WorkflowGraph.shape.nodes, edges: WorkflowGraph.shape.edges });
+export type CreateWorkflow = z.input<typeof CreateWorkflow>;
+/** PUT /api/workflows/:id/graph: `revision` is the one the editor loaded. */
+export const SaveWorkflowGraph = WorkflowGraph.extend({ revision: z.number().int() });
+export type SaveWorkflowGraph = z.input<typeof SaveWorkflowGraph>;
+export const UpdateWorkflow = z.object({ name: z.string().trim().min(1).max(200), enabled: z.boolean() }).partial();
+export type UpdateWorkflow = z.input<typeof UpdateWorkflow>;
 
 /** WebSocket events, engine → UI. */
 export type ServerEvent =
@@ -689,8 +752,10 @@ export type ServerEvent =
   | { type: 'memory.updated'; memory: Memory }
   | { type: 'memory.proposal'; proposal: MemoryProposal }
   | { type: 'panel.updated'; chatId: string; tabs: PanelTab[] }
-  | { type: 'schedule.updated'; schedule: Schedule }
-  | { type: 'schedule.deleted'; id: string }
+  | { type: 'workflow.updated'; workflow: Workflow }
+  | { type: 'workflow.deleted'; id: string }
+  /** A run started, moved to another step or ended (with its steps). */
+  | { type: 'workflow.run'; run: WorkflowRun }
   | { type: 'local.updated'; status: LocalStatus }
   | { type: 'local.pull'; pull: LocalPull }
   | { type: 'chatgpt.updated'; status: ChatGptStatus }

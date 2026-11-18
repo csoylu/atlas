@@ -2,7 +2,7 @@ import { USER, cardRef, type Block, type CardStatus, type SideEffect } from '@at
 import type { Db } from './store/db.ts';
 import type { Kanban } from './kanban.ts';
 import type { Memories } from './memory.ts';
-import type { Schedules } from './schedules.ts';
+import type { Workflows } from './workflows.ts';
 
 /**
  * Side effects (card #138): what a chat's tool calls did outside the chat and its files. The runner records them right
@@ -36,6 +36,7 @@ export interface Mark {
   messages: number;
   agentMessages: number;
   memories: number;
+  /** rowid of the workflows table (schedule_create makes one-step workflows, #170). */
   schedules: number;
   documents: number;
 }
@@ -48,13 +49,13 @@ export class SideEffects {
     private db: Db,
     private kanban: Kanban,
     private memories: Memories,
-    private schedules: Schedules,
+    private workflows: Workflows,
   ) {}
 
   /** Taken right before a synchronous tool call (nothing else writes in between). */
   mark(): Mark {
     const max = (t: string) => (this.db.prepare(`SELECT COALESCE(MAX(rowid), 0) AS n FROM ${t}`).get() as { n: number }).n;
-    return { cards: max('cards'), messages: max('messages'), agentMessages: max('agent_messages'), memories: max('memories'), schedules: max('schedules'), documents: max('documents') };
+    return { cards: max('cards'), messages: max('messages'), agentMessages: max('agent_messages'), memories: max('memories'), schedules: max('workflows'), documents: max('documents') };
   }
 
   /** After a tool call that succeeded: record what it did outside the chat, if anything. */
@@ -113,7 +114,7 @@ export class SideEffects {
         return;
       }
       case 'schedule_create':
-        for (const s of newer<{ id: string; title: string }>('schedules', mark.schedules, 'id, title')) add('schedule', s.id, s.title);
+        for (const s of newer<{ id: string; title: string }>('workflows', mark.schedules, 'id, name AS title')) add('schedule', s.id, s.title);
         return;
       case 'schedule_delete':
         if (typeof i.id === 'string') add('schedule_delete', i.id, i.id);
@@ -148,7 +149,7 @@ export class SideEffects {
       if (u.messageId) this.db.prepare('UPDATE messages SET rewind_id = ? WHERE id = ? AND rewind_id IS NULL').run(rewindId, u.messageId);
       if (u.agentMessage) this.db.prepare('UPDATE agent_messages SET replied_at = ?, reply_delivered_at = ? WHERE id = ? AND replied_at IS NULL').run(now, now, u.agentMessage);
       if (u.memory) this.memories.forget(u.memory, USER);
-      if (u.schedule) this.schedules.update(u.schedule, { enabled: false });
+      if (u.schedule) this.workflows.update(u.schedule, { enabled: false });
     }
     this.db.prepare('UPDATE side_effects SET rewind_id = ? WHERE card_id = ? AND at >= ? AND rewind_id IS NULL').run(rewindId, cardId, since);
     return plan;
@@ -176,8 +177,8 @@ export class SideEffects {
           else left.push(`${e.label} was changed since, so it was left as it is`);
         }
         if (u.schedule) {
-          const s = this.schedules.list().find((x) => x.id === u.schedule);
-          if (s && !s.enabled) this.schedules.update(u.schedule, { enabled: true });
+          const s = this.workflows.list().find((x) => x.id === u.schedule);
+          if (s && !s.enabled) this.workflows.update(u.schedule, { enabled: true });
           else left.push(`schedule ${e.label} was ${s ? 'turned on' : 'deleted'} since`);
         }
       } catch (err) {
@@ -237,7 +238,7 @@ export class SideEffects {
         return undone('archived', { memory: id });
       }
       case 'schedule': {
-        const s = this.db.prepare('SELECT enabled, last_fired_at FROM schedules WHERE id = ?').get(r.ref) as { enabled: number; last_fired_at: string | null } | undefined;
+        const s = this.db.prepare('SELECT enabled, last_fired_at FROM workflows WHERE id = ?').get(r.ref) as { enabled: number; last_fired_at: string | null } | undefined;
         if (!s) return kept('deleted since');
         if (s.last_fired_at) return kept('already ran');
         if (!s.enabled) return kept('already off');

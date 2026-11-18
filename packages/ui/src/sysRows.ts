@@ -64,7 +64,7 @@ const quoted = (s: string) => `“${s}”`;
 /** The engine's note that memory changed mid-conversation (memory.ts memoryDeltaNote). */
 const MEMORY_NOTE = '[memory] ';
 const FROM = /^\[from @([\w.-]+), (?:card|task) (#\d+|c_[0-9a-f]{8})\]\s*([\s\S]*)$/;
-const SCHEDULE = /\n\n— from schedule (\S+?), ([\s\S]*?)\.?\s*$/;
+const SCHEDULE = /\n\n— from (?:schedule|workflow) (\S+?), ([\s\S]*?)\.?\s*$/;
 
 /**
  * The row for a message the agent received from someone other than the user (a start prompt, a card's message, a
@@ -82,7 +82,8 @@ export function messageRow(m: Message, assignee: string | null): SysRow | null {
     if (text.startsWith(MEMORY_NOTE)) return memoryRow([m], assignee);
     return null;
   }
-  if (m.author === 'schedule') {
+  // Schedules became one-step workflows (#170): both kinds of prompt are a scheduled run.
+  if (m.author === 'schedule' || m.author === 'workflow') {
     const s = SCHEDULE.exec(text);
     const prompt = s ? text.slice(0, s.index) : text;
     return { ...base, icon: 'clock', tone: 'acc', verb: 'Scheduled run', object: cut(plain(prompt), 120), rest: s?.[2], body: { kind: 'markdown', text: prompt } };

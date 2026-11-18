@@ -179,7 +179,7 @@ test.describe('U · screens (Playwright, real UI, scripted model)', () => {
     await page.getByRole('button', { name: 'New schedule' }).click();
     await page.getByPlaceholder(/What the agent should do each time/).fill('Ping the team');
     await page.getByRole('button', { name: 'Create schedule' }).click();
-    await expect.poll(async () => (await call(atlas, 'GET', '/schedules')).body.map((x: any) => x.title)).toContain('Ping the team');
+    await expect.poll(async () => (await call(atlas, 'GET', '/workflows')).body.map((x: any) => x.name)).toContain('Ping the team');
     const row = page.locator('.model-list > *').filter({ hasText: 'Ping the team' }).first();
     await expect(row).toBeVisible();
     await row.getByRole('button', { name: 'Run now' }).click();
@@ -187,12 +187,12 @@ test.describe('U · screens (Playwright, real UI, scripted model)', () => {
     await expect.poll(() => page.evaluate(() => location.hash)).toContain('card='); // Run now opens the card
     await page.keyboard.press('Escape');
     // pause
-    const sch = (await call(atlas, 'GET', '/schedules')).body.find((x: any) => x.title === 'Ping the team');
+    const sch = (await call(atlas, 'GET', '/workflows')).body.find((x: any) => x.name === 'Ping the team');
     await row.locator('label.switch').click();
-    await expect.poll(async () => (await call(atlas, 'GET', `/schedules/${sch.id}`)).body.enabled).toBe(false);
+    await expect.poll(async () => (await call(atlas, 'GET', `/workflows/${sch.id}`)).body.enabled).toBe(false);
     await page.goto(atlas.url + '/#/schedules');
     await page.locator('.model-list > *').filter({ hasText: 'Ping the team' }).first().getByRole('button', { name: 'Delete' }).click();
-    await expect.poll(async () => (await call(atlas, 'GET', '/schedules')).body.some((x: any) => x.id === sch.id)).toBe(false);
+    await expect.poll(async () => (await call(atlas, 'GET', '/workflows')).body.some((x: any) => x.id === sch.id)).toBe(false);
     expect(bad).toEqual([]);
   });
 

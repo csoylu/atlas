@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from 'react';
 import { AgentFace } from './AgentFace.tsx';
-import { cardRef, type UpdateStatus, type Doc, type Agent, type Card, type ChatGptStatus, type Inbox as InboxData, type Model, type Schedule, type Settings } from '@atlas/shared';
+import { cardRef, type UpdateStatus, type Doc, type Agent, type Card, type ChatGptStatus, type Inbox as InboxData, type Model, type Settings, type Workflow } from '@atlas/shared';
 import { api, subscribe, type AuthState } from './api.ts';
 import { Board } from './Board.tsx';
 import { Inbox } from './Inbox.tsx';
@@ -124,7 +124,7 @@ export function App() {
   const [updateOpen, setUpdateOpen] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [agents, setAgents] = useState<Agent[]>([]);
-  const [schedules, setSchedules] = useState<Schedule[]>([]);
+  const [workflows, setWorkflows] = useState<Workflow[]>([]);
   const [settings, setSettings] = useState<Settings | null>(null);
   const [chats, setChats] = useState<Card[]>([]);
   const [chatsLoaded, setChatsLoaded] = useState(false);
@@ -188,8 +188,8 @@ export function App() {
         } else if (e.type === 'memory.updated') stream.push('memories', { type: 'memory', memory: e.memory });
         else if (e.type === 'memory.proposal') stream.push('memories', { type: 'proposal', proposal: e.proposal });
         else if (e.type === 'panel.updated') stream.push('panel:' + e.chatId, { type: 'panel', tabs: e.tabs });
-        else if (e.type === 'schedule.updated') setSchedules((ss) => { const i = ss.findIndex(s => s.id === e.schedule.id); const next = ss.slice(); if (i < 0) return [...ss, e.schedule]; next[i] = e.schedule; return next; });
-        else if (e.type === 'schedule.deleted') setSchedules((ss) => ss.filter(s => s.id !== e.id));
+        else if (e.type === 'workflow.updated') setWorkflows((ws) => { const i = ws.findIndex(w => w.id === e.workflow.id); const next = ws.slice(); if (i < 0) return [...ws, e.workflow]; next[i] = e.workflow; return next; });
+        else if (e.type === 'workflow.deleted') setWorkflows((ws) => ws.filter(w => w.id !== e.id));
         else if (e.type === 'local.updated') stream.push('local', { type: 'local', status: e.status });
         else if (e.type === 'local.pull') stream.push('local', { type: 'pull', pull: e.pull });
         else if (e.type === 'voice.updated') stream.push('voice', { type: 'voice', status: e.status });
@@ -217,7 +217,7 @@ export function App() {
           void reload();
           reloadInbox();
           api.agents().then(setAgents, (e: Error) => setError(e.message));
-          api.schedules().then(setSchedules, (e: Error) => setError(e.message));
+          api.workflows().then(setWorkflows, (e: Error) => setError(e.message));
           api.settings().then(setSettings, (e: Error) => setError(e.message));
           api.update().then(setUpdate, (e: Error) => setError(e.message));
           api.chatgpt().then(setChatgpt, (e: Error) => setError(e.message));
@@ -368,7 +368,7 @@ export function App() {
   ];
   const openChat = route.view === 'chat' ? chats.find((c) => c.id === route.target) : undefined;
   const badge = shownInbox?.badge ?? 0;
-  const activeSchedules = schedules.filter((s) => s.enabled).length;
+  const activeSchedules = workflows.filter((s) => s.enabled).length;
   /** An agent is busy while one of its cards runs or one of its chats is answering. */
   const busy = (id: string) => cards.some((c) => c.assignee === id && c.status === 'running') || chats.some((c) => c.assignee === id && c.working);
   const mainChats = new Set(agents.flatMap((a) => (a.mainChat ? [a.mainChat] : [])));
@@ -405,7 +405,7 @@ export function App() {
             ? { parts: [<a key="l" className="crumb-link" href="#/library">Library</a>], title: libraryTitle ?? 'Document' }
             : { parts: [], title: 'Library' }
           : route.view === 'schedules'
-            ? { parts: [], title: 'Schedules', sub: `${activeSchedules} active of ${schedules.length}` }
+            ? { parts: [], title: 'Schedules', sub: `${activeSchedules} active of ${workflows.length}` }
             : route.view === 'settings'
               ? { parts: [<span key="s" className="crumb-part">Settings</span>], title: settingsLabel(route.target as SettingsPage) }
               : { parts: [], title: 'Document' };
@@ -616,7 +616,7 @@ export function App() {
             onError={fail}
           />
         ) : route.view === 'schedules' ? (
-          <SchedulesView schedules={schedules} agents={agents} onOpenCard={setOpenId} onError={fail} />
+          <SchedulesView workflows={workflows} agents={agents} onOpenCard={setOpenId} onError={fail} />
         ) : (
         <Board
           cards={cards}

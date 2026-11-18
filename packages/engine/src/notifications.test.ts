@@ -96,9 +96,9 @@ describe('inbox', () => {
     const e = await setup();
     const done = e.kanban.create({ title: 'Palette', status: 'ready', assignee: 'atlas' }, 'user');
     e.kanban.update(done.id, { status: 'done' }, 'atlas', 'Typecheck + 412 tests green');
-    const s = e.schedules.create({ title: 'Funding digest', prompt: 'write it', agentId: 'atlas', kind: 'cron', cron: '0 9 * * 1', timezone: 'Europe/Paris' }, 'user');
-    const run = e.schedules.runNow(s.id);
-    e.kanban.update(run.id, { status: 'done' }, 'atlas', '1 doc');
+    const s = e.workflows.createOneStep({ title: 'Funding digest', prompt: 'write it', agentId: 'atlas', kind: 'cron', cron: '0 9 * * 1', timezone: 'Europe/Paris' }, 'user');
+    const run = e.workflows.runNow(s.id).steps!.find((x) => x.kind === 'agent')!.cardId!;
+    e.kanban.update(run, { status: 'done' }, 'atlas', '1 doc');
     e.notifications.create({ kind: 'plan.switched', title: 'Claude plan limit reached', body: 'Work moved to the API key account' });
 
     let inbox = e.notifications.inbox();

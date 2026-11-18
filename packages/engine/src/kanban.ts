@@ -437,7 +437,13 @@ export class Kanban {
             const { n } = this.db.prepare("SELECT COUNT(*) AS n FROM memory_proposals WHERE card_id = ? AND status = 'pending'").get(id) as { n: number };
             this.notify({ kind: 'memory.cleanup', title: n ? `Memory cleanup: ${n} proposal${n === 1 ? '' : 's'}` : 'Memory cleanup: nothing to change', body: summary ?? '', cardId: id });
           } else if (after.status === 'done') {
-            const s = this.db.prepare('SELECT title FROM schedules WHERE last_card_id = ? OR chat_card_id = ? LIMIT 1').get(id, id) as { title: string } | undefined;
+            // A workflow's agent step (#170): the Inbox says which workflow ran (kind kept from schedules).
+            const s = this.db
+              .prepare(
+                `SELECT w.name AS title FROM workflow_run_steps st JOIN workflow_runs r ON r.id = st.run_id JOIN workflows w ON w.id = r.workflow_id WHERE st.card_id = ?
+                 UNION ALL SELECT w.name FROM workflow_nodes n JOIN workflows w ON w.id = n.workflow_id WHERE n.own_card_id = ? LIMIT 1`,
+              )
+              .get(id, id) as { title: string } | undefined;
             this.notify(s ? { kind: 'schedule.ran', title: s.title, body: summary ?? '', cardId: id } : { kind: 'card.done', title: after.title, body: summary ?? '', cardId: id });
           }
         }

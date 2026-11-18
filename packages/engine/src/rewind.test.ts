@@ -355,7 +355,7 @@ describe('rewind', () => {
     const r = (await t.rewind(c.id, first.seq))!;
     expect(r.effects).toEqual(preview.effects);
     const memory = t.e.db.prepare("SELECT id, status FROM memories WHERE text = 'the build lives in dist'").get() as { id: number; status: string };
-    const sched = () => (t.e.db.prepare("SELECT enabled FROM schedules WHERE title = 'Daily digest'").get() as { enabled: number }).enabled;
+    const sched = () => (t.e.db.prepare("SELECT enabled FROM workflows WHERE name = 'Daily digest'").get() as { enabled: number }).enabled;
     expect([t.e.kanban.get(fresh.id).status, t.e.kanban.get(worked.id).status, memory.status, sched()]).toEqual(['closed', 'todo', 'archived', 0]);
     expect(t.e.kanban.messages(fresh.id).some((m) => m.content.some((b) => b.type === 'text' && b.text.includes('not read yet')))).toBe(false);
     const tl = (await (await fetch(t.u + `/cards/${c.id}/timeline`)).json()) as Timeline;

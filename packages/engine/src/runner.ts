@@ -38,7 +38,7 @@ import type { Documents } from './documents.ts';
 import { isTeamTool, runTeamTool, teamToolSpecs } from './teamTools.ts';
 import { cleanupToolSpecs, isCleanupCard, isCleanupTool, runCleanupTool, type MemoryCleanup } from './cleanup.ts';
 import { memoryDeltaNote, renderMemory, SHARED, type Memories } from './memory.ts';
-import type { Schedules } from './schedules.ts';
+import type { Workflows } from './workflows.ts';
 import { workdirOf } from './agents.ts';
 import type { FileLog } from './fileLog.ts';
 import { Background, exitNote, type BgProcess } from './background.ts';
@@ -146,7 +146,7 @@ export class Runner {
     private agents: Agents,
     private models: Models,
     private memories: Memories,
-    private schedules: Schedules,
+    private workflows: Workflows,
     private opts: RunnerOptions,
   ) {
     this.maxTurns = opts.maxTurns ?? MAX_TURNS;
@@ -560,7 +560,7 @@ export class Runner {
               r = runTeamTool(u.name, u.input, {
                 kanban: this.kanban,
                 memories: this.memories,
-                schedules: this.schedules,
+                workflows: this.workflows,
                 agentId: agent.id,
                 cardId,
                 workCard,
@@ -996,7 +996,7 @@ export class Runner {
     const parts = [
       `You are "${agent.id}", an AI agent in Atlas, where a small team of agents works for ${name}, the user: the only human here.`,
       `Atlas has tasks (assigned to agents, run automatically, block on questions, go to review, shown on a board), direct`,
-      `chats with ${name}, artifacts (documents, pages, diagrams, links) in a shared Library, schedules, and per-agent models and memory.`,
+      `chats with ${name}, artifacts (documents, pages, diagrams, links) in a shared Library, workflows (a trigger starting agent steps, approvals and conditions; schedules are one-step workflows), and per-agent models and memory.`,
       `Role: ${agent.rolePrompt.trim() || `no specific role: help with whatever ${name} asks.`}`,
       '',
       `# ${name}`,

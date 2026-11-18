@@ -19,10 +19,10 @@ export interface ScheduleLine {
   failed: boolean;
 }
 
-/** schedule_list output: « sch_x @atlas "title": when · next … · … » per line. */
+/** schedule_list output (ids sch_… or, since #170, wf_…): « sch_x @atlas "title": when · next … · … » per line. */
 export function scheduleList(out: string): ScheduleLine[] {
   return out.split('\n').flatMap((l) => {
-    const m = /^(sch_\w+) @(\S+) "(.*)": (.*)$/.exec(l.trim());
+    const m = /^((?:sch|wf)_\w+) @(\S+) "(.*)": (.*)$/.exec(l.trim());
     if (!m) return [];
     const [when, ...more] = m[4]!.split(' · ');
     return [{ id: m[1]!, agent: m[2]!, title: m[3]!, when: when!, more: more.join(' · '), failed: more.some((p) => p.startsWith('LAST RUN FAILED')) }];
@@ -31,7 +31,7 @@ export function scheduleList(out: string): ScheduleLine[] {
 
 /** schedule_create output: « scheduled sch_x "title" for @atlas: when, first run ISO ». */
 export function scheduleCreated(out: string): { id: string; title: string; agent: string; when: string; first: string } | null {
-  const m = /^scheduled (sch_\w+) "(.*)" for @(\S+): (.*), first run (\S+)$/.exec(out.trim());
+  const m = /^scheduled ((?:sch|wf)_\w+) "(.*)" for @(\S+): (.*), first run (\S+)$/.exec(out.trim());
   return m ? { id: m[1]!, title: m[2]!, agent: m[3]!, when: m[4]!, first: m[5]! } : null;
 }
 

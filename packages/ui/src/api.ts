@@ -1,4 +1,4 @@
-import type { About, Account, Agent, Card, CardStatus, ChatGptModel, ChatGptStatus, ChatUsage, ClaudePlanModel, ClaudePlanStatus, ClearEvent, CompactResult, CreateAccount, CreateAgent, CreateCard, CreateModelRequest, CreatePlanAccount, CreateSchedule, Doc, DocContent, DocHit, DocRef, DocVersion, FileChange, Folder, Inbox, LocalModel, LocalPull, LocalStatus, Memory, MemoryChange, MemoryProposal, MemoryQuery, Message, Model, ModelTest, Notification, PanelTab, PlanProvider, RewindPreview, RewindResult, Run, Schedule, ServerEvent, Settings, Timeline, ToolCallTiming, UpdateAccount, UpdateAgent, UpdateChatGpt, UpdateClaudePlan, UpdateLocal, UpdateMemory, UpdateModelRequest, UpdatePlanAccount, UpdateSchedule, UpdateStatus, UpdateVoice, Upload, UsageSummary, VoiceName, VoiceStatus } from '@atlas/shared';
+import type { About, Account, Agent, Card, CardStatus, ChatGptModel, ChatGptStatus, ChatUsage, ClaudePlanModel, ClaudePlanStatus, ClearEvent, CompactResult, CreateAccount, CreateAgent, CreateCard, CreateModelRequest, CreatePlanAccount, CreateWorkflow, Doc, DocContent, DocHit, DocRef, DocVersion, FileChange, Folder, Inbox, LocalModel, LocalPull, LocalStatus, Memory, MemoryChange, MemoryProposal, MemoryQuery, Message, Model, ModelTest, Notification, PanelTab, PlanProvider, RewindPreview, RewindResult, Run, SaveWorkflowGraph, ServerEvent, Settings, Timeline, ToolCallTiming, UpdateAccount, UpdateAgent, UpdateChatGpt, UpdateClaudePlan, UpdateLocal, UpdateMemory, UpdateModelRequest, UpdatePlanAccount, UpdateStatus, UpdateVoice, Upload, UsageSummary, VoiceName, VoiceStatus, TriggerPreview, UpdateWorkflow, Workflow, WorkflowRun } from '@atlas/shared';
 
 /** HTTP error with the parsed body (e.g. a 409's details). */
 export class ApiError extends Error {
@@ -187,15 +187,18 @@ export const api = {
   deleteLocal: (name: string) => call<void>('DELETE', '/local/models?name=' + encodeURIComponent(name)),
   loadLocal: (name: string, keep: boolean) => call<void>('POST', '/local/load', { name, keep }),
   useLocal: (name: string) => call<Model>('POST', '/local/use', { name }),
-  // ── Schedules ───────────────────────────────────────────────────────
-  schedules: () => call<Schedule[]>('GET', '/schedules'),
-  createSchedule: (s: CreateSchedule) => call<Schedule>('POST', '/schedules', s),
-  updateSchedule: (id: string, patch: UpdateSchedule) => call<Schedule>('PATCH', `/schedules/${id}`, patch),
-  deleteSchedule: (id: string) => call<void>('DELETE', `/schedules/${id}`),
-  runSchedule: (id: string) => call<Card>('POST', `/schedules/${id}/run`),
-  /** Next 3 firings of a draft (400 with the reason if the cron or zone is wrong). */
-  previewSchedule: (w: Pick<Schedule, 'kind' | 'cron' | 'at' | 'timezone'>) =>
-    call<{ timezone: string; next: string[] }>('POST', '/schedules/preview', w),
+  // ── Workflows (#170; the Schedules page shows the one-step ones) ──────
+  workflows: () => call<Workflow[]>('GET', '/workflows'),
+  createWorkflow: (w: CreateWorkflow) => call<Workflow>('POST', '/workflows', w),
+  saveWorkflowGraph: (id: string, g: SaveWorkflowGraph) => call<Workflow>('PUT', `/workflows/${id}/graph`, g),
+  updateWorkflow: (id: string, patch: UpdateWorkflow) => call<Workflow>('PATCH', `/workflows/${id}`, patch),
+  deleteWorkflow: (id: string) => call<void>('DELETE', `/workflows/${id}`),
+  runWorkflow: (id: string) => call<WorkflowRun>('POST', `/workflows/${id}/run`),
+  workflowRuns: (id: string) => call<WorkflowRun[]>('GET', `/workflows/${id}/runs`),
+  workflowRun: (id: string) => call<WorkflowRun>('GET', `/workflow-runs/${id}`),
+  stopWorkflowRun: (id: string) => call<WorkflowRun>('POST', `/workflow-runs/${id}/stop`),
+  /** Next firings of a draft time trigger; a bad cron or zone rejects with the reason. */
+  previewTrigger: (t: TriggerPreview) => call<{ timezone: string; next: string[] }>('POST', '/workflows/preview', t),
 };
 
 /** One WebSocket to the engine; reconnects with backoff. Returns an unsubscribe function. */

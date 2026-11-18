@@ -8,7 +8,7 @@ One app where the user's agents work like a small team:
   directory and a memory.
 - **Kanban** board: the only task tracker. Cards are assigned to agents, run automatically, block on questions,
   go to review, finish with a handoff.
-- **Schedules**: run an agent prompt or create a card at a time or on a cron expression.
+- **Workflows** (replaced Schedules, #170): a trigger (a time, or by hand) wired to agent steps, approvals and conditions.
 - **Canvas**: a board that the user and agents both read and write (HTML mockups, running apps, notes; diagrams as svg).
 - **Models**: Anthropic (cloud) and local LLMs (OpenAI-compatible server), chosen per agent and per card.
 - **Chat**: talk to any agent directly; agents message each other.
@@ -49,7 +49,7 @@ Non-goals for v1: multi-user, plugin marketplace, mobile app, voice, a skill sto
 | `messages` | id, conversation_id, seq, role, content (json blocks), tokens, at — the full transcript, append-only |
 | `conversations` | id, agent_id, kind (`chat`/`card`/`schedule`), summary, summary_upto_seq |
 | `tool_calls` | id, run_id, tool_use_id, name, input, status, output_ref, started_at, ended_at |
-| `schedules` | id, agent_id, cron or at, prompt or card_template, timezone, next_run_at, last_run_id, enabled |
+| `workflows`, `workflow_nodes`, `workflow_edges`, `workflow_runs`, `workflow_run_steps` | §9 (migration 0044; replaced `schedules`) |
 | `memories` | id, kind (`rule`/`preference`/`fact`/`project`), scope (`shared`/`agent:<id>`), text (≤ 500), source_conversation_id + source_seq, card_id, status (`active`/`stale`/`archived`), pinned, created_at, confirmed_at, updated_at, updated_by — Memory v2 (§8, migration 0033); `memories_fts` (FTS5, porter) kept in sync by triggers |
 | `memory_changes` | id, memory_id, at, by, action, before_text/kind/status/pinned, undone_by — every change, for the daily digest and undo |
 | `canvases` | id, name, scene (json), version, updated_by, updated_at |
@@ -323,11 +323,50 @@ Statuses: `triage → todo → ready → running → (blocked | review) → done
   still finds them. A rewind to a message before a clear sets its `rewind_id` (it no longer counts); undoing the rewind
   brings it back. The old « /clear = new main chat » is gone (the API route stays).
 
-## 9. Scheduler
-- `schedules` rows with a cron expression or a one-shot time, in the user's timezone. Missed runs while the engine was
-  down: run once at start (not once per missed slot), noted in the run.
-- A schedule either sends a prompt to an agent (new conversation, or a named one) or creates a card from a template.
-- Same lease mechanism as runs, so a restart doesn't double-fire.
+## 9. Workflows (replaced the scheduler, #170, 18 Nov 2026, `engine/src/workflows.ts`, `workflowTime.ts`)
+A workflow is a small graph: one **trigger** wired to **steps**. Mockup: paris's #165. The UI that edits graphs is #171;
+until then the Schedules page lists workflows (one-step ones editable, others as a row with on/off, Run now, Delete).
+- **Tables** (migration 0044): `workflows` (name, enabled, origin `'schedules'` when migrated, revision, next_run_at,
+  last_fired_at, last_error), `workflow_nodes` (kind trigger | agent | approval | condition, x, y, config JSON,
+  `own_card_id` = an agent step's kept task, runtime state outside the revision), `workflow_edges` (from node + named
+  exit → to node, one edge per exit), `workflow_runs` (number, state running | waiting | done | failed | stopped |
+  skipped, trigger time | manual, reason, times), `workflow_run_steps` (node, kind, round, state, exit, task, summary,
+  times). Every change is one transaction; `workflow.updated` / `workflow.deleted` / `workflow.run` go on the WebSocket
+  after commit.
+- **Graph rules** (checked on every save, refused with the reason): exactly one trigger, which can't be deleted; every
+  edge leaves from an existing node by one of its exits and goes to an existing node; each exit wired at most once;
+  agent steps name an existing agent; a cron and a time zone that parse; a one-shot date not in the past. Exits: trigger
+  `start`; agent `done` / `failed`; approval `approved` / `rejected`; condition `yes` / `no`. A graph save carries the
+  revision it was read at: a stale one is refused (409).
+- **Triggers** (v1): *time*, a cron in a time zone or once at a date (what schedules were), and *manual*. Run now works
+  on any workflow, even off. GitHub events and webhooks: later.
+- **Agent step**: the prompt goes to the agent as a new dated task each run, or onto the step's own task, reopened each
+  run so it keeps the history (done/todo/closed → ready; running: read at the next turn). Variables: `{{run.id}}`,
+  `{{previous.summary}}` (the handoff of the last agent step that ended), `{{previous.task}}`. The task's state picks
+  the exit: done → `done` (summary: the agent's task_complete / request_review text); closed, archived, deleted, or
+  blocked with kind `capability` (the agent can't do it; the task is then closed) → `failed`. Blocked on Master or in
+  review: the run is *waiting*.
+- **Approval**: a task blocked on Master (needs_input, options Approve / Reject) in the Inbox. The answer picks the
+  exit; anything else asks again. Closing the task rejects.
+- **Condition**, two tests, nothing judged by a model: « step X ran fewer than N times in this run » (a loop guard)
+  and « the previous step's summary contains <text> ».
+- **Ends**: an unwired exit ends the run. done / approved / yes / no end it Done; failed / rejected end it Failed with
+  the reason. A run reaching a deleted agent or a missing node fails with the reason (it never crashes the tick).
+- **One run at a time**: a trigger firing (time or Run now) while a run is open records a *skipped* run with the reason.
+  Stop run closes the run's open tasks and ends it Stopped. Deleting a workflow stops its open run; tasks stay.
+- **Durability**: the tick (every 15 s, and right after card or message events) fires due triggers, then moves every
+  open run from the stored state of its current step's task. A firing claims its slot (compare-and-set on
+  `next_run_at`) in the same transaction as the run and its first task: no double fire across restarts. Missed slots
+  fire once at start, noted in the run. Killing the engine mid-run loses nothing: at restart the next tick reads the
+  task and goes on.
+- **Schedules migrated**: each schedule became « trigger → one agent step » with its id, prompt, cron or date, zone,
+  task mode, on/off, next and last run, last error and its task; a schedule that had fired has run 1 (done) pointing at
+  its last task. Agents keep `schedule_create` / `schedule_list` / `schedule_delete` (same inputs), now on one-step
+  workflows (`schedule_delete` refuses a multi-step one). Task `created_by` is `workflow:<id>`.
+- **API**: `GET/POST /api/workflows`, `GET/PATCH/DELETE /api/workflows/:id` (PATCH: name, enabled),
+  `PUT /api/workflows/:id/graph` (revision check), `POST /api/workflows/:id/run`, `GET /api/workflows/:id/runs`,
+  `GET /api/workflow-runs/:id` (with steps), `POST /api/workflow-runs/:id/stop`, `POST /api/workflows/preview` (next
+  firings of a draft time trigger).
 
 ## 10. Tools (v1)
 | Tool | Notes |
@@ -341,7 +380,7 @@ Statuses: `triage → todo → ready → running → (blocked | review) → done
 | `card_*` | create, comment, block, complete, request_review, list, show |
 | `message_agent` | posts into the other agent's chat; the reply arrives as a message later |
 | `artifact_create`, `artifact_update`, `artifact_list`, `artifact_read` | artifacts (§11) |
-| `schedule_create`, `schedule_list`, `schedule_delete` | |
+| `schedule_create`, `schedule_list`, `schedule_delete` | one-step workflows (§9) |
 | `memory_add`, `memory_update`, `memory_forget`, `memory_search` | Memory v2 (§8). add(kind, scope self/shared, text, update?/new?): refused with the similar ones listed unless `update: id` or `new: true`; over the always-on budget → refused, asking to merge. update(id, text, kind?) and forget(id) on own and shared memories only; forget archives. search(query): own + shared, stale included. Replaced `memory_edit` (old transcripts still render it) |
 | `ask_user` | in chat runs only; on cards use `card_block(needs_input)` |
 
@@ -456,7 +495,7 @@ Each step ends with something the user can use.
    Settings screen.
 5. **Kanban**: cards, dispatcher, card tools, board UI, blocks and answers, review, « why not running ».
 6. **Multi-agent**: several agents, `message_agent`, memory, per-agent permissions.
-7. **Scheduler**: schedules, schedule tools, UI.
+7. **Scheduler**: schedules, schedule tools, UI (became Workflows, §9, #170).
 8. **Context management** (§8) with the summary fallback.
 9. **Artifacts** (§11).
 10. **Server mode** (§12 auth) and move to the VPS.

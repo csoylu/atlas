@@ -45,7 +45,7 @@ describe.skipIf(!ready)('screenshot with Chrome', () => {
        <div id="box"></div><button id="go" onclick="document.body.insertAdjacentHTML('beforeend','<p id=after>after</p>')">go</button>
        <script>console.error('mock says no'); fetch('/api/cards', { method: 'POST', body: '{}' }).catch(() => {}); setTimeout(() => { throw new Error('boom'); });</script>`,
     );
-    writeFileSync(join(wd, 'pages', 'inner.html'), `<p>inner</p><script>fetch('/api/schedules', { method: 'POST', mode: 'no-cors', body: 'x' }).catch(() => {})</script>`);
+    writeFileSync(join(wd, 'pages', 'inner.html'), `<p>inner</p><script>fetch('/api/workflows', { method: 'POST', mode: 'no-cors', body: 'x' }).catch(() => {})</script>`);
     writeFileSync(join(wd, 'pages', 'outer.html'), `<h1>outer</h1><iframe src="/api/files/atlas/pages/inner.html"></iframe>`);
   }, 30_000);
   afterAll(async () => {
@@ -87,7 +87,7 @@ describe.skipIf(!ready)('screenshot with Chrome', () => {
   it('frames in other processes (sandboxed pages, like mockups in a chat) settle and are read-only too', async () => {
     const r = await shoot({ target: 'pages/outer.html' });
     expect(r.isError, r.output).toBe(false);
-    expect(r.output).toContain('Writes refused (read-only):\n  POST /api/schedules');
+    expect(r.output).toContain('Writes refused (read-only):\n  POST /api/workflows');
   }, 30_000);
 
   it('clip shoots one element; actions run before the shot; wait_for waits for the result', async () => {
