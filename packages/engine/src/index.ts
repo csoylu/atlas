@@ -5,7 +5,7 @@ import { Bus } from './events.ts';
 import { Kanban } from './kanban.ts';
 import { Agents } from './agents.ts';
 import { Models, realProviders, type ProviderFactory } from './models.ts';
-import { Runner } from './runner.ts';
+import { Runner, type RunnerOptions } from './runner.ts';
 import { SideEffects } from './sideEffects.ts';
 import { Rewinds } from './rewind.ts';
 import { Slash } from './slash.ts';
@@ -84,7 +84,7 @@ export interface EngineOptions {
    */
   shellPath?: 'login' | 'engine' | ShellPathOptions;
   /** Pull requests of tasks In review (#189): how they are read (default: gh api) and how often (false: never by itself). */
-  prs?: { read?: GhRead; intervalMs?: number | false };
+  prs?: { read?: GhRead; intervalMs?: number | false; validate?: RunnerOptions['prTool'] };
   /** Projects (#213): how the repo check runs gh (default: gh with the engine's login-shell env). */
   projects?: { gh?: GhRun };
   /**
@@ -169,7 +169,7 @@ export async function startEngine(opts: EngineOptions): Promise<Engine> {
   const review = new MemoryReview(db, kanban, memories, models, agents, settings, usage);
   if (opts.memoryReview === false) review.after = () => {};
   const effects = new SideEffects(db, kanban, memories, workflows);
-  const runner = new Runner(db, bus, kanban, agents, models, memories, workflows, { fileLog, effects, dataDir: opts.dataDir, leaseMs: opts.leaseMs, maxTurns: opts.maxTurns, usage, user: () => settings.user(), documents, cleanup, review, isVoiceChat: voiceChat ? (id) => voiceChat.isVoiceChat(id) : undefined, engine: () => ({ url, cookie: () => (auth.enabled ? auth.issue().token : null), answer: (method, path) => screenshotAnswer(kanban, method, path) }), shellEnv, secrets });
+  const runner = new Runner(db, bus, kanban, agents, models, memories, workflows, { fileLog, effects, dataDir: opts.dataDir, leaseMs: opts.leaseMs, maxTurns: opts.maxTurns, usage, user: () => settings.user(), documents, cleanup, review, isVoiceChat: voiceChat ? (id) => voiceChat.isVoiceChat(id) : undefined, engine: () => ({ url, cookie: () => (auth.enabled ? auth.issue().token : null), answer: (method, path) => screenshotAnswer(kanban, method, path) }), shellEnv, secrets, prTool: opts.prs?.validate });
   const rewinds = new Rewinds(db, bus, kanban, agents, runner, opts.dataDir, fileLog, effects);
   const dispatcher = new Dispatcher(bus, kanban, agents, models, settings, runner);
   const slash = new Slash(db, bus, kanban, runner);

@@ -14,6 +14,8 @@ interface ProjectRow {
   id: string;
   name: string;
   repo: string | null;
+  ci_job: string | null;
+  changelog: number;
   lead: string | null;
   colour: number;
   status: 'active' | 'archived';
@@ -165,8 +167,8 @@ export class Projects {
         const colour = c.colour ?? PROJECT_HUES.find((h) => !used.has(h)) ?? PROJECT_HUES[used.size % PROJECT_HUES.length]!;
         const members = this.memberList(c.members, c.lead);
         this.db
-          .prepare('INSERT INTO projects (id, name, repo, lead, colour, created_at) VALUES (?, ?, ?, ?, ?, ?)')
-          .run(id, c.name, c.repo, c.lead, colour, new Date().toISOString());
+          .prepare('INSERT INTO projects (id, name, repo, ci_job, changelog, lead, colour, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?)')
+          .run(id, c.name, c.repo, c.ciJob, c.changelog ? 1 : 0, c.lead, colour, new Date().toISOString());
         for (const a of members) this.addMember(id, a);
         return id;
       })
@@ -189,6 +191,8 @@ export class Projects {
           if (p.repo && this.db.prepare('SELECT 1 FROM projects WHERE repo = ? COLLATE NOCASE').get(p.repo)) throw new ConflictError(`another project already has the repo ${p.repo}`);
           this.db.prepare('UPDATE projects SET repo = ? WHERE id = ?').run(p.repo, before.id);
         }
+        if (p.ciJob !== undefined) this.db.prepare('UPDATE projects SET ci_job = ? WHERE id = ?').run(p.ciJob, before.id);
+        if (p.changelog !== undefined) this.db.prepare('UPDATE projects SET changelog = ? WHERE id = ?').run(p.changelog ? 1 : 0, before.id);
         if (p.colour !== undefined) this.db.prepare('UPDATE projects SET colour = ? WHERE id = ?').run(p.colour, before.id);
         const lead = p.lead !== undefined ? p.lead : before.lead;
         if (p.lead !== undefined) {
@@ -285,7 +289,7 @@ export class Projects {
     const members = (this.db.prepare('SELECT * FROM project_members WHERE project_id = ? ORDER BY joined_at, rowid').all(r.id) as MemberRow[]).map(
       (m): ProjectMember => ({ agentId: m.agent_id, workspace: m.workspace, cloneState: m.clone_state, cloneError: m.clone_error, joinedAt: m.joined_at }),
     );
-    return { id: r.id, name: r.name, repo: r.repo, lead: r.lead, colour: r.colour, status: r.status, createdAt: r.created_at, archivedAt: r.archived_at, members, isDefault: r.id === def };
+    return { id: r.id, name: r.name, repo: r.repo, ciJob: r.ci_job, changelog: r.changelog === 1, lead: r.lead, colour: r.colour, status: r.status, createdAt: r.created_at, archivedAt: r.archived_at, members, isDefault: r.id === def };
   }
 
   private emit(id: string): Project {

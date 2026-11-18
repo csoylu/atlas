@@ -187,7 +187,7 @@ describe('store', () => {
     db.prepare("INSERT INTO conversations (id, kind) VALUES ('k', 'card')").run();
     db.prepare("INSERT INTO cards (id, title, status, conversation_id, created_by, created_at, updated_at) VALUES ('c_1', 't', 'ready', 'k', 'user', 'x', 'x')").run();
     db.prepare("INSERT INTO folders (id, name, created_at) VALUES ('fld_1', 'Feeds', 'x')").run();
-    expect(migrate(db)).toEqual(['0048_projects.sql']);
+    expect(migrate(db)[0]).toBe('0048_projects.sql'); // and every later one
     expect(db.prepare('SELECT id, name, repo, lead, status FROM projects').all()).toEqual([{ id: 'atlas', name: 'Atlas', repo: 'csoylu/atlas', lead: 'munih', status: 'active' }]);
     expect(db.prepare('SELECT agent_id, workspace, clone_state FROM project_members ORDER BY agent_id').all()).toEqual([
       { agent_id: 'atlas', workspace: null, clone_state: 'ready' },
@@ -198,6 +198,25 @@ describe('store', () => {
     for (const t of ['cards', 'folders', 'documents', 'workflows', 'memories']) expect(db.prepare(`SELECT COUNT(*) AS n FROM ${t} WHERE project_id IS NOT 'atlas'`).get()).toEqual({ n: 0 });
     expect(db.prepare('SELECT project_id FROM cards').all()).toEqual([{ project_id: 'atlas' }]);
     expect(db.pragma('foreign_key_check')).toEqual([]);
+    db.close();
+  });
+
+  it('0050 project gate: Atlas keeps CI job « test » and the changelog rule, another project gets any check, no changelog', () => {
+    const dir = join(dirname(fileURLToPath(import.meta.url)), 'migrations');
+    const db = new Database(':memory:');
+    db.exec('CREATE TABLE schema_migrations (name TEXT PRIMARY KEY, applied_at TEXT NOT NULL)');
+    db.pragma('foreign_keys = OFF');
+    for (const f of readdirSync(dir).filter((f) => /^\d{4}_.+\.sql$/.test(f) && f < '0050').sort()) {
+      db.exec(readFileSync(join(dir, f), 'utf8'));
+      db.prepare('INSERT INTO schema_migrations (name, applied_at) VALUES (?, ?)').run(f, 'x');
+    }
+    db.pragma('foreign_keys = ON');
+    db.prepare("INSERT INTO projects (id, name, repo, colour, created_at) VALUES ('datinel', 'Datinel', 'datinel/datinel', 200, 'x')").run();
+    migrate(db);
+    expect(db.prepare('SELECT id, ci_job, changelog FROM projects ORDER BY id').all()).toEqual([
+      { id: 'atlas', ci_job: 'test', changelog: 1 },
+      { id: 'datinel', ci_job: null, changelog: 0 },
+    ]);
     db.close();
   });
 });

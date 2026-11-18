@@ -122,10 +122,12 @@ with `process.env` directly: take `ctx.env()`.
   for Master: no Inbox item) and Atlas reads the PR from GitHub every minute (`gh api`, Master's gh login). When CI
   `test` is green, the reviewer's run starts **in the same task thread**: zurich (Settings → Board & triage → Review
   agent), or atlas for zurich's own PRs. No separate "Validate PR #N" task any more. The reviewer reads the diff and
-  checks it (code: tests, the feature in a build, screenshots for UI; docs only: read it), then runs
-  `node scripts/pr/validate.mjs <pr> --ok --sha <head> --as zurich "what was checked" --merge` or
-  `--fail --as zurich "why, for the builder"`. Atlas moves the task by itself: **merged → Done**; **CI red, a conflict
-  or `--fail` → Ready** for the builder, with the reason as a note in the thread; the builder fixes, pushes and calls
+  checks it (code: tests, the feature in a build, screenshots for UI; docs only: read it), then gives its verdict with
+  the engine's **`pr_validate` tool** (#216: `{pr, verdict: "ok", sha: <head>, reason: "what was checked"}`, merges
+  by default; or `{pr, verdict: "fail", reason: "why, for the builder"}`), offered only to the task's reviewer while
+  it is In review. Master's terminal: `node scripts/pr/validate.mjs <pr> --ok --sha <head> --as master "…" --merge`
+  (same gate, same code). Atlas moves the task by itself: **merged → Done**; **CI red, a conflict
+  or a failed validation → Ready** for the builder, with the reason as a note in the thread; the builder fixes, pushes and calls
   `task_request_review` again. Blocked only ever means "needs Master". When GitHub can't be read (gh logged out,
   offline) nothing moves; the card says why. The script refuses a base other than main, a head that moved, red
   CI and a PR without exactly one changelog entry. `--list` shows the
@@ -140,6 +142,17 @@ with `process.env` directly: take `ctx.env()`.
   CI on a conflicting head, so there CI that never ran on the old head is not required (#195); CI red or still running
   on it is still refused. The gate
   guards against accidents, not misuse: `--as` is a name anyone can type.
+- **Other projects (#216).** The same flow works for any project with a GitHub repo (Datinel: datinel/datinel). The gate
+  comes from the task's project: `repo`, `ciJob` (the check that must be green; empty = every check run on the head
+  green: success, neutral or skipped) and `changelog` (exactly one new CHANGELOG.md entry, and the changelog-only
+  auto-rebase above). Atlas: csoylu/atlas, `test`, on. A new project: no CI job, changelog off (a conflict is refused:
+  the builder rebases). Set them with `PATCH /api/projects/:id {"ciJob": "…", "changelog": true}`.
+  `task_request_review` refuses a PR of another repo than the task's project's (and a project without a repo). The
+  reviewer must be a member of the project (its review runs in its workspace for that project); otherwise nothing
+  starts and the card says « review agent @X is not a member of project Y ». The auto-rebase uses the reviewer's clone of
+  the repo in its workspace (the workspace or a folder right in it whose origin is the repo). On the GitHub side Master
+  sets, per repo, branch protection on main: required status `qa/validated`, plus the required CI check if there is one
+  (agents never change a repo's settings).
 - **Done means on main** (#126, #189): a task with a PR ends with `task_request_review` and becomes Done when the PR
   merges, by itself. A task with several branches links every PR. A task with no code (mockup, audit, report)
   finishes with `task_complete` as usual.
