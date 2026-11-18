@@ -25,6 +25,7 @@ import {
   PRUNE_MIN,
   PRUNE_TAIL,
   renderForSummary,
+  serverToolProblem,
   type Reading,
 } from './context.ts';
 import { runTool, toolSpecs } from './tools.ts';
@@ -495,6 +496,9 @@ export class Runner {
         // The task's pictures always go, whatever the number of newer ones (they open the view, the oldest place).
         const pinned = new Set(taskBlocks.filter((b): b is ImageBlock => b.type === 'image'));
         const wire = await withPictures(withTaskImages(view, taskBlocks), IMAGE_KEEP, pinned);
+        // A history the API would refuse fails the same way on every retry: stop with where it is (rule 3, #144).
+        const unsendable = serverToolProblem(wire);
+        if (unsendable) throw new ModelError(`the conversation's history can't be sent: ${unsendable}`);
 
         const res = await this.call(model.id, () => provider.complete(
           {
