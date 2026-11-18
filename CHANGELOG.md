@@ -6,6 +6,10 @@ computed by `scripts/release/changelog.mjs` from the oldest entry to the newest,
 `Fixed` → patch, `Added` or `Changed` → minor, `Breaking` (data or settings stop working without action) → major.
 Never type a version number.
 
+## Added · #178 · A test that only passed on a retry is now named in the test output and as a warning in CI
+
+vitest retries a failed test (twice in CI), which let a flaky test pass quietly. A small reporter (`scripts/test/retryReporter.ts`) now lists every test that failed and then passed on a retry, by name and file: in the console, and on GitHub Actions as a `::warning` annotation (vitest's own « Flaky Tests » section in the job summary and its failure annotations are kept). A run with no flaky test prints nothing. It reports only; the run stays green, fix the test.
+
 ## Changed · #189 · Tasks know their pull requests: a task with an open PR waits In review for QA and moves to Done by itself when the PR merges
 
 A builder ends its run with `task_request_review({summary, prs: [url]})`: the task goes **In review**, which now means « waiting for QA » (no Inbox item, not in « Needs you »), and shows « PR #N » with CI, conflicts and QA on the board tile and in the task view. Atlas reads each PR from GitHub every minute with `gh api` (your own gh login, no token stored). CI green → the review agent (Settings → Board & triage, zurich by default; atlas for zurich's own PRs) gets a run in the same task thread, no more « Validate PR #N » cards. Merged → Done; CI red, a conflict or a failed validation → back to Ready for the builder with the reason as a note. When GitHub can't be read nothing moves and the card says why (an Inbox item after 15 min). `task_complete` is refused while a linked PR is open. Migration 0045 (table `card_prs`, column `cards.reviewer`).
