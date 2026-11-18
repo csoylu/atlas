@@ -167,6 +167,23 @@ export interface FileChange {
   path: string;
   change: 'restored' | 'recreated' | 'deleted';
 }
+/**
+ * Something the rewound part did outside the chat and its files (card #138), and what the rewind does with it: `undone`
+ * (a task nobody started closed, a message nobody read withdrawn, a new memory archived, a new schedule turned off; Undo
+ * brings it back) or `kept` (already done or read: it can't be taken back), with why.
+ */
+export interface SideEffect {
+  kind: 'task' | 'task_change' | 'message' | 'memory' | 'memory_change' | 'schedule' | 'schedule_delete' | 'canvas' | 'push';
+  /** How it is named: « #131 Mockup: artifacts library », « @zurich », « m104 Library tiles… ». */
+  label: string;
+  /** The card a task or message is about (a link), else null. */
+  cardId: string | null;
+  outcome: 'undone' | 'kept';
+  /** What happened to it: closed, withdrawn, archived, turned off; « stays » when kept. */
+  action: string;
+  /** Why it is kept (« @munih already worked on it », « already read »), or null. */
+  why: string | null;
+}
 /** What rewinding to a user message would do (the confirm dialog). */
 export interface RewindPreview {
   seq: number;
@@ -175,6 +192,8 @@ export interface RewindPreview {
   files: FileChange[];
   /** Why files can't be restored (no snapshot before this message, git missing…); messages are still hidden. */
   filesError: string | null;
+  /** What the rewound part did elsewhere: undone or kept (#138). */
+  effects: SideEffect[];
 }
 /** A rewind done: `text` goes back in the composer; Undo with its id. */
 export interface RewindResult extends RewindPreview {
@@ -255,6 +274,8 @@ export interface RewindEvent {
   /** null while the files are still being put back. */
   files: FileChange[] | null;
   filesError: string | null;
+  /** What the rewound part did elsewhere: undone or kept (#138). */
+  effects: SideEffect[];
   /** Undo would work now (the latest rewind, nothing written since; a running agent still refuses it). */
   undoable: boolean;
 }

@@ -30,6 +30,7 @@ import {
 } from './context.ts';
 import { runTool, toolSpecs } from './tools.ts';
 import type { EngineAccess } from './screenshot.ts';
+import type { SideEffects } from './sideEffects.ts';
 import { withPictures } from './images.ts';
 import { taskImageBlocks, withTaskImages, workspaceName } from './taskImages.ts';
 import { cardToolSpecs, describeCard, isCardTool, runCardTool, type Terminal } from './cardTools.ts';
@@ -90,6 +91,8 @@ export interface RunnerOptions {
   review?: { after(cardId: string): void };
   /** Logs the files each tool call changed (Rewind puts back only its own chat's changes); omitted in runner-only tests. */
   fileLog?: FileLog;
+  /** What tool calls do outside the chat (tasks, messages, memories, schedules…), for rewinds (#138). */
+  effects?: SideEffects;
 }
 
 export interface WakeOptions {
@@ -538,6 +541,8 @@ export class Runner {
             let detail: ToolCallDetail | null = null;
             const live = this.liveTail(Number(lastInsertRowid), cardId);
             const invalid = invalidToolInput(u.input);
+            // Card, canvas and team tools run synchronously: what the tables gained in between is theirs (#138).
+            const mark = this.opts.effects && !invalid ? this.opts.effects.mark() : null;
             if (invalid) r = { output: invalid, isError: true };
             else if (isCardTool(u.name)) {
               const c = runCardTool(u.name, u.input, { kanban: this.kanban, agentId: agent.id, cardId });
@@ -578,6 +583,13 @@ export class Runner {
                 });
               const log = this.opts.fileLog;
               r = await (log ? log.track(cardId, workdir, u.name, u.input, exec) : exec()).finally(live.stop);
+            }
+            if (mark && !r.isError) {
+              try {
+                this.opts.effects!.record(cardId, agent.id, u.name, u.input, u.name === 'shell' ? null : mark);
+              } catch (e) {
+                console.error(`recording what ${u.name} did failed`, e);
+              }
             }
             // Files written by the agent become new document versions (a « changed » mark in open panels).
             if (this.opts.documents && WRITES_FILES.has(u.name)) this.opts.documents.sync(agent.id, agent.id, workCard);

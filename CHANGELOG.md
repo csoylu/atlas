@@ -10,6 +10,14 @@ Never type a version number.
 
 Canvases, nodes and whiteboards are gone. Agents now make artifacts: markdown documents, html pages, svg diagrams and links, each a versioned file (artifact_create, artifact_update, artifact_list, artifact_read). In the chat an artifact is a card that says its kind and version ("Updated to v3", "v4 is the latest") and opens that version. The viewer has one header row: tabs, a version picker (with "Restore vN"), Latest, Full size and a ⋯ menu (author, folder, path, source, open in the browser or the Library). The Library has flat folders (rename, delete moves items to Unfiled), "Recently modified" tiles that show the real content, pinned items on top, and search across titles and content. Existing canvases are converted once to html pages in a "Canvases" folder (migration 0041; the old table is kept as an archive). Converted canvases start at v1: their old version history stays only in the archived tables.
 
+## Added · #138 · A rewind says what it undoes and what it keeps, and takes back the tasks, messages, memories and schedules nobody acted on
+
+The « Rewind to this message? » dialog, the note above the composer and the « Rewound by you » row now list two groups: Undone (files, plus tasks the rewound part created that nobody started, closed; messages to agents or tasks not read yet, withdrawn; new memories, archived; new schedules that never ran, turned off) and Kept (a task someone already worked on, a message already read, changed memories, canvases, `git push`), with why. « No files changed » never stands alone when something else happened. Undo brings back everything undone (unless it changed since; the note says so). Two rewinds in a row show as one row, whose Undo undoes both. Tool calls now record what they did in a new `side_effects` table (migration 0043, which also adds `rewinds.effects`); rewinds made before this list nothing.
+
+## Changed · #126 · A task is done only once its code is on main
+
+CLAUDE.md's Releases section now says it: before finishing a task, check that none of its branches (`<type>/<N>-…`) has commits that are not on origin/main. If one does, merge it first, or block and name the branch. Tasks with no code finish as before. This is a project rule in CLAUDE.md, not an engine check (Master, 18 Nov 2026). No code change, no migration.
+
 ## Changed · #141 · A pull request can only merge into main once the QA agent has validated it
 
 GitHub cannot make an account approve its own pull request, and every agent uses Master's account, so the validation is a commit status, `qa/validated`, set on the PR's head commit by `scripts/pr/validate.mjs`. main requires it and the CI job `test`; a new commit on the PR clears it. The script refuses a PR not based on main, a head that moved since the review, red CI and a PR without exactly one changelog entry. CLAUDE.md's Releases section describes the flow. No code change in the app, no migration.

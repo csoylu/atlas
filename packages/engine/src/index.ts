@@ -6,6 +6,7 @@ import { Kanban } from './kanban.ts';
 import { Agents } from './agents.ts';
 import { Models, realProviders, type ProviderFactory } from './models.ts';
 import { Runner } from './runner.ts';
+import { SideEffects } from './sideEffects.ts';
 import { Rewinds } from './rewind.ts';
 import { Slash } from './slash.ts';
 import { FileLog } from './fileLog.ts';
@@ -141,8 +142,9 @@ export async function startEngine(opts: EngineOptions): Promise<Engine> {
   const fileLog = new FileLog(db, new Snapshots(join(opts.dataDir, 'checkpoints')));
   const review = new MemoryReview(db, kanban, memories, models, agents, settings, usage);
   if (opts.memoryReview === false) review.after = () => {};
-  const runner = new Runner(db, bus, kanban, agents, models, memories, schedules, { fileLog, dataDir: opts.dataDir, leaseMs: opts.leaseMs, maxTurns: opts.maxTurns, usage, user: () => settings.user(), documents, cleanup, review, isVoiceChat: voiceChat ? (id) => voiceChat.isVoiceChat(id) : undefined, engine: () => ({ url, cookie: () => (auth.enabled ? auth.issue().token : null), answer: (method, path) => screenshotAnswer(kanban, method, path) }) });
-  const rewinds = new Rewinds(db, bus, kanban, agents, runner, opts.dataDir, fileLog);
+  const effects = new SideEffects(db, kanban, memories, schedules);
+  const runner = new Runner(db, bus, kanban, agents, models, memories, schedules, { fileLog, effects, dataDir: opts.dataDir, leaseMs: opts.leaseMs, maxTurns: opts.maxTurns, usage, user: () => settings.user(), documents, cleanup, review, isVoiceChat: voiceChat ? (id) => voiceChat.isVoiceChat(id) : undefined, engine: () => ({ url, cookie: () => (auth.enabled ? auth.issue().token : null), answer: (method, path) => screenshotAnswer(kanban, method, path) }) });
+  const rewinds = new Rewinds(db, bus, kanban, agents, runner, opts.dataDir, fileLog, effects);
   const dispatcher = new Dispatcher(bus, kanban, agents, models, settings, runner);
   const slash = new Slash(db, bus, kanban, runner);
   const updater = new Updater(db, bus, {
