@@ -7,6 +7,7 @@ import { ArtifactViewer, KindIcon } from './Viewer.tsx';
 import { Icon } from './ScreenHeader.tsx';
 import { PopItem } from './HeadMenu.tsx';
 import { libraryHref } from './library.ts';
+import type { PanelResize } from './PanelResizer.tsx';
 
 /** What « Ask about this » puts in the composer: the reference sent with the message and the chip's label. */
 export interface Quote {
@@ -51,6 +52,8 @@ export function DocPanel(props: {
   chatId: string;
   tabs: PanelTab[];
   mode: PanelMode;
+  /** Drag handle and width (#211); none on a phone. */
+  resize?: PanelResize;
   userName: string | null;
   want: { docId: string; version: number; key: string } | null;
   stream: MessageStream;
@@ -74,7 +77,8 @@ export function DocPanel(props: {
   const phone = props.mode === 'full';
   const mode = phone || full ? 'full' : props.mode;
   return (
-    <aside className={'side-doc ' + mode} aria-label="Artifacts">
+    <aside className={'side-doc ' + mode} aria-label="Artifacts" style={props.resize && mode !== 'full' ? { width: props.resize.width } : undefined}>
+      {mode !== 'full' && props.resize?.handle}
       <ArtifactViewer
         doc={doc}
         mode="panel"

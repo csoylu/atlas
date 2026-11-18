@@ -973,6 +973,12 @@ button.tool .icon { color: var(--muted); font-family: var(--mono); }
   .strip-gauges { flex: 0 0 auto; } /* holds « ◔ 65% » and the plan gauge; the model pill shrinks (ellipsis) instead */
   .composer-strip .pick-menu { flex: 1 1 auto; }
 }
+/* The same in a chat made narrow by a wide side panel (#211; .chat-pane is the container). */
+@container (max-width: 560px) {
+  .strip-word, .strip-ctx .strip-dot, .strip-ctx .num { display: none; }
+  .strip-gauges { flex: 0 0 auto; }
+  .composer-strip .pick-menu { flex: 1 1 auto; }
+}
 .ring { flex: none; }
 .ring-track { fill: none; stroke: var(--active); stroke-width: 2.2; }
 .ring-fill { fill: none; stroke: var(--accent); stroke-width: 2.2; stroke-linecap: round; }
@@ -1428,6 +1434,15 @@ a.web-hit:hover { background: var(--hover); }
 /* 960px and below: over the chat; phones: the whole sheet. */
 .side-doc.overlay { position: absolute; inset: 0 0 0 auto; width: min(560px, 94%); z-index: 20; box-shadow: var(--float-shadow); border-left-color: var(--border); }
 .side-doc.full { position: absolute; inset: 0; width: 100%; z-index: 20; border: 0; }
+/* The separator between the chat and the panel (#211): an 8px grab area astride the border, a 2px accent line on
+   hover, drag or focus. Absolute, so it never shifts the layout. While dragging, iframes ignore the pointer. */
+.side-doc.side { position: relative; }
+.sd-resize { position: absolute; top: 0; bottom: 0; left: -4px; width: 8px; z-index: 25; cursor: col-resize; touch-action: none; }
+.sd-resize::after { content: ''; position: absolute; top: 0; bottom: 0; left: 3px; width: 2px; background: transparent; transition: background 0.12s; }
+.sd-resize:hover::after, .sd-resize:focus-visible::after, .panel-resizing .sd-resize::after { background: var(--accent); }
+.sd-resize:focus-visible { outline: none; }
+body.panel-resizing { cursor: col-resize; user-select: none; }
+body.panel-resizing iframe { pointer-events: none; }
 .sd-head { height: 44px; flex: none; display: flex; align-items: center; gap: 4px; padding: 0 8px; border-bottom: 1px solid var(--rule); }
 .sd-tabs { flex: 1; min-width: 0; display: flex; gap: 2px; overflow-x: auto; scrollbar-width: none; }
 .sd-tab { flex: none; display: flex; align-items: center; max-width: 220px; border-radius: 7px; color: var(--muted); }

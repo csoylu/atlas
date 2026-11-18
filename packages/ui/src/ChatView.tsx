@@ -1,4 +1,5 @@
-import { useEffect, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
+import { usePanelResize } from './PanelResizer.tsx';
 import { cardRef, type Agent, type Card, type Model } from '@atlas/shared';
 import { ThreadPanel } from './ThreadPanel.tsx';
 import { api } from './api.ts';
@@ -58,6 +59,8 @@ function ChatWithPanel(props: Parameters<typeof ChatView>[0] & { chat: Card }) {
   const { chat, stream, onError } = props;
   const tabs = usePanelTabs(chat.id, stream, onError);
   const mode = usePanelMode();
+  const viewRef = useRef<HTMLDivElement>(null);
+  const resize = usePanelResize(viewRef, mode);
   const [quote, setQuote] = useState<Quote | null>(null);
   const [hidden, setHidden] = useState(false);
   const [want, setWant] = useState<{ docId: string; version: number; key: string } | null>(null);
@@ -82,7 +85,7 @@ function ChatWithPanel(props: Parameters<typeof ChatView>[0] & { chat: Card }) {
   }, [hasTabs]);
   const focusComposer = () => setTimeout(() => document.querySelector<HTMLTextAreaElement>('.chat-pane .composer textarea')?.focus(), 0);
   return (
-    <div className={'chat-view' + (show || thread ? ' with-doc ' + mode : '')}>
+    <div ref={viewRef} className={'chat-view' + (show || thread ? ' with-doc ' + mode : '')}>
       <CardPanel
         plan={chat.modelId ? props.models.find((m) => m.id === chat.modelId)?.provider === 'chatgpt' : props.planAgents.has(chat.assignee ?? '')}
         models={props.models}
@@ -117,6 +120,7 @@ function ChatWithPanel(props: Parameters<typeof ChatView>[0] & { chat: Card }) {
           models={props.models}
           plan={thread.modelId ? props.models.find((m) => m.id === thread.modelId)?.provider === 'chatgpt' : props.planAgents.has(thread.assignee ?? '')}
           mode={mode}
+          resize={resize}
           stream={stream}
           userName={props.userName}
           onOpen={openCard}
@@ -140,6 +144,7 @@ function ChatWithPanel(props: Parameters<typeof ChatView>[0] & { chat: Card }) {
           chatId={chat.id}
           tabs={tabs}
           mode={mode}
+          resize={resize}
           userName={props.userName}
           want={want}
           stream={stream}
