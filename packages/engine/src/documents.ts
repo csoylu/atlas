@@ -7,7 +7,7 @@ import type { Bus } from './events.ts';
 import { canvasPage } from './canvasPage.ts';
 import { ConflictError, InvalidError, NotFoundError, type Kanban } from './kanban.ts';
 import { inside } from './tools.ts';
-import { assertActive, defaultProjectId } from './projects.ts';
+import { assertActive, defaultProjectId, workspaceOf, workspacesOf } from './projects.ts';
 
 const KEEP_VERSIONS = 50;
 /** Bigger files are not documents (the panel renders them whole). */
@@ -34,11 +34,18 @@ interface Row {
   project_id: string;
   /** COALESCE(chat_id, the card's origin chat), from DOC_SELECT. */
   chat: string | null;
+  /** How its workspace is served (#214), from DOC_SELECT. */
+  files_root: string;
 }
 /** Documents with the chat they belong to: where first opened, else where their card came from. */
 /** Documents of active projects (#213): archived projects are hidden unless asked. */
 const ACTIVE_PROJECT = "d.project_id IN (SELECT id FROM projects WHERE status = 'active')";
-const DOC_SELECT = 'SELECT d.*, COALESCE(d.chat_id, c.origin_card) AS chat FROM documents d LEFT JOIN cards c ON c.id = d.card_id';
+// files_root (#214, projects.ts filesRoot): the agent's id for its home workspace, <agent>@<project> for a clone.
+const DOC_SELECT = `SELECT d.*, COALESCE(d.chat_id, c.origin_card) AS chat,
+  CASE WHEN COALESCE((SELECT m.home FROM project_members m WHERE m.agent_id = d.agent_id AND m.project_id = d.project_id),
+                     (SELECT k.home FROM kept_workspaces k WHERE k.agent_id = d.agent_id AND k.project_id = d.project_id), 1) = 1
+       THEN d.agent_id ELSE d.agent_id || '@' || d.project_id END AS files_root
+  FROM documents d LEFT JOIN cards c ON c.id = d.card_id`;
 const toDoc = (r: Row): Doc => ({
   id: r.id,
   agentId: r.agent_id,
@@ -54,6 +61,7 @@ const toDoc = (r: Row): Doc => ({
   chatId: r.chat,
   fromCanvas: r.from_canvas,
   projectId: r.project_id,
+  filesRoot: r.files_root,
 });
 
 const stampOf = (file: string) => {
@@ -71,13 +79,17 @@ export class Documents {
     private db: Db,
     private bus: Bus,
     private kanban: Kanban,
-    /** An agent's workspace folder. */
-    private workdirOf: (agentId: string) => string,
+    private dataDir: string,
   ) {}
 
+  /** The agent's workspace in a project (#214): throws when it has none there or it is not ready (never another one). */
+  private root(agentId: string, projectId: string): string {
+    return workspaceOf(this.db, this.dataDir, agentId, projectId);
+  }
+
   /**
-   * The project of a new artifact (#213): the project of the task or chat it is made in, else the default one. (Every
-   * workspace is in the default project until #214 gives each project its own.)
+   * The project of a new artifact (#213): the project of the task or chat it is made in, else the default one. Its
+   * file goes in the agent's workspace of that project (#214).
    */
   private projectFor(cardId: string | null): string {
     const r = cardId ? (this.db.prepare('SELECT project_id FROM cards WHERE id = ?').get(cardId) as { project_id: string } | undefined) : undefined;
@@ -220,11 +232,11 @@ export class Documents {
    * unless `path` is given) and indexed as v1. A link's content is its address.
    */
   create(agentId: string, a: { kind: DocKind; title: string; content: string; path?: string; folder?: string | null }, by: string, cardId: string | null = null): Doc {
-    const root = this.workdirOf(agentId);
     const project = this.projectFor(cardId);
     assertActive(this.db, project, 'its Library');
+    const root = this.root(agentId, project);
     const spec = KIND_FILE[a.kind];
-    let rel = a.path?.trim() ? this.rel(agentId, a.path.trim()) : null;
+    let rel = a.path?.trim() ? this.rel(root, a.path.trim()) : null;
     if (rel && docKindOf(rel) !== a.kind) throw new InvalidError(`${rel}: a ${a.kind} artifact needs a .${spec.ext} file`);
     if (!rel) {
       const base = slug(a.title) || 'untitled';
@@ -238,7 +250,7 @@ export class Documents {
     const full = inside(root, rel);
     mkdirSync(dirname(full), { recursive: true });
     writeFileSync(full, content);
-    const doc = this.record(agentId, rel, content, stampOf(full).stamp, by, cardId, a.title.trim()).doc;
+    const doc = this.record(agentId, project, rel, content, stampOf(full).stamp, by, cardId, a.title.trim()).doc;
     if (folder) this.db.prepare('UPDATE documents SET folder_id = ? WHERE id = ?').run(folder.id, doc.id);
     return folder ? this.emitDoc(doc.id) : doc;
   }
@@ -258,9 +270,9 @@ export class Documents {
     else next = current;
     if (Buffer.byteLength(next) > MAX_DOC_BYTES) throw new InvalidError(`artifacts are at most ${MAX_DOC_BYTES} bytes`);
     if (change.title !== undefined) this.db.prepare('UPDATE documents SET name = ? WHERE id = ?').run(change.title.trim() || null, id);
-    const full = inside(this.workdirOf(doc.agentId), doc.path);
+    const full = inside(this.root(doc.agentId, doc.projectId), doc.path);
     writeFileSync(full, next);
-    const res = this.record(doc.agentId, doc.path, next, stampOf(full).stamp, by, cardId);
+    const res = this.record(doc.agentId, doc.projectId, doc.path, next, stampOf(full).stamp, by, cardId);
     // A rename alone: the title changes without a new version.
     if (!res.changed && change.title !== undefined) {
       this.db.prepare('UPDATE documents SET title = ? WHERE id = ?').run(docTitle(doc.path, next, change.title.trim() || null), id);
@@ -272,7 +284,7 @@ export class Documents {
   /** An artifact by id, or by a path in the agent's workspace (indexed on the way). */
   resolve(agentId: string, ref: string, cardId: string | null = null): Doc {
     if (/^doc_[\w-]+$/.test(ref)) return this.get(ref);
-    return this.byPath(agentId, ref) ?? this.indexFile(agentId, ref, agentId, cardId);
+    return this.byPath(agentId, ref, cardId) ?? this.indexFile(agentId, ref, agentId, cardId);
   }
 
   /**
@@ -296,7 +308,8 @@ export class Documents {
     let n = 0;
     for (const c of todo) {
       const agentId = agents.includes(c.updated_by) ? c.updated_by : agents.includes('atlas') ? 'atlas' : agents[0]!;
-      const root = this.workdirOf(agentId);
+      const project = this.projectFor(null);
+      const root = this.root(agentId, project);
       let nodes: unknown[] = [];
       try {
         nodes = JSON.parse(c.nodes) as unknown[];
@@ -309,7 +322,7 @@ export class Documents {
       const full = inside(root, rel);
       mkdirSync(dirname(full), { recursive: true });
       writeFileSync(full, html);
-      const doc = this.record(agentId, rel, html, stampOf(full).stamp, c.updated_by, null, c.name).doc;
+      const doc = this.record(agentId, project, rel, html, stampOf(full).stamp, c.updated_by, null, c.name).doc;
       this.db.prepare('UPDATE documents SET folder_id = ?, from_canvas = ?, updated_at = ? WHERE id = ?').run(folder.id, c.id, c.updated_at, doc.id);
       this.db.prepare('UPDATE document_versions SET updated_at = ? WHERE doc_id = ?').run(c.updated_at, doc.id);
       this.emitDoc(doc.id);
@@ -318,21 +331,23 @@ export class Documents {
     return n;
   }
 
-  /** The document of a workspace file, if indexed. */
-  byPath(agentId: string, path: string): Doc | null {
-    const rel = this.rel(agentId, path);
-    const row = this.db.prepare(DOC_SELECT + ' WHERE d.agent_id = ? AND d.path = ?').get(agentId, rel) as Row | undefined;
+  /** The document of a file in the agent's workspace of `cardId`'s project (default project without a card), if indexed. */
+  byPath(agentId: string, path: string, cardId: string | null = null): Doc | null {
+    const project = this.projectFor(cardId);
+    const rel = this.rel(this.root(agentId, project), path);
+    const row = this.db.prepare(DOC_SELECT + ' WHERE d.agent_id = ? AND d.project_id = ? AND d.path = ?').get(agentId, project, rel) as Row | undefined;
     return row ? toDoc(row) : null;
   }
 
   /**
-   * Index one file of an agent's workspace: create its document, or add a version if the content changed.
-   * `cardId` attaches the document to that card when it isn't attached yet.
+   * Index one file of an agent's workspace (of `cardId`'s project): create its document, or add a version if the
+   * content changed. `cardId` attaches the document to that card when it isn't attached yet.
    */
   indexFile(agentId: string, path: string, by: string, cardId: string | null = null): Doc {
-    const root = this.workdirOf(agentId);
+    const project = this.projectFor(cardId);
+    const root = this.root(agentId, project);
     const full = inside(root, path);
-    const rel = this.rel(agentId, path);
+    const rel = this.rel(root, path);
     if (!docKindOf(rel)) throw new InvalidError(`${rel}: artifacts are .md, .html, .svg and .url files`);
     let st: ReturnType<typeof stampOf>;
     try {
@@ -343,35 +358,40 @@ export class Documents {
     if (!st.isFile) throw new InvalidError(`${rel} is not a file`);
     if (st.size > MAX_DOC_BYTES) throw new InvalidError(`${rel} is ${st.size} bytes; documents are at most ${MAX_DOC_BYTES}`);
     const content = readFileSync(full, 'utf8');
-    return this.record(agentId, rel, content, st.stamp, by, cardId).doc;
+    return this.record(agentId, project, rel, content, st.stamp, by, cardId).doc;
   }
 
   /**
    * Re-read the agent's indexed files that changed on disk, and index new files in docs/, pages/ and diagrams/.
+   * `cardId`: only the workspace of its project (after a run's file tools); else every ready workspace of the agent.
    * Returns the documents that got a new version. Missing files are left as they were (their versions stay readable).
    */
   sync(agentId: string, by: string, cardId: string | null = null): Doc[] {
-    const root = this.workdirOf(agentId);
+    const spaces = cardId
+      ? [{ projectId: this.projectFor(cardId), dir: this.root(agentId, this.projectFor(cardId)) }]
+      : workspacesOf(this.db, this.dataDir, agentId);
     const changed: Doc[] = [];
-    const known = this.db.prepare('SELECT * FROM documents WHERE agent_id = ?').all(agentId) as Row[];
-    const seen = new Set<string>();
-    for (const r of known) {
-      seen.add(r.path);
-      let st: ReturnType<typeof stampOf>;
-      try {
-        st = stampOf(inside(root, r.path));
-      } catch {
-        continue; // deleted or moved: keep the versions
+    for (const { projectId, dir: root } of spaces) {
+      const known = this.db.prepare('SELECT * FROM documents WHERE agent_id = ? AND project_id = ?').all(agentId, projectId) as Row[];
+      const seen = new Set<string>();
+      for (const r of known) {
+        seen.add(r.path);
+        let st: ReturnType<typeof stampOf>;
+        try {
+          st = stampOf(inside(root, r.path));
+        } catch {
+          continue; // deleted or moved: keep the versions
+        }
+        if (st.stamp === r.file_stamp || !st.isFile || st.size > MAX_DOC_BYTES) continue;
+        const res = this.record(agentId, projectId, r.path, readFileSync(inside(root, r.path), 'utf8'), st.stamp, by, cardId);
+        if (res.changed) changed.push(res.doc);
       }
-      if (st.stamp === r.file_stamp || !st.isFile || st.size > MAX_DOC_BYTES) continue;
-      const res = this.record(agentId, r.path, readFileSync(inside(root, r.path), 'utf8'), st.stamp, by, cardId);
-      if (res.changed) changed.push(res.doc);
-    }
-    for (const rel of this.scan(root)) {
-      if (seen.has(rel)) continue;
-      const st = stampOf(join(root, rel));
-      if (st.size > MAX_DOC_BYTES) continue;
-      changed.push(this.record(agentId, rel, readFileSync(join(root, rel), 'utf8'), st.stamp, by, cardId).doc);
+      for (const rel of this.scan(root)) {
+        if (seen.has(rel)) continue;
+        const st = stampOf(join(root, rel));
+        if (st.size > MAX_DOC_BYTES) continue;
+        changed.push(this.record(agentId, projectId, rel, readFileSync(join(root, rel), 'utf8'), st.stamp, by, cardId).doc);
+      }
     }
     return changed;
   }
@@ -404,9 +424,9 @@ export class Documents {
     const doc = this.get(id);
     assertActive(this.db, doc.projectId, 'its Library');
     const { content } = this.content(id, version);
-    const full = inside(this.workdirOf(doc.agentId), doc.path);
+    const full = inside(this.root(doc.agentId, doc.projectId), doc.path);
     writeFileSync(full, content);
-    return this.record(doc.agentId, doc.path, content, stampOf(full).stamp, by, null).doc;
+    return this.record(doc.agentId, doc.projectId, doc.path, content, stampOf(full).stamp, by, null).doc;
   }
 
   attach(id: string, cardId: string): Doc {
@@ -498,22 +518,22 @@ export class Documents {
     return last && last >= now ? new Date(Date.parse(last) + 1).toISOString() : now;
   }
 
-  private rel(agentId: string, path: string): string {
-    const root = this.workdirOf(agentId);
+  private rel(root: string, path: string): string {
     return relative(root, inside(root, path)).split(sep).join('/');
   }
 
   private resync(doc: Doc): Doc {
-    const root = this.workdirOf(doc.agentId);
+    let root: string;
     let st: ReturnType<typeof stampOf>;
     try {
+      root = this.root(doc.agentId, doc.projectId);
       st = stampOf(inside(root, doc.path));
     } catch {
-      return doc;
+      return doc; // file gone, or no workspace there any more (a removed member's): its versions stay readable
     }
     const row = this.db.prepare('SELECT file_stamp FROM documents WHERE id = ?').get(doc.id) as { file_stamp: string | null };
     if (st.stamp === row.file_stamp || !st.isFile || st.size > MAX_DOC_BYTES) return doc;
-    return this.record(doc.agentId, doc.path, readFileSync(inside(root, doc.path), 'utf8'), st.stamp, doc.agentId, null).doc;
+    return this.record(doc.agentId, doc.projectId, doc.path, readFileSync(inside(root, doc.path), 'utf8'), st.stamp, doc.agentId, null).doc;
   }
 
   /** docs/, pages/, diagrams/, links/ artifact files (3 levels deep, capped). */
@@ -537,19 +557,19 @@ export class Documents {
     return out;
   }
 
-  private record(agentId: string, rel: string, content: string, stamp: string, by: string, cardId: string | null, name: string | null = null): { doc: Doc; changed: boolean } {
+  private record(agentId: string, projectId: string, rel: string, content: string, stamp: string, by: string, cardId: string | null, name: string | null = null): { doc: Doc; changed: boolean } {
     const kind = docKindOf(rel)!;
     const now = new Date().toISOString();
     let changed = false;
     const doc = this.db
       .transaction(() => {
-        const row = this.db.prepare('SELECT * FROM documents WHERE agent_id = ? AND path = ?').get(agentId, rel) as Row | undefined;
+        const row = this.db.prepare('SELECT * FROM documents WHERE agent_id = ? AND project_id = ? AND path = ?').get(agentId, projectId, rel) as Row | undefined;
         const title = docTitle(rel, content, row?.name ?? name);
         if (!row) {
           const id = newId();
           this.db
             .prepare('INSERT INTO documents (id, agent_id, path, kind, title, card_id, version, updated_by, updated_at, file_stamp, name, project_id) VALUES (?, ?, ?, ?, ?, ?, 1, ?, ?, ?, ?, ?)')
-            .run(id, agentId, rel, kind, title, cardId, by, now, stamp, name, this.projectFor(cardId));
+            .run(id, agentId, rel, kind, title, cardId, by, now, stamp, name, projectId);
           this.db.prepare('INSERT INTO document_versions VALUES (?, 1, ?, ?, ?)').run(id, content, by, now);
           changed = true;
           return this.get(id);

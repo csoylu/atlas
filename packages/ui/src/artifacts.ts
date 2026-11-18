@@ -33,7 +33,7 @@ export function isImageUrl(url: string): boolean {
 }
 
 /** The file as served by the engine (html pages load relative assets from there). */
-export const fileUrl = (doc: Pick<Doc, 'agentId' | 'path'>) => `/api/files/${encodeURIComponent(doc.agentId)}/${doc.path.split('/').map(encodeURIComponent).join('/')}`;
+export const fileUrl = (doc: Pick<Doc, 'agentId' | 'path'> & { filesRoot?: string }) => `/api/files/${encodeURIComponent(doc.filesRoot ?? doc.agentId)}/${doc.path.split('/').map(encodeURIComponent).join('/')}`;
 
 /** « vN » on the latest version, « vN of M » on an older one. */
 export const versionLabel = (shown: number, latest: number) => (shown < latest ? `v${shown} of ${latest}` : `v${shown}`);

@@ -14,7 +14,10 @@ export const RepoName = z
   .trim()
   .regex(/^[A-Za-z0-9-]+\/[A-Za-z0-9._-]+$/, 'a GitHub repo is owner/name');
 
-/** A member's workspace: `ready` = usable; cloning comes with #214. */
+/**
+ * A member's workspace (#214): `pending` = queued, `cloning` = git is fetching it (or making the empty folder of a
+ * project without a repo), `ready` = usable, `failed` = the clone failed (cloneError says why; retry).
+ */
 export const CloneState = z.enum(['pending', 'cloning', 'ready', 'failed']);
 export type CloneState = z.infer<typeof CloneState>;
 
@@ -24,7 +27,22 @@ export interface ProjectMember {
   workspace: string | null;
   cloneState: CloneState;
   cloneError: string | null;
+  /** Works in the agent's own workdir (the first project, as before projects): nothing is cloned. */
+  home: boolean;
+  /** While cloning: git's progress 0-100 (receiving objects), null before git says it. Not stored. */
+  cloneProgress: number | null;
+  /** Its main chat in this project (#214): created on first use; null = none yet. */
+  mainChat: string | null;
   joinedAt: string;
+}
+
+/** A removed member's workspace (#214): kept on disk until Master deletes it. */
+export interface KeptWorkspace {
+  agentId: string;
+  path: string;
+  /** The agent's own workdir (the first project's workspace): never deleted from Atlas. */
+  home: boolean;
+  keptAt: string;
 }
 
 export interface Project {
@@ -47,6 +65,8 @@ export interface Project {
   createdAt: string;
   archivedAt: string | null;
   members: ProjectMember[];
+  /** Workspaces of removed members, still on disk. */
+  kept: KeptWorkspace[];
   /** The default project: what a task, chat or artifact gets when no project is given (the oldest active one). */
   isDefault: boolean;
 }
@@ -72,7 +92,7 @@ export const CreateProject = z.object({
 });
 export type CreateProject = z.input<typeof CreateProject>;
 
-/** PATCH /api/projects/:id. The repo is fixed once set: giving another one is refused. */
+/** PATCH /api/projects/:id. The repo is fixed once a member's clone is ready: giving another one is refused. */
 export const UpdateProject = z
   .object({
     name: z.string().trim().min(1).max(60),

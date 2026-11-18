@@ -12,6 +12,8 @@ import WebSocket from 'ws';
 export interface EngineAccess {
   url: string;
   agentId: string;
+  /** How the run's workspace is served (#214): `/api/files/<filesRoot>/…`; omitted = the agent's id (its home workspace). */
+  filesRoot?: string;
   /** Value of the session cookie when the engine has a login (server mode); null without login. */
   cookie: () => string | null;
   /**
@@ -68,7 +70,7 @@ export function findChrome(env: NodeJS.ProcessEnv = process.env, exists: (p: str
  * Where the target lives, as a path + hash on the engine. Routes (`#/chat/paris`) are the app; `/api/files/<agent>/…`
  * a served workspace file; a relative path a file in the caller's workspace. Anything else (other sites) is refused.
  */
-export function resolveTarget(target: string, o: { agentId: string; workdir: string; theme?: 'dark' | 'light' }): { path: string; kind: 'app' | 'file' } {
+export function resolveTarget(target: string, o: { agentId: string; filesRoot?: string; workdir: string; theme?: 'dark' | 'light' }): { path: string; kind: 'app' | 'file' } {
   const t = target.trim();
   if (!t) throw new Error('target is empty: give a route like #/board, or a workspace file like pages/x.html');
   if (/^[a-z][a-z0-9+.-]*:/i.test(t) || t.startsWith('//'))
@@ -90,7 +92,7 @@ export function resolveTarget(target: string, o: { agentId: string; workdir: str
   const rel = relative(o.workdir, full);
   if (rel === '' || rel === '..' || rel.startsWith('..' + sep)) throw new Error(`${t} is outside your workspace`);
   if (!existsSync(full)) throw new Error(`${t} does not exist in your workspace`);
-  return { path: `/api/files/${encodeURIComponent(o.agentId)}/${rel.split(sep).map(encodeURIComponent).join('/')}${more.join('')}`, kind: 'file' };
+  return { path: `/api/files/${encodeURIComponent(o.filesRoot ?? o.agentId)}/${rel.split(sep).map(encodeURIComponent).join('/')}${more.join('')}`, kind: 'file' };
 }
 
 /**
@@ -268,7 +270,7 @@ export async function takeScreenshot(
   ctx: { engine: EngineAccess; workdir: string; signal: AbortSignal; onSpawn?: (pid: number) => void; chromePath?: string; now?: Date },
 ): Promise<ShotResult> {
   const chromePath = ctx.chromePath ?? findChrome();
-  const target = resolveTarget(o.target, { agentId: ctx.engine.agentId, workdir: ctx.workdir, theme: o.theme });
+  const target = resolveTarget(o.target, { agentId: ctx.engine.agentId, filesRoot: ctx.engine.filesRoot, workdir: ctx.workdir, theme: o.theme });
   const base = new URL(ctx.engine.url);
   const url = base.origin + target.path;
   const timeout = new AbortController();
@@ -307,7 +309,7 @@ export async function takeScreenshot(
         let where = request.url;
         try {
           const u = new URL(request.url);
-          where = u.origin === base.origin ? u.pathname : u.origin + u.pathname;
+          where = u.origin === base.origin ? u.pathname + u.search : u.origin + u.pathname;
         } catch {
           // keep the raw url
         }
@@ -460,11 +462,11 @@ export async function takeScreenshot(
 }
 
 /** The read-only answers the engine gives the page for lookups the app makes with a POST (see EngineAccess.answer). */
-export function screenshotAnswer(kanban: { existingMainChat(agentId: string): unknown }, method: string, path: string): unknown {
-  const m = method === 'POST' ? /^\/api\/agents\/([^/]+)\/main-chat$/.exec(path) : null;
+export function screenshotAnswer(kanban: { existingMainChat(agentId: string, projectId?: string): unknown }, method: string, path: string): unknown {
+  const m = method === 'POST' ? /^\/api\/agents\/([^/]+)\/main-chat(?:\?project=([^&]+))?$/.exec(path) : null;
   if (!m) return undefined;
   try {
-    return kanban.existingMainChat(decodeURIComponent(m[1]!)) ?? undefined;
+    return kanban.existingMainChat(decodeURIComponent(m[1]!), m[2] ? decodeURIComponent(m[2]) : undefined) ?? undefined;
   } catch {
     return undefined;
   }

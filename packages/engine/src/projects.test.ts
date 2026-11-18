@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it } from 'vitest';
-import { mkdtempSync } from 'node:fs';
+import { mkdirSync, mkdtempSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { startEngine, type Engine } from './index.ts';
@@ -7,7 +7,16 @@ import { FakeProvider } from './providers/fake.ts';
 import { runCardTool } from './cardTools.ts';
 import { runTeamTool, type TeamToolContext } from './teamTools.ts';
 import { runDocTool } from './docTools.ts';
-import type { GhRun } from './projects.ts';
+import type { CloneRun, GhRun } from './projects.ts';
+import { until } from '../test/kit/index.ts';
+
+/** A clone that makes the folder with one file (no git, no network). */
+const fakeClone: CloneRun = async (_repo, dir) => {
+  mkdirSync(dir, { recursive: true });
+  writeFileSync(join(dir, 'README.md'), 'hi');
+};
+const ready = (e: Engine, project: string, ...agents: string[]) =>
+  until(() => agents.every((a) => e.projects.get(project).members.find((m) => m.agentId === a)?.cloneState === 'ready'), `${agents.join(', ')} ready in ${project}`);
 
 const engines: Engine[] = [];
 afterEach(async () => {
@@ -23,7 +32,7 @@ async function setup(gh?: GhRun, fake = new FakeProvider([])) {
     dispatch: false,
     providers: () => fake,
     env: {},
-    projects: { gh: gh ?? (async () => Promise.reject(new Error('no gh in this test'))) },
+    projects: { gh: gh ?? (async () => Promise.reject(new Error('no gh in this test'))), clone: fakeClone },
   });
   engines.push(e);
   for (const id of ['munih', 'zurich', 'dina']) e.agents.create({ id, rolePrompt: `${id} role`, modelId: 'sonnet' });
@@ -72,9 +81,10 @@ describe('projects (#213)', () => {
     expect(made.status).toBe(201);
     expect(made.body).toMatchObject({ id: 'datinel', lead: 'dina', colour: 145, isDefault: false });
     expect((made.body as { members: { agentId: string; cloneState: string }[] }).members.map((m) => [m.agentId, m.cloneState]).sort()).toEqual([
-      ['dina', 'pending'],
-      ['zurich', 'pending'],
+      ['dina', 'cloning'],
+      ['zurich', 'cloning'],
     ]);
+    await ready(e, 'datinel', 'dina', 'zurich');
     expect((await api(e, 'POST', '/api/projects', { name: 'datinel' })).status).toBe(409);
     expect((await api(e, 'POST', '/api/projects', { name: 'Other', repo: 'datinel/datinel' })).status).toBe(409);
     expect((await api(e, 'POST', '/api/projects', { name: 'Bad', repo: 'nope' })).status).toBe(400);
@@ -170,6 +180,7 @@ describe('projects (#213)', () => {
 
   it('scopes the agent tools to the run project; only a lead crosses', async () => {
     const { e } = await twoProjects();
+    await ready(e, 'datinel', 'dina', 'zurich');
     const own = e.kanban.create({ title: 'zurich in datinel', projectId: 'datinel', assignee: 'zurich' }, 'user');
     const lead = e.kanban.create({ title: 'dina in datinel', projectId: 'datinel', assignee: 'dina' }, 'user');
     const atlasRun = e.kanban.create({ title: 'munih in atlas', assignee: 'munih' }, 'user');
@@ -219,6 +230,7 @@ describe('projects (#213)', () => {
     const fake = new FakeProvider([[{ type: 'text', text: 'ok' }]]);
     const e2 = await setup(undefined, fake);
     e2.projects.create({ name: 'Datinel', repo: 'datinel/datinel', lead: 'dina', members: ['zurich'] });
+    await ready(e2, 'datinel', 'zurich');
     const c = e2.kanban.create({ title: 'work', projectId: 'datinel', assignee: 'zurich', status: 'done' }, 'user');
     e2.kanban.appendMessage(c.id, 'user', 'user', [{ type: 'text', text: 'go' }]);
     e2.runner.wake(c.id);

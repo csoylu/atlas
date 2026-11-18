@@ -19,6 +19,10 @@ export interface LaunchOptions extends Partial<EngineOptions> {
 }
 
 const json = { 'content-type': 'application/json' };
+/** Tests never reach GitHub: a project repo is cloned only with an injected `projects.clone` (#214). */
+const noClone = async () => {
+  throw new Error('no clone in this test: pass projects.clone');
+};
 
 /**
  * A throwaway engine, every dependency injectable: the model (`script` or `provider`), and anything startEngine takes
@@ -32,7 +36,7 @@ export async function launch(o: LaunchOptions = {}) {
   const ownDir = !rest.dataDir;
   const dataDir = rest.dataDir ?? mkdtempSync(join(tmpdir(), 'atlas-t-'));
   mkdirSync(join(dataDir, 'workspaces', 'atlas'), { recursive: true });
-  const engine: Engine = await startEngine({ dbFile: ':memory:', port: 0, manageLocal: false, memoryReview: false, providers: () => fake, ...rest, dataDir } as EngineOptions);
+  const engine: Engine = await startEngine({ dbFile: ':memory:', port: 0, manageLocal: false, memoryReview: false, providers: () => fake, ...rest, projects: { clone: noClone, ...rest.projects }, dataDir } as EngineOptions);
   onTestFinished(async () => {
     await engine.stop().catch(() => {});
     if (ownDir) rmSync(dataDir, { recursive: true, force: true });

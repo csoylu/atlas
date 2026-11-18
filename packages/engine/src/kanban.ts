@@ -21,7 +21,7 @@ import { MEMORY_SELECT, staleCardMemories, toMemory } from './memory.ts';
 import { isCleanupCard } from './cleanup.ts';
 import { stripData } from './images.ts';
 import { cardPrs, parsePrUrl } from './prs.ts';
-import { assertActive, defaultProjectId, isMember, leadOf, projectForNewCard, projectRow, resolveProject, scopeFor } from './projects.ts';
+import { assertActive, defaultProjectId, defaultProjectOrNull, isMember, leadOf, projectForNewCard, projectRow, resolveProject, scopeFor } from './projects.ts';
 
 interface CardRow {
   id: string;
@@ -366,57 +366,93 @@ export class Kanban {
   }
 
   /**
-   * The agent's main chat (v3): the one direct chat the sidebar and voice open, named after the agent and never
-   * auto-titled. Created on first use, and again if it was deleted or archived; other direct chats are its History.
+   * The agent's main chat (v3) in a project (#214: one per agent per project; omitted = the default project): the one
+   * direct chat the sidebar and voice open, named after the agent and never auto-titled. Created on first use, and
+   * again if it was deleted or archived; other direct chats are its History. It lives on project_members.
    */
   /** The agent's current main chat without creating one (read-only, for the screenshot tool), or null. */
-  existingMainChat(agentId: string): Card | null {
-    const row = this.db.prepare('SELECT main_chat FROM agents WHERE id = ?').get(agentId) as { main_chat: string | null } | undefined;
+  existingMainChat(agentId: string, projectId?: string): Card | null {
+    const project = projectId ?? defaultProjectOrNull(this.db);
+    if (!project) return null;
+    const row = this.db.prepare('SELECT main_chat FROM project_members WHERE agent_id = ? AND project_id = ?').get(agentId, project) as { main_chat: string | null } | undefined;
     if (!row?.main_chat || !this.db.prepare("SELECT 1 FROM cards WHERE id = ? AND board = 'direct' AND status != 'archived'").get(row.main_chat)) return null;
     return this.get(row.main_chat);
   }
 
-  mainChat(agentId: string): Card {
+  mainChat(agentId: string, projectId?: string): Card {
     const id = this.db
       .transaction(() => {
-        const row = this.db.prepare('SELECT main_chat FROM agents WHERE id = ?').get(agentId) as { main_chat: string | null } | undefined;
-        if (!row) throw new NotFoundError(`agent ${agentId} does not exist`);
-        if (row.main_chat && this.db.prepare("SELECT 1 FROM cards WHERE id = ? AND board = 'direct' AND status != 'archived'").get(row.main_chat))
-          return { id: row.main_chat, created: false };
-        return { id: this.insertMainChat(agentId), created: true };
+        const { project, current } = this.mainChatRow(agentId, projectId);
+        if (current) return { id: current, created: false };
+        return { id: this.insertMainChat(agentId, project), created: true };
       })
       .immediate();
     return id.created ? this.emit(id.id) : this.get(id.id);
   }
 
   /**
-   * `/clear` in a direct chat: a fresh, empty main chat for the agent. The previous one stays as it is, in History,
-   * titled « @agent · until <date> ». Voice follows agents.main_chat, so it goes to the new one.
+   * `/clear` in a direct chat: a fresh, empty main chat for the agent in that project. The previous one stays as it is,
+   * in History, titled « @agent · until <date> ». Voice follows the main chat, so it goes to the new one.
    */
-  newMainChat(agentId: string): Card {
+  newMainChat(agentId: string, projectId?: string): Card {
     const { id, old } = this.db
       .transaction(() => {
-        const row = this.db.prepare('SELECT main_chat FROM agents WHERE id = ?').get(agentId) as { main_chat: string | null } | undefined;
-        if (!row) throw new NotFoundError(`agent ${agentId} does not exist`);
-        const old = row.main_chat && this.db.prepare("SELECT 1 FROM cards WHERE id = ? AND board = 'direct' AND status != 'archived'").get(row.main_chat) ? row.main_chat : null;
+        const { project, current: old } = this.mainChatRow(agentId, projectId);
         if (old) {
           const until = new Date().toLocaleDateString('en-GB', { day: 'numeric', month: 'short', year: 'numeric' });
-          this.renameChat(old, `@${agentId} · until ${until}`);
+          this.renameChat(old, `${this.get(old).title} · until ${until}`);
         }
-        return { id: this.insertMainChat(agentId), old };
+        return { id: this.insertMainChat(agentId, project), old };
       })
       .immediate();
     if (old) this.emit(old);
     return this.emit(id);
   }
 
-  /** Inside a transaction: a new direct chat named after the agent (never auto-titled), set as its main chat. */
-  private insertMainChat(agentId: string): string {
-    const c = this.insert({ title: '@' + agentId, status: 'done', assignee: agentId }, 'user', null, 'direct');
+  /** Inside a transaction: the member row of (agent, project) and its live main chat (null if none, or archived). */
+  private mainChatRow(agentId: string, projectId?: string): { project: string; current: string | null } {
+    if (!this.db.prepare('SELECT 1 FROM agents WHERE id = ?').get(agentId)) throw new NotFoundError(`agent ${agentId} does not exist`);
+    const project = projectId ? resolveProject(this.db, projectId) : defaultProjectId(this.db);
+    const row = this.db.prepare('SELECT main_chat FROM project_members WHERE agent_id = ? AND project_id = ?').get(agentId, project) as { main_chat: string | null } | undefined;
+    if (!row) throw new InvalidError(`@${agentId} is not a member of project ${projectRow(this.db, project).name}: it has no chat there`);
+    const live = row.main_chat && this.db.prepare("SELECT 1 FROM cards WHERE id = ? AND board = 'direct' AND status != 'archived'").get(row.main_chat);
+    return { project, current: live ? row.main_chat : null };
+  }
+
+  /**
+   * Inside a transaction: a new direct chat named after the agent (never auto-titled), set as its main chat in the
+   * project. « @agent » in the agent's home project (as before projects), « @agent · Project » elsewhere.
+   */
+  private insertMainChat(agentId: string, projectId: string): string {
+    const home = (this.db.prepare('SELECT home FROM project_members WHERE agent_id = ? AND project_id = ?').get(agentId, projectId) as { home: number }).home === 1;
+    const title = home ? '@' + agentId : `@${agentId} · ${projectRow(this.db, projectId).name}`;
+    const c = this.insert({ title, status: 'done', assignee: agentId, projectId }, 'user', null, 'direct');
     this.db.prepare("UPDATE conversations SET kind = 'chat' WHERE id = ?").run(c.conversationId);
-    this.renameChat(c.id, '@' + agentId); // a « renamed » event: never auto-titled
-    this.db.prepare('UPDATE agents SET main_chat = ? WHERE id = ?').run(c.id, agentId);
+    this.renameChat(c.id, title); // a « renamed » event: never auto-titled
+    this.db.prepare('UPDATE project_members SET main_chat = ? WHERE agent_id = ? AND project_id = ?').run(c.id, agentId, projectId);
     return c.id;
+  }
+
+  /**
+   * Inside the transaction removing a member from a project (#214): its open tasks there go back to the lead (triage,
+   * unassigned), its chats there are archived (read-only, still searchable). Returns the cards touched (to emit and to
+   * stop their runs after the commit). Other projects are untouched.
+   */
+  releaseMember(projectId: string, agentId: string, by: string): string[] {
+    const open = this.db
+      .prepare("SELECT id, status FROM cards WHERE project_id = ? AND assignee = ? AND board = 'main' AND status NOT IN ('done', 'closed', 'archived')")
+      .all(projectId, agentId) as { id: string; status: CardStatus }[];
+    for (const c of open) {
+      this.db.prepare("UPDATE cards SET status = 'triage', assignee = NULL, reviewer = NULL, updated_at = ? WHERE id = ?").run(new Date().toISOString(), c.id);
+      this.clearBlock(c.id);
+      this.event(c.id, 'status', { from: c.status, to: 'triage', by, why: `@${agentId} left the project` });
+      this.event(c.id, 'edited', { by, fields: ['assignee'] });
+    }
+    const chats = this.db
+      .prepare("SELECT id FROM cards WHERE project_id = ? AND assignee = ? AND board = 'direct' AND status != 'archived'")
+      .all(projectId, agentId) as { id: string }[];
+    for (const c of chats) this.db.prepare("UPDATE cards SET status = 'archived' WHERE id = ?").run(c.id);
+    return [...open.map((c) => c.id), ...chats.map((c) => c.id)];
   }
 
   /** Direct chats (chat history), latest activity first: a message bumps the chat's updated_at. */
@@ -770,12 +806,14 @@ export class Kanban {
    * agent_message (#96): where a message to an agent lands. Its one active task (ready or running) if it has exactly
    * one, else its main chat.
    */
-  agentInbox(agentId: string): Card {
+  agentInbox(agentId: string, projectId?: string): Card {
     if (!this.db.prepare('SELECT 1 FROM agents WHERE id = ?').get(agentId)) throw new NotFoundError(`agent @${agentId} does not exist`);
+    // In the sender's project (#214) when the target is a member there, else its default project's main chat.
+    const project = projectId && isMember(this.db, projectId, agentId) ? projectId : undefined;
     const active = this.db
-      .prepare("SELECT id FROM cards WHERE board = 'main' AND assignee = ? AND status IN ('ready', 'running')")
-      .all(agentId) as { id: string }[];
-    return active.length === 1 ? this.get(active[0]!.id) : this.mainChat(agentId);
+      .prepare(`SELECT id FROM cards WHERE board = 'main' AND assignee = ? AND status IN ('ready', 'running')${project ? ' AND project_id = ?' : ''}`)
+      .all(...(project ? [agentId, project] : [agentId])) as { id: string }[];
+    return active.length === 1 ? this.get(active[0]!.id) : this.mainChat(agentId, project);
   }
 
   /**
@@ -786,8 +824,8 @@ export class Kanban {
   sendAgentMessage(from: string, fromCard: string, to: string, text: string): Card {
     if (to === from) throw new InvalidError('that is you: you cannot send a message to yourself');
     if (!text.trim()) throw new InvalidError('empty message: give a text');
-    const target = this.agentInbox(to);
     const source = this.get(fromCard);
+    const target = this.agentInbox(to, source.projectId);
     const where = source.board === 'direct' ? 'main chat' : `task ${this.ref(fromCard)}`;
     const content: ContentBlock[] = [{ type: 'text', text: `[message from @${from} (${where}); your answer is sent back to them] ${text}` }];
     let messageId = '';

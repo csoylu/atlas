@@ -3,7 +3,7 @@ import { execFileSync } from 'node:child_process';
 import { mkdirSync, mkdtempSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { launch } from '../test/kit/index.ts';
+import { launch, until } from '../test/kit/index.ts';
 import { findClone, prToolSpecs, repoOfUrl, runPrTool } from './prTools.ts';
 
 const SHA = 'a'.repeat(40);
@@ -153,11 +153,12 @@ describe('pr_validate in a reviewer run (#216)', () => {
   it('the reviewer’s run calls it and the status lands on the project’s repo', async () => {
     const f = fakeGh('datinel/datinel', 3, { after: head });
     const call = { type: 'tool_use' as const, id: 't_v', name: 'pr_validate', input: { pr: 3, verdict: 'ok', sha: SHA, reason: 'read it' } };
-    const t = await launch({ script: [[call], [{ type: 'text', text: 'validated' }]], dispatch: false, prs: { read: async () => Promise.reject(new Error('no poll')), intervalMs: false, validate: { gh: f.gh, wait: { sleep: () => {}, everyMs: 0 } } } });
+    const t = await launch({ script: [[call], [{ type: 'text', text: 'validated' }]], dispatch: false, prs: { read: async () => Promise.reject(new Error('no poll')), intervalMs: false, validate: { gh: f.gh, wait: { sleep: () => {}, everyMs: 0 } } }, projects: { clone: async (_r, dir) => void mkdirSync(dir, { recursive: true }) } });
     const e = t.engine;
     for (const id of ['zurich', 'munih']) if (!e.agents.list().some((a) => a.id === id)) e.agents.create({ id, modelId: e.agents.get('atlas').modelId });
     e.settings.update({ reviewAgent: 'zurich', triageAgent: 'atlas' });
     e.projects.create({ name: 'Datinel', repo: 'datinel/datinel', lead: 'munih', members: ['zurich'] });
+    await until(() => e.projects.get('datinel').members.every((m) => m.cloneState === 'ready'), 'Datinel workspaces ready');
     const c = e.kanban.create({ title: 'x', status: 'running', assignee: 'munih', projectId: 'datinel' }, 'user');
     e.kanban.requestReview(c.id, ['https://github.com/datinel/datinel/pull/3'], 'munih', 'built');
     e.runner.wake(c.id, { agentId: 'zurich', kind: 'work', kick: 'review it' });

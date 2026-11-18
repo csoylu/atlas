@@ -14,7 +14,6 @@ import { Snapshots } from './snapshots.ts';
 import { Dispatcher } from './dispatcher.ts';
 import { Settings } from './settings.ts';
 import { Documents } from './documents.ts';
-import { workdirOf } from './agents.ts';
 import { Memories } from './memory.ts';
 import { MemoryCleanup } from './cleanup.ts';
 import { MemoryReview } from './memoryReview.ts';
@@ -35,7 +34,7 @@ import { VoiceChat } from './voiceChat.ts';
 import { Updater, type UpdateHost } from './updater.ts';
 import { ShellEnv, type ShellPathOptions } from './shellEnv.ts';
 import { Prs, ghReader, type GhRead } from './prs.ts';
-import { Projects, ghRunner, type GhRun } from './projects.ts';
+import { Projects, ghClone, ghRunner, type CloneRun, type GhRun } from './projects.ts';
 
 export interface EngineOptions {
   /** SQLite file, or ':memory:'. */
@@ -85,8 +84,11 @@ export interface EngineOptions {
   shellPath?: 'login' | 'engine' | ShellPathOptions;
   /** Pull requests of tasks In review (#189): how they are read (default: gh api) and how often (false: never by itself). */
   prs?: { read?: GhRead; intervalMs?: number | false; validate?: RunnerOptions['prTool'] };
-  /** Projects (#213): how the repo check runs gh (default: gh with the engine's login-shell env). */
-  projects?: { gh?: GhRun };
+  /**
+   * Projects (#213): how the repo check runs gh (default: gh with the engine's login-shell env); how a member's
+   * workspace is cloned (#214, default: gh repo clone, same env).
+   */
+  projects?: { gh?: GhRun; clone?: CloneRun };
   /**
    * App updates from GitHub releases (#123). The packaged Mac app passes a host (it can install); without it the
    * engine can't install and doesn't check by itself (dev, server). Tests point api/fetch at a fake release server.
@@ -161,10 +163,15 @@ export async function startEngine(opts: EngineOptions): Promise<Engine> {
   models.setLockedNames(() => secrets.lockedNames());
   secrets.resume(); // a value added just before a crash: its waiting task goes back to work (#207)
   const shellEnv = new ShellEnv(typeof opts.shellPath === 'object' ? opts.shellPath : { mode: opts.shellPath ?? 'engine' });
+  const projects = new Projects(db, bus, opts.projects?.gh ?? ghRunner(() => shellEnv.engineEnv()), kanban, {
+    dataDir: opts.dataDir,
+    clone: opts.projects?.clone ?? ghClone(),
+    env: () => shellEnv.engineEnv(),
+  });
   const voice = opts.voice ? new Voice(db, bus, opts.voice) : null;
   let url = '';
   const voiceChat = opts.voice ? new VoiceChat(db, bus, kanban, agents, () => url) : null;
-  const documents = new Documents(db, bus, kanban, (id) => workdirOf(agents.get(id), opts.dataDir));
+  const documents = new Documents(db, bus, kanban, opts.dataDir);
   const fileLog = new FileLog(db, new Snapshots(join(opts.dataDir, 'checkpoints')));
   const review = new MemoryReview(db, kanban, memories, models, agents, settings, usage);
   if (opts.memoryReview === false) review.after = () => {};
@@ -179,7 +186,6 @@ export async function startEngine(opts: EngineOptions): Promise<Engine> {
   });
   dispatcher.reviewReason = (c) => prs.reason(c);
   dispatcher.recheck = (id) => prs.recheck(id);
-  const projects = new Projects(db, bus, opts.projects?.gh ?? ghRunner(() => shellEnv.engineEnv()));
   const updater = new Updater(db, bus, {
     version: opts.version ?? 'dev',
     dataDir: opts.dataDir,
@@ -238,6 +244,11 @@ export async function startEngine(opts: EngineOptions): Promise<Engine> {
   }
   await rewinds.recover().catch((e: unknown) => console.error('rewind recovery failed', e));
   runner.start();
+  // A removed member's runs in that project stop (#214); clones a stopped engine left half done start again.
+  projects.onRelease = (ids, why) => {
+    for (const id of ids) runner.stop(id, why);
+  };
+  projects.resume();
   // Watch/autostart the local server; off by default for in-memory (test) engines so they never touch a real Ollama.
   if (opts.manageLocal ?? (opts.dispatch !== false && opts.dbFile !== ':memory:')) void local.startWatching();
   if (opts.dispatch !== false) {
@@ -288,6 +299,7 @@ export async function startEngine(opts: EngineOptions): Promise<Engine> {
       voice?.stop();
       dispatcher.stop();
       await prs.idle();
+      await projects.stop();
       await runner.shutdown();
       review.after = () => {};
       await review.idle; // a background memory review writes to the db: let it finish before closing

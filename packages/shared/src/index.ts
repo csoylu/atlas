@@ -378,7 +378,10 @@ export interface Agent {
   enabled: boolean;
   /** Work runs this agent may have at once. */
   maxRuns: number;
-  /** Its main chat (v3): the direct chat the sidebar and voice open; null until first opened. */
+  /**
+   * Its main chat (v3) in the default project: the direct chat the sidebar and voice open; null until first opened.
+   * One per project (#214): `Project.members[].mainChat`.
+   */
   mainChat: string | null;
 }
 /** Starts a user message that came by voice (speech-to-text): the agent answers it in short spoken sentences. */

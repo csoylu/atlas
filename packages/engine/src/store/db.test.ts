@@ -187,7 +187,8 @@ describe('store', () => {
     db.prepare("INSERT INTO conversations (id, kind) VALUES ('k', 'card')").run();
     db.prepare("INSERT INTO cards (id, title, status, conversation_id, created_by, created_at, updated_at) VALUES ('c_1', 't', 'ready', 'k', 'user', 'x', 'x')").run();
     db.prepare("INSERT INTO folders (id, name, created_at) VALUES ('fld_1', 'Feeds', 'x')").run();
-    expect(migrate(db)[0]).toBe('0048_projects.sql'); // and every later one
+    db.prepare("UPDATE agents SET main_chat = 'c_1' WHERE id = 'munih'").run();
+    expect(migrate(db)).toEqual(expect.arrayContaining(['0048_projects.sql', '0051_project_workspaces.sql'])); // and every later one
     expect(db.prepare('SELECT id, name, repo, lead, status FROM projects').all()).toEqual([{ id: 'atlas', name: 'Atlas', repo: 'csoylu/atlas', lead: 'munih', status: 'active' }]);
     expect(db.prepare('SELECT agent_id, workspace, clone_state FROM project_members ORDER BY agent_id').all()).toEqual([
       { agent_id: 'atlas', workspace: null, clone_state: 'ready' },
@@ -198,6 +199,12 @@ describe('store', () => {
     for (const t of ['cards', 'folders', 'documents', 'workflows', 'memories']) expect(db.prepare(`SELECT COUNT(*) AS n FROM ${t} WHERE project_id IS NOT 'atlas'`).get()).toEqual({ n: 0 });
     expect(db.prepare('SELECT project_id FROM cards').all()).toEqual([{ project_id: 'atlas' }]);
     expect(db.pragma('foreign_key_check')).toEqual([]);
+    // 0051 (#214): the main chat moves to the member row (same chat), the first project's members stay home.
+    expect(db.prepare("SELECT agent_id, home, main_chat FROM project_members ORDER BY agent_id").all()).toEqual([
+      { agent_id: 'atlas', home: 1, main_chat: null },
+      { agent_id: 'munih', home: 1, main_chat: 'c_1' },
+    ]);
+    expect((db.prepare('PRAGMA table_info(agents)').all() as { name: string }[]).map((c) => c.name)).not.toContain('main_chat');
     db.close();
   });
 
