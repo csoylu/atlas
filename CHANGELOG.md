@@ -10,6 +10,10 @@ Never type a version number.
 
 Atlas checks GitHub for a new version at start, every hour and on "Check now" (Settings → About). When one exists, the sidebar shows "Update available"; the dialog lists what changed in every version since yours and who is working (they resume after the restart). Update downloads the app for your Mac, checks it, backs up the database, then quits, swaps /Applications/Atlas.app and reopens. Agents no longer reinstall the app.
 
+## Changed · #112 · Atlas is bigger and calmer: 14 px text, agent faces, coloured status chips
+
+The approved #104 v2 visual pass, with the OpenCode type scale (four sizes, 13 px minimum) and text contrast of at least 4.5:1 in both themes.
+
 ## Fixed · #122 · The removed claude_code provider can no longer be picked for a model
 
 `POST /api/models` and `PATCH /api/models/:id` with `provider: "claude_code"` now return 400 ("provider claude_code was removed (0018): existing rows stay readable, but new or edited models cannot select it") and write nothing. Existing legacy rows still list in Settings → Models and can be renamed; how they behave when run is unchanged. No migration.
