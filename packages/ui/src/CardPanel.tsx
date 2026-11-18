@@ -7,7 +7,7 @@ import { api } from './api.ts';
 import type { MessageStream } from './useMessages.ts';
 import { submitOnEnter } from './composerKeys.ts';
 import { ComposerMeta, useChatUsage } from './Usage.tsx';
-import { CARD_HREF, findCard, linkCardIds, linkCardRefsMd } from './cardModal.ts';
+import { CARD_HREF, findCard, linkCardIds, linkCardRefsMd, proseRefLabel } from './cardModal.ts';
 import { StepRow, Turn } from './ChatActivity.tsx';
 import { draftSegments, turns, type Segment } from './chatTurn.ts';
 import { AttachButton, AttachmentStrip, ImageThumbs, imageFiles, isAttachedLine, pastedImages, useAttachments } from './Images.tsx';
@@ -18,7 +18,7 @@ import { ChatPins } from './ChatPins.tsx';
 import { ChatRow } from './ChatRow.tsx';
 import { parseReport, rowTime } from './chatRow.ts';
 import { HeaderActions, Icon } from './ScreenHeader.tsx';
-import { StatusIcon } from './StatusIcon.tsx';
+import { StatusIcon, STATUS_LABEL } from './StatusIcon.tsx';
 import type { Quote } from './DocPanel.tsx';
 import { draftKey, readDraft, useDraft, writeDraft } from './drafts.ts';
 import { useAutoGrow } from './useAutoGrow.ts';
@@ -785,14 +785,13 @@ function TextBlock({ text: raw, onOpenRef, quotes, cardLinks, streaming }: { tex
 
 const REHYPE_CARET = [rehypeCaret];
 
-/** A #N reference in a message: a chip with the card's status icon and title; opens the card. */
+/** A #N reference in a message's text (#140): plain « #N » in the text's size and line height, title and status on hover. */
 function CardRef({ ref_, links, children }: { ref_: string; links: CardLinks; children: ReactNode }) {
   const c = links.card?.(ref_);
+  const { title, label } = proseRefLabel(ref_, c && { title: c.title, status: STATUS_LABEL[c.status] });
   return (
-    <button type="button" className="card-ref" title={c ? `${c.title} · open the task` : 'Open the task'} onClick={() => links.open(ref_)}>
-      {c && <StatusIcon status={c.status} size={12} />}
+    <button type="button" className="prose-ref" title={title} aria-label={label} onClick={() => links.open(ref_)}>
       {children}
-      {c && <em className="card-ref-title">{c.title}</em>}
     </button>
   );
 }

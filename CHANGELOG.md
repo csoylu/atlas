@@ -10,6 +10,10 @@ Never type a version number.
 
 Canvases, nodes and whiteboards are gone. Agents now make artifacts: markdown documents, html pages, svg diagrams and links, each a versioned file (artifact_create, artifact_update, artifact_list, artifact_read). In the chat an artifact is a card that says its kind and version ("Updated to v3", "v4 is the latest") and opens that version. The viewer has one header row: tabs, a version picker (with "Restore vN"), Latest, Full size and a ⋯ menu (author, folder, path, source, open in the browser or the Library). The Library has flat folders (rename, delete moves items to Unfiled), "Recently modified" tiles that show the real content, pinned items on top, and search across titles and content. Existing canvases are converted once to html pages in a "Canvases" folder (migration 0041; the old table is kept as an archive). Converted canvases start at v1: their old version history stays only in the archived tables.
 
+## Fixed · #140 · Task numbers inside message text are plain #112 links with the title on hover, no more chips
+
+In message text, summaries and tables a task reference is now a link-coloured « #112 » in the text's own size and line height, so lines stay evenly spaced. The task's title and status show on hover and are read by screen readers; a click or tap still opens the task. Chips that stand alone (pins, sidebar, cards, tool rows, Library, Memory) are unchanged. ui-check has a new `chat-refs` screen that checks line spacing, size, contrast and the hover title. No migration.
+
 ## Fixed · #132 · A [memory] note lists each changed memory once, with its latest text
 
 A memory changed several times between two turns was listed once per change; now it is one line with its latest text. A memory added then forgotten, changed then changed back, or pinned then unpinned is not listed at all, and a memory already shown in an earlier note comes back only if it changed again. The chat row counts distinct memories ("2 memories changed") and no longer repeats ids, also for older notes. No migration.
