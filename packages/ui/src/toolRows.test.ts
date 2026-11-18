@@ -46,7 +46,7 @@ describe('toolRow', () => {
     expect(toolRow('card_list', {}, ok('#1 [running] @atlas P2 A\n#2 [ready] @atlas P2 B\n#3 [done] @atlas P2 C')).meta).toEqual([{ text: '3 tasks · 1 running · 1 ready' }]);
     expect(toolRow('card_list', { status: 'blocked' }, ok('(no cards)'))).toMatchObject({ rest: 'blocked tasks', meta: [{ text: '0 tasks' }] });
     expect(toolRow('card_block', { kind: 'needs_input', question: 'Which one?\nDetails' }, ok('card blocked'))).toMatchObject({ tone: 'warn', verb: 'Asked you', object: 'Which one?', rest: 'needs input' });
-    expect(toolRow('card_request_review', { summary: 'Ready.' }, ok('review requested'))).toMatchObject({ tone: 'warn', rest: 'Ready.' });
+    expect(toolRow('card_request_review', { summary: 'Ready.', prs: ['https://github.com/csoylu/atlas/pull/41'] }, ok('in review'))).toMatchObject({ tone: 'plain', verb: 'Sent to QA', object: 'PR #41', rest: 'Ready.' });
     expect(toolRow('card_complete', { summary: '**Done** in `x`.' }, ok('card done'))).toMatchObject({ tone: 'ok', icon: 'check', verb: 'Finished the task', rest: 'Done in x.' });
     expect(toolRow('history_search', { query: 'mockup' }, ok('no message contains "mockup"'))).toMatchObject({ object: '“mockup”', meta: [{ text: '0 hits' }] });
     expect(toolRow('history_search', { seq: 50 }, ok('#50 tool …'))).toMatchObject({ object: 'message #50', meta: [] });

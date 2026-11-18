@@ -113,12 +113,19 @@ with `process.env` directly: take `ctx.env()`.
   force-pushes and deletion (GitHub branch protection).
 - **A PR merges only once zurich (QA) has validated it** (#141). GitHub cannot make an account approve its own PR (all
   agents are csoylu), so the validation is the commit status `qa/validated` on the PR's head; main requires it and the CI
-  job `test`, so a new commit needs a new validation. Flow: push the branch, open the PR, then create a task for zurich
-  "Validate PR #N" (ready, priority of the release). zurich reads the diff and checks it (code: tests, the feature in a
-  build, screenshots for UI; docs only: read it), then runs
-  `node scripts/pr/validate.mjs <pr> --ok --sha <head> --as zurich "what was checked" --merge` (or `--fail … "why"`,
-  then fix and push; the task goes back to ready). The script refuses a base other than main, a head that moved, red
-  CI and a PR without exactly one changelog entry. A `qa/*` PR (zurich's own) is validated by atlas. `--list` shows the
+  job `test`, so a new commit needs a new validation. **Flow (#189): the task carries its PR.** Push the branch, open
+  the PR, then end your run with `task_request_review({summary, prs: ["https://github.com/csoylu/atlas/pull/N"]})`
+  (not `task_complete`, which is refused while a linked PR is open). The task goes **In review** (waiting for QA, not
+  for Master: no Inbox item) and Atlas reads the PR from GitHub every minute (`gh api`, Master's gh login). When CI
+  `test` is green, the reviewer's run starts **in the same task thread**: zurich (Settings → Board & triage → Review
+  agent), or atlas for zurich's own PRs. No separate "Validate PR #N" task any more. The reviewer reads the diff and
+  checks it (code: tests, the feature in a build, screenshots for UI; docs only: read it), then runs
+  `node scripts/pr/validate.mjs <pr> --ok --sha <head> --as zurich "what was checked" --merge` or
+  `--fail --as zurich "why, for the builder"`. Atlas moves the task by itself: **merged → Done**; **CI red, a conflict
+  or `--fail` → Ready** for the builder, with the reason as a note in the thread; the builder fixes, pushes and calls
+  `task_request_review` again. Blocked only ever means "needs Master". When GitHub can't be read (gh logged out,
+  offline) nothing moves; the card says why. The script refuses a base other than main, a head that moved, red
+  CI and a PR without exactly one changelog entry. `--list` shows the
   PRs still waiting. Master can validate from a terminal too (`--as master`). Each merge moves the changelog top, so the
   other open PRs then conflict there: the validator merges the oldest PR first. When CHANGELOG.md is the PR's **only**
   conflict, `--ok … --merge` rebases it by itself (#188, `scripts/pr/rebase-changelog.mjs`): it replays the commits
@@ -130,10 +137,9 @@ with `process.env` directly: take `ctx.env()`.
   CI on a conflicting head, so there CI that never ran on the old head is not required (#195); CI red or still running
   on it is still refused. The gate
   guards against accidents, not misuse: `--as` is a name anyone can type.
-- **Done means on main** (#126): before `task_complete` or `task_request_review`, run `git fetch` and then
-  `git log --oneline origin/main..origin/<branch>` for every branch of the task (`git branch -r | grep '/<N>-'`).
-  If any branch has commits not on main, the task isn't done: merge the PR first, or `task_block` and say which branch
-  is still open and how many commits it is ahead of main. A task with no code (mockup, audit, report) finishes as usual.
+- **Done means on main** (#126, #189): a task with a PR ends with `task_request_review` and becomes Done when the PR
+  merges, by itself. A task with several branches links every PR. A task with no code (mockup, audit, report)
+  finishes with `task_complete` as usual.
 - **Agents never install the app.** No `install:mac`: Master's Atlas shows "Update available" and installs on
   Master's click (it restarts; running tasks resume). `install:mac` stays for a manual build from source.
 - **Testing without installing:**

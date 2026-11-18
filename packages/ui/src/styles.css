@@ -2098,3 +2098,36 @@ a.pop-row[aria-disabled='true'] { opacity: 0.5; pointer-events: none; }
 .update-about-line.bad { color: var(--neg-ink); }
 .update-about-acts { display: flex; gap: 8px; }
 .update-about .update-fine { flex-basis: 100%; }
+
+/* Pull requests on tasks (#189): the tile's line, the task view's rows, the « can't read GitHub » banner. */
+.prc-line { display: flex; flex-wrap: wrap; gap: 4px 10px; font-size: var(--fs-small); line-height: var(--lh-tight); color: var(--muted); min-width: 0; }
+.prc-one { display: inline-flex; align-items: center; gap: 6px; min-width: 0; }
+.prc-link { display: inline-flex; align-items: center; padding: 1px 7px; border-radius: 999px; border: 1px solid var(--line); color: var(--text); font-weight: var(--fw-medium); text-decoration: none; white-space: nowrap; }
+.prc-link:hover { background: var(--hover); }
+.prc-bit { white-space: nowrap; }
+.prc-ok { color: var(--positive); }
+.prc-bad { color: var(--negative); }
+.prc-warn { color: var(--warn-ink); }
+.prc-info { color: var(--accent); }
+.prc-muted { color: var(--muted); }
+.why.prc-unreadable { color: var(--warn-ink); }
+.card-top .rv-face { margin-left: 0; }
+.card-top .rv-face .dot-avatar, .rv-face .dot-avatar { box-shadow: 0 0 0 2px var(--raised), 0 0 0 3px var(--accent); }
+.card-top .rv-face { display: inline-flex; }
+.prc-rows { display: flex; flex-direction: column; gap: 8px; margin-top: 8px; }
+.prc-banner { padding: 8px 12px; border-radius: var(--radius-control); background: var(--warn-bg); color: var(--warn-ink); font-size: var(--fs-small); line-height: var(--lh-normal); }
+.prc-row { display: grid; grid-template-columns: auto 1fr auto; gap: 6px 12px; align-items: center; padding: 8px 12px; border: 1px solid var(--line); border-radius: var(--radius-control); font-size: var(--fs-small); line-height: var(--lh-tight); }
+.prc-main { display: flex; flex-direction: column; gap: 4px; min-width: 0; }
+.prc-bits { display: flex; flex-wrap: wrap; gap: 4px 10px; align-items: center; }
+.prc-meta { color: var(--muted); font-family: var(--mono); overflow-wrap: anywhere; }
+.prc-when { color: var(--faint); white-space: nowrap; }
+.prc-state { padding: 0 7px; border-radius: 999px; font-weight: var(--fw-medium); }
+.prc-st-open { background: var(--pos-bg); color: var(--pos-ink); }
+.prc-st-merged { background: var(--hover); color: var(--accent); }
+.prc-st-closed { background: var(--hover); color: var(--muted); }
+@media (max-width: 640px) {
+  .prc-row { grid-template-columns: auto 1fr; }
+  .prc-when { grid-column: 2; }
+}
+.list-row .prc-line { flex: none; flex-wrap: nowrap; }
+@media (max-width: 640px) { .list-row .prc-line { display: none; } }

@@ -240,12 +240,36 @@ Statuses: `triage → todo → ready → running → (blocked | review) → done
   block columns of the `todo` card (`card.retry`, « retrying at 14:05 · why ») and the dispatcher moves it to `ready`
   then. Both are read from the tables, so a restart keeps them. Old `blocked/dependency` cards stay as they were. Answering a question from the UI or a reply on Telegram
   writes an `answer` event and puts the card back to `ready`.
-- Review: `review` reassigns to a reviewer agent; the reviewer completes or requests changes (back to the builder).
+- Review (#189): `review` = **In review, waiting for QA**, never for the user (no Inbox item, not in « Needs you »).
+  See §7.1.
 - Failure limit: 2 failed attempts in a row → `blocked/capability` with both errors. Interruptions and provider
   outages don't count.
 - Comments on a running card are delivered to the agent at its next turn.
 - No automatic decomposition: only an agent or the user creates cards.
 - Notifications: only `needs_input`, `capability` blocks and cards the user subscribed to. Not every status change.
+
+### 7.1 Tasks linked to their pull requests (#189, built 18 Nov 2026, `engine/src/prs.ts`)
+- **Link.** The builder ends its run with `task_request_review({summary, prs: [url…]})`: rows in `card_prs` (repo,
+  number, url, branch, head, state open / merged / closed, CI `test`, `qa/validated` + its description, when read, the
+  last read error), the card goes `review` and gets `cards.reviewer`: the review agent (Settings → Board & triage),
+  or the triage agent when the builder is the review agent (zurich's own PRs → atlas). Work with no PR ends with
+  `task_complete`; `task_complete` is refused while a linked PR is open.
+- **Read.** `Prs` polls every 60 s (and right after a link or a reviewer run ends) with `gh api`, the user's own gh
+  login with the login shell's PATH: no token anywhere in Atlas. Only tasks `review` are read; one poll at a time.
+- **Move** (no agent run, by `github`):
+  - every PR merged → `done` (« PR #N merged into main (sha) » is the summary: Inbox update, report to the origin chat);
+  - CI red, a conflict with the base, `qa/validated` = failure (its description is the reason), or every PR closed
+    unmerged → `ready` for the builder, the reason as a system note in the thread (once per head: `failed_sha`);
+  - CI green, not validated, not yet reviewed on this head → the reviewer's run starts **in the task's own thread**
+    (kind `work`, agent = reviewer, kick « You review this task's pull request… », prompt: review, don't fix). One run
+    per head (`reviewed_sha`); a new `task_request_review` clears it. The reviewer validates and merges with
+    `scripts/pr/validate.mjs`; the merge then moves the card. Retry on an In review card starts the reviewer again.
+- **GitHub unreadable** (gh missing, logged out, offline): nothing moves on old data; the card's why-line and the task
+  view's banner say « can't read PR #N from GitHub since 10:42: gh: not logged in »; after 15 min one Inbox item
+  (`github.unreadable`), archived by itself when a read works again.
+- **Restart:** everything is in `card_prs` and `cards`; the first poll after a start resumes (a PR merged while Atlas
+  was down → done; a head already reviewed is not reviewed twice).
+- Any GitHub repo the gh login can read; no other forge.
 
 ## 8. Context management
 - The full transcript is never deleted. What's sent to the model is a **view**: system prompt + memory + card + the
