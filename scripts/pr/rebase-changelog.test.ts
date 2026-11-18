@@ -1,5 +1,5 @@
 import { execFileSync } from 'node:child_process';
-import { mkdtempSync, readFileSync, writeFileSync } from 'node:fs';
+import { chmodSync, mkdtempSync, readFileSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { describe, expect, it } from 'vitest';
@@ -93,7 +93,7 @@ describe('rebaseChangelogOnly on real git repos', { timeout: 60_000 }, () => {
     expect(w.state()).toEqual(before);
   });
 
-  it('fetches and pushes by URL, never by remote name (so no git version moves the clone’s origin/* refs)', () => {
+  it('fetches and pushes by URL, and puts back any origin/* ref the push moved (git 2.56 does, even by URL)', () => {
     const w = world();
     w.g('checkout', '-q', '-b', 'fix/2-mine');
     const pr = w.commit('#2 the fix', { 'CHANGELOG.md': log(e('Fixed', 2, 'Mine'), e('Added', 1, 'First')) });
@@ -103,6 +103,11 @@ describe('rebaseChangelogOnly on real git repos', { timeout: 60_000 }, () => {
     w.g('push', '-q', 'origin', 'main');
     const remotes = () => execFileSync('git', ['-C', w.validator, 'for-each-ref', 'refs/remotes/'], { encoding: 'utf8' });
     const remotesBefore = remotes();
+    // What git 2.56 does on a push, even to a URL (CI run 44272994578): it moves the clone's origin/* tracking refs.
+    // A pre-push hook does the same here, so the test fails on any git version if they are not put back.
+    const hook = join(w.validator, '.git', 'hooks', 'pre-push');
+    writeFileSync(hook, `#!/bin/sh\ngit update-ref refs/remotes/origin/fix/2-mine ${pr}\ngit update-ref refs/remotes/origin/main ${pr}\ngit update-ref -d refs/remotes/origin/HEAD\n`);
+    chmodSync(hook, 0o755);
     const trace = join(w.dev, '..', 'trace.txt');
     rebaseChangelogOnly({ repo: w.validator, branch: 'fix/2-mine', sha: pr, env: { ...ENV, GIT_TRACE: trace } });
     const cmds = readFileSync(trace, 'utf8').split('\n').filter((l) => /built-in: git (-C \S+ )?(fetch|push) /.test(l));

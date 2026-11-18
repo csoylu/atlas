@@ -73,8 +73,8 @@ export function rebaseChangelogOnly({ repo, branch, sha, base = 'main', remote =
   const ns = `refs/pr-rebase/${process.pid}-${Date.now()}`;
   let worktree = null;
   try {
-    // From the remote's URL, not its name: a fetch by name also updates the clone's origin/<branch> refs on some git
-    // versions (2.56 does even with --refmap=), and the validator's clone must stay as it was.
+    // From the remote's URL, not its name: a fetch by name may also update the clone's <remote>/* tracking refs, and
+    // the validator's clone must stay as it was.
     const fetchUrl = git(['remote', 'get-url', remote]);
     git(['fetch', '-q', '--no-tags', fetchUrl, `+refs/heads/${base}:${ns}/base`, `+refs/heads/${branch}:${ns}/head`]);
     const onto = git(['rev-parse', `${ns}/base`]);
@@ -143,9 +143,18 @@ export function rebaseChangelogOnly({ repo, branch, sha, base = 'main', remote =
     if (recheck) fail(`${FILE}: ${recheck}`);
 
     // Push the branch only, and only if it is still the validated head.
-    // To the remote's URL, not its name: a push by name would also move the clone's origin/<branch> ref.
+    // A push moves the clone's <remote>/<branch> tracking ref, even to the URL on git 2.56 (it matches the URL to the
+    // configured remote): snapshot refs/remotes/<remote>/ and put it back as it was right after the push.
     const url = git(['remote', 'get-url', '--push', remote]);
+    const tracking = `refs/remotes/${remote}/`;
+    const trackingRefs = () => new Map(git(['for-each-ref', '--format=%(refname) %(objectname)', tracking]).split('\n').filter(Boolean).map((l) => l.split(' ')));
+    const trackingBefore = trackingRefs();
     const push = git(['push', '-q', '--porcelain', `--force-with-lease=refs/heads/${branch}:${oldHead}`, url, `${newHead}:refs/heads/${branch}`], { allowFail: true });
+    for (const [ref, oid] of trackingRefs()) {
+      if (!trackingBefore.has(ref)) git(['update-ref', '-d', ref, oid]);
+      else if (trackingBefore.get(ref) !== oid) git(['update-ref', ref, trackingBefore.get(ref), oid]);
+    }
+    for (const [ref, oid] of trackingBefore) if (!git(['for-each-ref', ref])) git(['update-ref', ref, oid, '']);
     if (push.status !== 0)
       throw new Error(`auto-rebase not pushed (${branch} moved on ${remote} since ${oldHead.slice(0, 7)}, or the push was refused): ${(push.err || push.out).trim()}`);
     const [entry] = parseChangelog(newLog);
