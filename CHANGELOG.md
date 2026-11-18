@@ -6,6 +6,10 @@ computed by `scripts/release/changelog.mjs` from the oldest entry to the newest,
 `Fixed` → patch, `Added` or `Changed` → minor, `Breaking` (data or settings stop working without action) → major.
 Never type a version number.
 
+## Added · #148 · `npm run ui:check:fast` runs the UI check at the four widths in parallel (about 80 s instead of 3 min)
+
+`scripts/ui-check/parallel.mjs` starts one `check.mjs` per width (1440, 1100, 900, 390), each with its own Chrome and output folder, and exits 1 if any width reports an issue. Same flags as `ui:check`, except `--widths` and `--out`. Test tooling only: no change in the app.
+
 ## Changed · #126 · Tests: one shared kit, a stable rewind test, retries that show
 
 Tests wait with one `eventually()` helper instead of six private copies, engines for tests are launched with `launch()` (model and other dependencies injected), and a failed test is retried once and marked. The flaky rewind test no longer depends on timing.
