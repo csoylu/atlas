@@ -363,9 +363,9 @@ export function Library(props: {
                   <span>
                     {relAgo(d.updatedAt)} · v{d.version}
                   </span>
-                  <span className="lib-fold">
+                  <span className="lib-fold" title={folderName(folders, d.folderId)}>
                     <Icon.folder />
-                    {folderName(folders, d.folderId)}
+                    <span className="lib-fold-n">{folderName(folders, d.folderId)}</span>
                   </span>
                 </span>
               </a>

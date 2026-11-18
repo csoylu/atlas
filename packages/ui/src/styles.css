@@ -1964,7 +1964,8 @@ button.msg-quote:hover { color: var(--text); }
 .lib-tile-t { display: flex; align-items: center; gap: 6px; min-width: 0; font-size: var(--fs-small); }
 .lib-tile-t b { font-weight: var(--fw-medium); min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .lib-tile-m { display: flex; align-items: center; gap: 6px; min-width: 0; font-size: var(--fs-small); color: var(--muted); white-space: nowrap; }
-.lib-tile-m .lib-fold { margin-left: auto; max-width: 110px; }
+.lib-tile-m .lib-fold { margin-left: auto; max-width: 110px; flex: 0 1 auto; min-width: 0; }
+.lib-fold-n { min-width: 0; overflow: hidden; text-overflow: ellipsis; }
 @media (pointer: coarse) { .lib-more { opacity: 1; } }
 @media (max-width: 640px) {
   .lib-head-search { display: none; }
@@ -1995,7 +1996,8 @@ a.pop-row[aria-disabled='true'] { opacity: 0.5; pointer-events: none; }
 .sd-body.url { overflow: hidden; }
 .sd-body.url .doc-frame { flex: 1; }
 .lib-tile-m .dot-avatar { flex: none; }
-.lib-tile-m > span:not(.lib-fold) { min-width: 0; overflow: hidden; text-overflow: ellipsis; }
+/* #180: the time stays whole; the folder chip shrinks first and ellipsizes its name. */
+.lib-tile-m > span:not(.lib-fold) { flex: none; }
 .lib-bar .lib-chips .lib-fold-in { flex: none; }
 @media (max-width: 640px) {
   /* Phone rows: the ⋯ menu has Pin; the pin button only shows when pinned. The tile's folder takes its own line. */
