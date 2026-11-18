@@ -6,3 +6,4 @@ data/
 out/
 .env
 release/
+!scripts/release/
