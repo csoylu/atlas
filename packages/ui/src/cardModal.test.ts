@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import type { Card } from '@atlas/shared';
-import { findCard, isDangerous, linkCardIds, linkCardRefsMd, pillStatus, splitHash, statusChip, todoList, trapFocus, withCard } from './cardModal.ts';
+import { findCard, isDangerous, linkCardIds, linkCardRefsMd, pillStatus, proseRefLabel, splitHash, statusChip, todoList, trapFocus, withCard } from './cardModal.ts';
 
 describe('card hash', () => {
   it('splits the card parameter off any route', () => {
@@ -110,5 +110,13 @@ describe('todoList', () => {
     expect(todoList({ todos: [{ content: 'a', status: 'done' }] })).toBeNull();
     expect(todoList({})).toBeNull();
     expect(todoList(null)).toBeNull();
+  });
+
+  it('a task reference in running text keeps its title and status for hover and screen readers (#140)', () => {
+    expect(proseRefLabel('#112', { title: 'Type scale', status: 'Running' })).toEqual({
+      title: '#112 Type scale · Running',
+      label: '#112 Type scale, Running: open the task',
+    });
+    expect(proseRefLabel('#9')).toEqual({ title: 'Open the task', label: '#9: open the task' });
   });
 });
