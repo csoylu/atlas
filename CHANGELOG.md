@@ -8,7 +8,7 @@ Never type a version number.
 
 ## Added · #123 · Atlas updates itself: every push to main is a release, and you install it with one click
 
-Atlas checks GitHub for a new version at start, every hour and on « Check now » (Settings → About). When one exists, the sidebar shows « Update available »; the dialog lists what changed in every version since yours and who is working (they resume after the restart). Update downloads the app for your Mac, checks it, backs up the database, then quits, swaps /Applications/Atlas.app and reopens. Agents no longer reinstall the app.
+Atlas checks GitHub for a new version at start, every hour and on "Check now" (Settings → About). When one exists, the sidebar shows "Update available"; the dialog lists what changed in every version since yours and who is working (they resume after the restart). Update downloads the app for your Mac, checks it, backs up the database, then quits, swaps /Applications/Atlas.app and reopens. Agents no longer reinstall the app.
 
 ## Fixed · #122 · The removed claude_code provider can no longer be picked for a model
 

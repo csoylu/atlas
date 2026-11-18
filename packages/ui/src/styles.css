@@ -1968,3 +1968,49 @@ button.msg-quote:hover { color: var(--text); }
 .slash-hint { margin-left: auto; font-size: var(--fs-small); color: var(--faint); flex: none; }
 .slash-busy { display: flex; align-items: center; gap: 8px; font-size: var(--fs-small); color: var(--muted); }
 .sys-clear-note { margin: 0; font-size: var(--fs-small); color: var(--muted); }
+
+/* ── App updates (#123): sidebar badge, dialog, Settings → About ── */
+.update-badge {
+  display: flex; align-items: center; gap: 8px; margin: 8px 0 4px; padding: 0 10px; height: 32px; flex: none; width: 100%;
+  border: 1px solid var(--line); border-radius: 8px; background: var(--accent-soft); color: var(--text); cursor: pointer;
+  font: inherit; font-size: var(--fs-base); font-weight: var(--fw-medium); line-height: var(--lh-tight); text-align: left;
+}
+.update-badge:hover { border-color: var(--accent); }
+.update-badge.failed { background: var(--warn-bg); color: var(--warn-ink); }
+.update-dot { width: 7px; height: 7px; border-radius: 50%; background: var(--accent); flex: none; }
+.update-badge.failed .update-dot { background: var(--warning); }
+.update-badge-label { min-width: 0; flex: 1; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.update-badge-v { color: var(--muted); font-size: var(--fs-small); font-weight: var(--fw-regular); }
+.update-badge.failed .update-badge-v { color: inherit; }
+.modal.update-dialog { width: min(560px, 100%); max-height: calc(100vh - 32px); overflow-y: auto; }
+.update-notes { display: flex; flex-direction: column; border: 1px solid var(--line); border-radius: 10px; max-height: 320px; overflow-y: auto; flex: none; }
+.update-note { padding: 10px 14px; display: flex; flex-direction: column; gap: 4px; }
+.update-note + .update-note { border-top: 1px solid var(--line); }
+.update-note-head { display: flex; align-items: center; gap: 8px; font-size: var(--fs-small); line-height: var(--lh-tight); }
+.update-v { font-weight: var(--fw-bold); color: var(--text); }
+.update-kind { padding: 1px 7px; border-radius: 4px; background: var(--raised); color: var(--muted); font-weight: var(--fw-medium); }
+.update-kind.added, .update-kind.changed { background: var(--accent-soft); color: var(--text); }
+.update-kind.fixed { background: var(--pos-bg); color: var(--pos-ink); }
+.update-kind.breaking { background: var(--neg-bg); color: var(--neg-ink); }
+.update-task { color: var(--muted); }
+.update-note-title { font-size: var(--fs-base); line-height: var(--lh-normal); color: var(--text); }
+.update-note-body { font-size: var(--fs-small); line-height: var(--lh-normal); color: var(--muted); }
+.update-note-body > :first-child { margin-top: 0; }
+.update-note-body > :last-child { margin-bottom: 0; }
+.update-note-body ul { padding-left: 18px; }
+.update-working ul { list-style: none; margin: 8px 0 0; padding: 0; display: flex; flex-direction: column; gap: 4px; }
+.update-working li { display: flex; gap: 8px; align-items: baseline; font-size: var(--fs-small); line-height: var(--lh-tight); min-width: 0; }
+.update-agent { color: var(--text); font-weight: var(--fw-medium); flex: none; }
+.update-work-title { color: var(--muted); min-width: 0; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.modal p.update-error { color: var(--neg-ink); background: var(--neg-bg); padding: 8px 12px; border-radius: 8px; font-size: var(--fs-small); }
+.modal p.update-fine, .update-fine { font-size: var(--fs-small); color: var(--faint); line-height: var(--lh-normal); }
+.update-progress { display: flex; align-items: center; gap: 12px; font-size: var(--fs-small); color: var(--muted); }
+.update-bar { flex: 1; height: 6px; border-radius: 3px; background: var(--active); overflow: hidden; }
+.update-bar > div { height: 100%; background: var(--accent); transition: width 0.3s ease; }
+.update-actions { display: flex; justify-content: flex-end; gap: 8px; margin-top: 4px; }
+.modal .update-actions .primary { margin-top: 0; align-self: auto; }
+.update-about { display: flex; flex-wrap: wrap; align-items: center; gap: 6px 12px; }
+.update-about-line { min-width: 0; }
+.update-about-line.bad { color: var(--neg-ink); }
+.update-about-acts { display: flex; gap: 8px; }
+.update-about .update-fine { flex-basis: 100%; }

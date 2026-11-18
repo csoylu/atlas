@@ -108,7 +108,7 @@ export function checkPush(before, after) {
     if (added < 0) return `this push removes ${-added} CHANGELOG.md entr${added === -1 ? 'y' : 'ies'}: older entries must stay`;
     if (added > 1) return `this push adds ${added} CHANGELOG.md entries: one push to main is one entry (merge the work into one entry, or push separately)`;
     const changed = older.findIndex((e, i) => e.heading !== newer[i + 1].heading);
-    if (changed >= 0) return `the new CHANGELOG.md entry must be on top, and older ones unchanged (« ${older[changed].heading} » moved or changed)`;
+    if (changed >= 0) return `the new CHANGELOG.md entry must be on top, and older ones unchanged ("${older[changed].heading}" moved or changed)`;
   }
   return null;
 }

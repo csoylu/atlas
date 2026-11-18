@@ -1,4 +1,4 @@
-import type { ClearEvent, CompactResult, Inbox, FileChange, RewindPreview, RewindResult, Doc, DocContent, DocRef, DocVersion, PanelTab, About, CreatePlanAccount, Notification, PlanProvider, UpdatePlanAccount, ChatUsage, UsageSummary, ChatGptModel, ChatGptStatus, UpdateChatGpt, ClaudePlanModel, ClaudePlanStatus, UpdateClaudePlan, Account, CreateAccount, UpdateAccount, LocalModel, LocalPull, LocalStatus, UpdateLocal, Agent, Canvas, CanvasNode, Card, CardStatus, CreateAgent, CreateCard, CreateModelRequest, CreateSchedule, Memory, MemoryChange, MemoryProposal, MemoryQuery, UpdateMemory, Message, Model, ModelTest, Run, Schedule, Timeline, ToolCallTiming, ServerEvent, Settings, UpdateVoice, VoiceName, VoiceStatus, UpdateAgent, UpdateModelRequest, UpdateSchedule, Upload } from '@atlas/shared';
+import type { ClearEvent, CompactResult, Inbox, FileChange, RewindPreview, RewindResult, Doc, DocContent, DocRef, DocVersion, PanelTab, About, CreatePlanAccount, Notification, PlanProvider, UpdatePlanAccount, ChatUsage, UsageSummary, ChatGptModel, ChatGptStatus, UpdateChatGpt, ClaudePlanModel, ClaudePlanStatus, UpdateClaudePlan, Account, CreateAccount, UpdateAccount, LocalModel, LocalPull, LocalStatus, UpdateLocal, Agent, Canvas, CanvasNode, Card, CardStatus, CreateAgent, CreateCard, CreateModelRequest, CreateSchedule, Memory, MemoryChange, MemoryProposal, MemoryQuery, UpdateMemory, Message, Model, ModelTest, Run, Schedule, Timeline, ToolCallTiming, ServerEvent, Settings, UpdateVoice, UpdateStatus, VoiceName, VoiceStatus, UpdateAgent, UpdateModelRequest, UpdateSchedule, Upload } from '@atlas/shared';
 
 /** HTTP error with the parsed body (e.g. 409 carries the current canvas). */
 export class ApiError extends Error {
@@ -139,6 +139,10 @@ export const api = {
   deleteSecret: (name: string) => call<void>('DELETE', `/secrets/${name}`),
   settings: () => call<Settings>('GET', '/settings'),
   about: () => call<About>('GET', '/about'),
+  // ── App updates (#123) ──
+  update: () => call<UpdateStatus>('GET', '/update'),
+  checkUpdate: () => call<UpdateStatus>('POST', '/update/check'),
+  installUpdate: () => call<UpdateStatus>('POST', '/update/install'),
   // ── Voice mode (desktop only) ──
   voice: () => call<VoiceStatus>('GET', '/voice'),
   updateVoice: (patch: UpdateVoice) => call<VoiceStatus>('PATCH', '/voice', patch),
