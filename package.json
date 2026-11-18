@@ -21,6 +21,7 @@
     "test:slow": "vitest run --project slow",
     "test:changed": "vitest run --project fast --changed",
     "ui:check": "node scripts/ui-check/check.mjs",
+    "ui:check:fast": "node scripts/ui-check/parallel.mjs",
     "app": "npm -w @atlas/desktop run app",
     "dist": "npm -w @atlas/desktop run dist"
   },
