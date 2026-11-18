@@ -110,13 +110,18 @@ test.describe('K · cards, kanban, dispatcher (API)', () => {
     expect((await call(atlas, 'GET', '/inbox')).body.needsYou).toEqual([]);
   });
 
-  test('[K11] task_request_review → review status + Inbox needs-you; user message puts it back to ready/running', async ({ atlas }) => {
-    atlas.model.next(tu('task_request_review', { summary: 'please look' }), tu('task_complete', { summary: 'fixed' }));
+  test('[K11] task_request_review with a PR → In review (waits for QA, #189), not in Needs you; a user message is a chat with the builder, the task stays In review', async ({ atlas }) => {
+    atlas.model.next(tu('task_request_review', { summary: 'please look', prs: ['https://github.com/csoylu/atlas/pull/41'] }), [{ type: 'text', text: 'noted, the title changes with the next push' }]);
     const c = await atlas.task('review me');
     await expect.poll(async () => (await atlas.card(c.id)).status).toBe('review');
-    expect((await call(atlas, 'GET', '/inbox')).body.needsYou.length).toBe(1);
+    const card = await atlas.card(c.id);
+    expect(card.prs.map((p) => p.number)).toEqual([41]);
+    expect((await call(atlas, 'GET', '/inbox')).body.needsYou).toEqual([]);
+    await atlas.idle(c.id);
     await atlas.say(c.id, 'change the title');
-    await expect.poll(async () => (await atlas.card(c.id)).status).toBe('done');
+    await expect.poll(() => atlas.model.of('main').length).toBe(2);
+    await atlas.idle(c.id);
+    expect((await atlas.card(c.id)).status).toBe('review');
   });
 
   test('[K12] transient block (#131) waits in Todo with a retry time (retry.at), no block, and does not need the user', async ({ atlas }) => {
