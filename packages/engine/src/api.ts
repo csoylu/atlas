@@ -131,12 +131,14 @@ export function createApi(deps: {
     res.json(kanban.list());
   });
   app.post('/api/cards', (req, res) => {
+    refuseRunning(req.body);
     res.status(201).json(kanban.create(req.body, USER));
   });
   app.get('/api/cards/:id', (req, res) => {
     res.json(kanban.get(req.params.id));
   });
   app.patch('/api/cards/:id', (req, res) => {
+    refuseRunning(req.body);
     res.json(kanban.update(req.params.id, req.body, USER)); // the dispatcher reacts to the change
   });
   app.delete('/api/cards/:id', (req, res) => {
@@ -736,4 +738,9 @@ export function createApi(deps: {
     return close(cb);
   };
   return server;
+}
+/** « running » means a run holds the card: only the dispatcher sets it, when a run starts (design §7). By hand it would strand the card. */
+function refuseRunning(body: unknown): void {
+  if ((body as { status?: unknown } | null)?.status === 'running')
+    throw new InvalidError('a task cannot be set to Running by hand: Running is set by the dispatcher when a run starts (move it to Ready instead)');
 }

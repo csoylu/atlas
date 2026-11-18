@@ -68,6 +68,27 @@ describe('api', () => {
     ws.close();
   });
 
+  it('refuses Running by hand on create and on update (only the dispatcher sets it)', async () => {
+    engine = await startEngine({ dbFile: ':memory:', dataDir: mkdtempSync(join(tmpdir(), 'atlas-')), port: 0, dispatch: false });
+    const send = (method: string, path: string, body: unknown) =>
+      fetch(engine!.url + path, { method, headers: { 'content-type': 'application/json' }, body: JSON.stringify(body) });
+    const created = await send('POST', '/api/cards', { title: 'x', status: 'running' });
+    expect(created.status).toBe(400);
+    expect(((await created.json()) as { error: string }).error).toMatch(/dispatcher when a run starts/);
+    expect(engine.kanban.list()).toEqual([]);
+
+    const card = (await (await send('POST', '/api/cards', { title: 'y', status: 'todo' })).json()) as Card;
+    const events = () => engine!.db.prepare("SELECT COUNT(*) AS n FROM card_events WHERE card_id = ? AND kind = 'status'").get(card.id);
+    const before = events();
+    const moved = await send('PATCH', `/api/cards/${card.id}`, { status: 'running' });
+    expect(moved.status).toBe(400);
+    expect(((await moved.json()) as { error: string }).error).toMatch(/dispatcher when a run starts/);
+    expect(engine.kanban.get(card.id).status).toBe('todo');
+    expect(events()).toEqual(before);
+    // The dispatcher path is untouched.
+    expect(engine.kanban.update(card.id, { status: 'running' }, 'dispatcher').status).toBe('running');
+  });
+
   it('shuts down promptly with a WebSocket still open', async () => {
     const e = await startEngine({ dbFile: ':memory:', dataDir: mkdtempSync(join(tmpdir(), 'atlas-')), port: 0 });
     const ws = new WebSocket(e.url.replace('http', 'ws') + '/api/events');
