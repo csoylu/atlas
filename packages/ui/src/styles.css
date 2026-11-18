@@ -2475,3 +2475,92 @@ button.wfl-ghead:hover { color: var(--text); background: var(--hover); }
   .board.one .column .fold { cursor: default; }
   .board.one .column .fold:hover { background: none; }
 }
+
+/* ── Projects (#217, mockup #212). Shown only with two projects or more, except Settings → Projects. ── */
+/* a project's mark: a small rounded square in the project's hue (circles stay for statuses and priorities) */
+.proj-dot { display: inline-block; width: 8px; height: 8px; border-radius: 2px; flex: none; background: hsl(var(--ph) 62% 50%); }
+.proj-tag { display: inline-flex; align-items: center; gap: 5px; height: 22px; padding: 0 7px; border-radius: 999px; border: 1px solid var(--line-2); font-size: var(--fs-small); font-weight: var(--fw-regular); color: var(--muted); white-space: nowrap; line-height: var(--lh-tight); flex: none; }
+.lib-m .proj-tag, .mem-scope .proj-tag, .model-title .proj-tag, .ni .proj-tag { height: 20px; }
+/* the project filter: one head button, the same on Tasks, Library, Workflows, Memory and Secrets */
+.head-btn.proj-btn { gap: 6px; }
+.head-btn.proj-btn svg { color: var(--faint); }
+.proj-btn .proj-crumb { display: inline-flex; align-items: center; gap: 6px; }
+/* the project button keeps its text on narrow screens: the project's name is its whole point */
+.head-actions .proj-btn .btn-text { display: inline; }
+.proj-menu { position: relative; }
+.proj-menu .head-pop { left: 0; right: auto; width: 230px; }
+.pop-row .proj-dot { margin: 0 3px; }
+.proj-menu .pop-row .tab-n { margin-left: auto; }
+.proj-menu .pop-row.on .pop-check { margin-left: 6px; }
+/* sidebar: one group per project when there are two or more */
+.side-group .proj-dot { margin-right: 3px; }
+/* chat header crumb: Datinel › munih */
+.crumb .proj-crumb { display: inline-flex; align-items: center; gap: 7px; color: var(--muted); }
+/* new task: the project pill */
+.prop-pill .proj-dot { margin-left: 4px; }
+/* Settings → Projects */
+.pj-repo { font-family: var(--mono); font-size: var(--fs-small); color: var(--muted); font-weight: var(--fw-regular); overflow-wrap: anywhere; }
+.pj-faces { display: inline-flex; align-items: center; gap: 3px; }
+.pj-faces .dot-avatar, .pj-who .dot-avatar { width: 16px; height: 16px; }
+.pj-faces > span:last-child { margin-left: 3px; }
+.pj-who { display: inline-flex; align-items: center; gap: 4px; white-space: nowrap; }
+.pj-row.pj-wrap { flex-wrap: wrap; }
+.pj-clone { flex-basis: 100%; display: flex; flex-direction: column; gap: 8px; padding-top: 10px; border-top: 1px solid var(--rule); }
+.pj-cl { display: flex; align-items: center; gap: 8px; font-size: var(--fs-small); color: var(--muted); line-height: var(--lh-tight); flex-wrap: wrap; }
+.pj-cl .dot-avatar { width: 16px; height: 16px; }
+.pj-cl .spin { margin-left: 0; }
+.pj-cl b { color: var(--text); font-weight: var(--fw-medium); }
+.pj-cl .linklike { font-size: var(--fs-small); }
+.pj-ok { color: var(--positive); width: 14px; height: 14px; flex: none; }
+.pj-bad-ic { color: var(--negative); width: 14px; height: 14px; flex: none; }
+.pj-err { flex-basis: 100%; display: flex; flex-direction: column; gap: 8px; padding: 10px 12px; border-radius: 8px; background: var(--neg-bg); color: var(--neg-ink); font-size: var(--fs-base); line-height: var(--lh-normal); }
+.pj-err b { font-weight: var(--fw-bold); }
+.pj-err code, .pj-form code, .pj-note code, .pj-inline code { font-size: var(--fs-small); background: var(--code); padding: 1px 6px; border-radius: 4px; color: var(--text); }
+.pj-err .actions { display: flex; gap: 6px; flex-wrap: wrap; }
+.pj-form { flex-direction: column; align-items: stretch !important; gap: 14px; }
+.pj-form .field-row { flex-wrap: wrap; }
+.pj-form .field-row .field { min-width: 200px; flex: 1; }
+.pj-form .form-note { margin: 0; line-height: var(--lh-normal); font-size: var(--fs-small); }
+.pj-form .actions { display: flex; gap: 6px; align-items: center; justify-content: flex-end; }
+.pj-check { display: flex; align-items: flex-start; gap: 6px; font-size: var(--fs-small); font-weight: var(--fw-regular); color: var(--muted); line-height: var(--lh-normal); }
+.pj-check .pj-ok, .pj-check .pj-bad-ic { margin-top: 3px; }
+.pj-check .spin { margin: 3px 0 0; }
+.pj-check b { color: var(--text); font-weight: var(--fw-medium); }
+.pj-check.bad { color: var(--neg-ink); }
+.pj-check.bad b { color: var(--neg-ink); }
+.pj-note { margin: 0 0 16px; padding: 10px 12px; border: 1px solid var(--line-2); border-radius: 10px; font-size: var(--fs-base); color: var(--muted); line-height: var(--lh-normal); max-width: 760px; }
+.pj-note b { color: var(--text); font-weight: var(--fw-medium); }
+.pj-sub { margin: 28px 0 10px; font-size: var(--fs-base); font-weight: var(--fw-bold); color: var(--text); line-height: var(--lh-tight); }
+.pj-mem { align-items: center; }
+.pj-mem > .dot-avatar { width: 22px; height: 22px; }
+.pj-inline { flex-basis: 100%; display: flex; flex-direction: column; gap: 8px; padding-top: 10px; border-top: 1px solid var(--rule); font-size: var(--fs-base); line-height: var(--lh-normal); color: var(--text); }
+.pj-inline b { font-weight: var(--fw-bold); }
+.pj-inline ul { margin: 0; padding-left: 18px; }
+.pj-inline li::marker { color: var(--faint); }
+.pj-inline .actions { display: flex; gap: 6px; align-items: center; justify-content: flex-end; flex-wrap: wrap; }
+.pj-inline select { max-width: 280px; }
+.pj-links { display: grid; grid-template-columns: repeat(auto-fill, minmax(220px, 1fr)); gap: 8px; }
+.pj-link { display: flex; flex-direction: column; align-items: flex-start; gap: 4px; padding: 12px 14px; height: auto; border: 1px solid var(--border); border-radius: 12px; background: var(--sheet); color: var(--text); text-align: left; font-size: var(--fs-base); font-weight: var(--fw-medium); line-height: var(--lh-tight); white-space: normal; }
+.pj-link > span { font-size: var(--fs-small); font-weight: var(--fw-regular); color: var(--muted); line-height: var(--lh-normal); }
+.pj-link, .pj-link:hover { text-decoration: none; }
+.pj-link:hover { border-color: var(--line-2); background: var(--hover); }
+.pj-h2dot { width: 10px; height: 10px; margin-right: 8px; vertical-align: 1px; }
+@media (max-width: 640px) {
+  .pj-row { flex-wrap: wrap; }
+  .pj-row .model-main { flex-basis: calc(100% - 34px); }
+  .pj-row .model-actions { width: 100%; justify-content: flex-start; margin-left: -8px; flex-wrap: wrap; }
+  .pj-mem .model-actions { width: auto; margin-left: auto; }
+  .pj-mem { flex-wrap: nowrap; }
+  .pj-mem.pj-wrap { flex-wrap: wrap; }
+  .pj-mem .model-main { flex: 1 1 0; min-width: 0; }
+  .pj-form .field-row .field { min-width: 100%; }
+  .pj-links { grid-template-columns: 1fr; }
+  /* phone: the project button takes the title's place on the same row (no extra header) */
+  .screen-head:has(.proj-menu) .crumb { display: none; }
+  .screen-head:has(.proj-menu) .head-actions { justify-content: flex-start; }
+  .proj-menu .head-pop { left: 0; width: min(240px, calc(100vw - 60px)); }
+  .lib-m:has(.proj-tag) .lib-fold { display: none; }
+  .proj-btn { max-width: 112px; }
+  .proj-btn .btn-text { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; min-width: 0; }
+}
+.pj-form input:disabled { color: var(--muted); }

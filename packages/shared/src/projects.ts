@@ -34,6 +34,8 @@ export interface ProjectMember {
   /** Its main chat in this project (#214): created on first use; null = none yet. */
   mainChat: string | null;
   joinedAt: string;
+  /** The branch checked out in its workspace (#217), read from .git/HEAD; null when unknown (no clone yet, detached). */
+  branch: string | null;
 }
 
 /** A removed member's workspace (#214): kept on disk until Master deletes it. */

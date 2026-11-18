@@ -18,6 +18,11 @@ describe('settings routes', () => {
     expect(settingsLabel('subscriptions')).toBe('Subscriptions');
     expect(settingsLabel('canvas')).toBe('Agents');
   });
+  it('opens a project page at #/settings/projects/<id> (#217)', () => {
+    expect(settingsRoute('#/settings/projects')).toEqual({ page: 'projects', rest: '', path: '#/settings/projects' });
+    expect(settingsRoute('#/settings/projects/datinel')).toEqual({ page: 'projects', rest: 'datinel', path: '#/settings/projects/datinel' });
+    expect(settingsRoute('#/settings/projects/new')).toEqual({ page: 'projects', rest: 'new', path: '#/settings/projects/new' });
+  });
   it('leaves other views alone', () => {
     expect(settingsPageOf('board', undefined)).toBeNull();
     expect(settingsPageOf('canvas', 'cv_1')).toBeNull();

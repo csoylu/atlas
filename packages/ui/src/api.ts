@@ -1,4 +1,4 @@
-import type { About, Account, Agent, Card, CardStatus, ChatGptModel, ChatGptStatus, ChatUsage, ClaudePlanModel, ClaudePlanStatus, ClearEvent, CompactResult, CreateAccount, CreateAgent, CreateCard, CreateModelRequest, CreatePlanAccount, CreateWorkflow, Doc, DocContent, DocHit, DocRef, DocVersion, FileChange, Folder, Inbox, LocalModel, LocalPull, LocalStatus, Memory, MemoryBudget, MemoryChange, MemoryProposal, MemoryQuery, Message, Model, ModelTest, Notification, PanelTab, PlanProvider, RewindPreview, RewindResult, Run, CreateSecret, SecretInfo, SecretList, SecretStoreStatus, UpdateSecret, SaveWorkflowGraph, ServerEvent, Settings, Timeline, ToolCallTiming, UpdateAccount, UpdateAgent, UpdateChatGpt, UpdateClaudePlan, UpdateLocal, UpdateMemory, UpdateModelRequest, UpdatePlanAccount, UpdateStatus, UpdateVoice, Upload, UsageSummary, VoiceName, VoiceStatus, TriggerPreview, UpdateWorkflow, Workflow, WorkflowRun } from '@atlas/shared';
+import type { About, Account, Agent, Card, CardStatus, ChatGptModel, ChatGptStatus, ChatUsage, ClaudePlanModel, ClaudePlanStatus, ClearEvent, CompactResult, CreateAccount, CreateAgent, CreateCard, CreateModelRequest, CreatePlanAccount, CreateWorkflow, Doc, DocContent, DocHit, DocRef, DocVersion, FileChange, Folder, Inbox, LocalModel, LocalPull, LocalStatus, Memory, MemoryBudget, MemoryChange, MemoryProposal, MemoryQuery, Message, Model, ModelTest, Notification, PanelTab, PlanProvider, RewindPreview, RewindResult, Run, CreateSecret, SecretInfo, SecretList, SecretStoreStatus, UpdateSecret, SaveWorkflowGraph, ServerEvent, Settings, Timeline, ToolCallTiming, UpdateAccount, UpdateAgent, UpdateChatGpt, UpdateClaudePlan, UpdateLocal, UpdateMemory, UpdateModelRequest, UpdatePlanAccount, UpdateStatus, UpdateVoice, Upload, UsageSummary, VoiceName, VoiceStatus, TriggerPreview, UpdateWorkflow, Workflow, WorkflowRun, Project, CreateProject, UpdateProject, RepoCheck } from '@atlas/shared';
 
 /** HTTP error with the parsed body (e.g. a 409's details). */
 export class ApiError extends Error {
@@ -35,7 +35,8 @@ async function call<T>(method: string, path: string, body?: unknown): Promise<T>
 export type AuthState = { authenticated: boolean; enabled: boolean };
 
 export const api = {
-  cards: () => call<Card[]>('GET', '/cards'),
+  /** `archived`: also the cards of archived projects (the project filter's « Archived »). */
+  cards: (archived = false) => call<Card[]>('GET', '/cards' + (archived ? '?archived=1' : '')),
   createCard: (card: CreateCard) => call<Card>('POST', '/cards', card),
   updateCard: (id: string, patch: Partial<Pick<Card, 'title' | 'body' | 'status' | 'assignee' | 'priority' | 'parents' | 'modelId' | 'effort'>>) =>
     call<Card>('PATCH', `/cards/${id}`, patch),
@@ -63,7 +64,9 @@ export const api = {
   addCardImages: (id: string, uploads: string[]) => call<Card>('POST', `/cards/${id}/images`, { uploads }),
   removeCardImage: (id: string, path: string) => call<Card>('DELETE', `/cards/${id}/images?path=${encodeURIComponent(path)}`),
   // ── Documents and the side panel ──
-  documents: (cardId?: string) => call<Doc[]>('GET', '/documents' + (cardId ? `?card=${encodeURIComponent(cardId)}` : '')),
+  documents: (cardId?: string, archived = false) => call<Doc[]>('GET', '/documents' + (cardId ? `?card=${encodeURIComponent(cardId)}` : archived ? '?archived=1' : '')),
+  /** The Library with the artifacts of archived projects too (the project filter's « Archived »). */
+  documentsArchived: () => call<Doc[]>('GET', '/documents?archived=1'),
   document: (id: string, version?: number) => call<DocContent>('GET', `/documents/${id}` + (version === undefined ? '' : `?version=${version}`)),
   docVersions: (id: string) => call<DocVersion[]>('GET', `/documents/${id}/versions`),
   restoreDoc: (id: string, version: number) => call<Doc>('POST', `/documents/${id}/restore/${version}`),
@@ -71,7 +74,7 @@ export const api = {
   moveDoc: (id: string, folderId: string | null) => call<Doc>('POST', `/documents/${id}/move`, { folderId }),
   searchDocs: (q: string) => call<DocHit[]>('GET', `/documents/search?q=${encodeURIComponent(q)}`),
   folders: () => call<Folder[]>('GET', '/folders'),
-  createFolder: (name: string) => call<Folder>('POST', '/folders', { name }),
+  createFolder: (name: string, projectId?: string) => call<Folder>('POST', '/folders', projectId ? { name, projectId } : { name }),
   renameFolder: (id: string, name: string) => call<Folder>('PATCH', `/folders/${id}`, { name }),
   deleteFolder: (id: string) => call<void>('DELETE', `/folders/${id}`),
   panel: (chatId: string) => call<PanelTab[]>('GET', `/chats/${chatId}/panel`),
@@ -96,7 +99,8 @@ export const api = {
   agents: () => call<Agent[]>('GET', '/agents'),
   chats: () => call<Card[]>('GET', '/chats'),
   newChat: (agentId: string) => call<Card>('POST', `/agents/${agentId}/chats`),
-  mainChat: (agentId: string) => call<Card>('POST', `/agents/${agentId}/main-chat`),
+  /** `project`: its main chat in that project (#214); omitted = the default project. */
+  mainChat: (agentId: string, project?: string) => call<Card>('POST', `/agents/${agentId}/main-chat` + (project ? `?project=${encodeURIComponent(project)}` : '')),
   /** A fresh main chat; the previous one stays in History (the composer's /clear clears the context instead, #99). */
   newMainChat: (agentId: string) => call<Card>('POST', `/agents/${agentId}/main-chat/new`),
   usage: (days = 30) => call<UsageSummary>('GET', `/usage?days=${days}`),
@@ -195,7 +199,17 @@ export const api = {
   loadLocal: (name: string, keep: boolean) => call<void>('POST', '/local/load', { name, keep }),
   useLocal: (name: string) => call<Model>('POST', '/local/use', { name }),
   // ── Workflows (#170; the Schedules page shows the one-step ones) ──────
-  workflows: () => call<Workflow[]>('GET', '/workflows'),
+  // ── Projects (#213, #214) ──
+  /** Every project, archived ones too: the UI filters. */
+  projects: () => call<Project[]>('GET', '/projects?archived=1'),
+  createProject: (p: CreateProject) => call<Project>('POST', '/projects', p),
+  updateProject: (id: string, patch: UpdateProject) => call<Project>('PATCH', `/projects/${id}`, patch),
+  archiveProject: (id: string) => call<Project>('POST', `/projects/${id}/archive`),
+  restoreProject: (id: string) => call<Project>('POST', `/projects/${id}/restore`),
+  repoCheck: (repo: string) => call<RepoCheck>('GET', `/projects/repo-check?repo=${encodeURIComponent(repo)}`),
+  retryClone: (id: string, agentId: string) => call<Project>('POST', `/projects/${id}/members/${agentId}/retry`),
+  deleteKept: (id: string, agentId: string) => call<Project>('DELETE', `/projects/${id}/kept/${agentId}`),
+  workflows: (archived = false) => call<Workflow[]>('GET', '/workflows' + (archived ? '?archived=1' : '')),
   createWorkflow: (w: CreateWorkflow) => call<Workflow>('POST', '/workflows', w),
   saveWorkflowGraph: (id: string, g: SaveWorkflowGraph) => call<Workflow>('PUT', `/workflows/${id}/graph`, g),
   updateWorkflow: (id: string, patch: UpdateWorkflow) => call<Workflow>('PATCH', `/workflows/${id}`, patch),

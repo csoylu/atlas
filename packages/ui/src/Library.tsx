@@ -3,6 +3,7 @@ import { cardRef, type Card, type Doc, type DocHit, type Folder } from '@atlas/s
 import { api } from './api.ts';
 import type { MessageStream } from './useMessages.ts';
 import { HeaderActions, Icon } from './ScreenHeader.tsx';
+import { effectiveFilter, inFilter, ProjectFilterButton, ProjTag, projectForNew, useProjectFilter, useProjects } from './projects.tsx';
 import { Menu, PopButton, PopItem, PopRow } from './HeadMenu.tsx';
 import { Avatar } from './Board.tsx';
 import { StatusIcon } from './StatusIcon.tsx';
@@ -42,7 +43,12 @@ export function Library(props: {
     localStorage.setItem('atlas.library.view', JSON.stringify(next));
   };
 
-  const reload = useCallback(() => api.documents().then(setDocs, onError), [onError]);
+  const pinfo = useProjects();
+  const [pfRaw, setPf] = useProjectFilter();
+  const pf = effectiveFilter(pfRaw, pinfo);
+  const hasArchived = pinfo.all.some((p) => p.status === 'archived');
+  // With an archived project, the list has its artifacts too (« Archived » in the filter shows them).
+  const reload = useCallback(() => api.documents(undefined, hasArchived).then(setDocs, onError), [onError, hasArchived]);
   useEffect(() => {
     void reload();
     const offDoc = stream.listen('docs', (e) => {
@@ -70,12 +76,13 @@ export function Library(props: {
   }, [query, onError, docs]);
 
   // A folder that was deleted elsewhere: back to All.
-  const folder: LibFolder = view.folder === 'all' || view.folder === 'unfiled' || folders.some((f) => f.id === view.folder) || !folders.length ? view.folder : 'all';
+  const folderOk = (id: string) => folders.some((f) => f.id === id && (!pinfo.byId(pfRaw) || f.projectId === pfRaw || !pinfo.multi));
+  const folder: LibFolder = view.folder === 'all' || view.folder === 'unfiled' || folderOk(view.folder) || !folders.length ? view.folder : 'all';
   const replace = (x: Doc) => setDocs((ds) => ds && ds.map((y) => (y.id === x.id ? x : y)));
   const pin = (d: Doc) => api.pinDoc(d.id, !d.pinned).then(replace, onError);
   const move = (d: Doc, to: string | null) => api.moveDoc(d.id, to).then(replace, onError);
   const createFolder = (name: string) =>
-    api.createFolder(name).then((f) => {
+    api.createFolder(name, pinfo.multi ? projectForNew(pf, pinfo)?.id : undefined).then((f) => {
       setEditing(null);
       save({ ...view, folder: f.id });
     }, onError);
@@ -180,21 +187,25 @@ export function Library(props: {
     );
   }
 
-  const all = (docs ?? []).filter((d) => matches(d, view.tab, view.filter));
-  const counts = folderCounts(docs ?? []);
+  const inProj = (docs ?? []).filter((d) => inFilter(pf, d.projectId, pinfo));
+  const all = inProj.filter((d) => matches(d, view.tab, view.filter));
+  const counts = folderCounts(inProj);
+  // One project picked: its folders only, and its rows carry no tag.
+  const shownFolders = pinfo.byId(pf) ? folders.filter((f) => f.projectId === pf) : folders;
+  const tagged = pinfo.multi && !pinfo.byId(pf);
   const inView = all.filter((d) => inFolder(d, folder));
   const n = filterCount(view.filter);
   const withDocs = (ids: (string | null)[]) => new Set(ids.filter((x): x is string => !!x));
-  const docCards = withDocs((docs ?? []).map((d) => d.cardId));
-  const docChats = withDocs((docs ?? []).map((d) => d.chatId));
-  const docAgents = withDocs((docs ?? []).map((d) => d.agentId));
+  const docCards = withDocs(inProj.map((d) => d.cardId));
+  const docChats = withDocs(inProj.map((d) => d.chatId));
+  const docAgents = withDocs(inProj.map((d) => d.agentId));
   const setFilter = (k: keyof LibView['filter'], v: string | null) => save({ ...view, filter: { ...view.filter, [k]: v } });
   const pick = (f: LibFolder) => {
     setQ('');
     save({ ...view, folder: f });
   };
   // Search results follow the type tab and filter too.
-  const results = hits?.filter((h) => matches(h.doc, view.tab, view.filter)) ?? null;
+  const results = hits?.filter((h) => inFilter(pf, h.doc.projectId, pinfo) && matches(h.doc, view.tab, view.filter)) ?? null;
   const current = folders.find((f) => f.id === folder);
 
   const typeTabs = (cls: string) => (
@@ -268,6 +279,7 @@ export function Library(props: {
           </span>
         </a>
         <span className="lib-m">
+          {tagged && <ProjTag id={d.projectId} />}
           {(query || folder === 'all') && (
             <span className="lib-fold" title="Folder">
               <Icon.folder />
@@ -402,6 +414,7 @@ export function Library(props: {
   return (
     <div className="library">
       <HeaderActions>
+        <ProjectFilterButton value={pf} onChange={setPf} count={(f) => (docs ?? []).filter((d) => inFilter(f, d.projectId, pinfo)).length} />
         {typeTabs('view-tabs lib-tabs-head')}
         <span className="head-sp" />
         {searchBox('lib-head-search')}
@@ -470,7 +483,7 @@ export function Library(props: {
         <div className="lib-chips" aria-label="Folders">
           {chip('all', 'All artifacts')}
           {chip('unfiled', 'Unfiled')}
-          {folders.map((f) => chip(f.id, f.name, f))}
+          {shownFolders.map((f) => chip(f.id, f.name, f))}
           {editing === 'new' && nameInput(null)}
           {current && !query && folderMenu(current, 'mem-chip')}
         </div>
@@ -485,7 +498,7 @@ export function Library(props: {
               <Icon.plus />
             </button>
           </div>
-          {folders.map((f) => folderItem(f.id, <Icon.folder16 />, f.name, f))}
+          {shownFolders.map((f) => folderItem(f.id, <Icon.folder16 />, f.name, f))}
           {editing === 'new' && nameInput(null)}
         </nav>
         <div className="lib-main-col">

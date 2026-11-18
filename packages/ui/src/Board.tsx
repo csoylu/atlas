@@ -3,6 +3,8 @@ import { AgentFace } from './AgentFace.tsx';
 import { pastedImages, TASK, TaskImages, useAttachments, useFileDrop } from './Images.tsx';
 import { cardRef, type Agent, type Card, type CardStatus, type CreateCard } from '@atlas/shared';
 import { HeaderActions, Icon } from './ScreenHeader.tsx';
+import { api } from './api.ts';
+import { effectiveFilter, inFilter, ProjDot, ProjectFilterButton, ProjTag, projectForNew, useProjectFilter, useProjects } from './projects.tsx';
 import { StatusIcon, STATUS_LABEL } from './StatusIcon.tsx';
 import { Menu, PopRow } from './HeadMenu.tsx';
 import {
@@ -83,13 +85,27 @@ export function Board(props: {
     onCreateAsked?.();
   }, [createAsk, onCreateAsked]);
 
-  const shown = props.cards.filter((c) => matches(c, view.tab, view.filter));
+  const pinfo = useProjects();
+  const [pfRaw, setPf] = useProjectFilter();
+  const pf = effectiveFilter(pfRaw, pinfo);
+  // « Archived »: the cards of archived projects, read-only, fetched on demand (the app's list has active projects only).
+  const [archivedCards, setArchivedCards] = useState<Card[]>([]);
+  const hasArchived = pinfo.all.some((p) => p.status === 'archived');
+  const { onError } = props;
+  useEffect(() => {
+    if (hasArchived) api.cards(true).then((cs) => setArchivedCards(cs.filter((c) => pinfo.byId(c.projectId)?.status === 'archived')), onError);
+  }, [hasArchived, pinfo, onError]);
+  const pool = pf === 'archived' ? archivedCards : props.cards;
+  const inProject = pool.filter((c) => inFilter(pf, c.projectId, pinfo));
+  // One project picked: its cards carry no tag (they all have it).
+  const tagged = pinfo.multi && !pinfo.byId(pf);
+  const shown = inProject.filter((c) => matches(c, view.tab, view.filter));
   const columns = columnsFor(view.tab);
   const nFilters = filterCount(view.filter);
   const counts: Record<BoardTab, number> = {
     all: 0,
-    needs: props.cards.filter((c) => matches(c, 'needs', view.filter)).length,
-    running: props.cards.filter((c) => matches(c, 'running', view.filter)).length,
+    needs: inProject.filter((c) => matches(c, 'needs', view.filter)).length,
+    running: inProject.filter((c) => matches(c, 'running', view.filter)).length,
   };
 
   // Phone (#229): one column at a time, picked from a row of status chips (name + count); no folded rails.
@@ -126,6 +142,7 @@ export function Board(props: {
   return (
     <div className={'board-screen ' + view.layout}>
       <HeaderActions>
+        <ProjectFilterButton value={pf} onChange={setPf} count={(f) => (f === 'archived' ? archivedCards.length : props.cards.filter((c) => inFilter(f, c.projectId, pinfo)).length)} />
         <div className="view-tabs board-tabs" role="tablist" aria-label="Tasks">
           {TABS.map((t) => (
             <button
@@ -256,7 +273,7 @@ export function Board(props: {
                   <div className="cards">
                     {cards.length === 0 && HINT[status] && <p className="hint">{HINT[status]}</p>}
                     {cards.map((c) => (
-                      <BoardCard key={c.id} card={c} cards={props.cards} open={props.openId === c.id} onOpen={props.onOpen} />
+                      <BoardCard key={c.id} card={c} cards={props.cards} tagged={tagged} open={props.openId === c.id} onOpen={props.onOpen} />
                     ))}
                   </div>
                 )}
@@ -300,7 +317,7 @@ export function Board(props: {
                       <span className="card-title">{c.title}</span>
                       <PrLine card={c} />
                       {why && <span className={'why' + (why.blocked ? ' blocked' : '')}>{why.text}</span>}
-                      <Labels card={c} cards={props.cards} />
+                      <Labels card={c} cards={props.cards} tagged={tagged} />
                       {c.assignee ? <Avatar id={c.assignee} /> : <span className="avatar-none" />}
                     </div>
                   );
@@ -315,6 +332,7 @@ export function Board(props: {
           status={creating}
           agents={props.agents}
           filterAgent={view.filter.agent}
+          project={projectForNew(pf, pinfo)?.id ?? null}
           onClose={() => setCreating(null)}
           onCreate={(c) =>
             props.onCreate(c).then(
@@ -328,7 +346,7 @@ export function Board(props: {
   );
 }
 
-function BoardCard({ card: c, cards, open, onOpen }: { card: Card; cards: Card[]; open: boolean; onOpen(id: string): void }) {
+function BoardCard({ card: c, cards, open, tagged, onOpen }: { card: Card; cards: Card[]; open: boolean; tagged: boolean; onOpen(id: string): void }) {
   const why = whyLine(c);
   return (
     <article
@@ -361,21 +379,22 @@ function BoardCard({ card: c, cards, open, onOpen }: { card: Card; cards: Card[]
           <span>{why.text}</span>
         </div>
       )}
-      <Labels card={c} cards={cards} />
+      <Labels card={c} cards={cards} tagged={tagged} />
     </article>
   );
 }
 
 /** The card's labels: priority and « after N » (Atlas cards have no free labels yet). */
-function Labels({ card: c, cards }: { card: Card; cards: Card[] }) {
+function Labels({ card: c, cards, tagged }: { card: Card; cards: Card[]; tagged: boolean }) {
   const after = c.parents.map((p) => {
     const x = cards.find((y) => y.id === p);
     return x ? cardRef(x) : p;
   });
   const showAfter = showAfterLabel(c, after);
-  if (c.priority === 0 && !showAfter) return null;
+  if (c.priority === 0 && !showAfter && !tagged) return null;
   return (
     <div className="labels">
+      {tagged && <ProjTag id={c.projectId} />}
       {c.priority !== 0 && (
         <span className={'lab prio p' + c.priority}>
           <i />P{c.priority}
@@ -397,10 +416,16 @@ export function Avatar({ id }: { id: string }) {
 }
 
 /** « New card »: title, description, agent, status, priority. ⌘↵ creates, Esc cancels. */
-function NewCard(props: { status: CardStatus; agents: Agent[]; filterAgent: string | null; onClose(): void; onCreate(c: CreateCard): Promise<boolean> }) {
+function NewCard(props: { status: CardStatus; agents: Agent[]; filterAgent: string | null; project: string | null; onClose(): void; onCreate(c: CreateCard): Promise<boolean> }) {
+  const pinfo = useProjects();
+  const [projectId, setProjectId] = useState(props.project);
+  const project = pinfo.byId(projectId);
+  // With two projects, only the project's members can take the task.
+  const agents = pinfo.multi && project ? props.agents.filter((a) => project.members.some((m) => m.agentId === a.id)) : props.agents;
   const [title, setTitle] = useState('');
   const [body, setBody] = useState('');
-  const [assignee, setAssignee] = useState<string>(props.filterAgent ?? '');
+  const [assigneeRaw, setAssignee] = useState<string>(props.filterAgent ?? '');
+  const assignee = agents.some((a) => a.id === assigneeRaw) ? assigneeRaw : '';
   const [status, setStatus] = useState<CardStatus>(props.status);
   const [priority, setPriority] = useState(0);
   const [busy, setBusy] = useState(false);
@@ -429,7 +454,7 @@ function NewCard(props: { status: CardStatus; agents: Agent[]; filterAgent: stri
       .take()
       .then((uploads) => {
         created.current = true; // set before the dialog closes: its images belong to the task now
-        return props.onCreate({ title: title.trim(), body, assignee: assignee || null, status, priority, uploads });
+        return props.onCreate({ title: title.trim(), body, assignee: assignee || null, status, priority, uploads, ...(pinfo.multi && projectId ? { projectId } : {}) });
       })
       .then((ok) => {
         if (ok === false) created.current = false; // not created: the dialog stays, Cancel still deletes them
@@ -474,6 +499,16 @@ function NewCard(props: { status: CardStatus; agents: Agent[]; filterAgent: stri
           <TaskImages cardId={null} images={[]} att={att} onAdd={att.add} />
         </div>
         <div className="nc-props">
+          {pinfo.multi && project && (
+            <label className="prop-pill" title="Project">
+              <ProjDot hue={project.colour} />
+              <select value={project.id} onChange={(e) => setProjectId(e.target.value)} aria-label="Project">
+                {pinfo.active.map((p) => (
+                  <option key={p.id} value={p.id}>{p.name}</option>
+                ))}
+              </select>
+            </label>
+          )}
           <label className="prop-pill" title="Status">
             <StatusIcon status={status} />
             <select value={status} onChange={(e) => setStatus(e.target.value as CardStatus)} aria-label="Status">
@@ -486,7 +521,7 @@ function NewCard(props: { status: CardStatus; agents: Agent[]; filterAgent: stri
             {assignee ? <Avatar id={assignee} /> : <span className="avatar-none" />}
             <select value={assignee} onChange={(e) => setAssignee(e.target.value)} aria-label="Agent">
               <option value="">Unassigned</option>
-              {props.agents.map((a) => (
+              {agents.map((a) => (
                 <option key={a.id} value={a.id}>@{a.id}</option>
               ))}
             </select>
@@ -500,7 +535,7 @@ function NewCard(props: { status: CardStatus; agents: Agent[]; filterAgent: stri
           </label>
         </div>
         <div className="nc-foot">
-          <span className="nc-note">{status === 'triage' ? 'The triage agent shapes it.' : assignee ? `@${assignee} picks it up when it is ready.` : 'Assign an agent so it runs.'}</span>
+          <span className="nc-note">{status === 'triage' ? (pinfo.multi && project ? (project.lead ? `${project.name}'s lead (${project.lead}) shapes it.` : `${project.name} has no lead: assign an agent so it runs.`) : 'The triage agent shapes it.') : assignee ? `@${assignee} picks it up when it is ready.` : 'Assign an agent so it runs.'}</span>
           <button type="submit" className="primary small" disabled={!title.trim() || busy}>
             Create task <span className="kbd">⌘↵</span>
           </button>

@@ -481,7 +481,8 @@ const panelTabs = () =>
   doc ? [{ doc, openedBy: doc.agentId, openedAt: now, focusedAt: now, section: null, seenVersion: doc.version, active: true, cardTitle: null }] : [];
 
 // Memory has its own screens below (fixtures, edit, deep links).
-const SETTINGS = ['agents', 'board', 'subscriptions', 'api-keys', 'local', 'model-list', 'usage', 'profile', 'appearance', 'voice', 'about'];
+const PJ2 = 'uicheck-datinel'; // the fixture project's id (#217)
+const SETTINGS = ['projects', 'agents', 'board', 'subscriptions', 'api-keys', 'local', 'model-list', 'usage', 'profile', 'appearance', 'voice', 'about'];
 // Settings → Secrets (#209): every row kind (granted to some, to all, to none, made by an agent, waiting for a value,
 // model keys) on the desktop keychain, then the same list on a locked server (the sidebar badge, the unlock panel).
 const secretRow = (name, o) => ({ name, description: '', kind: 'agent', grant: 'none', agents: [], project: null, hasValue: true, createdBy: 'user', createdCard: null, createdAt: secAgo(86400 * 6), updatedAt: secAgo(86400 * 6), updatedBy: 'user', lastUsedAt: null, lastUsedBy: null, waitingCard: null, ...o });
@@ -565,6 +566,15 @@ const SCREENS = [
   { name: 'shortcuts', hash: '#/board', ready: '.board', then: { js: `window.dispatchEvent(new KeyboardEvent('keydown', { key: '?', shiftKey: true, bubbles: true }));`, ready: '.keys-sheet' }, keys: ['.keys-head h2', '.keys-row > span:first-child', '.pal-sec'] },
   // Workflows (#171): the list (fixtures on top of the real ones), the canvas in Edit with a step selected, the canvas in
   // Runs with the waiting run; on a phone the canvas screens show the steps as a list.
+  // Projects (#217): with a single project nothing changes elsewhere; these screens add a second one (fixture).
+  { name: 'projects-2', hash: '#/settings/projects', ready: '.pj-row', projects2: true, keys: ['.pj-row .model-title b', '.pj-cl', '.pj-err', '.settings-nav button'] },
+  { name: 'project-page', hash: `#/settings/projects/${PJ2}`, ready: '.pj-mem', projects2: true, keys: ['.pj-mem b', '.pj-sub', '.pj-form .field', '.crumb-link'] },
+  { name: 'project-new', hash: '#/settings/projects/new', ready: '.pj-form', projects2: true, keys: ['.pj-form .field', '.pj-check', '.pj-form .actions button'] },
+  { name: 'board-2', hash: '#/board', ready: '.board', projects2: true, then: { js: `document.querySelector('.proj-btn').click();`, ready: '.proj-menu .pop-row' }, keys: ['.proj-btn', '.proj-menu .pop-row', '.proj-tag', '.side-group'] },
+  { name: 'new-task-2', hash: '#/board', ready: '.board', projects2: true, then: { js: `document.querySelector('button[aria-label="New task"]').click();`, ready: '.new-card-modal select[aria-label=Project]' }, keys: ['.nc-crumb', '.nc-note', '.prop-pill'] },
+  { name: 'drawer-2', hash: '#/board', ready: '.menu-btn', projects2: true, then: { js: `document.querySelector('.menu-btn').click(); await new Promise((r) => setTimeout(r, 400));`, ready: '.scrim' }, keys: ['.nav-item', '.side-group'] },
+  { name: 'inbox-2', hash: '#/inbox', ready: '.ni', inbox: true, projects2: true, keys: ['.ni-l2', '.proj-tag'] },
+  { name: 'workflows-2', hash: '#/workflows', ready: '.wf-row', workflows: true, projects2: true, keys: ['.wfl-name', '.proj-btn', '.proj-tag'] },
   { name: 'workflows', hash: '#/workflows', ready: '.wf-row', workflows: true, keys: ['.wfl-name', '.wfl-sub .trig', '.wfl-last .st', '.wfl-ghead', '.wfl-cols'] },
   { name: 'workflow-edit', hash: '#/workflows/wf_uicheck', ready: '.wf-node, .wf-phone', workflows: true, then: { js: `document.querySelector('.wf-plane .wf-node[data-id="validate"]')?.dispatchEvent(new PointerEvent('pointerdown', { bubbles: true, button: 0, isPrimary: true })); document.querySelector('.wf-plane .wf-node[data-id="validate"]')?.dispatchEvent(new PointerEvent('pointerup', { bubbles: true, button: 0, isPrimary: true })); await new Promise((r) => setTimeout(r, 200)); document.body.dataset.wfSel = '1';`, ready: 'body[data-wf-sel]' }, keys: ['.wf-title', '.wf-kind', '.wf-out', '.wf-side .sd-head b', '.wf-side .field > span'] },
   { name: 'workflow-runs', hash: '#/workflows/wf_uicheck/runs/wr_uicheck2', ready: '.wf-run, .wf-phone', workflows: true, keys: ['.wf-title', '.wf-run .st-chip', '.wf-steps-log .t', '.wf-runs button'] },
@@ -617,6 +627,23 @@ const evaluate = async (expr) => {
   return r.result.value;
 };
 
+// ── Two projects (#217): the live ones plus a fixture « Datinel » (one member cloning, one failed), and every third
+// task in it, so the sidebar groups, the project filter, the tags and the crumb show on screens with `projects2`. ──
+const projects2 = async () => {
+  const live = await get('/projects?archived=1');
+  const agentIds = (await get('/agents')).map((a) => a.id);
+  const lead = agentIds[0] ?? null;
+  const at = '2026-11-18T09:00:00.000Z';
+  const member = (agentId, i) => ({
+    agentId, workspace: `/x/workspaces/${agentId}/datinel`, cloneState: i === 1 ? 'cloning' : i === 2 ? 'failed' : 'ready', home: false,
+    cloneError: i === 2 ? "Can't reach datinel/datinel: GitHub has no repo by that name, or your GitHub login (gh) can't read it." : null,
+    cloneProgress: i === 1 ? 62 : null, mainChat: null, joinedAt: at, branch: i === 0 ? 'main' : null,
+  });
+  const fixture = { id: PJ2, name: 'Datinel', repo: 'datinel/datinel', ciJob: null, changelog: false, lead, colour: 145, status: 'active', createdAt: at, archivedAt: null, members: agentIds.slice(0, 3).map(member), kept: [], isDefault: false };
+  return live.some((p) => p.id !== live[0]?.id && p.status === 'active') ? live : [...live, fixture];
+};
+const inProject2 = (list) => list.map((c, i) => (i % 3 === 1 ? { ...c, projectId: PJ2 } : c));
+
 // ── API interception: fixtures in, writes out ──
 let screen = null;
 const refusedWrites = [];
@@ -643,6 +670,9 @@ handlers.set('Fetch.requestPaused', async ({ requestId, request }) => {
         default: return await send('Fetch.continueRequest', { requestId });
       }
     }
+    if (screen?.projects2 && request.method === 'GET' && url.pathname === '/api/projects') return await json(await projects2());
+    if (screen?.projects2 && request.method === 'GET' && url.pathname === '/api/cards')
+      return await json(inProject2([...(await get('/cards' + url.search)), ...(screen.inbox ? INBOX_CARDS : [])]));
     if (request.method === 'GET' && url.pathname === '/api/cards' && screen?.blocked) return await json((await get('/cards')).map(blockedModal));
     if (request.method === 'GET' && url.pathname === '/api/cards' && (screen?.inbox || screen?.memory)) return await json([...(await get('/cards')), ...INBOX_CARDS]);
     // Memory fixtures (#82); other Inbox screens get no digest, so their list stays the mockup's.

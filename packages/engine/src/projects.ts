@@ -1,5 +1,5 @@
 import { execFile, spawn } from 'node:child_process';
-import { existsSync, mkdirSync, readdirSync, renameSync, rmSync } from 'node:fs';
+import { existsSync, mkdirSync, readdirSync, readFileSync, renameSync, rmSync } from 'node:fs';
 import { dirname, join, resolve } from 'node:path';
 import { CreateProject, PROJECT_HUES, UpdateProject, type CloneState, type KeptWorkspace, type Project, type ProjectMember, type RepoCheck } from '@atlas/shared';
 import type { Db } from './store/db.ts';
@@ -601,6 +601,7 @@ export class Projects {
         cloneProgress: m.clone_state === 'cloning' ? (this.progress.get(`${r.id}/${m.agent_id}`) ?? null) : null,
         mainChat: m.main_chat,
         joinedAt: m.joined_at,
+        branch: m.home || m.clone_state === 'ready' ? branchOf(m.home ? homeDir(this.db, this.o.dataDir, m.agent_id) : m.workspace) : null,
       }),
     );
     const kept = (this.db.prepare('SELECT * FROM kept_workspaces WHERE project_id = ? ORDER BY kept_at').all(r.id) as KeptRow[]).map(
@@ -614,6 +615,18 @@ export class Projects {
     this.bus.emit({ type: 'project.updated', project });
     return project;
   }
+}
+
+/**
+ * The branch checked out in a workspace (#217: Settings → Projects shows it per member), read from .git/HEAD: no git
+ * process. null when it is no git clone, a detached head or a worktree (.git is a file there).
+ */
+export function branchOf(dir: string | null): string | null {
+  if (!dir) return null;
+  const head = join(dir, '.git', 'HEAD');
+  if (!existsSync(head)) return null;
+  const m = /^ref: refs\/heads\/(.+)$/m.exec(readFileSync(head, 'utf8'));
+  return m ? m[1]!.trim() : null;
 }
 
 function RepoNameOrThrow(repo: string): string {

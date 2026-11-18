@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useState } from 'react';
-import type { About, ShellPathInfo, UpdateStatus, Agent, Card, ChatGptStatus, Model, SecretStoreStatus, Settings } from '@atlas/shared';
+import type { About, ShellPathInfo, UpdateStatus, Agent, Card, ChatGptStatus, Model, SecretStoreStatus, Settings, Workflow } from '@atlas/shared';
 import { api } from './api.ts';
 import { AgentsView } from './AgentsView.tsx';
 import { MemoryPage } from './MemoryPage.tsx';
@@ -13,6 +13,8 @@ import { ProfileSettings } from './Profile.tsx';
 import { SecretsPage } from './SecretsPage.tsx';
 import { VoiceSettings } from './VoiceSettings.tsx';
 import { SETTINGS_GROUPS, type SettingsPage } from './settingsPages.ts';
+import { ProjectsPage } from './ProjectsPage.tsx';
+import { useProjects } from './projects.tsx';
 import { THEMES, type ThemeChoice } from './theme.ts';
 import type { MessageStream } from './useMessages.ts';
 import { UpdateAbout } from './UpdateDialog.tsx';
@@ -27,6 +29,8 @@ export function SettingsView(props: {
   memoryRest: string;
   cards: Card[];
   chats: Card[];
+  /** For Settings → Projects' counts (#217). */
+  workflows: Workflow[];
   stream: MessageStream;
   settings: Settings | null;
   agents: Agent[];
@@ -82,7 +86,9 @@ export function SettingsView(props: {
     props.onModelsChanged();
   };
 
+  const projects = useProjects();
   const counts: Partial<Record<SettingsPage, number | null>> = {
+    projects: projects.active.length,
     agents: props.agents.length,
     secrets: secretCount,
     subscriptions: claudeAccounts === null || !props.chatgpt ? null : claudeAccounts + props.chatgpt.accounts.length,
@@ -131,8 +137,10 @@ export function SettingsView(props: {
             <MemoryPage rest={props.memoryRest} agents={props.agents} cards={props.cards} chats={props.chats} stream={stream} settings={props.settings} models={props.models} onSettings={props.onSettings} onError={onError} />
           </div>
         ) : (
-        <div className="agents-view settings-view" key={page}>
-          {page === 'agents' ? (
+        <div className="agents-view settings-view" key={page === 'projects' ? page + '/' + props.memoryRest.split('/')[0] : page}>
+          {page === 'projects' ? (
+            <ProjectsPage rest={props.memoryRest} agents={props.agents} cards={props.cards} workflows={props.workflows} onError={onError} />
+          ) : page === 'agents' ? (
             <AgentsView settings={props.settings} onSettings={props.onSettings} onAgentsChanged={props.onAgentsChanged} onError={onError} />
           ) : page === 'board' ? (
             <BoardSettings settings={props.settings} agents={props.agents} onSettings={props.onSettings} onError={onError} />

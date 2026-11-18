@@ -2,7 +2,7 @@ import { useEffect, useLayoutEffect, useRef, useState, type ReactNode } from 're
 import { createPortal } from 'react-dom';
 
 /** A header button with a drop-down; a click outside or Esc closes it. */
-export function Menu(props: { open: boolean; onOpen(open: boolean): void; label: ReactNode; title: string; children: ReactNode }) {
+export function Menu(props: { open: boolean; onOpen(open: boolean): void; label: ReactNode; title: string; children: ReactNode; className?: string; btnClass?: string }) {
   const box = useRef<HTMLDivElement>(null);
   const { open, onOpen } = props;
   useEffect(() => {
@@ -21,8 +21,8 @@ export function Menu(props: { open: boolean; onOpen(open: boolean): void; label:
     };
   }, [open, onOpen]);
   return (
-    <div className="head-menu" ref={box}>
-      <button type="button" className={'head-btn' + (open ? ' open' : '')} aria-expanded={open} aria-haspopup="menu" title={props.title} onClick={() => onOpen(!open)}>
+    <div className={'head-menu' + (props.className ? ' ' + props.className : '')} ref={box}>
+      <button type="button" className={'head-btn' + (props.btnClass ? ' ' + props.btnClass : '') + (open ? ' open' : '')} aria-expanded={open} aria-haspopup="menu" title={props.title} onClick={() => onOpen(!open)}>
         {props.label}
       </button>
       {open && (

@@ -243,3 +243,17 @@ describe('projects (#213)', () => {
     expect(system).not.toMatch(/- munih/);
   });
 });
+
+describe('branchOf (#217: the branch shown per member)', () => {
+  it('reads the branch from .git/HEAD; null without a clone or on a detached head', async () => {
+    const { branchOf } = await import('./projects.ts');
+    const dir = mkdtempSync(join(tmpdir(), 'branch-'));
+    expect(branchOf(null)).toBeNull();
+    expect(branchOf(dir)).toBeNull();
+    mkdirSync(join(dir, '.git'));
+    writeFileSync(join(dir, '.git', 'HEAD'), 'ref: refs/heads/feat/217-projects-ui\n');
+    expect(branchOf(dir)).toBe('feat/217-projects-ui');
+    writeFileSync(join(dir, '.git', 'HEAD'), '4b825dc642cb6eb9a060e54bf8d69288fbee4904\n');
+    expect(branchOf(dir)).toBeNull();
+  });
+});

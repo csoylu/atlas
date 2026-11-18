@@ -1,6 +1,6 @@
 /** Settings: one page with a grouped sub-navigation (design §12). Each page lives at #/settings/<id>. */
 export const SETTINGS_GROUPS = [
-  { title: 'Team', pages: [{ id: 'agents', label: 'Agents' }, { id: 'memory', label: 'Memory' }, { id: 'board', label: 'Board & triage' }, { id: 'secrets', label: 'Secrets' }] },
+  { title: 'Team', pages: [{ id: 'projects', label: 'Projects' }, { id: 'agents', label: 'Agents' }, { id: 'memory', label: 'Memory' }, { id: 'board', label: 'Board & triage' }, { id: 'secrets', label: 'Secrets' }] },
   {
     title: 'Models',
     pages: [
@@ -17,7 +17,8 @@ export const SETTINGS_GROUPS = [
 export type SettingsPage = (typeof SETTINGS_GROUPS)[number]['pages'][number]['id'];
 export const SETTINGS_PAGES: { id: SettingsPage; label: string }[] = SETTINGS_GROUPS.flatMap((g) => [...g.pages]);
 /** Never throws: an unknown page (stale hash, old localStorage) reads as the first page, where the route sends it. */
-export const settingsLabel = (p: string) => (SETTINGS_PAGES.find((x) => x.id === p) ?? SETTINGS_PAGES[0]!).label;
+/** An unknown page is labelled like the page it opens: Agents (Projects is listed first but isn't the default, #217). */
+export const settingsLabel = (p: string) => (SETTINGS_PAGES.find((x) => x.id === p) ?? SETTINGS_PAGES.find((x) => x.id === 'agents')!).label;
 
 /** Hashes from before the restructure (#/agents, #/models, #/settings/board, #/settings/canvas…) → their new page. */
 const LEGACY: Record<string, SettingsPage> = { models: 'subscriptions', canvas: 'appearance' };
@@ -45,6 +46,8 @@ export function settingsRoute(path: string): { page: SettingsPage; rest: string;
     const raw = more.join('/');
     return { page: 'memory', rest: more.map(decodeURIComponent).join('/'), path: '#/settings/memory' + (raw ? '/' + raw : '') };
   }
+  // A project's page (#217): #/settings/projects/<id>[/repo].
+  if (view === 'settings' && id === 'projects' && more.length) return { page: 'projects', rest: more.map(decodeURIComponent).join('/'), path: '#/settings/projects/' + more.join('/') };
   const page = settingsPageOf(view, id);
   return page ? { page, rest: '', path: '#/settings/' + page } : null;
 }
