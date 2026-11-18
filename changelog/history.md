@@ -1,10 +1,9 @@
-# Changelog
+# Changelog history (frozen)
 
-Newest on top. One push to main = one entry = one release (docs/updater.md). Each entry is a heading
-`## Kind · #task · One plain sentence`, then optional details. The kind sets the version (Semantic Versioning,
-computed by `scripts/release/changelog.mjs` from the oldest entry to the newest, starting at 0.3.0 = v3, cad983f):
-`Fixed` → patch, `Added` or `Changed` → minor, `Breaking` (data or settings stop working without action) → major.
-Never type a version number.
+The entries from before #223 (18 Nov 2026), newest on top: this was CHANGELOG.md. Never edit this file (CI refuses
+it). New entries are one file per pull request in `changelog/` (`<task>-<slug>.md`, docs/updater.md); the version is
+computed by `scripts/release/changelog.mjs` from 0.3.0 (v3, cad983f) through these entries, oldest first, then the
+files in the order they reached main. Read the whole changelog with `node scripts/release/changelog.mjs full`.
 
 ## Fixed · #224 · On a phone the Tasks header no longer draws the « All tasks » tab over the « Tasks » title
 

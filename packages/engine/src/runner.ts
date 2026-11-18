@@ -100,8 +100,8 @@ export interface RunnerOptions {
   fileLog?: FileLog;
   /** What tool calls do outside the chat (tasks, messages, memories, schedules…), for rewinds (#138). */
   effects?: SideEffects;
-  /** pr_validate (#216) in tests: a fake GitHub, rebase and CI wait. */
-  prTool?: Pick<PrToolContext, 'gh' | 'rebase' | 'wait'>;
+  /** pr_validate (#216) in tests: a fake GitHub. */
+  prTool?: Pick<PrToolContext, 'gh'>;
 }
 
 export interface WakeOptions {
@@ -601,7 +601,7 @@ export class Runner {
                 env: (command) => this.shellEnvFor(agent.id, card.projectId, command),
               });
             else if (isPrTool(u.name))
-              r = await runPrTool(u.name, u.input, { db: this.db, kanban: this.kanban, agentId: agent.id, cardId, workdir, signal, env: () => this.shellEnvFor(agent.id, card.projectId, ''), ...this.opts.prTool });
+              r = await runPrTool(u.name, u.input, { db: this.db, kanban: this.kanban, agentId: agent.id, cardId, env: () => this.shellEnvFor(agent.id, card.projectId, ''), ...this.opts.prTool });
             else if (cleanup && isCleanupTool(u.name)) r = runCleanupTool(u.name, u.input, { cleanup, kanban: this.kanban, agents: this.agents, agentId: agent.id, cardId });
             else if (isTeamTool(u.name)) {
               const changeBefore = this.memories.lastChange();

@@ -1,10 +1,8 @@
-import { execFileSync, spawnSync } from 'node:child_process';
-import { mkdtempSync, readFileSync, writeFileSync } from 'node:fs';
-import { tmpdir } from 'node:os';
+import { readFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { describe, expect, it } from 'vitest';
 // @ts-expect-error plain JS module (run by CI with node before npm ci)
-import { bump, checkPush, notesOf, parseChangelog, versionOf } from './changelog.mjs';
+import { bump, changelogRule, fullOf, notesOf, parseChangelog, parseEntry, versionOf, versionsOf } from './changelog.mjs';
 
 const head = '# Changelog\n\nIntro text.\n\n';
 const file = (...entries: string[]) => head + entries.join('\n\n') + '\n';
@@ -25,11 +23,12 @@ describe('changelog version', () => {
     expect(bump('1.4.2', 'Breaking')).toBe('2.0.0');
   });
 
-  it('the same file always gives the same version, and the real CHANGELOG.md parses', () => {
-    const text = readFileSync(join(import.meta.dirname, '../../CHANGELOG.md'), 'utf8');
-    expect(versionOf(text)).toBe(versionOf(text));
-    expect(versionOf(text)).toMatch(/^\d+\.\d+\.\d+$/);
-    expect(parseChangelog(text).length).toBeGreaterThan(10);
+  it('the frozen history gives exactly the version the last CHANGELOG.md gave on main before #223 (0.48.1)', () => {
+    const text = readFileSync(join(import.meta.dirname, '../../changelog/history.md'), 'utf8');
+    expect(versionOf(text)).toBe('0.48.1');
+    const entries = parseChangelog(text);
+    expect(entries.length).toBe(72);
+    expect(entries[0].heading).toMatch(/^Fixed · #224 · /); // the newest entry of CHANGELOG.md at e51cfd0
   });
 
   it('parses kind, task, sentence and body; ignores ## inside code fences', () => {
@@ -44,59 +43,38 @@ describe('changelog version', () => {
     expect(() => versionOf(file('## Fixed · #1'))).toThrow(/has no sentence/);
   });
 
-  it('notes = the newest entry', () => {
-    expect(notesOf(file('## Fixed · #2 · New\n\nBody', '## Added · Old'))).toBe('## Fixed · #2 · New\n\nBody\n');
-    expect(notesOf(file('## Fixed · Only'))).toBe('## Fixed · Only\n');
+  it('notes = the newest entry; full = every entry newest first, with the version each gave', () => {
+    const entries = parseChangelog(file('## Fixed · #2 · New\n\nBody', '## Added · Old'));
+    expect(notesOf(entries)).toBe('## Fixed · #2 · New\n\nBody\n');
+    expect(versionsOf(entries)).toEqual(['0.4.1', '0.4.0']);
+    const full = fullOf(entries);
+    expect(full).toMatch(/^# Changelog\n/);
+    expect(full.indexOf('## 0.4.1 · Fixed · #2 · New\n\nBody')).toBeLessThan(full.indexOf('## 0.4.0 · Added · Old'));
   });
 });
 
-describe('CI entry check (one push = one entry)', () => {
-  const before = file('## Added · #1 · a');
-  it('accepts exactly one new entry on top', () => {
-    expect(checkPush(before, file('## Fixed · #2 · b', '## Added · #1 · a'))).toBeNull();
-    expect(checkPush(null, file('## Fixed · first'))).toBeNull();
+describe('entry files (#223)', () => {
+  it('reads one entry: heading on the first line, task = the file number', () => {
+    expect(parseEntry('## Fixed · #12 · It works\n\nDetails\n\n### More\n', 'changelog/12-it-works.md')).toMatchObject({ kind: 'Fixed', task: 12, title: 'It works', body: 'Details\n\n### More', path: 'changelog/12-it-works.md' });
   });
-  it('refuses no entry, two entries, a removed entry, an entry not on top, an edited heading', () => {
-    expect(checkPush(before, before)).toMatch(/adds no CHANGELOG.md entry/);
-    expect(checkPush(before, file('## Fixed · c', '## Fixed · b', '## Added · #1 · a'))).toMatch(/adds 2 CHANGELOG.md entries/);
-    expect(checkPush(file('## Fixed · b', '## Added · #1 · a'), before)).toMatch(/removes 1 CHANGELOG.md entry/);
-    expect(checkPush(before, file('## Added · #1 · a', '## Fixed · b'))).toMatch(/must be on top/);
-    expect(checkPush(before, file('## Fixed · b', '## Changed · #1 · a'))).toMatch(/must be on top/);
-    expect(checkPush(before, file('## Bogus · b', '## Added · #1 · a'))).toMatch(/unknown kind/);
+  it('refuses a bad name, no heading first, two entries, another task or none', () => {
+    expect(() => parseEntry('## Fixed · #12 · a\n', 'changelog/It-Works.md')).toThrow(/not an entry file name/);
+    expect(() => parseEntry('## Fixed · #12 · a\n', 'changelog/12-a.txt')).toThrow(/not an entry file name/);
+    expect(() => parseEntry('Intro\n\n## Fixed · #12 · a\n', 'changelog/12-a.md')).toThrow(/first line must be the heading/);
+    expect(() => parseEntry('## Fixed · #12 · a\n\n## Details\n', 'changelog/12-a.md')).toThrow(/unknown kind « Details »/);
+    expect(() => parseEntry('## Fixed · #12 · a\n\n## Fixed · #12 · b\n', 'changelog/12-a.md')).toThrow(/holds 2 entries/);
+    expect(() => parseEntry('## Fixed · #13 · a\n', 'changelog/12-a.md')).toThrow(/task \(#13\) must be the file's number, #12/);
+    expect(() => parseEntry('## Fixed · a\n', 'changelog/12-a.md')).toThrow(/task \(none\)/);
   });
-  it('body edits of older entries are allowed (typos), headings are not', () => {
-    expect(checkPush(file('## Added · #1 · a\n\nold'), file('## Fixed · b', '## Added · #1 · a\n\nfixed typo'))).toBeNull();
+  it('the rule: exactly one new file in changelog/, no other changelog file touched', () => {
+    const add = (path: string) => ({ path, status: 'added' });
+    expect(changelogRule([{ path: 'src/a.ts', status: 'modified' }, add('changelog/2-b.md')])).toEqual({ file: 'changelog/2-b.md' });
+    expect(changelogRule([add('changelog/history.md'), add('changelog/2-b.md'), { path: 'CHANGELOG.md', status: 'removed' }])).toEqual({ file: 'changelog/2-b.md' });
+    expect(changelogRule([{ path: 'src/a.ts', status: 'modified' }]).problem).toMatch(/no new changelog entry/);
+    expect(changelogRule([{ path: 'CHANGELOG.md', status: 'modified' }]).problem).toMatch(/no new changelog entry/);
+    expect(changelogRule([add('changelog/2-b.md'), add('changelog/3-c.md')]).problem).toMatch(/2 new changelog entries/);
+    expect(changelogRule([add('changelog/2-b.md'), { path: 'changelog/1-a.md', status: 'modified' }]).problem).toMatch(/1-a\.md is changed/);
+    expect(changelogRule([add('changelog/2-b.md'), { path: 'changelog/1-a.md', status: 'removed' }]).problem).toMatch(/1-a\.md is removed/);
+    expect(changelogRule([add('changelog/2-b.md'), { path: 'changelog/history.md', status: 'modified' }]).problem).toMatch(/history\.md is changed/);
   });
-
-  it('check-push.sh against real git history: first release, one entry, none, two', () => {
-    const repo = mkdtempSync(join(tmpdir(), 'atlas-changelog-'));
-    const git = (...a: string[]) => execFileSync('git', a, { cwd: repo, encoding: 'utf8' }).trim();
-    git('init', '-q', '-b', 'main');
-    git('config', 'user.email', 't@t');
-    git('config', 'user.name', 't');
-    const script = join(import.meta.dirname, 'check-push.sh');
-    const commit = (text: string, withScript = true) => {
-      writeFileSync(join(repo, 'CHANGELOG.md'), text);
-      execFileSync('mkdir', ['-p', join(repo, 'scripts/release')]);
-      if (withScript) writeFileSync(join(repo, 'scripts/release/changelog.mjs'), '// marker');
-      git('add', '-A');
-      git('commit', '-qm', 'c');
-      return git('rev-parse', 'HEAD');
-    };
-    const run = (beforeSha: string) => spawnSync(script, [beforeSha], { cwd: repo, encoding: 'utf8' });
-    const c0 = commit(file('## Added · a', '## Added · b', '## Fixed · c'), false); // history before the check existed
-    const c1 = commit(file('## Fixed · d', '## Added · a', '## Added · b', '## Fixed · c'));
-    expect(run(c0).status).toBe(0); // bootstrap: no check before this push
-    expect(run(c0).stdout).toContain('first release');
-    commit(file('## Fixed · e', '## Fixed · d', '## Added · a', '## Added · b', '## Fixed · c'));
-    expect(run(c1).status).toBe(0);
-    const c3 = git('rev-parse', 'HEAD');
-    commit(file('## Fixed · e', '## Fixed · d', '## Added · a', '## Added · b', '## Fixed · c') + '\nmore text\n');
-    expect(run(c3).status).toBe(1);
-    expect(run(c3).stderr).toMatch(/adds no CHANGELOG.md entry/);
-    expect(run(c1).status).toBe(0); // c1..HEAD still adds one (e)
-    commit(file('## Fixed · g', '## Fixed · f', '## Fixed · e', '## Fixed · d', '## Added · a', '## Added · b', '## Fixed · c'));
-    expect(run(c3).stderr).toMatch(/adds 2 CHANGELOG.md entries/);
-    expect(run('0000000000000000000000000000000000000000').status).toBe(0); // new branch push: nothing to compare
-  }, 60_000); // several git repos + bash: slow when the machine is loaded (#124)
 });

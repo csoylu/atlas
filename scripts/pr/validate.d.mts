@@ -18,24 +18,10 @@ export interface ValidateOptions {
   changelog?: boolean;
 }
 
-export interface RebaseResult {
-  oldHead: string;
-  newHead: string;
-  onto: string;
-  commits: number;
-  lines: string[];
-}
-
-export interface ValidateDeps {
-  rebase?: (a: { branch: string; sha: string; base: string }) => RebaseResult | Promise<RebaseResult>;
-  wait?: { sleep?: (ms: number) => unknown; timeoutMs?: number; everyMs?: number; now?: () => number; log?: (line: string) => void };
-  log?: (line: string) => void;
-}
-
 export const REPO: string;
 export const CONTEXT: string;
 export const CI_JOB: string;
 export function gateOf(o: Partial<ValidateOptions>): { repo: string; ciJob: string | null; changelog: boolean };
 export function ghBinary(): string;
 export function ghClient(o?: { bin?: string; env?: NodeJS.ProcessEnv }): (args: string[]) => Promise<string>;
-export function validate(o: ValidateOptions, gh?: Gh, deps?: ValidateDeps): Promise<string[]>;
+export function validate(o: ValidateOptions, gh?: Gh): Promise<string[]>;

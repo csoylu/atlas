@@ -452,7 +452,7 @@ export interface ShellPathInfo {
 /** A published release newer than the running app (GET /api/update). */
 export interface AppRelease {
   version: string;
-  /** The release notes: its CHANGELOG.md entry (markdown). */
+  /** The release notes: its changelog entry (markdown). */
   notes: string;
   publishedAt: string;
 }
