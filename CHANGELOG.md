@@ -6,6 +6,10 @@ computed by `scripts/release/changelog.mjs` from the oldest entry to the newest,
 `Fixed` → patch, `Added` or `Changed` → minor, `Breaking` (data or settings stop working without action) → major.
 Never type a version number.
 
+## Fixed · #184 · The end-to-end suite is green again: K12 follows the #131 Todo behaviour, and two flaky spots in the tests are fixed
+
+`e2e/tests/audit/api-cards.spec.ts` K12 now expects a transient block to wait in Todo with `retry.at` about 30 min ahead, no block, "retrying at" as the waiting reason and nothing in Inbox « Needs you » (it still expected `blocked`, stale since #131). `ui-134.spec.ts` killed the `sleep` commands of the tests running in parallel (a blanket `pkill`): each test now kills only its own. `artifacts.spec.ts`: the four fixed `waitForTimeout(600)` wait for the chip row to stop scrolling, and an unused variable is gone. Tests only: no change in the app. Full suite: 178 passed, 1 skipped, three runs in a row.
+
 ## Fixed · #180 · In the Library's recent tiles, the time and version stay readable at every width; a long folder name is shortened instead.
 
 ## Added · #127 · QA check of artifacts: 11 end-to-end tests and a written verification report

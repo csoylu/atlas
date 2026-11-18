@@ -1,4 +1,5 @@
 import { test, expect } from '../harness/fixtures.ts';
+import type { Locator } from '@playwright/test';
 import type { ContentBlock } from '@atlas/shared';
 import type { TestAtlas } from '../harness/engine.ts';
 
@@ -154,6 +155,24 @@ async function seedLibrary(atlas: TestAtlas) {
   await atlas.idle(chat.id, 30_000);
 }
 
+/** Resolves once the element has stopped scrolling (same scrollLeft over 10 frames): a scroll closes an open menu, so click after it. */
+async function scrollSettled(el: Locator): Promise<void> {
+  await el.evaluate(
+    (n) =>
+      new Promise<void>((resolve) => {
+        let last = n.scrollLeft;
+        let still = 0;
+        const tick = () => {
+          still = n.scrollLeft === last ? still + 1 : 0;
+          last = n.scrollLeft;
+          if (still >= 10) resolve();
+          else requestAnimationFrame(tick);
+        };
+        requestAnimationFrame(tick);
+      }),
+  );
+}
+
 test('library: folders with counts, tabs, tiles, search, empty state', async ({ atlas, page }) => {
   await seedLibrary(atlas);
   await page.goto(`${atlas.url}/#/library`);
@@ -167,7 +186,6 @@ test('library: folders with counts, tabs, tiles, search, empty state', async ({ 
   await expect(tiles).toHaveCount(4);
   await expect(page.locator('.lib-tile').first().locator('iframe, img, .doc-md, .lib-pv-doc').first()).toBeVisible();
   // type tabs
-  const tabs = page.locator('.lib-tabs-head').or(page.locator('.lib-tabs-bar'));
   for (const t of ['All', 'Docs', 'Pages', 'Diagrams', 'Links']) await expect(page.getByRole('tab', { name: t, exact: true }).first()).toBeAttached();
   await page.getByRole('tab', { name: 'Diagrams', exact: true }).first().click();
   await expect(page.locator('.lib-row')).toHaveCount(1);
@@ -307,18 +325,18 @@ test('phone library: folders are chips, tiles swipe sideways, chip ⋯ renames a
   expect(await page.evaluate(() => document.documentElement.scrollWidth)).toBeLessThanOrEqual(390);
   // chip ⋯
   await chips.getByRole('button', { name: /Design\s*3/ }).click();
-  await page.waitForTimeout(600); // the row scrolls the chosen chip into view; a scroll closes an open menu
+  await scrollSettled(chips);
   await chips.getByRole('button', { name: /Actions for Design/ }).scrollIntoViewIfNeeded(); // the ⋯ sits at the end of the row
-  await page.waitForTimeout(600); // a scroll closes an open menu
+  await scrollSettled(chips);
   await chips.getByRole('button', { name: /Actions for Design/ }).click();
   await page.locator('.fixed-pop').getByText('Rename').click();
   await page.getByLabel('Folder name').filter({ visible: true }).first().fill('Specs');
   await page.getByLabel('Folder name').filter({ visible: true }).first().press('Enter');
   await expect(chips.getByRole('button', { name: /Specs\s*3/ })).toBeVisible();
-  await page.waitForTimeout(600);
+  await scrollSettled(chips);
   page.on('dialog', (d) => void d.accept());
   await chips.getByRole('button', { name: /Actions for Specs/ }).scrollIntoViewIfNeeded();
-  await page.waitForTimeout(600);
+  await scrollSettled(chips);
   await chips.getByRole('button', { name: /Actions for Specs/ }).click();
   await page.locator('.fixed-pop').getByText(/Delete/).click();
   const confirm = page.getByRole('button', { name: /^Delete/ });

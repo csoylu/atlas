@@ -18,13 +18,16 @@ test.describe('sidebar Running titles', () => {
     for (const [width, height] of SIZES) {
       test(`long titles end in an ellipsis · ${theme} ${width}px`, async ({ browser }) => {
         const atlas = await TestAtlas.start();
+        const sleeps: string[] = []; // this test's own sleeps: a blanket pkill would kill those of the tests running in parallel
         try {
           const page = await (await browser.newContext({ viewport: { width, height }, colorScheme: theme })).newPage();
           const who = ['munih', 'paris', 'zurich'];
           for (const a of who) atlas.engine.agents.create({ id: a, modelId: atlas.engine.agents.get('atlas').modelId });
           const titles = ['Re-check three UI bugs from paris on the current build', 'Sidebar running titles are clipped at the panel edge with no ellipsis', 'Short'];
           for (const [i, t] of titles.entries()) {
-            atlas.model.next(shell('sleep 3' + Math.floor(Math.random() * 1e6)));
+            const sleep = 'sleep 3' + Math.floor(Math.random() * 1e6);
+            sleeps.push(sleep);
+            atlas.model.next(shell(sleep));
             await atlas.task(t, who[i]);
             await expect.poll(() => atlas.db("SELECT COUNT(*) AS n FROM tool_calls WHERE status = 'running'"), { timeout: 15_000 }).toEqual([{ n: i + 1 }]);
           }
@@ -43,7 +46,7 @@ test.describe('sidebar Running titles', () => {
           }
         } finally {
           await atlas.stop();
-          try { execSync("pkill -f 'sleep 3[0-9]{4,}'"); } catch { /* none */ }
+          for (const sl of sleeps) try { execSync(`pkill -f '${sl}$'`); } catch { /* none */ }
         }
       });
     }
