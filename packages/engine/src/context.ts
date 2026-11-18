@@ -49,6 +49,14 @@ export function needsTurn(view: ModelRequest['messages']): boolean {
   return view.at(-1)?.role === 'user';
 }
 
+/**
+ * needsTurn on a transcript, task notes left out (#143): a note about a task (Kanban.taskNotes) is read on the agent's
+ * next turn but never asks for one.
+ */
+export function owesTurn(messages: (Message & { contextUpto?: number | null })[], notes: Set<string>): boolean {
+  return needsTurn(buildMessages(notes.size ? messages.filter((m) => !notes.has(m.id)) : messages));
+}
+
 // ── Compaction (design §8) ────────────────────────────────────────────────────────────────────────────────────────
 // The transcript is never changed. The view sent to the model is: a summary of the oldest part (stored on the
 // conversation with the seq it covers) + the messages after it. Past COMPACT_AT of the context window the runner folds

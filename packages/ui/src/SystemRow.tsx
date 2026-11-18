@@ -23,7 +23,7 @@ export function SystemRow(props: {
   const title = r.ref ? cards?.card?.(r.ref)?.title : undefined;
   return (
     <ChatRow
-      className={'sys-row sys-' + r.icon}
+      className={'sys-row sys-' + r.icon + (r.quiet ? ' mem-quiet' : '')}
       icon={<RowIconSvg name={r.icon} />}
       verb={
         r.ref ? (
@@ -56,6 +56,19 @@ function SysBodyView({ row, renderText, onRetry, onUndo, onToggleEarlier, onUndo
     void fn().finally(() => setBusy(false));
   };
   if (b.kind === 'markdown') return <>{renderText(b.text)}</>;
+  if (b.kind === 'memories')
+    return (
+      <ul className="mem-list">
+        {b.items.map((m) => (
+          <li key={m.id}>
+            <span className="chat-row-ref">{m.id}</span>
+            <span className={'mem-k ' + m.kind}>{m.kind}</span>
+            <span className="tn-mb">{m.who}</span>
+            <span className="tn-mt" title={m.text}>{m.text}</span>
+          </li>
+        ))}
+      </ul>
+    );
   if (b.kind === 'clear')
     return (
       <>

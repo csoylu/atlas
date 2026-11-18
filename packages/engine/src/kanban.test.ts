@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import { openDb } from './store/db.ts';
 import { Bus } from './events.ts';
-import { Kanban, NotFoundError } from './kanban.ts';
+import { Kanban, noteText, NotFoundError } from './kanban.ts';
 import { isCardTool, runCardTool } from './cardTools.ts';
 import { isTeamTool, runTeamTool, type TeamToolContext } from './teamTools.ts';
 import type { ServerEvent } from '@atlas/shared';
@@ -130,5 +130,21 @@ describe('kanban', () => {
     expect(isCardTool('card_show')).toBe(true);
     expect(runCardTool('card_show', { id: '#1' }, ctx).output).toMatch(/^#1 \[triage\]/);
     expect(isTeamTool('card_message')).toBe(true);
+  });
+});
+
+describe('noteText (#143)', () => {
+  it('keeps a text that fits whole', () => {
+    expect(noteText('  All good. ', 'x', 20)).toBe('All good.');
+  });
+  it('ends on the last sentence that fits, then says where the rest is', () => {
+    expect(noteText('One two. Three four five. Six seven eight nine.', 'full summary: task_show #9', 30)).toBe('One two. Three four five.\n\n(shortened; full summary: task_show #9)');
+  });
+  it('without a sentence end, stops on a whole word with an ellipsis', () => {
+    const t = noteText('Behaviour checked across every screen and both themes without a single full stop anywhere', 'full summary: task_show #99', 40);
+    expect(t).toBe('Behaviour checked across every screen…\n\n(shortened; full summary: task_show #99)');
+  });
+  it('a sentence end too early is not used: the cut keeps most of the text', () => {
+    expect(noteText('Ok. then a long run of words with no further stop at all here', 'r', 40).startsWith('Ok. then a long run of words with no…')).toBe(true);
   });
 });

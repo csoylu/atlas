@@ -7,7 +7,7 @@ import { workdirOf, type Agents } from './agents.ts';
 import type { Runner } from './runner.ts';
 import type { FileState, Snapshots } from './snapshots.ts';
 import { same, type FileLog } from './fileLog.ts';
-import { buildMessages, needsTurn } from './context.ts';
+import { owesTurn } from './context.ts';
 import type { DoneEffect, SideEffects } from './sideEffects.ts';
 
 /**
@@ -323,7 +323,7 @@ export class Rewinds {
     }
     // A direct chat is always open (its status stays 'done' between replies); a work card only if it wasn't finished.
     const open = this.kanban.get(r.card_id).board === 'direct' || !['done', 'review', 'closed', 'archived'].includes((JSON.parse(r.card_before) as CardState).status);
-    return { cardId: r.card_id, ...res, resume: open && needsTurn(buildMessages(this.kanban.messages(r.card_id))) };
+    return { cardId: r.card_id, ...res, resume: open && owesTurn(this.kanban.messages(r.card_id), this.kanban.taskNotes(this.kanban.get(r.card_id).conversationId)) };
   }
 
   private async undoFiles(id: string): Promise<{ files: FileChange[]; filesError: string | null }> {

@@ -11,7 +11,6 @@ import type { Models } from './models.ts';
 import type { Usage } from './usage.ts';
 import { invalidToolInput, ModelError, type ModelRequest, type Provider, type ToolSpec } from './providers/types.ts';
 import {
-  buildMessages,
   COMPACT_AT,
   COMPACT_TO,
   compactedView,
@@ -19,7 +18,7 @@ import {
   estimateTokens,
   INTERRUPTED,
   measuredSize,
-  needsTurn,
+  owesTurn,
   pickCut,
   pickPrune,
   PRUNE_MIN,
@@ -307,7 +306,8 @@ export class Runner {
 
   /** True if the card's agent owes a reply (the transcript ends with a user message). */
   owesReply(cardId: string): boolean {
-    return needsTurn(buildMessages(this.transcript(this.kanban.get(cardId))));
+    const card = this.kanban.get(cardId);
+    return owesTurn(this.transcript(card), this.kanban.taskNotes(card.conversationId));
   }
 
   /** Start a run if none is active on the card and the agent owes a reply (or `kick` is given). Returns the run id. */
@@ -315,7 +315,7 @@ export class Runner {
     const card = this.kanban.get(cardId);
     const agentId = o.agentId ?? card.assignee;
     if (!agentId || this.active.has(card.id) || this.compactingCards.has(card.id)) return null;
-    const owed = needsTurn(buildMessages(this.transcript(card)));
+    const owed = owesTurn(this.transcript(card), this.kanban.taskNotes(card.conversationId));
     if (!owed && !o.kick) return null;
     const runId = 'r_' + randomUUID().slice(0, 8);
     const kind = o.kind ?? 'chat';
@@ -477,7 +477,8 @@ export class Runner {
         const card = this.kanban.get(cardId);
         this.closeDanglingToolUses(card);
         let transcript = this.transcript(card);
-        if (!paused && !needsTurn(buildMessages(transcript))) break;
+        // A task note that came in during the run is read on the next turn, not answered now (#143).
+        if (!paused && !owesTurn(transcript, this.kanban.taskNotes(card.conversationId))) break;
         paused = false;
         if (turn >= this.maxTurns) {
           // A limit ends as waiting, never as an error (design §4): the note closes the turn, a reply resumes the work.
@@ -973,8 +974,9 @@ export class Runner {
             ? [
                 `A direct chat with ${name}, not a task: answer whatever ${name} asks. Work worth tracking goes in tasks`,
                 '(task_create, with assignee and parents for order); say which tasks you created. Tasks you create here report',
-                `back in this chat (a system message when one finishes, is closed, stopped or needs ${name}): then tell ${name}`,
-                `in your own words, briefly. If ${name} changes their mind about a task, close it (task_update status=closed).`,
+                `back in this chat: a system note when one finishes, is closed, stopped or needs ${name}. ${name} sees it as a row`,
+                'with the task in the Inbox, so do not restate it: it is information for your next turn, and no run starts for it.',
+                `If ${name} changes their mind about a task, close it (task_update status=closed).`,
                 ...(agent.mainChat === card.id
                   ? [
                       `This is your main chat with ${name}: it lives for months. Tasks you create here are its threads (each with`,

@@ -25,6 +25,8 @@ import {
   step,
   timeOf,
   titleOf,
+  TASK_KEY,
+  taskEntry,
   toRead,
   unreadOf,
   type InboxItem,
@@ -58,6 +60,16 @@ export function Inbox(props: {
     setTabState(t);
     localStorage.setItem('atlas.inbox.tab', t);
   };
+  // A link from a task note (#task:<id>, #143): the task's entry, else the task itself.
+  useEffect(() => {
+    if (!inbox || !selected?.startsWith(TASK_KEY)) return;
+    const id = selected.slice(TASK_KEY.length);
+    const entry = taskEntry(inbox, id);
+    if (entry?.tab && entry.tab !== tab) setTabState(entry.tab); // not stored: the user's tab choice stays
+    if (entry) return onSelect(entry.key);
+    onSelect(null);
+    props.onOpenCard(id);
+  }, [inbox, selected, tab, onSelect, props.onOpenCard]);
   const wide = useMedia(WIDE);
   const items = useMemo(() => (inbox ? itemsOf(inbox, tab) : []), [inbox, tab]);
   const lastIndex = useRef(0);
@@ -80,7 +92,7 @@ export function Inbox(props: {
 
   // The key that left the list gives way to the item now at its place: keep the URL on what is shown.
   useEffect(() => {
-    if (selected && item && item.key !== selected) onSelect(item.key);
+    if (selected && !selected.startsWith(TASK_KEY) && item && item.key !== selected) onSelect(item.key);
   }, [selected, item, onSelect]);
 
   // The selected row stays in view (J/K).

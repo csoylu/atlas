@@ -15,8 +15,22 @@ export interface CardReport {
   /** "finished", "needs your review", "closed by you"… */
   verb: string;
   tone: RowTone;
-  /** The full report shown when the row expands (markdown); '' when there is nothing more than the line. */
+  /** The full report (markdown); '' when there is nothing more than the line. The row shows only `summary` of it. */
   body: string;
+  /** Where the row leads (#143): the task's Inbox entry (a stopped task waits there too), or the task itself (closed: no entry). */
+  inbox: boolean;
+  /** A finished task's first summary line, plain text, shown under the row on one line (#143); '' otherwise. */
+  summary: string;
+}
+
+/** The first line of a markdown text, without its marks (**, `, #, list bullets, [text](url) links). */
+export function firstPlainLine(md: string): string {
+  const line = md.trim().split('\n')[0]?.trim() ?? '';
+  return line
+    .replace(/^(?:#+|[-*+]|\d+\.)\s+/, '')
+    .replace(/\[([^\]]*)\]\([^)]*\)/g, '$1')
+    .replace(/\*\*|__|`/g, '')
+    .trim();
 }
 
 const HEAD = /^(?:✓ )?(?:Card|Task|You stopped) “(.*?)” \((#\d+|c_[0-9a-f]{8})\)/s;
@@ -28,14 +42,17 @@ export function parseReport(text: string): CardReport | null {
   const [, title, card] = m as unknown as [string, string, string];
   const rest = text.slice(m[0].length);
   const after = (prefix: string) => rest.slice(prefix.length).replace(/^:\s*/, '').trim();
-  const base = { card, title };
+  const base = { card, title, inbox: true, summary: '' };
   if (text.startsWith('You stopped')) return { ...base, icon: 'failed', verb: 'stopped', tone: 'bad', body: rest.replace(/^\.\s*/, '').trim() };
-  if (rest.startsWith(' finished')) return { ...base, icon: 'done', verb: 'finished', tone: 'plain', body: after(' finished') };
+  if (rest.startsWith(' finished')) {
+    const body = after(' finished');
+    return { ...base, icon: 'done', verb: 'finished', tone: 'plain', body, summary: firstPlainLine(body) };
+  }
   if (rest.startsWith(' is ready for your review')) return { ...base, icon: 'review', verb: 'needs your review', tone: 'warn', body: after(' is ready for your review') };
-  if (rest.startsWith(' needs your OK')) return { ...base, icon: 'blocked', verb: 'needs you', tone: 'warn', body: after(' needs your OK') };
+  if (rest.startsWith(' needs your OK')) return { ...base, icon: 'blocked', verb: 'needs your OK', tone: 'warn', body: after(' needs your OK') };
   if (rest.startsWith(' is blocked')) return { ...base, icon: 'blocked', verb: 'blocked', tone: 'bad', body: after(' is blocked') };
   const closed = /^ closed by (you|@\S+?)\.\s*/.exec(rest);
-  if (closed) return { ...base, icon: 'closed', verb: `closed by ${closed[1]}`, tone: 'plain', body: rest.slice(closed[0].length).trim() };
+  if (closed) return { ...base, inbox: false, icon: 'closed', verb: `closed by ${closed[1]}`, tone: 'plain', body: rest.slice(closed[0].length).trim() };
   return null;
 }
 

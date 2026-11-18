@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import type { Card, Inbox, InboxNeed, Notification } from '@atlas/shared';
-import { inboxKey, itemsOf, kindOf, lineOf, parseTab, refOf, shortAgo, shownItem, step, systemTitle, toRead, unreadOf } from './inboxView.ts';
+import { inboxKey, taskEntry, taskKey, itemsOf, kindOf, lineOf, parseTab, refOf, shortAgo, shownItem, step, systemTitle, toRead, unreadOf } from './inboxView.ts';
 
 const card = (p: Partial<Card>): Card =>
   ({ id: 'c', number: 1, title: 't', body: '', status: 'blocked', assignee: 'scout', priority: 0, board: 'main', parents: [], block: null, waiting: null, ...p }) as Card;
@@ -27,6 +27,13 @@ describe('inbox view', () => {
     expect(shownItem(items, null, 0, true)?.key).toBe('c_ask');
     expect(shownItem(items, null, 0, false)).toBeNull(); // one column: the list until you pick
     expect(shownItem([], 'x', 0, true)).toBeNull();
+  });
+
+  it('a task link from the chat (#143) finds the task in Needs you, else its latest update, else nothing', () => {
+    expect(taskKey('c_ask')).toBe('task:c_ask');
+    expect(taskEntry(inbox, 'c_ask')).toEqual({ key: 'c_ask', tab: null });
+    expect(taskEntry(inbox, 'c_done')).toEqual({ key: 'n5', tab: 'all' });
+    expect(taskEntry(inbox, 'c_none')).toBeNull();
   });
 
   it('J/K step and stop at the ends', () => {

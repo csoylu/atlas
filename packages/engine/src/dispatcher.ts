@@ -110,7 +110,6 @@ export class Dispatcher {
         const cur = c.status === 'closed' ? this.runner.current(c.id) : null;
         if (cur && cur.kind !== 'chat') this.runner.stop(c.id, 'task closed');
       }
-      this.deliverReports();
       this.deliverAgentMessages();
       // Refresh « why not moving » in the UI when it changed.
       for (const c of this.kanban.list()) {
@@ -123,25 +122,6 @@ export class Dispatcher {
       console.error('dispatcher tick failed', e);
     } finally {
       this.ticking = false;
-    }
-  }
-
-  /**
-   * Report-back (design §16): a card created from a chat changed state and a system message was posted in that chat.
-   * Start a chat run so the agent tells the user in its own words. A report is delivered once its chat no longer owes a
-   * reply; while a run is going on, it reads the message at its next turn (or the next tick wakes the chat again).
-   */
-  private deliverReports(): void {
-    for (const r of this.kanban.pendingReports()) {
-      if (this.runner.current(r.chatId)) continue;
-      // A run since the report that ended (answered, failed or stopped by the user) settles it: no retry loop.
-      const last = this.runner.runs(r.chatId)[0];
-      const ranSince = last && last.startedAt >= r.at && last.status !== 'interrupted';
-      if (ranSince || !this.runner.owesReply(r.chatId)) this.kanban.reportDelivered(r.id);
-      else {
-        const chat = this.kanban.get(r.chatId);
-        if (chat.assignee && !this.agentUsable(chat.assignee, chat.modelId)) this.runner.wake(r.chatId, { kind: 'chat' });
-      }
     }
   }
 

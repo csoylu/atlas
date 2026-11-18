@@ -7,7 +7,7 @@ import { api } from './api.ts';
 import type { MessageStream } from './useMessages.ts';
 import { submitOnEnter } from './composerKeys.ts';
 import { ComposerMeta, useChatUsage } from './Usage.tsx';
-import { CARD_HREF, findCard, linkCardIds, linkCardRefsMd, proseRefLabel } from './cardModal.ts';
+import { CARD_HREF, findCard, linkCardIds, linkCardRefsMd, proseRefLabel, withCard } from './cardModal.ts';
 import { StepRow, Turn } from './ChatActivity.tsx';
 import { draftSegments, turns, type Segment } from './chatTurn.ts';
 import { AttachButton, AttachmentStrip, ImageThumbs, imageFiles, isAttachedLine, pastedImages, useAttachments } from './Images.tsx';
@@ -17,13 +17,14 @@ import { webSearchResult } from './webRows.ts';
 import { ChatPins } from './ChatPins.tsx';
 import { ChatRow } from './ChatRow.tsx';
 import { parseReport, rowTime } from './chatRow.ts';
+import { taskKey } from './inboxView.ts';
 import { HeaderActions, Icon } from './ScreenHeader.tsx';
 import { StatusIcon, STATUS_LABEL } from './StatusIcon.tsx';
 import type { Quote } from './DocPanel.tsx';
 import { draftKey, readDraft, useDraft, writeDraft } from './drafts.ts';
 import { useAutoGrow } from './useAutoGrow.ts';
 import { RewindConfirm, RewindIcon, RewindNote, useRewind, type Rewind } from './Rewind.tsx';
-import { clearPoint, distribute, messageRow, timelineRows, type SysRow } from './sysRows.ts';
+import { clearPoint, distribute, isMemoryNote, memoryRow, messageRow, timelineRows, type SysRow } from './sysRows.ts';
 import { parseSlash, slashKey, slashMatches, type SlashName } from './slashCommands.ts';
 import { SystemRow } from './SystemRow.tsx';
 import { focusSeqFor, groupForSeq } from './memoryView.ts';
@@ -334,6 +335,17 @@ export function Activity(props: {
   const lastGroup = groups.at(-1)?.[0];
   const draftJoined =
     draft && !!lastGroup && isAgent(lastGroup) && lastGroup.author === card.assignee && lastGroup.author !== 'system' && !messageRow(lastGroup, card.assignee) && !placed.after[groups.length - 1]!.length;
+  // Consecutive [memory] notes with nothing placed between them are one row (#143): the first carries them all, the
+  // others draw nothing (null).
+  const memRows = new Map<number, SysRow | null>();
+  for (let i = 0; i < groups.length; i++) {
+    if (!isMemoryNote(groups[i]![0]!)) continue;
+    let j = i;
+    while (j + 1 < groups.length && isMemoryNote(groups[j + 1]![0]!) && !placed.after[j]!.length) j++;
+    memRows.set(i, memoryRow(groups.slice(i, j + 1).map((g) => g[0]!), card.assignee));
+    for (let k = i + 1; k <= j; k++) memRows.set(k, null);
+    i = j;
+  }
   const sysRow = (r: SysRow) => (
     <SystemRow
       key={r.key}
@@ -356,7 +368,9 @@ export function Activity(props: {
         const m = ms[0]!;
         const prev = groups[i - 1]?.[0];
         const after = placed.after[i]!.map(sysRow);
-        const event = messageRow(m, card.assignee);
+        const merged = memRows.get(i);
+        if (merged === null) return <Fragment key={m.id}>{after}</Fragment>;
+        const event = merged ?? messageRow(m, card.assignee);
         if (event)
           return (
             <Fragment key={m.id}>
@@ -367,7 +381,7 @@ export function Activity(props: {
         if (m.author === 'system')
           return (
             <Fragment key={m.id}>
-              <SystemMessage message={m} landed={props.convo.isLive(m.id)} onOpenCard={cardLinks?.open ?? props.onOpenCard} renderBody={(t) => text(t)} />
+              <SystemMessage message={m} landed={props.convo.isLive(m.id)} cards={cardLinks} onOpenCard={props.onOpenCard} />
               {after}
             </Fragment>
           );
@@ -436,58 +450,63 @@ function DraftView({ segments, cardLinks }: { segments: Segment[]; cardLinks?: C
   );
 }
 
-/** A system message: a card report-back is one compact row that expands to the full report; anything else a note. */
-function SystemMessage({ message: m, landed, onOpenCard, renderBody }: { message: Message; landed?: boolean; onOpenCard?(id: string): void; renderBody(text: string): ReactNode }) {
+/**
+ * A system message: a task note (card report-back) is one compact row (#143), a link to the task's Inbox entry (closed
+ * and stopped tasks have none: the task itself); a finished one shows its summary's first line. Anything else a note.
+ */
+function SystemMessage({ message: m, landed, cards, onOpenCard }: { message: Message; landed?: boolean; cards?: CardLinks; onOpenCard?(id: string): void }) {
   const text = m.content.map((b) => (b.type === 'text' ? b.text : '')).join(' ');
   const r = parseReport(text);
   if (!r) return <SysNote text={text} onOpenCard={onOpenCard} />;
-  const ref = onOpenCard ? (
-    <button
-      type="button"
-      className="chat-row-ref"
-      title="Open the ticket"
-      onClick={(e) => {
-        e.stopPropagation();
-        onOpenCard(r.card);
-      }}
-    >
-      {r.card}
-    </button>
-  ) : (
-    <span className="chat-row-ref">{r.card}</span>
-  );
   // A finished task reads « #99 [Done] » (#104); the other reports keep their verb.
   const done = r.verb === 'finished';
-  return (
-    <ChatRow
-      className={'card-report' + (done ? ' done' : '') + (landed ? ' landed' : '')}
-      icon={<StatusIcon status={r.icon} />}
-      verb={
-        done ? (
-          <>
-            {ref} <span className="st-chip done">Done</span>
-          </>
-        ) : (
-          <>
-            {ref} {r.verb}
-          </>
-        )
-      }
-      object={r.title}
-      at={m.at}
-      tone={r.tone}
-    >
-      {(r.body || onOpenCard) && (
-        <>
-          {r.body && renderBody(r.body)}
-          {onOpenCard && (
-            <button type="button" className="chat-row-open" onClick={() => onOpenCard(r.card)}>
-              Open ticket ↗
-            </button>
-          )}
-        </>
+  const id = cards?.card?.(r.card)?.id;
+  const line = (
+    <span className="chat-row-line">
+      <span className="chat-row-icon">
+        <StatusIcon status={r.icon} />
+      </span>
+      <span className="chat-row-verb">
+        <span className="chat-row-ref">{r.card}</span>{' '}
+        {done ? <span className="st-chip done">Done</span> : r.verb}
+      </span>
+      <span className="chat-row-obj">{r.title}</span>
+      <span className="chat-row-rest" />
+      <span className="chat-row-time">{rowTime(m.at)}</span>
+      {id && (
+        <span className="tn-go">
+          <span className="tn-word">{r.inbox ? 'Inbox' : 'Task'}</span>
+          <span className="tn-arr" aria-hidden="true">
+            ›
+          </span>
+        </span>
       )}
-    </ChatRow>
+    </span>
+  );
+  const cls = 'chat-row tone-' + r.tone + ' card-report task-note' + (done ? ' done' : '') + (landed ? ' landed' : '');
+  const sum = r.summary && <span className="tn-sum">{r.summary}</span>;
+  // The task is gone from the board: nothing to open.
+  if (!id)
+    return (
+      <div className={cls}>
+        {line}
+        {sum}
+      </div>
+    );
+  return (
+    <a
+      className={cls}
+      href={r.inbox ? '#/inbox/' + encodeURIComponent(taskKey(id)) : withCard(typeof location === 'undefined' ? '#/' : location.hash, id)}
+      title={r.inbox ? 'Open in the Inbox' : 'Open the task'}
+      onClick={(e) => {
+        if (r.inbox || !onOpenCard) return;
+        e.preventDefault();
+        onOpenCard(id);
+      }}
+    >
+      {line}
+      {sum}
+    </a>
   );
 }
 

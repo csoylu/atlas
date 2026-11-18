@@ -46,6 +46,7 @@ async function setup(fake: Provider, o: { dbFile?: string; dataDir?: string; dis
     dispatch: o.dispatch ?? true,
     providers: () => fake,
     env: {},
+    memoryReview: false,
   });
   engines.push(e);
   return e;
@@ -65,15 +66,17 @@ const reports = (e: Engine) => e.db.prepare('SELECT chat_id, card_id, transition
 const createdCard = (e: Engine) => e.kanban.list().find((c) => c.title === 'Add web_fetch tool')!;
 
 describe('card lifecycle from a chat', () => {
-  it('records the origin chat, reports the finish there once and has the agent tell the user', async () => {
+  it('records the origin chat, posts the finish there once without waking the agent, which reads it on its next turn', async () => {
     const fake = new RoutedFake(
       [
         [use('task_create', { title: 'Add web_fetch tool', body: 'Fetch a URL as markdown.', assignee: 'atlas' })],
         text('On it: I created a card and started it.'),
         (req) => {
-          const last = req.messages.at(-1)!.content.map((b) => (b.type === 'text' ? b.text : '')).join('');
+          // The note and Master's next message reach the model as one user turn.
+          const last = req.messages.at(-1)!.content.map((b) => (b.type === 'text' ? b.text : '')).join('\n');
           expect(last).toContain('finished: web_fetch is in, 141 tests pass');
-          return text('Done: web_fetch is in, tests pass.');
+          expect(last).toContain('Anything else?');
+          return text('Nothing else: web_fetch is in.');
         },
       ],
       // The work takes a moment, so the chat has answered « On it » before the report arrives.
@@ -84,20 +87,26 @@ describe('card lifecycle from a chat', () => {
     e.kanban.appendMessage(chat.id, 'user', 'user', text('Add a web_fetch tool.'));
     e.dispatcher.onUserMessage(chat.id);
 
-    await until(() => e.kanban.messages(chat.id).at(-1)?.content.some((b) => b.type === 'text' && b.text.startsWith('Done:')) ?? false, 'the agent tells the user');
+    await until(() => createdCard(e)?.status === 'done', 'the task is done');
     const card = createdCard(e);
     expect(card).toMatchObject({ status: 'done', originCard: chat.id });
     expect(systemTexts(e, chat.id)).toEqual([`✓ Task “Add web_fetch tool” (${cardRef(card)}) finished: web_fetch is in, 141 tests pass`]);
-    await until(() => reports(e)[0]?.delivered_at != null, 'report delivered');
     expect(reports(e)).toMatchObject([{ chat_id: chat.id, card_id: card.id, transition: 'done' }]);
-    expect(e.runner.runs(chat.id).map((r) => r.status)).toEqual(['done', 'done']); // the user's message, then the report
-    expect(fake.calls.filter((c) => c.kind === 'chat')).toHaveLength(3);
 
-    // Nothing more: more ticks don't start another chat run or post again.
+    // No run for the note (#143): ticks start nothing, the agent owes nothing, nothing is posted again.
+    await until(() => e.runner.current(chat.id) === null, 'the chat run ended');
     for (let i = 0; i < 5; i++) e.dispatcher.tick();
     await new Promise((r) => setTimeout(r, 50));
-    expect(e.runner.runs(chat.id)).toHaveLength(2);
+    expect(e.runner.runs(chat.id)).toHaveLength(1); // the user's message only
+    expect(e.runner.owesReply(chat.id)).toBe(false);
+    expect(fake.calls.filter((c) => c.kind === 'chat')).toHaveLength(2);
     expect(systemTexts(e, chat.id)).toHaveLength(1);
+
+    // Master's next message: the agent sees the note with it.
+    e.kanban.appendMessage(chat.id, 'user', 'user', text('Anything else?'));
+    e.dispatcher.onUserMessage(chat.id);
+    await until(() => e.kanban.messages(chat.id).at(-1)?.content.some((b) => b.type === 'text' && b.text.startsWith('Nothing else')) ?? false, 'the agent answers');
+    expect(e.runner.runs(chat.id)).toHaveLength(2);
 
     // A card created on the board (not from a chat) has no origin and reports nowhere.
     const plain = e.kanban.create({ title: 'board card', status: 'todo' }, 'user');
@@ -110,7 +119,6 @@ describe('card lifecycle from a chat', () => {
       [
         () => [use('task_update', { id: cardId, status: 'closed' })],
         text('Closed it before any edit. “Board” stays.'),
-        text('(report) It is closed.'),
       ],
       [[use('shell', { command: 'sleep 20' })]],
     );
@@ -128,7 +136,8 @@ describe('card lifecycle from a chat', () => {
     expect(e.kanban.get(card.id).status).toBe('closed'); // not blocked: the stop of a closed card changes nothing
     expect(e.kanban.get(card.id).block).toBeNull();
     expect(systemTexts(e, chat.id)).toEqual([`Task “Rename Board to Tasks” (${cardRef(card)}) closed by @atlas. Nothing more will be done on it.`]);
-    await until(() => reports(e)[0]?.delivered_at != null, 'report delivered');
+    await until(() => e.runner.current(chat.id) === null, 'the chat run ended');
+    expect(e.runner.runs(chat.id)).toHaveLength(1); // the close itself starts no other run
 
     // The child stays in todo: a closed parent is not done.
     for (let i = 0; i < 3; i++) e.dispatcher.tick();
@@ -153,7 +162,7 @@ describe('card lifecycle from a chat', () => {
 
   it('Stop kills a running command and its process within 1 s; the card says so and writing resumes it', async () => {
     const fake = new RoutedFake(
-      [text('Stopped. The last command was killed before it finished.'), text('It finished without running it again.')],
+      [],
       [[use('shell', { command: 'sleep 30; echo never' })], [{ type: 'text', text: 'Resumed: not running it again.' }, use('task_complete', { summary: 'skipped' })]],
     );
     const e = await setup(fake);
@@ -185,7 +194,6 @@ describe('card lifecycle from a chat', () => {
     await until(() => e.kanban.get(card.id).status === 'blocked', 'card blocked');
     expect(e.kanban.get(card.id).block).toMatchObject({ kind: 'needs_input', reason: 'Stopped by you. Write what to do next.' });
     expect(systemTexts(e, chat.id)).toEqual([`You stopped “Clean up old data folders” (${cardRef(card)}). Its run and commands were killed; writing in the task resumes it.`]);
-    await until(() => reports(e)[0]?.delivered_at != null, 'stop reported');
     expect(reports(e).map((r) => r.transition)).toEqual(['stopped']);
 
     // Writing on the card resumes it like a block answer; the interrupted call got the usual synthetic result.
@@ -195,23 +203,30 @@ describe('card lifecycle from a chat', () => {
     const resumed = fake.calls.filter((c) => c.kind === 'work')[1]!.req;
     expect(JSON.stringify(resumed.messages)).toContain('interrupted by a restart or a stop');
     expect(reports(e).map((r) => r.transition)).toEqual(['stopped', 'done']);
+    expect(e.runner.runs(chat.id)).toHaveLength(0); // neither note woke the chat
   });
 
-  it('reports a needs_input block, once', async () => {
-    const fake = new RoutedFake([text('It needs your OK on the colour.')], [[use('task_block', { kind: 'needs_input', question: 'Blue or green?' })]]);
+  it('reports a needs_input block once, as a note in the chat and a question in the Inbox, with no agent message', async () => {
+    const fake = new RoutedFake([], [[use('task_block', { kind: 'needs_input', question: 'Blue or green?' })]]);
     const e = await setup(fake);
     const chat = e.kanban.newChat('atlas');
     const card = e.kanban.create({ title: 'Theme', status: 'ready', assignee: 'atlas' }, 'atlas', chat.id);
-    await until(() => reports(e)[0]?.delivered_at != null, 'report delivered');
+    await until(() => reports(e).length === 1, 'note posted');
     expect(systemTexts(e, chat.id)).toEqual([`Task “Theme” (${cardRef(card)}) needs your OK: Blue or green?`]);
-    expect(e.runner.runs(chat.id)).toHaveLength(1);
+    for (let i = 0; i < 5; i++) e.dispatcher.tick();
+    await new Promise((r) => setTimeout(r, 50));
+    expect(e.runner.runs(chat.id)).toHaveLength(0);
+    expect(e.kanban.messages(chat.id).filter((m) => m.role === 'assistant')).toHaveLength(0);
+    expect(fake.calls.filter((c) => c.kind === 'chat')).toHaveLength(0);
+    const inbox = (await (await fetch(e.url + '/api/inbox')).json()) as { needsYou: { card: { id: string } }[] };
+    expect(inbox.needsYou.map((n) => n.card.id)).toEqual([card.id]);
     // A transient block or a dependency is not reported.
     e.kanban.update(card.id, { status: 'todo' }, 'user');
     e.kanban.block(card.id, { kind: 'transient', reason: '429', until: new Date(Date.now() + 60_000).toISOString() }, 'dispatcher');
     expect(reports(e)).toHaveLength(1);
   });
 
-  it('survives a kill: the report written with the status change is delivered once after restart', async () => {
+  it('survives a kill: the note written with the status change is there after restart, read on the next turn, never a run of its own', async () => {
     const dataDir = mkdtempSync(join(tmpdir(), 'atlas-'));
     const dbFile = join(dataDir, 'k.db');
     const first = await setup(new RoutedFake([], []), { dbFile, dataDir, dispatch: false });
@@ -219,34 +234,54 @@ describe('card lifecycle from a chat', () => {
     const card = first.kanban.create({ title: 'Job', status: 'running', assignee: 'atlas' }, 'atlas', chat.id);
     first.kanban.update(card.id, { status: 'done' }, 'atlas', 'all good');
     expect(reports(first)).toHaveLength(1);
-    first.db.close(); // killed before any chat run started
-    engines = [];
-
-    // Second process: delivers it, but dies during the chat run (left 'running' with an expired lease).
-    const second = await setup(new RoutedFake([], []), { dbFile, dataDir, dispatch: false });
-    expect(systemTexts(second, chat.id)).toEqual([`✓ Task “Job” (${cardRef(card)}) finished: all good`]);
-    second.db
+    // Killed with a chat run left 'running' (expired lease): it was mid-answer when the note came.
+    first.db
       .prepare("INSERT INTO runs (id, card_id, agent_id, kind, status, started_at) VALUES ('r_dead', ?, 'atlas', 'chat', 'running', ?)")
       .run(chat.id, new Date().toISOString());
-    second.db.close();
+    first.db.close();
     engines = [];
 
-    // Third process: the interrupted chat run resumes once; the dispatcher doesn't start a second one.
-    const fake = new RoutedFake([text('Job is done: all good.')], []);
-    const third = await setup(fake, { dbFile, dataDir });
-    await until(() => reports(third)[0]?.delivered_at != null, 'report delivered');
-    expect(fake.calls).toHaveLength(1);
-    expect(third.runner.runs(chat.id).map((r) => r.status).sort()).toEqual(['done', 'interrupted']);
-    expect(systemTexts(third, chat.id)).toHaveLength(1);
-    await third.stop();
-    engines = [];
-
-    // Fourth start: nothing owed, nothing runs.
-    const fake4 = new RoutedFake([], []);
-    const fourth = await setup(fake4, { dbFile, dataDir });
+    // Second process: the note is there; the interrupted chat run does not resume for it, the dispatcher starts nothing.
+    const fake = new RoutedFake(
+      [
+        (req) => {
+          const all = JSON.stringify(req.messages);
+          expect(all).toContain(`✓ Task “Job” (${cardRef(card)}) finished: all good`);
+          expect(all).toContain('status?');
+          return text('Job is done: all good.');
+        },
+      ],
+      [],
+    );
+    const second = await setup(fake, { dbFile, dataDir });
+    expect(systemTexts(second, chat.id)).toEqual([`✓ Task “Job” (${cardRef(card)}) finished: all good`]);
+    for (let i = 0; i < 5; i++) second.dispatcher.tick();
     await new Promise((r) => setTimeout(r, 100));
-    expect(fake4.calls).toHaveLength(0);
-    expect(fourth.runner.runs(chat.id)).toHaveLength(2);
+    expect(fake.calls).toHaveLength(0);
+    expect(second.runner.runs(chat.id).map((r) => r.status)).toEqual(['interrupted']);
+
+    // Master writes: one run, which reads the note.
+    second.kanban.appendMessage(chat.id, 'user', 'user', text('status?'));
+    second.dispatcher.onUserMessage(chat.id);
+    await until(() => second.runner.runs(chat.id)[0]?.status === 'done', 'the chat answered');
+    expect(fake.calls).toHaveLength(1);
+    expect(systemTexts(second, chat.id)).toHaveLength(1);
+  });
+
+  it('a long summary is shortened on a sentence, never mid-word, and says where the rest is', async () => {
+    const e = await setup(new RoutedFake([], []), { dispatch: false });
+    const chat = e.kanban.newChat('atlas');
+    const card = e.kanban.create({ title: 'Long', status: 'running', assignee: 'atlas' }, 'atlas', chat.id);
+    const summary = Array.from({ length: 60 }, (_, i) => `Sentence ${i} checks the behaviour of part ${i}.`).join(' ');
+    expect(summary.length).toBeGreaterThan(2000);
+    e.kanban.update(card.id, { status: 'done' }, 'atlas', summary);
+    const [note] = systemTexts(e, chat.id);
+    expect(note!.length).toBeLessThan(1700);
+    expect(note).toMatch(new RegExp(`part \\d+\\.\\n\\n\\(shortened; full summary: task_show ${cardRef(card)}\\)$`));
+    // A short one stays whole.
+    const other = e.kanban.create({ title: 'Short', status: 'running', assignee: 'atlas' }, 'atlas', chat.id);
+    e.kanban.update(other.id, { status: 'done' }, 'atlas', 'All good.');
+    expect(systemTexts(e, chat.id)[1]).toBe(`✓ Task “Short” (${cardRef(other)}) finished: All good.`);
   });
 
   it('the rebuilt cards table takes the closed status and keeps every reference valid', async () => {

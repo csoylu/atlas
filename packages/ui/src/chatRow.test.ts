@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { parseReport, rowTime } from './chatRow.ts';
+import { firstPlainLine, parseReport, rowTime } from './chatRow.ts';
 
 // The exact lines the engine writes (packages/engine/src/kanban.ts reportText).
 describe('parseReport', () => {
@@ -11,11 +11,13 @@ describe('parseReport', () => {
       verb: 'finished',
       tone: 'plain',
       body: 'Done.\n\nChecked with ui:check.',
+      inbox: true,
+      summary: 'Done.',
     });
     expect(parseReport('Card “Inbox” (#56) is ready for your review: look at it')).toMatchObject({ icon: 'review', verb: 'needs your review', tone: 'warn', body: 'look at it' });
-    expect(parseReport('Card “Digest” (#55) needs your OK: which day?')).toMatchObject({ icon: 'blocked', verb: 'needs you', tone: 'warn', body: 'which day?' });
+    expect(parseReport('Card “Digest” (#55) needs your OK: which day?')).toMatchObject({ icon: 'blocked', verb: 'needs your OK', tone: 'warn', body: 'which day?', inbox: true, summary: '' });
     expect(parseReport('Card “Keys” (#5) is blocked: no API key')).toMatchObject({ icon: 'blocked', verb: 'blocked', tone: 'bad', body: 'no API key' });
-    expect(parseReport('Card “Old” (#54) closed by you. Nothing more will be done on it.')).toMatchObject({ icon: 'closed', verb: 'closed by you', body: 'Nothing more will be done on it.' });
+    expect(parseReport('Card “Old” (#54) closed by you. Nothing more will be done on it.')).toMatchObject({ icon: 'closed', verb: 'closed by you', body: 'Nothing more will be done on it.', inbox: false });
     expect(parseReport('Card “Old” (#54) closed by @atlas. Nothing more will be done on it.')).toMatchObject({ verb: 'closed by @atlas' });
     expect(parseReport('You stopped “Bench” (#53). Its run and commands were killed; writing on the card resumes it.')).toMatchObject({
       card: '#53',
@@ -24,6 +26,7 @@ describe('parseReport', () => {
       verb: 'stopped',
       tone: 'bad',
       body: 'Its run and commands were killed; writing on the card resumes it.',
+      inbox: true,
     });
   });
   it('has no body when the line is all there is', () => {
@@ -31,6 +34,11 @@ describe('parseReport', () => {
   });
   it('keeps quotes in titles and old c_ ids', () => {
     expect(parseReport('✓ Card “Say “hi”” (c_1a2b3c4d) finished: ok')).toMatchObject({ card: 'c_1a2b3c4d', title: 'Say “hi”' });
+  });
+  it('a finished task carries its first summary line in plain text (#143)', () => {
+    expect(parseReport('✓ Task “X” (#9) finished: **Shipped** the `row` and [docs](http://x).\nMore.')).toMatchObject({ summary: 'Shipped the row and docs.' });
+    expect(firstPlainLine('- first point\n- second')).toBe('first point');
+    expect(firstPlainLine('## Title')).toBe('Title');
   });
   it('leaves other system lines alone', () => {
     expect(parseReport('Model changed to x')).toBeNull();
