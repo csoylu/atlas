@@ -97,6 +97,18 @@ fails after 15 s naming what never appeared, and returns page errors + refused w
   included. Work goes to a branch (`<type>/<task number>-<slug>`), then a PR whose base is main (check a stacked PR's
   base before merging). One merged PR = one push to main = one changelog entry = one release. main refuses
   force-pushes and deletion (GitHub branch protection).
+- **A PR merges only once zurich (QA) has validated it** (#141). GitHub cannot make an account approve its own PR (all
+  agents are csoylu), so the validation is the commit status `qa/validated` on the PR's head; main requires it and the CI
+  job `test`, so a new commit needs a new validation. Flow: push the branch, open the PR, then create a task for zurich
+  "Validate PR #N" (ready, priority of the release). zurich reads the diff and checks it (code: tests, the feature in a
+  build, screenshots for UI; docs only: read it), then runs
+  `node scripts/pr/validate.mjs <pr> --ok --sha <head> --as zurich "what was checked" --merge` (or `--fail … "why"`,
+  then fix and push; the task goes back to ready). The script refuses a base other than main, a head that moved, red
+  CI and a PR without exactly one changelog entry. A `qa/*` PR (zurich's own) is validated by atlas. `--list` shows the
+  PRs still waiting. Master can validate from a terminal too (`--as master`). Each merge moves the changelog top, so the
+  other open PRs then conflict there: the validator merges the oldest PR first, and an author whose PR conflicts rebases
+  (new entry back on top) and sends the new head. The gate guards against accidents, not misuse: `--as` is a name
+  anyone can type.
 - **Agents never install the app.** No `install:mac`: Master's Atlas shows "Update available" and installs on
   Master's click (it restarts; running tasks resume). `install:mac` stays for a manual build from source.
 - **Testing without installing:**
