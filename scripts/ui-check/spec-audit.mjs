@@ -67,10 +67,14 @@ export const SPEC_AUDIT = (W, scale, exceptions, minContrast) => `((W, SCALE, EX
     if (placeholderOnly) continue;
     const fg = parse(s.color), bg = backdrop(e);
     if (!fg || !bg) continue;
-    const a = fg[3] * opacityOf(e);
-    const eff = over([fg[0], fg[1], fg[2], a], bg);
+    // Separators (·, —) carry no information. Dimmed text (opacity < 1: .dim, disabled-looking, fading in) is measured
+    // too and reported as « dimmed »; opacity under 0.5 is a transition frame or a hidden control, skipped.
+    if (!/[\p{L}\p{N}]/u.test(txt(e))) continue;
+    const op = opacityOf(e);
+    if (op < 0.5) continue;
+    const eff = over([fg[0], fg[1], fg[2], fg[3] * op], bg);
     const r = ratio(eff, bg);
-    if (r < MINC) { const k = tag(e) + ' ' + s.color; if (!lowContrast.has(k)) lowContrast.set(k, r.toFixed(2) + ':1 "' + txt(e) + '"'); }
+    if (r < MINC) { const k = tag(e) + ' ' + s.color + (op < 0.99 ? ' x' + op.toFixed(2) : ''); if (!lowContrast.has(k)) lowContrast.set(k, r.toFixed(2) + ':1' + (op < 0.99 ? ' (dimmed, opacity ' + op.toFixed(2) + ')' : '') + ' on rgb(' + bg.slice(0, 3).map(Math.round).join(',') + ') "' + txt(e) + '"'); }
   }
   for (const [k, v] of seenSize) issues.push('font size off the scale ' + k + ' ' + v);
   for (const [k, v] of lowContrast) issues.push('contrast ' + v + ' (' + theme + ') ' + k);
@@ -79,7 +83,7 @@ export const SPEC_AUDIT = (W, scale, exceptions, minContrast) => `((W, SCALE, EX
   for (const a of document.querySelectorAll('.dot-avatar')) {
     if (!shown(a) || a.closest('.sidebar-foot')) continue;
     if (!a.querySelector('svg')) issues.push('avatar without face: ' + tag(a) + ' "' + txt(a) + '"');
-    else if ((a.textContent || '').trim()) issues.push('avatar shows a letter next to the face: ' + tag(a) + ' "' + txt(a) + '"');
+    else if ([...a.childNodes].some((n) => n.nodeType === 3 && n.textContent.trim())) issues.push('avatar shows a letter next to the face: ' + tag(a) + ' "' + txt(a) + '"');
   }
 
   // ── 4: measures (px) — only when the element is on this screen
@@ -99,8 +103,8 @@ export const SPEC_AUDIT = (W, scale, exceptions, minContrast) => `((W, SCALE, EX
   want('.crumb .dot-avatar', 'w', 24, 'chat header avatar');
   want('.msg .who .dot-avatar', 'w', 20, 'message avatar');
   want('.card-top .dot-avatar', 'w', 20, 'card avatar');
-  want('.chat-row.steps > .chat-row-line, .chat-row.nested > .chat-row-line', 'h', 36, 'step row height', 1.5);
-  want('.chat-pin', 'h', 40, 'pinned task height');
+  want('.chat-row.steps > .chat-row-line, .chat-row.nested > .chat-row-line', 'h', matchMedia('(pointer: coarse)').matches ? 44 : 36, 'step row height', 1.5);
+  want('.chat-pin', 'h', matchMedia('(pointer: coarse)').matches ? 44 : 40, 'pinned task height');
   if (!phone) want('.column', 'w', 300, 'board lane width');
   if (W > 760) want('.card-modal', 'w', 720, 'task view width');
   if (!phone) for (const e of document.querySelectorAll('.chat-pane .composer')) { if (shown(e) && e.getBoundingClientRect().width > 781) { issues.push('composer wider than the 780 px column: ' + Math.round(e.getBoundingClientRect().width)); break; } }
