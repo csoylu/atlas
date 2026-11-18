@@ -254,7 +254,7 @@ function describe(name: string, o: Input, out: string, ok: boolean, detail?: Too
       const refused = ok ? /Writes refused/.test(out) : false;
       const errors = ok ? /Page errors \((\d+)\)/.exec(out)?.[1] : undefined;
       const meta = [{ text: size }, ...(errors ? [{ text: plural(Number(errors), 'page error') }] : []), ...(refused ? [{ text: 'writes refused' }] : [])];
-      return { icon: 'panel', verb: 'Screenshot', running: 'Taking a screenshot of', object: target, mono: true, meta, detail: 'generic', short: { verb: 'took a screenshot of', obj: cut(target, 30) } };
+      return { icon: 'canvas', verb: 'Screenshot', running: 'Taking a screenshot of', object: target, mono: true, meta, detail: 'generic', short: { verb: 'took a screenshot of', obj: cut(target, 30) } };
     }
     case 'web_search': {
       const q = str(o.query) ?? '';
