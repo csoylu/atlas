@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import type { ContentBlock, Message } from '@atlas/shared';
-import { buildMessages, compactedView, degrade, estimateTokens, INTERRUPTED, measuredSize, needsTurn, pairServerTools, pickCut, pickPrune, pruneMessages, serverToolProblem, SUMMARY_LEAD, TODO_LEAD } from './context.ts';
+import { buildMessages, compactedView, otherLead, degrade, estimateTokens, INTERRUPTED, measuredSize, needsTurn, pairServerTools, pickCut, pickPrune, pruneMessages, serverToolProblem, SUMMARY_LEAD, TODO_LEAD } from './context.ts';
 
 let seq = 0;
 const m = (role: 'user' | 'assistant', content: ContentBlock[], contextUpto: number | null = null) => ({
@@ -16,6 +16,36 @@ const m = (role: 'user' | 'assistant', content: ContentBlock[], contextUpto: num
 const t = (text: string): ContentBlock[] => [{ type: 'text', text }];
 
 describe('buildMessages', () => {
+  it("shows another agent's turns as theirs, not as the running agent's (#221)", () => {
+    seq = 0;
+    const by = (author: string, msg: ReturnType<typeof m>) => ({ ...msg, author });
+    const transcript = [
+      m('user', t('build it')),
+      by('munih', m('assistant', [{ type: 'thinking', thinking: 'private', signature: 's' }, { type: 'text', text: 'I built it.' }, { type: 'tool_use', id: 'u1', name: 'shell', input: { command: 'npm test' } }])),
+      by('tool', m('user', [{ type: 'tool_result', tool_use_id: 'u1', content: '42 passed' }])),
+      by('munih', m('assistant', t('PR #49 is open.'))),
+      by('system', m('user', t('You review PR #49.'))),
+      by('zurich', m('assistant', [{ type: 'tool_use', id: 'u2', name: 'shell', input: { command: 'git diff' } }])),
+      by('tool', m('user', [{ type: 'tool_result', tool_use_id: 'u2', content: 'diff' }])),
+    ];
+    // zurich's view: munih's turns are user context opening with who wrote them; zurich's own call stays a tool call.
+    const z = buildMessages(transcript, 'zurich');
+    expect(z.map((v) => v.role)).toEqual(['user', 'assistant', 'user']);
+    const context = z[0]!.content.map((b) => (b.type === 'text' ? b.text : b.type)).join('\n');
+    expect(context).toContain(`${otherLead('munih')}\nI built it.\n→ shell {"command":"npm test"}`);
+    expect(context).toContain("← @munih's shell: 42 passed");
+    expect(context).toContain(`${otherLead('munih')}\nPR #49 is open.`);
+    expect(context).not.toContain('private');
+    expect(z[1]!.content).toEqual([{ type: 'tool_use', id: 'u2', name: 'shell', input: { command: 'git diff' } }]);
+    expect(z[2]!.content).toEqual([{ type: 'tool_result', tool_use_id: 'u2', content: 'diff' }]);
+    // munih's view, later: its own turns are its own, zurich's are labelled.
+    const mu = buildMessages(transcript, 'munih');
+    expect(mu.map((v) => v.role)).toEqual(['user', 'assistant', 'user', 'assistant', 'user']);
+    expect(JSON.stringify(mu.at(-1)!.content)).toContain(otherLead('zurich'));
+    // No running agent given: the raw view (one role per message, as before).
+    expect(buildMessages(transcript).filter((v) => v.role === 'assistant')).toHaveLength(3);
+  });
+
   it('merges consecutive roles and puts tool results first', () => {
     seq = 0;
     const view = buildMessages([

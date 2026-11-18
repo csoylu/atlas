@@ -1,5 +1,5 @@
 import { execFile } from 'node:child_process';
-import type { Card, CardPr } from '@atlas/shared';
+import type { Card, CardPr, Run } from '@atlas/shared';
 import type { Db } from './store/db.ts';
 import type { Bus } from './events.ts';
 import type { Kanban } from './kanban.ts';
@@ -92,15 +92,20 @@ const short = (sha: string | null) => (sha ?? '').slice(0, SHA);
 const hhmm = (iso: string) => new Date(iso).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', hourCycle: 'h23' });
 
 /** The kick of a reviewer run: what to check, and how the task moves after. */
-export function reviewKick(card: Card, prs: CardPr[]): string {
+export function reviewKick(card: Card, prs: CardPr[], again = false): string {
   const list = prs.map((p) => `PR #${p.number} (${p.url}, branch ${p.branch}, head ${p.headSha})`).join(', ');
   return (
+    (again ? 'Your last review run of this head ended without a verdict: nothing was validated or failed on GitHub. ' : '') +
     `You review this task's pull request${prs.length > 1 ? 's' : ''}: ${list}. CI is green. ` +
-    `@${card.assignee ?? 'nobody'} built it. Check it the way the project says (its CLAUDE.md), then give your verdict with pr_validate ` +
-    "(ok with the head sha you checked and merge: true, or fail with the reason for the builder): it applies the project's gate. " +
+    `@${card.assignee ?? 'nobody'} built it: the earlier messages marked @${card.assignee ?? 'nobody'} are theirs, not yours. ` +
+    "Check it the way the project says (its CLAUDE.md), then give your verdict with pr_validate (ok with the head sha you checked and merge: true, " +
+    "or fail with the reason for the builder): it applies the project's gate. A review ends with one of the two on the head. " +
     'The task moves by itself: merged → done, failed → back to the builder with your reason.'
   );
 }
+
+/** Review runs per head before a review that ends without a verdict is shown as stalled instead of started again. */
+export const REVIEW_TRIES = 2;
 
 export interface PrsOptions {
   read: GhRead;
@@ -258,16 +263,77 @@ export class Prs {
               : null;
       if (why) return this.sendBack(card, p, `PR #${p.number}: ${why}`);
     }
+    // The reviewer's run ended and GitHub says nothing about the head (#221): not a review. Once more, then shown.
+    const stall = this.stall(card);
+    let again = false;
+    if (stall && stall.tries < REVIEW_TRIES) {
+      this.db.transaction(() => {
+        for (const p of stall.prs) this.db.prepare('UPDATE card_prs SET reviewed_sha = NULL WHERE card_id = ? AND repo = ? AND number = ?').run(cardId, p.repo, p.number);
+        this.kanban.event(cardId, 'review_retry', { by: 'github', reviewer: stall.by, runId: stall.run.id, prs: stall.prs.map((p) => ({ number: p.number, sha: p.headSha })) });
+      })();
+      again = true;
+    } else if (stall) this.stalled(card, stall);
+    const fresh = again ? this.kanban.get(cardId) : card;
     // CI green on every open PR, none validated yet on this head: the reviewer's turn.
-    const due = open.filter((p) => p.ci === 'success' && p.mergeable !== false && p.qa !== 'success' && p.reviewedSha !== p.headSha);
-    if (!due.length || due.length !== open.filter((p) => p.qa !== 'success').length) return;
-    if (this.reviewerProblem(card)) return;
+    const openNow = fresh.prs.filter((p) => p.state === 'open');
+    const due = openNow.filter((p) => p.ci === 'success' && p.mergeable !== false && p.qa !== 'success' && p.reviewedSha !== p.headSha);
+    if (!due.length || due.length !== openNow.filter((p) => p.qa !== 'success').length) return;
+    if (this.reviewerProblem(fresh)) return;
     if (this.runner.current(cardId)) return; // a chat reply or the builder's last words: after it
-    const runId = this.runner.wake(cardId, { agentId: card.reviewer!, kind: 'work', kick: reviewKick(card, due) });
+    const runId = this.runner.wake(cardId, { agentId: fresh.reviewer!, kind: 'work', kickAlways: true, kick: reviewKick(fresh, due, again || due.some((p) => this.tries(cardId, p) > 0)) });
     if (!runId) return;
     for (const p of due) this.db.prepare('UPDATE card_prs SET reviewed_sha = ? WHERE card_id = ? AND repo = ? AND number = ?').run(p.headSha, cardId, p.repo, p.number);
-    this.kanban.event(cardId, 'review_started', { by: card.reviewer, prs: due.map((p) => ({ number: p.number, sha: p.headSha })) });
+    this.kanban.event(cardId, 'review_started', { by: fresh.reviewer, runId, prs: due.map((p) => ({ number: p.number, sha: p.headSha })) });
     this.kanban.emit(cardId);
+  }
+
+  /** The reviewer runs started on this PR's current head (review_started events). */
+  private tries(cardId: string, p: CardPr): number {
+    return this.reviewEvents(cardId).filter((e) => e.prs.some((x) => x.number === p.number && x.sha === p.headSha)).length;
+  }
+
+  private reviewEvents(cardId: string): { at: string; by: string; runId?: string; prs: { number: number; sha: string }[] }[] {
+    return (this.db.prepare("SELECT at, payload FROM card_events WHERE card_id = ? AND kind = 'review_started' ORDER BY id DESC").all(cardId) as { at: string; payload: string }[]).map(
+      (r) => ({ at: r.at, ...(JSON.parse(r.payload) as { by: string; runId?: string; prs: { number: number; sha: string }[] }) }),
+    );
+  }
+
+  /**
+   * The latest review run ended (done or failed) and none of the PRs it was started on has a verdict on that head yet
+   * (still open, same head, no qa/validated success or failure): what it was, or null.
+   */
+  private stall(card: Card): { by: string; run: Run; prs: CardPr[]; tries: number } | null {
+    const last = this.reviewEvents(card.id)[0];
+    if (!last || this.runner.current(card.id)) return null;
+    const runs = this.runner.runs(card.id);
+    // Events from before #221 have no run id: the reviewer's newest run started before the event.
+    const run = last.runId ? runs.find((r) => r.id === last.runId) : runs.find((r) => r.agentId === last.by && r.startedAt <= last.at);
+    if (!run || (run.status !== 'done' && run.status !== 'failed')) return null;
+    const prs = last.prs.map((x) => card.prs.find((p) => p.number === x.number && p.headSha === x.sha && p.reviewedSha === x.sha));
+    if (!prs.length || prs.some((p) => !p || p.state !== 'open' || p.qa === 'success' || p.qa === 'failure' || p.ci !== 'success')) return null;
+    const ok = prs as CardPr[];
+    return { by: last.by, run, prs: ok, tries: Math.max(...ok.map((p) => this.tries(card.id, p))) };
+  }
+
+  /** A review that keeps ending without a verdict: one Inbox item per stalled review (the card says why, Retry restarts it). */
+  private stalled(card: Card, s: NonNullable<ReturnType<Prs['stall']>>): void {
+    const seen = this.db.prepare("SELECT payload FROM card_events WHERE card_id = ? AND kind = 'review_stalled'").all(card.id) as { payload: string }[];
+    if (seen.some((r) => (JSON.parse(r.payload) as { runId?: string }).runId === s.run.id)) return;
+    const n = this.db.transaction(() => {
+      this.kanban.event(card.id, 'review_stalled', { by: 'github', reviewer: s.by, runId: s.run.id, tries: s.tries, prs: s.prs.map((p) => ({ number: p.number, sha: p.headSha })) });
+      return insertNotification(
+        this.db,
+        {
+          kind: 'review.stalled',
+          title: `Review by @${s.by} ended without a verdict`,
+          body: `${s.prs.map((p) => `PR #${p.number} (${short(p.headSha)})`).join(', ')} of “${card.title}”: ${s.tries} review run${s.tries > 1 ? 's' : ''} ended without validating or failing it${s.run.status === 'failed' ? ` (the last one failed: ${s.run.error ?? 'the run failed'})` : ''}. The task waits In review: Retry starts the review again.`,
+          cardId: card.id,
+        },
+        new Date(this.now()),
+      );
+    })();
+    this.bus.emit({ type: 'notification.created', notification: n });
+    this.kanban.emit(card.id);
   }
 
   private failedSha(cardId: string, p: CardPr): string | null {
@@ -310,6 +376,9 @@ export class Prs {
     if (open.some((p) => p.ci === 'pending' || p.ci === null)) return 'QA starts when CI is green';
     if (open.some((p) => p.mergeable === null)) return 'GitHub is checking for conflicts…';
     if (open.every((p) => p.qa === 'success')) return 'validated: waiting for the merge';
+    const stall = this.stall(card);
+    if (stall && stall.tries >= REVIEW_TRIES)
+      return `review by @${stall.by} ended without a verdict on ${stall.prs.map((p) => short(p.headSha)).join(', ')} (${stall.tries} runs${stall.run.status === 'failed' ? `, the last failed: ${stall.run.error ?? 'the run failed'}` : ''}): Retry starts it again`;
     if (open.some((p) => p.reviewedSha === p.headSha)) {
       const last = this.runner.runs(card.id).find((r) => r.agentId === card.reviewer);
       if (last?.status === 'failed') return `@${card.reviewer}'s check failed: ${last.error ?? 'the run failed'}. Retry starts it again.`;
