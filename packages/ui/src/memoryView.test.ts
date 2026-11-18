@@ -103,7 +103,7 @@ describe('memory digest', () => {
     expect(parseMarks('{')).toEqual({ seen: null, archived: null });
   });
   it('sits among the Inbox updates by time and counts in the badge while unread', () => {
-    const n = (id: number, at: string) => ({ id, at, kind: 'card.done', title: 't', body: '', cardId: null, readAt: null, archivedAt: null });
+    const n = (id: number, at: string) => ({ id, at, kind: 'card.done', title: 't', body: '', cardId: null, readAt: null, archivedAt: null, projectId: null });
     const inbox = { needsYou: [], updates: [n(1, '2026-11-17T11:00:00Z'), n(2, '2026-11-17T09:00:00Z')], badge: 2 };
     const d = digestItem(changes, { seen: null, archived: null });
     const out = withDigest(inbox, d);

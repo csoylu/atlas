@@ -29,6 +29,7 @@ const card = (n: number, over: Partial<Card> = {}): Card => ({
   images: [],
   reviewer: null,
   prs: [],
+  projectId: 'atlas',
   ...over,
 });
 const need = (c: Card, failed = false): InboxNeed => ({ card: c, since: c.updatedAt, failed, notificationId: null, unread: true, summary: null });

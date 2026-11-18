@@ -35,6 +35,7 @@ import { VoiceChat } from './voiceChat.ts';
 import { Updater, type UpdateHost } from './updater.ts';
 import { ShellEnv, type ShellPathOptions } from './shellEnv.ts';
 import { Prs, ghReader, type GhRead } from './prs.ts';
+import { Projects, ghRunner, type GhRun } from './projects.ts';
 
 export interface EngineOptions {
   /** SQLite file, or ':memory:'. */
@@ -84,6 +85,8 @@ export interface EngineOptions {
   shellPath?: 'login' | 'engine' | ShellPathOptions;
   /** Pull requests of tasks In review (#189): how they are read (default: gh api) and how often (false: never by itself). */
   prs?: { read?: GhRead; intervalMs?: number | false };
+  /** Projects (#213): how the repo check runs gh (default: gh with the engine's login-shell env). */
+  projects?: { gh?: GhRun };
   /**
    * App updates from GitHub releases (#123). The packaged Mac app passes a host (it can install); without it the
    * engine can't install and doesn't check by itself (dev, server). Tests point api/fetch at a fake release server.
@@ -120,6 +123,7 @@ export interface Engine {
   updater: Updater;
   prs: Prs;
   secrets: Secrets;
+  projects: Projects;
   url: string;
   stop(): Promise<void>;
 }
@@ -175,6 +179,7 @@ export async function startEngine(opts: EngineOptions): Promise<Engine> {
   });
   dispatcher.reviewReason = (c) => prs.reason(c);
   dispatcher.recheck = (id) => prs.recheck(id);
+  const projects = new Projects(db, bus, opts.projects?.gh ?? ghRunner(() => shellEnv.engineEnv()));
   const updater = new Updater(db, bus, {
     version: opts.version ?? 'dev',
     dataDir: opts.dataDir,
@@ -217,6 +222,7 @@ export async function startEngine(opts: EngineOptions): Promise<Engine> {
     secrets,
     env,
     auth,
+    projects,
   });
   await new Promise<void>((resolve, reject) => {
     server.once('error', reject);
@@ -248,6 +254,7 @@ export async function startEngine(opts: EngineOptions): Promise<Engine> {
   return {
     db,
     secrets,
+    projects,
     bus,
     kanban,
     agents,

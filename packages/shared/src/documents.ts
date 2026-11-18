@@ -41,6 +41,8 @@ export interface Folder {
   id: string;
   name: string;
   createdAt: string;
+  /** Its project (#213): folder names are unique within a project. */
+  projectId: string;
 }
 
 /** A Library search hit: titles and content, every folder. `snippet` is set when the match is in the content. */
@@ -70,6 +72,8 @@ export interface Doc {
   chatId: string | null;
   /** The canvas (cv_ id) this page was converted from (#120); old chats link their canvas_* rows to it (#174). */
   fromCanvas: string | null;
+  /** Its project (#213): the project of the workspace the file is in. */
+  projectId: string;
 }
 
 export interface DocVersion {

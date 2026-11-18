@@ -3,6 +3,8 @@ import { DocRef, type Doc, type Folder, type PanelTab } from './documents.ts';
 
 export * from './documents.ts';
 export * from './cardRefs.ts';
+export * from './projects.ts';
+import type { Project } from './projects.ts';
 
 /** Kanban statuses, in board order (design §7, §16). 'closed' = cancelled: nothing (more) is done; unlike 'done' it
  * doesn't satisfy a child's parents. */
@@ -129,6 +131,8 @@ export const Card = z.object({
   reviewer: z.string().nullable().default(null),
   /** Its pull requests (#189), oldest link first. */
   prs: z.array(CardPr).default([]),
+  /** The project it belongs to (#213): set at creation, never changes. */
+  projectId: z.string().default('atlas'),
 });
 export type Card = z.infer<typeof Card>;
 
@@ -141,6 +145,8 @@ export const CreateCard = z.object({
   parents: z.array(z.string()).default([]),
   /** Staged images (POST /api/uploads) to attach to the new task (#119): the API moves them, the row lists them. */
   uploads: z.array(UploadId).max(IMAGE_MAX_PER_TASK).default([]),
+  /** Its project (#213), fixed for good; omitted = the default project (the oldest active one). */
+  projectId: z.string().min(1).optional(),
 });
 export type CreateCard = z.input<typeof CreateCard>;
 /** POST /api/cards/:id/images: staged images added to an existing task. */
@@ -757,6 +763,8 @@ export interface Workflow extends WorkflowGraph {
   createdBy: string;
   createdAt: string;
   updatedAt: string;
+  /** Its project (#213); null = global. */
+  projectId: string | null;
 }
 
 /** POST /api/workflows/preview: the next firings of a draft time trigger (time zone: the engine's if not given). */
@@ -768,7 +776,14 @@ export const TriggerPreview = z.object({
 });
 export type TriggerPreview = z.input<typeof TriggerPreview>;
 
-export const CreateWorkflow = z.object({ name: z.string().trim().min(1).max(200), enabled: z.boolean().default(true), nodes: WorkflowGraph.shape.nodes, edges: WorkflowGraph.shape.edges });
+export const CreateWorkflow = z.object({
+  name: z.string().trim().min(1).max(200),
+  enabled: z.boolean().default(true),
+  nodes: WorkflowGraph.shape.nodes,
+  edges: WorkflowGraph.shape.edges,
+  /** Its project (#213); null = global (its tasks go to the default project); omitted = the default project. */
+  projectId: z.string().min(1).nullable().optional(),
+});
 export type CreateWorkflow = z.input<typeof CreateWorkflow>;
 /** PUT /api/workflows/:id/graph: `revision` is the one the editor loaded. */
 export const SaveWorkflowGraph = WorkflowGraph.extend({ revision: z.number().int() });
@@ -812,7 +827,9 @@ export type ServerEvent =
   /** A secret was added, edited, rotated, deleted or used: reload Settings → Secrets (names and metadata only). */
   | { type: 'secrets.updated' }
   /** The server's secrets.enc was unlocked, locked or got a new password (#208): the sidebar badge and Settings → Secrets. */
-  | { type: 'secrets.status'; status: SecretStoreStatus };
+  | { type: 'secrets.status'; status: SecretStoreStatus }
+  /** A project was created, edited, archived or restored, or a member joined or left (#213). */
+  | { type: 'project.updated'; project: Project };
 
 /* ── Voice mode (desktop only): « Hi Atlas », all local (docs/voice-research.md) ─────────────────────── */
 
@@ -969,6 +986,8 @@ export interface Notification {
   readAt: string | null;
   /** Archived from the Inbox (E): it leaves the list. */
   archivedAt: string | null;
+  /** Its task's project (#213); null = not about a task. */
+  projectId: string | null;
 }
 
 /** A board card waiting on the user (blocked or in review): derived from the card's live state, so it leaves the Inbox by itself. */

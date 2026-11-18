@@ -191,7 +191,7 @@ describe('team: memory, messages between cards, agent and model management', () 
     e.kanban.update(cancelled.id, { status: 'closed' }, 'user');
     // An open card blocks; the closed (cancelled) one isn't listed.
     expect(() => e.agents.remove('paris')).toThrow(new RegExp(`open tasks: ${cardRef(c)}\\. Reassign`));
-    expect(() => e.agents.remove('atlas')).toThrow(/triage agent: pick another one in Settings → Board/);
+    expect(() => e.agents.remove('atlas')).toThrow(/leads Atlas \(the triage agent\): pick another one in Settings → Board/);
     e.kanban.update(c.id, { status: 'done' }, 'user');
     e.agents.remove('paris'); // only done + closed cards left: deletable
     expect(e.kanban.get(c.id).assignee).toBeNull();

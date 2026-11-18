@@ -12,6 +12,17 @@ export interface DocToolContext {
   cardId: string | null;
   /** How a card is named in text (#12). */
   cardRef?: (id: string) => string;
+  /**
+   * The project a call acts on (#213): `asked` omitted = the run's project; another one only for a lead (throws
+   * otherwise). Omitted (tests): the default project, no checks.
+   */
+  scope?: (asked?: string) => string | undefined;
+}
+
+/** Refuse an artifact of another project unless the agent may cross (a lead). */
+function reachDoc(doc: Doc, ctx: DocToolContext): Doc {
+  if (ctx.scope && doc.projectId !== ctx.scope()) ctx.scope(doc.projectId);
+  return doc;
 }
 
 const Target = {
@@ -22,7 +33,7 @@ const Target = {
 function resolveDoc(i: { artifact?: string; path?: string }, ctx: DocToolContext): Doc {
   const ref = i.artifact ?? i.path;
   if (!ref) throw new Error('give the artifact (id or path)');
-  return ctx.documents.resolve(ctx.agentId, ref, ctx.cardId);
+  return reachDoc(ctx.documents.resolve(ctx.agentId, ref, ctx.cardId), ctx);
 }
 
 /** « Title (doc_x, path, vN) »: the line the chat card is read from (ui cardModal.ts artifactOf). */
@@ -99,14 +110,19 @@ export const DOC_TOOLS = {
     },
   }),
   artifact_list: tool({
-    description: 'List artifacts in the Library (every agent\'s), latest first: id, kind, title, version, folder, path. query searches titles and content.',
-    input: z.object({ query: z.string().optional(), folder: z.string().optional().describe('a folder name, or Unfiled') }),
+    description: "List this project's artifacts in the Library (every agent's), latest first: id, kind, title, version, folder, path. query searches titles and content.",
+    input: z.object({
+      query: z.string().optional(),
+      folder: z.string().optional().describe('a folder name, or Unfiled'),
+      project: z.string().min(1).optional().describe("project id or name; omitted = this run's project (another project: leads only)"),
+    }),
     run: (i, ctx) => {
-      let docs = i.query?.trim() ? ctx.documents.search(i.query).map((h) => h.doc) : ctx.documents.library();
+      const project = ctx.scope?.(i.project);
+      let docs = i.query?.trim() ? ctx.documents.search(i.query, 50, project).map((h) => h.doc) : ctx.documents.library({ project });
       if (i.folder) {
         const unfiled = i.folder.trim().toLowerCase() === 'unfiled';
-        const f = unfiled ? null : ctx.documents.folderNamed(i.folder);
-        if (!unfiled && !f) throw new Error(`no folder "${i.folder}"; folders: ${ctx.documents.folders().map((x) => x.name).join(', ') || 'none'}`);
+        const f = unfiled ? null : ctx.documents.folderNamed(i.folder, project);
+        if (!unfiled && !f) throw new Error(`no folder "${i.folder}"; folders: ${ctx.documents.folders(project).map((x) => x.name).join(', ') || 'none'}`);
         docs = docs.filter((d) => d.folderId === (f?.id ?? null));
       }
       if (!docs.length) return 'no artifacts';
@@ -121,7 +137,7 @@ export const DOC_TOOLS = {
     input: z.object({ ...Target, version: z.number().int().positive().optional() }),
     run: (i, ctx) => {
       const ref = i.artifact ?? i.path;
-      const doc = ref && /^doc_[\w-]+$/.test(ref) ? ctx.documents.get(ref) : resolveDoc(i, ctx);
+      const doc = ref && /^doc_[\w-]+$/.test(ref) ? reachDoc(ctx.documents.get(ref), ctx) : resolveDoc(i, ctx);
       const c = ctx.documents.content(doc.id, i.version);
       const text = c.content.length > 60_000 ? c.content.slice(0, 60_000) + `\n… (${c.content.length - 60_000} more characters: read the file)` : c.content;
       return `${doc.title} (${doc.id}, ${doc.kind}, v${c.version} of ${doc.version}, ${folderOf(doc, ctx)}, @${doc.agentId}:${doc.path})\n\n${text}`;

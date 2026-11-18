@@ -7,6 +7,7 @@ import type { Bus } from './events.ts';
 import { canvasPage } from './canvasPage.ts';
 import { ConflictError, InvalidError, NotFoundError, type Kanban } from './kanban.ts';
 import { inside } from './tools.ts';
+import { assertActive, defaultProjectId } from './projects.ts';
 
 const KEEP_VERSIONS = 50;
 /** Bigger files are not documents (the panel renders them whole). */
@@ -30,10 +31,13 @@ interface Row {
   folder_id: string | null;
   name: string | null;
   from_canvas: string | null;
+  project_id: string;
   /** COALESCE(chat_id, the card's origin chat), from DOC_SELECT. */
   chat: string | null;
 }
 /** Documents with the chat they belong to: where first opened, else where their card came from. */
+/** Documents of active projects (#213): archived projects are hidden unless asked. */
+const ACTIVE_PROJECT = "d.project_id IN (SELECT id FROM projects WHERE status = 'active')";
 const DOC_SELECT = 'SELECT d.*, COALESCE(d.chat_id, c.origin_card) AS chat FROM documents d LEFT JOIN cards c ON c.id = d.card_id';
 const toDoc = (r: Row): Doc => ({
   id: r.id,
@@ -49,6 +53,7 @@ const toDoc = (r: Row): Doc => ({
   folderId: r.folder_id,
   chatId: r.chat,
   fromCanvas: r.from_canvas,
+  projectId: r.project_id,
 });
 
 const stampOf = (file: string) => {
@@ -70,49 +75,68 @@ export class Documents {
     private workdirOf: (agentId: string) => string,
   ) {}
 
+  /**
+   * The project of a new artifact (#213): the project of the task or chat it is made in, else the default one. (Every
+   * workspace is in the default project until #214 gives each project its own.)
+   */
+  private projectFor(cardId: string | null): string {
+    const r = cardId ? (this.db.prepare('SELECT project_id FROM cards WHERE id = ?').get(cardId) as { project_id: string } | undefined) : undefined;
+    return r?.project_id ?? defaultProjectId(this.db);
+  }
+
   get(id: string): Doc {
     const row = this.db.prepare(DOC_SELECT + ' WHERE d.id = ?').get(id) as Row | undefined;
     if (!row) throw new NotFoundError(`document ${id} not found`);
     return toDoc(row);
   }
 
-  list(filter: { cardId?: string } = {}): Doc[] {
-    const rows = filter.cardId
-      ? this.db.prepare(DOC_SELECT + ' WHERE d.card_id = ? ORDER BY d.updated_at DESC').all(filter.cardId)
-      : this.db.prepare(DOC_SELECT + ' ORDER BY d.updated_at DESC').all();
+  /** `project`: that project's artifacts only (#213); else those of active projects (`archived`: all). */
+  list(filter: { cardId?: string; project?: string; archived?: boolean } = {}): Doc[] {
+    const where: string[] = [];
+    const args: string[] = [];
+    if (filter.cardId) {
+      where.push('d.card_id = ?');
+      args.push(filter.cardId);
+    }
+    if (filter.project) {
+      where.push('d.project_id = ?');
+      args.push(filter.project);
+    } else if (!filter.cardId && !filter.archived) where.push(ACTIVE_PROJECT);
+    const rows = this.db.prepare(`${DOC_SELECT} ${where.length ? 'WHERE ' + where.join(' AND ') : ''} ORDER BY d.updated_at DESC`).all(...args);
     return (rows as Row[]).map(toDoc);
   }
 
   /** The Library: every artifact, fresh (re-reads every agent's artifact folders: edits made outside Atlas), latest first. */
-  library(): Doc[] {
+  library(filter: { project?: string; archived?: boolean } = {}): Doc[] {
     const agents = this.db.prepare('SELECT id FROM agents').all() as { id: string }[];
     for (const a of agents) this.sync(a.id, a.id);
-    return this.list();
+    return this.list(filter);
   }
 
   /** Pin an artifact on top of its folder, or unpin it. */
   pin(id: string, pinned: boolean): Doc {
-    this.get(id);
+    assertActive(this.db, this.get(id).projectId, 'its Library');
     this.db.prepare('UPDATE documents SET pinned_at = ? WHERE id = ?').run(pinned ? new Date().toISOString() : null, id);
     return this.emitDoc(id);
   }
 
   /** Move an artifact to a folder (null: Unfiled). */
   move(id: string, folderId: string | null): Doc {
-    this.get(id);
-    if (folderId) this.folder(folderId);
+    const doc = this.get(id);
+    assertActive(this.db, doc.projectId, 'its Library');
+    if (folderId && this.folder(folderId).projectId !== doc.projectId) throw new InvalidError('that folder is in another project');
     this.db.prepare('UPDATE documents SET folder_id = ? WHERE id = ?').run(folderId, id);
     return this.emitDoc(id);
   }
 
   /* ── Library folders (flat) ──────────────────────────────────────────── */
 
-  folders(): Folder[] {
-    return (this.db.prepare('SELECT * FROM folders ORDER BY name COLLATE NOCASE').all() as { id: string; name: string; created_at: string }[]).map((r) => ({
-      id: r.id,
-      name: r.name,
-      createdAt: r.created_at,
-    }));
+  /** `project`: that project's folders (#213); else every folder. */
+  folders(project?: string): Folder[] {
+    const rows = (project
+      ? this.db.prepare('SELECT * FROM folders WHERE project_id = ? ORDER BY name COLLATE NOCASE').all(project)
+      : this.db.prepare('SELECT * FROM folders ORDER BY name COLLATE NOCASE').all()) as { id: string; name: string; created_at: string; project_id: string }[];
+    return rows.map((r) => ({ id: r.id, name: r.name, createdAt: r.created_at, projectId: r.project_id }));
   }
 
   folder(id: string): Folder {
@@ -121,24 +145,26 @@ export class Documents {
     return f;
   }
 
-  /** A folder by name (case-insensitive), if any. */
-  folderNamed(name: string): Folder | null {
-    return this.folders().find((f) => f.name.toLowerCase() === name.trim().toLowerCase()) ?? null;
+  /** A folder by name (case-insensitive) in a project (default: the default project), if any. */
+  folderNamed(name: string, project = defaultProjectId(this.db)): Folder | null {
+    return this.folders(project).find((f) => f.name.toLowerCase() === name.trim().toLowerCase()) ?? null;
   }
 
-  createFolder(name: string): Folder {
+  createFolder(name: string, project = defaultProjectId(this.db)): Folder {
     const n = folderName(name);
-    if (this.folderNamed(n)) throw new ConflictError(`a folder named "${n}" exists already`);
+    assertActive(this.db, project, 'its Library');
+    if (this.folderNamed(n, project)) throw new ConflictError(`a folder named "${n}" exists already`);
     const id = 'fld_' + randomUUID().slice(0, 8);
-    this.db.prepare('INSERT INTO folders (id, name, created_at) VALUES (?, ?, ?)').run(id, n, new Date().toISOString());
+    this.db.prepare('INSERT INTO folders (id, name, created_at, project_id) VALUES (?, ?, ?, ?)').run(id, n, new Date().toISOString(), project);
     this.emitFolders();
     return this.folder(id);
   }
 
   renameFolder(id: string, name: string): Folder {
-    this.folder(id);
+    const f = this.folder(id);
+    assertActive(this.db, f.projectId, 'its Library');
     const n = folderName(name);
-    const other = this.folderNamed(n);
+    const other = this.folderNamed(n, f.projectId);
     if (other && other.id !== id) throw new ConflictError(`a folder named "${n}" exists already`);
     this.db.prepare('UPDATE folders SET name = ? WHERE id = ?').run(n, id);
     this.emitFolders();
@@ -147,7 +173,7 @@ export class Documents {
 
   /** Delete a folder: its artifacts move to Unfiled (nothing else is deleted). */
   deleteFolder(id: string): void {
-    this.folder(id);
+    assertActive(this.db, this.folder(id).projectId, 'its Library');
     const moved = (this.db.prepare('SELECT id FROM documents WHERE folder_id = ?').all(id) as { id: string }[]).map((r) => r.id);
     this.db
       .transaction(() => {
@@ -161,7 +187,8 @@ export class Documents {
 
   /* ── Search: titles and latest content, every folder ─────────────────── */
 
-  search(query: string, limit = 50): DocHit[] {
+  /** `project`: that project's artifacts only (#213); else those of active projects. */
+  search(query: string, limit = 50, project?: string): DocHit[] {
     const q = query.trim().toLowerCase();
     if (!q) return [];
     const rows = this.db
@@ -171,8 +198,10 @@ export class Documents {
       )
       .all() as { id: string; content: string }[];
     const hits: DocHit[] = [];
+    const active = new Set((this.db.prepare("SELECT id FROM projects WHERE status = 'active'").all() as { id: string }[]).map((p) => p.id));
     for (const r of rows) {
       const doc = this.get(r.id);
+      if (project ? doc.projectId !== project : !active.has(doc.projectId)) continue;
       const inTitle = doc.title.toLowerCase().includes(q);
       const text = searchableText(doc.kind, r.content);
       const at = text.toLowerCase().indexOf(q);
@@ -192,6 +221,8 @@ export class Documents {
    */
   create(agentId: string, a: { kind: DocKind; title: string; content: string; path?: string; folder?: string | null }, by: string, cardId: string | null = null): Doc {
     const root = this.workdirOf(agentId);
+    const project = this.projectFor(cardId);
+    assertActive(this.db, project, 'its Library');
     const spec = KIND_FILE[a.kind];
     let rel = a.path?.trim() ? this.rel(agentId, a.path.trim()) : null;
     if (rel && docKindOf(rel) !== a.kind) throw new InvalidError(`${rel}: a ${a.kind} artifact needs a .${spec.ext} file`);
@@ -203,7 +234,7 @@ export class Documents {
     const content = a.kind === 'url' ? a.content.trim() + '\n' : a.content;
     if (a.kind === 'url' && !/^(https?:\/\/|\/api\/files\/)/.test(content.trim())) throw new InvalidError('a link is an http(s) address or /api/files/<agent>/<path>');
     if (Buffer.byteLength(content) > MAX_DOC_BYTES) throw new InvalidError(`artifacts are at most ${MAX_DOC_BYTES} bytes`);
-    const folder = a.folder?.trim() ? (this.folderNamed(a.folder) ?? this.createFolder(a.folder)) : null;
+    const folder = a.folder?.trim() ? (this.folderNamed(a.folder, project) ?? this.createFolder(a.folder, project)) : null;
     const full = inside(root, rel);
     mkdirSync(dirname(full), { recursive: true });
     writeFileSync(full, content);
@@ -215,6 +246,7 @@ export class Documents {
   /** A new version of an artifact: the whole content, or one exact replacement in it. */
   update(id: string, change: { content?: string; oldText?: string; newText?: string; title?: string }, by: string, cardId: string | null = null): Doc {
     const doc = this.get(id);
+    assertActive(this.db, doc.projectId, 'its Library');
     const current = this.content(id).content;
     let next: string;
     if (change.content !== undefined) next = doc.kind === 'url' ? change.content.trim() + '\n' : change.content;
@@ -370,6 +402,7 @@ export class Documents {
   /** Go back to an earlier version: the file gets that content again, recorded as a new version (undoable). */
   restore(id: string, version: number, by: string): Doc {
     const doc = this.get(id);
+    assertActive(this.db, doc.projectId, 'its Library');
     const { content } = this.content(id, version);
     const full = inside(this.workdirOf(doc.agentId), doc.path);
     writeFileSync(full, content);
@@ -515,8 +548,8 @@ export class Documents {
         if (!row) {
           const id = newId();
           this.db
-            .prepare('INSERT INTO documents (id, agent_id, path, kind, title, card_id, version, updated_by, updated_at, file_stamp, name) VALUES (?, ?, ?, ?, ?, ?, 1, ?, ?, ?, ?)')
-            .run(id, agentId, rel, kind, title, cardId, by, now, stamp, name);
+            .prepare('INSERT INTO documents (id, agent_id, path, kind, title, card_id, version, updated_by, updated_at, file_stamp, name, project_id) VALUES (?, ?, ?, ?, ?, ?, 1, ?, ?, ?, ?, ?)')
+            .run(id, agentId, rel, kind, title, cardId, by, now, stamp, name, this.projectFor(cardId));
           this.db.prepare('INSERT INTO document_versions VALUES (?, 1, ?, ?, ?)').run(id, content, by, now);
           changed = true;
           return this.get(id);

@@ -1,6 +1,7 @@
 import { UpdateSettings, type Settings as SettingsT } from '@atlas/shared';
 import type { Db } from './store/db.ts';
 import { ConflictError } from './kanban.ts';
+import { defaultProjectId, leadOf } from './projects.ts';
 
 /**
  * The voice orb's place relative to its display (desktop app, see apps/desktop/src/orb/model.ts): Electron display id,
@@ -30,7 +31,8 @@ export class Settings {
     const rows = this.db.prepare('SELECT key, value FROM settings').all() as { key: string; value: string }[];
     const map = new Map(rows.map((r) => [r.key, r.value]));
     return {
-      triageAgent: map.get('triage_agent') || null,
+      // The default project's lead (#213): Settings → Board's triage agent until the Projects page replaces it.
+      triageAgent: this.defaultLead(),
       reviewAgent: map.get('review_agent') || null,
       userName: map.get('user_name') || null,
       userAbout: map.get('user_about') || null,
@@ -38,12 +40,25 @@ export class Settings {
     };
   }
 
+  private defaultLead(): string | null {
+    const r = this.db.prepare("SELECT id FROM projects WHERE status = 'active' ORDER BY created_at, rowid LIMIT 1").get() as { id: string } | undefined;
+    return r ? leadOf(this.db, r.id) : null;
+  }
+
   update(patch: unknown): SettingsT {
     const p = UpdateSettings.parse(patch);
     if (p.triageAgent !== undefined) {
       if (p.triageAgent && !this.db.prepare('SELECT 1 FROM agents WHERE id = ?').get(p.triageAgent))
         throw new ConflictError(`agent ${p.triageAgent} does not exist`);
-      this.db.prepare("INSERT INTO settings (key, value) VALUES ('triage_agent', ?) ON CONFLICT(key) DO UPDATE SET value = excluded.value").run(p.triageAgent ?? '');
+      const project = defaultProjectId(this.db);
+      this.db.transaction(() => {
+        this.db.prepare('UPDATE projects SET lead = ? WHERE id = ?').run(p.triageAgent, project);
+        // The lead is always a member.
+        if (p.triageAgent)
+          this.db
+            .prepare("INSERT OR IGNORE INTO project_members (project_id, agent_id, clone_state, joined_at) VALUES (?, ?, 'ready', ?)")
+            .run(project, p.triageAgent, new Date().toISOString());
+      })();
     }
     if (p.reviewAgent !== undefined) {
       if (p.reviewAgent && !this.db.prepare('SELECT 1 FROM agents WHERE id = ?').get(p.reviewAgent)) throw new ConflictError(`agent ${p.reviewAgent} does not exist`);

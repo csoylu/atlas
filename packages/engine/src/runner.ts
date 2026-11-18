@@ -45,6 +45,7 @@ import { Background, exitNote, type BgProcess } from './background.ts';
 import type { ShellEnv } from './shellEnv.ts';
 import type { Secrets } from './secrets.ts';
 import { isSecretTool, redactSecretCalls, runSecretTool, secretToolSpecs } from './secretTools.ts';
+import { projectRow } from './projects.ts';
 
 interface RunRow {
   id: string;
@@ -576,7 +577,7 @@ export class Runner {
               if (c.terminal && !c.isError) terminal = c.terminal;
               r = c;
             } else if (this.opts.documents && isDocTool(u.name))
-              r = runDocTool(u.name, u.input, { documents: this.opts.documents, agentId: agent.id, chatId: panelChat, cardId: workCard, cardRef: (id) => this.kanban.ref(id) });
+              r = runDocTool(u.name, u.input, { documents: this.opts.documents, agentId: agent.id, chatId: panelChat, cardId: workCard, cardRef: (id) => this.kanban.ref(id), scope: (asked) => this.kanban.scope(agent.id, cardId, asked) });
             else if (this.opts.secrets && isSecretTool(u.name))
               r = await runSecretTool(u.name, u.input, { secrets: this.opts.secrets, agentId: agent.id, cardId: workCard, workdir, signal, env: (command) => this.shellEnvFor(agent.id, command) });
             else if (cleanup && isCleanupTool(u.name)) r = runCleanupTool(u.name, u.input, { cleanup, kanban: this.kanban, agents: this.agents, agentId: agent.id, cardId });
@@ -1003,11 +1004,15 @@ export class Runner {
 
   private systemPrompt(agent: Agent, card: Card, kind: RunKind, workdir: string): { text: string; stable: number } {
     const { name, about } = this.user();
+    // The card's project (#213): its members are the team; other projects are out of sight.
+    const project = projectRow(this.db, card.projectId);
+    const members = new Set((this.db.prepare('SELECT agent_id FROM project_members WHERE project_id = ?').all(project.id) as { agent_id: string }[]).map((r) => r.agent_id));
     const roster = this.agents
       .list()
-      .filter((a) => a.enabled)
-      .map((a) => `- ${a.id}${a.id === agent.id ? ' (you)' : ''}: ${a.rolePrompt.split('\n')[0] || '(no role description)'}`)
+      .filter((a) => a.enabled && members.has(a.id))
+      .map((a) => `- ${a.id}${a.id === agent.id ? ' (you)' : ''}${a.id === project.lead ? ' (lead)' : ''}: ${a.rolePrompt.split('\n')[0] || '(no role description)'}`)
       .join('\n');
+    const projectLine = `Project: ${project.name}${project.repo ? ` (github.com/${project.repo})` : ''}, led by ${project.lead ?? 'nobody yet'}${project.lead === agent.id ? ' (you: you may act on other projects by passing project explicitly)' : ''}.`;
     const conversation =
       kind === 'triage'
         ? [
@@ -1069,6 +1074,7 @@ export class Runner {
       'never assume gender. In transcripts and tool output, messages by "user" are theirs.',
       '',
       '# This conversation',
+      projectLine,
       ...conversation,
       '',
       '# How to work',
@@ -1098,7 +1104,7 @@ export class Runner {
         : []),
       ...this.secretsBlock(agent.id),
       '',
-      '# Team',
+      `# Team (project ${project.name})`,
       roster,
       'To reach another agent, use agent_message (its answer comes back to you), or write in one of its tasks with task_message.',
       '',

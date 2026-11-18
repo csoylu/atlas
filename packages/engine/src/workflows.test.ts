@@ -313,7 +313,8 @@ describe('workflows (#170, design §9)', () => {
 
   it('agents keep the schedule_* tools: they create, list and delete one-step workflows', async () => {
     const { engine } = await setup();
-    const ctx = { kanban: engine.kanban, memories: engine.memories, workflows: engine.workflows, agentId: 'atlas', cardId: 'c_x', deliver: () => {} };
+    const run = engine.kanban.create({ title: 'the run the tools are called from' }, 'user');
+    const ctx = { kanban: engine.kanban, memories: engine.memories, workflows: engine.workflows, agentId: 'atlas', cardId: run.id, deliver: () => {} };
     const made = runTeamTool('schedule_create', { prompt: 'Check the backups', cron: '0 3 * * *', timezone: 'Europe/Paris' }, ctx);
     expect(made).toMatchObject({ isError: false, output: expect.stringMatching(/^scheduled wf_\w+ "Check the backups" for @atlas: cron "0 3 \* \* \*" \(Europe\/Paris\), first run \S+$/) });
     expect(runTeamTool('schedule_create', { prompt: 'x' }, ctx)).toMatchObject({ isError: true, output: 'give exactly one of cron or at' });
