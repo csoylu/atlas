@@ -513,6 +513,8 @@ the diagram « Secrets in Atlas: flow » and the mockup « Settings → Secrets 
   the model keys and passwords of the engine environment) becomes `[secret NAME]`, longest first; the count goes in
   `tool_calls.secrets_hidden` (`ToolCallTiming.secretsHidden`, the chat's « 1 secret hidden »). A store that can't be
   read withholds the output with the reason. Background log files on disk are not rewritten (reads of them are).
+  End-to-end tests, the leak audit (canary values searched in SQLite+WAL, files, logs, API, events, model requests,
+  snapshots) and the full list of known limits: `docs/qa/210-secrets-leak-audit.md`.
 - **Server store** (#208, `engine/src/secretFile.ts`): `<dataDir>/secrets.enc`, one JSON file: a header in the clear
   (version, scrypt cost N=2^15 r=8 p=1 and its random salt, the stored names, a key check) and the values encrypted
   with AES-256-GCM (random IV per write, the header as additional data). Key = scrypt(secrets password), 64 bytes: AES
