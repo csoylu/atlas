@@ -80,10 +80,16 @@ export class Dispatcher {
     try {
       const now = new Date().toISOString();
       for (const c of this.kanban.list()) {
-        if (c.status === 'blocked' && c.block?.kind === 'transient' && c.block.until && c.block.until <= now)
+        // A temporary failure waits in todo until its time (#131); a block of kind transient from before #131 too.
+        const retryAt = c.retry?.at ?? (c.status === 'blocked' && c.block?.kind === 'transient' ? c.block.until : null);
+        if (retryAt) {
+          if (retryAt <= now && (c.status === 'blocked' || this.kanban.openParents(c).length === 0)) this.kanban.update(c.id, { status: 'ready' }, 'dispatcher');
+        } else if (c.status === 'todo' && c.parents.length && this.kanban.openParents(c).length === 0) {
           this.kanban.update(c.id, { status: 'ready' }, 'dispatcher');
-        else if (c.status === 'todo' && c.parents.length && this.kanban.openParents(c).length === 0)
-          this.kanban.update(c.id, { status: 'ready' }, 'dispatcher');
+          // Back from waiting on other tasks (#131): tell the agent they are done, so it picks up where it stopped.
+          if (this.runner.runs(c.id).some((r) => r.kind === 'work'))
+            this.kanban.appendMessage(c.id, 'user', 'system', [{ type: 'text', text: `The tasks this one waited on are done (${c.parents.map((p) => this.kanban.ref(p)).join(', ')}). Continue where you left off.` }]);
+        }
       }
       const triageAgent = this.settings.get().triageAgent;
       for (const c of this.kanban.list()) {
@@ -259,7 +265,7 @@ export class Dispatcher {
     if (!(await this.retestFor(cardId))) return;
     const c = this.kanban.get(cardId);
     this.kanban.event(c.id, 'retry', { by: 'user' });
-    if (c.status === 'blocked') this.kanban.update(c.id, { status: 'ready' }, 'user');
+    if (c.status === 'blocked' || c.retry) this.kanban.update(c.id, { status: 'ready' }, 'user');
     else {
       this.kanban.emit(c.id);
       // A chat reply that failed (Retry on the chat's « Run failed » row): the agent answers again.
@@ -316,6 +322,7 @@ export class Dispatcher {
       }
       case 'todo': {
         const open = this.kanban.openParents(c);
+        if (c.retry && !open.length) return `retrying at ${hhmm(c.retry.at)}` + (c.retry.reason ? ` · ${c.retry.reason.split('\n')[0]}` : '');
         const closed = open.filter((p) => p.status === 'closed');
         if (closed.length)
           return `parent ${closed.map(cardRef).join(', ')} was closed (cancelled), so this task can't start: remove it from the parents, reopen it, or close this task too`;
