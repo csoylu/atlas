@@ -108,7 +108,7 @@ export function Board(props: {
   return (
     <div className={'board-screen ' + view.layout}>
       <HeaderActions>
-        <div className="view-tabs" role="tablist" aria-label="Tasks">
+        <div className="view-tabs board-tabs" role="tablist" aria-label="Tasks">
           {TABS.map((t) => (
             <button
               key={t.id}

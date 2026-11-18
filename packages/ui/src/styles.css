@@ -291,6 +291,11 @@ select { padding: 4px 8px; }
 @media (max-width: 640px) {
   .head-actions .btn-text, .head-btn .kbd, .tab-long { display: none; }
   .view-tabs { margin-left: 2px; }
+  /* Tasks on a phone (#224): the tabs (All · Needs you · Running) name the screen, so the « Tasks » title gives them
+     its room; the tabs tighten and, if counts still make them too wide, scroll sideways instead of covering the menu button. */
+  .screen-head:has(.board-tabs) .crumb { display: none; }
+  .board-tabs { flex: 0 1 auto; min-width: 0; overflow-x: auto; scrollbar-width: none; }
+  .board-tabs .tabbtn { padding: 0 8px; flex: none; }
   .list-row .why { display: none; }
   .nc-foot .kbd { display: none; }
 }
