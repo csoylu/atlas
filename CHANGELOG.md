@@ -6,6 +6,10 @@ computed by `scripts/release/changelog.mjs` from the oldest entry to the newest,
 `Fixed` → patch, `Added` or `Changed` → minor, `Breaking` (data or settings stop working without action) → major.
 Never type a version number.
 
+## Fixed · #224 · On a phone the Tasks header no longer draws the « All tasks » tab over the « Tasks » title
+
+Under 640 px the tabs (All · Needs you · Running) take the title's place in the one-row header and scroll sideways if counts make them too wide; wider screens are unchanged.
+
 ## Added · #210 · Secrets are now tested end to end, with a leak audit that searches for a secret value everywhere Atlas could write it
 
 Secrets 5/5. 16 new Playwright tests (`e2e/tests/secrets*.spec.ts`): add and grant, one agent sees `$NAME` and another does not, the `[secret NAME]` pill in the chat, replace (live), delete, an agent's `secret_set` (« by @agent »), a task blocked on a missing secret that resumes when you add it, and on a server: locked → wrong password → unlock → works → Lock now. After each test an audit looks for the canary values (plain, base64, hex) in SQLite and its WAL, every file of the data folder, the rewind snapshots, the engine logs, every API response, every WebSocket event and every request sent to the model: they are only in the secret store. The audit found two real leaks (a value a command writes into a Library file lands in SQLite; a value cut by the 30000-character output limit shows half), filed as #226 and #227. What the redactor does not catch is written down in `docs/qa/210-secrets-leak-audit.md`.
