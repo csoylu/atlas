@@ -30,7 +30,7 @@ async function setup(o: { dbFile?: string; dataDir?: string; fake?: FakeProvider
 const use = (name: string, input: unknown): ContentBlock => ({ type: 'tool_use', id: 't_' + Math.random().toString(36).slice(2, 8), name, input });
 
 describe('inbox', () => {
-  it('needs you: blocked (not transient, not stopped by you) and review, from the live card', async () => {
+  it('needs you: blocked (not transient, not stopped by you), from the live card; in review waits for QA, not you', async () => {
     const e = await setup();
     const events: ServerEvent[] = [];
     e.bus.on((ev) => events.push(ev));
@@ -50,18 +50,17 @@ describe('inbox', () => {
 
     let inbox = e.notifications.inbox();
     expect(inbox.needsYou.map((n) => [n.card.title, n.unread, n.failed, n.summary])).toEqual([
-      ['MEV primer', true, false, '2 400 words · docs/mev-primer.md'],
       ['Stopped one', false, false, null], // still waits on you, but you did it: no row, no unread dot
       ['Pick a data source', true, false, null],
     ]);
-    expect(inbox.updates).toEqual([]); // card.blocked / card.review rows never show as updates
-    expect(inbox.badge).toBe(3);
+    expect(inbox.updates).toEqual([]); // card.blocked rows never show as updates; in review writes none (#189)
+    expect(inbox.badge).toBe(2);
 
     // Opening marks it read; the badge still counts it (it needs you).
     e.notifications.read(inbox.needsYou.find((n) => n.card.id === ask.id)!.notificationId!);
     inbox = e.notifications.inbox();
     expect(inbox.needsYou.find((n) => n.card.id === ask.id)!.unread).toBe(false);
-    expect(inbox.badge).toBe(3);
+    expect(inbox.badge).toBe(2);
 
     // Answering (the user's message moves it to ready) and approving make the items leave by themselves.
     e.kanban.update(ask.id, { status: 'ready' }, 'user');
@@ -83,14 +82,6 @@ describe('inbox', () => {
     expect(need).toMatchObject({ notificationId: null, unread: false });
   });
 
-  it('a review requested before the Inbox existed (no notification row) still shows its handoff', async () => {
-    const e = await setup();
-    const c = e.kanban.create({ title: 'Old review', status: 'ready', assignee: 'atlas' }, 'user');
-    e.kanban.update(c.id, { status: 'review' }, 'atlas', 'what changed');
-    e.kanban.event(c.id, 'review_requested', { by: 'atlas', summary: 'what changed, how it was checked' }); // as card_request_review does
-    e.db.prepare('DELETE FROM notifications').run();
-    expect(e.notifications.inbox().needsYou[0]).toMatchObject({ notificationId: null, summary: 'what changed, how it was checked' });
-  });
 
   it('updates: done, schedule ran, system; read, archive, archive all read', async () => {
     const e = await setup();
@@ -167,7 +158,7 @@ describe('inbox', () => {
     const a = e.kanban.create({ title: 'A', status: 'ready', assignee: 'atlas' }, 'user');
     const b = e.kanban.create({ title: 'B', status: 'ready', assignee: 'atlas' }, 'user');
     e.kanban.update(a.id, { status: 'done' }, 'atlas');
-    e.kanban.update(b.id, { status: 'review' }, 'atlas', 'look');
+    e.kanban.block(b.id, { kind: 'needs_input', reason: 'look' }, 'atlas');
     const before = e.notifications.inbox();
     e.notifications.archive(before.updates[0]!.id);
     e.notifications.read(before.needsYou[0]!.notificationId!);
@@ -177,7 +168,7 @@ describe('inbox', () => {
     e = await setup({ dbFile, dataDir });
     const after = e.notifications.inbox();
     expect(after.updates).toEqual([]);
-    expect(after.needsYou).toMatchObject([{ card: { id: b.id }, unread: false, summary: 'look' }]);
+    expect(after.needsYou).toMatchObject([{ card: { id: b.id }, unread: false }]);
     expect(after.badge).toBe(1);
   });
 });

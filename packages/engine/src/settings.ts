@@ -31,6 +31,7 @@ export class Settings {
     const map = new Map(rows.map((r) => [r.key, r.value]));
     return {
       triageAgent: map.get('triage_agent') || null,
+      reviewAgent: map.get('review_agent') || null,
       userName: map.get('user_name') || null,
       userAbout: map.get('user_about') || null,
       memoryReviewModel: map.get('memory_review_model') || null,
@@ -43,6 +44,10 @@ export class Settings {
       if (p.triageAgent && !this.db.prepare('SELECT 1 FROM agents WHERE id = ?').get(p.triageAgent))
         throw new ConflictError(`agent ${p.triageAgent} does not exist`);
       this.db.prepare("INSERT INTO settings (key, value) VALUES ('triage_agent', ?) ON CONFLICT(key) DO UPDATE SET value = excluded.value").run(p.triageAgent ?? '');
+    }
+    if (p.reviewAgent !== undefined) {
+      if (p.reviewAgent && !this.db.prepare('SELECT 1 FROM agents WHERE id = ?').get(p.reviewAgent)) throw new ConflictError(`agent ${p.reviewAgent} does not exist`);
+      this.set('review_agent', p.reviewAgent ?? '');
     }
     if (p.userName !== undefined) this.set('user_name', p.userName);
     if (p.userAbout !== undefined) this.set('user_about', p.userAbout);

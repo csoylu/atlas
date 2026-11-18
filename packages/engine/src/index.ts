@@ -34,6 +34,7 @@ import { Voice, type VoiceHost } from './voice.ts';
 import { VoiceChat } from './voiceChat.ts';
 import { Updater, type UpdateHost } from './updater.ts';
 import { ShellEnv, type ShellPathOptions } from './shellEnv.ts';
+import { Prs, ghReader, type GhRead } from './prs.ts';
 
 export interface EngineOptions {
   /** SQLite file, or ':memory:'. */
@@ -78,6 +79,8 @@ export interface EngineOptions {
    * (a fake login shell).
    */
   shellPath?: 'login' | 'engine' | ShellPathOptions;
+  /** Pull requests of tasks In review (#189): how they are read (default: gh api) and how often (false: never by itself). */
+  prs?: { read?: GhRead; intervalMs?: number | false };
   /**
    * App updates from GitHub releases (#123). The packaged Mac app passes a host (it can install); without it the
    * engine can't install and doesn't check by itself (dev, server). Tests point api/fetch at a fake release server.
@@ -112,6 +115,7 @@ export interface Engine {
   /** The « Voice » chat the desktop voice loop talks through (desktop on a Mac only). */
   voiceChat: VoiceChat | null;
   updater: Updater;
+  prs: Prs;
   url: string;
   stop(): Promise<void>;
 }
@@ -155,6 +159,12 @@ export async function startEngine(opts: EngineOptions): Promise<Engine> {
   const rewinds = new Rewinds(db, bus, kanban, agents, runner, opts.dataDir, fileLog, effects);
   const dispatcher = new Dispatcher(bus, kanban, agents, models, settings, runner);
   const slash = new Slash(db, bus, kanban, runner);
+  const prs = new Prs(db, bus, kanban, agents, runner, {
+    read: opts.prs?.read ?? ghReader(() => shellEnv.engineEnv()),
+    intervalMs: opts.prs?.intervalMs,
+  });
+  dispatcher.reviewReason = (c) => prs.reason(c);
+  dispatcher.recheck = (id) => prs.recheck(id);
   const updater = new Updater(db, bus, {
     version: opts.version ?? 'dev',
     dataDir: opts.dataDir,
@@ -219,6 +229,7 @@ export async function startEngine(opts: EngineOptions): Promise<Engine> {
     // Built-in workflows come with the trigger clock (tests without a dispatcher start from an empty list).
     cleanup.ensureSchedule(workflows, agents);
     workflows.start();
+    prs.start();
   }
   voice?.start();
   updater.start();
@@ -250,12 +261,15 @@ export async function startEngine(opts: EngineOptions): Promise<Engine> {
     voice,
     voiceChat,
     updater,
+    prs,
     url,
     stop: async () => {
+      prs.stop();
       updater.stop();
       workflows.stop();
       voice?.stop();
       dispatcher.stop();
+      await prs.idle();
       await runner.shutdown();
       review.after = () => {};
       await review.idle; // a background memory review writes to the db: let it finish before closing

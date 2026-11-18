@@ -964,11 +964,19 @@ export class Runner {
             '  leave the task in triage; the answer comes in this chat.',
             'Do not do the work itself.',
           ]
-        : kind === 'work'
+        : kind === 'work' && card.reviewer === agent.id && card.assignee !== agent.id
           ? [
-              'Your job: do the task below. End your run with exactly one of: task_complete (done and verified),',
-              `task_request_review (${name} should look before it is done) or task_block (you need an answer, access, or`,
-              `another task first). If you stop without one, the task is blocked with your last message as the question for ${name}.`,
+              `Your job: review the pull request(s) of the task below, built by @${card.assignee ?? 'nobody'} (you are its reviewer;`,
+              'the builder\'s messages are earlier in this thread). Check the diff, the tests and the feature, then validate and',
+              'merge it the way the project says (its CLAUDE.md), or mark it failed with the reason. The task moves by itself:',
+              `merged → done, failed → back to the builder with your reason. Don't fix the code yourself. Only if ${name} must`,
+              'decide: task_block needs_input. task_complete is refused while a PR is open.',
+            ]
+          : kind === 'work'
+          ? [
+              'Your job: do the task below. End your run with exactly one of: task_complete (done and verified, no pull',
+              'request), task_request_review (your pull request is open: QA checks and merges it) or task_block (you need an',
+              `answer, access, or another task first). If you stop without one, the task is blocked with your last message as the question for ${name}.`,
             ]
           : card.board === 'direct'
             ? [

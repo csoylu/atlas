@@ -30,6 +30,9 @@ export class Dispatcher {
   private pending = false;
   private ticking = false;
   private lastWaiting = new Map<string, string | null>();
+  /** Set by the PR watcher (#189): why a task In review isn't moving, and Retry on one. */
+  reviewReason: (c: Card) => string | null = () => 'in review';
+  recheck: (cardId: string) => void = () => {};
 
   constructor(
     private bus: Bus,
@@ -183,7 +186,8 @@ export class Dispatcher {
 
   private onUserMessage2(cardId: string): void {
     const c = this.kanban.get(cardId);
-    if (c.status === 'blocked' || c.status === 'review') this.kanban.update(c.id, { status: 'ready' }, 'user');
+    // In review (#189) waits for QA: writing there is a chat with the builder, the task stays in review.
+    if (c.status === 'blocked') this.kanban.update(c.id, { status: 'ready' }, 'user');
     else if (c.status === 'triage') this.soon();
     else this.runner.wake(c.id, { kind: c.status === 'running' ? 'work' : 'chat' });
   }
@@ -246,6 +250,7 @@ export class Dispatcher {
     const c = this.kanban.get(cardId);
     this.kanban.event(c.id, 'retry', { by: 'user' });
     if (c.status === 'blocked' || c.retry) this.kanban.update(c.id, { status: 'ready' }, 'user');
+    else if (c.status === 'review') this.recheck(c.id);
     else {
       this.kanban.emit(c.id);
       // A chat reply that failed (Retry on the chat's « Run failed » row): the agent answers again.
@@ -317,7 +322,7 @@ export class Dispatcher {
       case 'blocked':
         return c.block?.kind === 'transient' && c.block.until ? `retrying at ${hhmm(c.block.until)}` : null;
       case 'review':
-        return 'waiting for your review';
+        return this.reviewReason(c);
       default:
         return null;
     }

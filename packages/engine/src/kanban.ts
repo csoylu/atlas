@@ -20,6 +20,7 @@ import { insertNotification, type NewNotification } from './notifications.ts';
 import { MEMORY_SELECT, staleCardMemories, toMemory } from './memory.ts';
 import { isCleanupCard } from './cleanup.ts';
 import { stripData } from './images.ts';
+import { cardPrs, parsePrUrl } from './prs.ts';
 
 interface CardRow {
   id: string;
@@ -42,6 +43,7 @@ interface CardRow {
   effort: Card['effort'];
   origin_card: string | null;
   images: string;
+  reviewer: string | null;
 }
 interface MessageRow {
   id: string;
@@ -199,6 +201,8 @@ export class Kanban {
       working: r.board === 'direct' && !!this.db.prepare("SELECT 1 FROM runs WHERE card_id = ? AND status = 'running'").get(r.id),
       originCard: r.origin_card,
       images: JSON.parse(r.images || '[]') as ImageBlock[],
+      reviewer: r.reviewer,
+      prs: r.board === 'main' ? cardPrs(this.db, r.id) : [],
     };
     card.waiting = this.waitingReason(card);
     return card;
@@ -419,8 +423,8 @@ export class Kanban {
       const after = this.get(id);
       if (after.status !== before.status) {
         this.event(id, 'status', { from: before.status, to: after.status, by });
-        if (after.status === 'done' || after.status === 'review' || after.status === 'closed')
-          this.reportBack(after, after.status, { by, text: summary });
+        // In review waits for QA, not the user (#189): no report, no Inbox item.
+        if (after.status === 'done' || after.status === 'closed') this.reportBack(after, after.status, { by, text: summary });
         // Its project memories are history now: out of recall (design §8).
         if (after.status === 'done' || after.status === 'closed') {
           const stale = staleCardMemories(this.db, id, by);
@@ -431,7 +435,6 @@ export class Kanban {
         }
         // The Inbox (design §16): not for what the user did themselves.
         if (by !== 'user' && after.board === 'main') {
-          if (after.status === 'review') this.notify({ kind: 'card.review', title: after.title, body: summary ?? '', cardId: id });
           if (after.status === 'done' && isCleanupCard(after)) {
             // One Inbox item for the week's proposals, approved or rejected line by line (#83).
             const { n } = this.db.prepare("SELECT COUNT(*) AS n FROM memory_proposals WHERE card_id = ? AND status = 'pending'").get(id) as { n: number };
@@ -450,6 +453,37 @@ export class Kanban {
       }
       const fields = Object.keys(p).filter((k) => k !== 'status');
       if (fields.length) this.event(id, 'edited', { by, fields });
+    });
+    return this.emit(id);
+  }
+
+  /**
+   * task_request_review (#189): link the task's pull requests and hand it to QA (In review). The reviewer is the review
+   * agent (Settings), or the triage agent when the builder is the review agent itself. Asking again (after a fix)
+   * clears what was decided on the previous head, so the reviewer checks again and a failure is read again.
+   */
+  requestReview(id: string, urls: string[], by: string, summary: string): Card {
+    const before = this.get(id);
+    if (before.board === 'direct') throw new InvalidError('a direct chat has no pull requests: create a task for the work');
+    if (before.status === 'review') throw new InvalidError(`${cardRef(before)} is already in review: its pull request is with @${before.reviewer ?? 'nobody'}`);
+    const prs = urls.map(parsePrUrl);
+    const setting = (k: string) => (this.db.prepare('SELECT value FROM settings WHERE key = ?').get(k) as { value: string } | undefined)?.value || null;
+    const review = setting('review_agent');
+    const reviewer = review && review === before.assignee ? setting('triage_agent') : review;
+    const now = new Date().toISOString();
+    this.tx(() => {
+      for (const pr of prs)
+        this.db
+          .prepare(
+            `INSERT INTO card_prs (card_id, repo, number, url, linked_at) VALUES (?, ?, ?, ?, ?)
+             ON CONFLICT (card_id, repo, number) DO UPDATE SET reviewed_sha = NULL, failed_sha = NULL`,
+          )
+          .run(id, pr.repo, pr.number, pr.url, now);
+      this.db.prepare('UPDATE card_prs SET reviewed_sha = NULL, failed_sha = NULL WHERE card_id = ?').run(id);
+      this.db.prepare("UPDATE cards SET status = 'review', reviewer = ?, updated_at = ? WHERE id = ?").run(reviewer, now, id);
+      this.clearBlock(id);
+      this.event(id, 'status', { from: before.status, to: 'review', by });
+      this.event(id, 'review_requested', { by, summary, prs: prs.map((p) => p.url), reviewer });
     });
     return this.emit(id);
   }

@@ -27,6 +27,8 @@ const card = (n: number, over: Partial<Card> = {}): Card => ({
   working: false,
   originCard: null,
   images: [],
+  reviewer: null,
+  prs: [],
   ...over,
 });
 const need = (c: Card, failed = false): InboxNeed => ({ card: c, since: c.updatedAt, failed, notificationId: null, unread: true, summary: null });

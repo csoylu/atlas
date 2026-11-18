@@ -106,6 +106,12 @@ export class ShellEnv {
     return this.info;
   }
 
+  /** The engine's own commands (gh for pull requests, #189): its environment with the login shell's PATH. */
+  async engineEnv(): Promise<NodeJS.ProcessEnv> {
+    const { path } = await this.ready;
+    return { ...this.base, PATH: path };
+  }
+
   async for(agentId: string): Promise<NodeJS.ProcessEnv> {
     const { path } = await this.ready;
     return agentEnv(this.base, path, agentId);

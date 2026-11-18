@@ -58,6 +58,37 @@ export const ImageBlock = z.object({
 });
 export type ImageBlock = z.infer<typeof ImageBlock>;
 
+/**
+ * A pull request linked to a task (#189): the task sits In review while it is open, goes Done when it merges and back to
+ * Ready when CI, a conflict or QA fails. Read from GitHub by the engine (`gh api`); `error` = the last read failed.
+ */
+export const CardPr = z.object({
+  /** owner/name, from the PR's url. */
+  repo: z.string(),
+  number: z.number().int(),
+  url: z.string(),
+  branch: z.string().nullable(),
+  base: z.string().nullable(),
+  headSha: z.string().nullable(),
+  state: z.enum(['open', 'merged', 'closed']),
+  mergeSha: z.string().nullable(),
+  /** GitHub's mergeable: false = conflicts with its base; null = not computed yet. */
+  mergeable: z.boolean().nullable(),
+  /** The head's check runs together: null = none (yet). */
+  ci: z.enum(['pending', 'success', 'failure']).nullable(),
+  /** The `qa/validated` status on the head (scripts/pr/validate.mjs). */
+  qa: z.enum(['pending', 'success', 'failure']).nullable(),
+  qaDescription: z.string().nullable(),
+  /** Last successful read from GitHub. */
+  checkedAt: z.string().nullable(),
+  /** Why the last read failed, and since when reads fail (null = the last read worked). */
+  error: z.string().nullable(),
+  errorSince: z.string().nullable(),
+  /** The head sha the reviewer was started on (once per head). */
+  reviewedSha: z.string().nullable(),
+});
+export type CardPr = z.infer<typeof CardPr>;
+
 export const Card = z.object({
   id: z.string(),
   /** Board cards: sequential number shown as #N (never reused). Direct chats: null. */
@@ -94,6 +125,10 @@ export const Card = z.object({
   originCard: z.string().nullable().default(null),
   /** Pictures attached to the task itself (#119): files in <data>/task-images/, shown to its assignee at each run. */
   images: z.array(ImageBlock).default([]),
+  /** The agent that checks this task's pull requests while it is In review (#189); null = none yet. */
+  reviewer: z.string().nullable().default(null),
+  /** Its pull requests (#189), oldest link first. */
+  prs: z.array(CardPr).default([]),
 });
 export type Card = z.infer<typeof Card>;
 
@@ -362,6 +397,11 @@ export type CreateAgent = z.input<typeof CreateAgent>;
 export interface Settings {
   /** Agent that shapes cards dropped in triage; null = nobody triages. */
   triageAgent: string | null;
+  /**
+   * Agent that checks pull requests of tasks In review (#189); its own PRs go to the triage agent. null = nobody: the
+   * task waits In review and says so.
+   */
+  reviewAgent: string | null;
   /** The human's name, as agents address them (asked on first launch; null until then). */
   userName: string | null;
   /** The human in their own words (age, job, background): agents adapt to it. Asked on first launch. */
@@ -431,6 +471,7 @@ export interface UpdateStatus {
 export const UpdateSettings = z
   .object({
     triageAgent: z.string().nullable(),
+    reviewAgent: z.string().nullable(),
     userName: z.string().trim().min(1, 'Enter your name').max(40),
     userAbout: z.string().trim().min(1, 'Say a few words about yourself').max(USER_ABOUT_MAX),
     memoryReviewModel: z.string().min(1).nullable(),
@@ -908,7 +949,7 @@ export type UpdatePlanAccount = z.infer<typeof UpdatePlanAccount>;
  * Kinds of notification the engine writes. card.blocked / card.review rows are for the system notification and history;
  * the Inbox shows those cards from their live state (InboxNeed). plan.* rows are « system ».
  */
-export const NOTIFICATION_KINDS = ['card.blocked', 'card.review', 'card.done', 'run.failed', 'schedule.ran', 'memory.cleanup', 'plan.switched', 'plan.exhausted'] as const;
+export const NOTIFICATION_KINDS = ['card.blocked', 'card.review', 'card.done', 'run.failed', 'schedule.ran', 'memory.cleanup', 'plan.switched', 'plan.exhausted', 'github.unreadable'] as const;
 export type NotificationKind = (typeof NOTIFICATION_KINDS)[number];
 
 /** Something the user is told about (also shown as a system notification by the app). */
