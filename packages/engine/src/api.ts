@@ -4,7 +4,7 @@ import { existsSync } from 'node:fs';
 import { join, relative } from 'node:path';
 import { WebSocketServer } from 'ws';
 import { ZodError } from 'zod';
-import { CreateModelRequest, IMAGE_MAX_BYTES, isTimeZone, PostMessage, RewindRequest, ScheduleWhen, SlashCommand, UpdateModelRequest, UpdateVoice } from '@atlas/shared';
+import { AddCardImages, CreateCard, CreateModelRequest, IMAGE_MAX_BYTES, IMAGE_MAX_PER_TASK, isTimeZone, PostMessage, RewindRequest, ScheduleWhen, SlashCommand, UpdateModelRequest, UpdateVoice } from '@atlas/shared';
 import type { Agents } from './agents.ts';
 import type { Models } from './models.ts';
 import type { Runner } from './runner.ts';
@@ -39,6 +39,7 @@ const USER = 'user';
 
 import { Auth, SESSION_COOKIE } from './auth.ts';
 import { Uploads } from './uploads.ts';
+import { TaskImages } from './taskImages.ts';
 
 export function createApi(deps: {
   kanban: Kanban;
@@ -75,10 +76,16 @@ export function createApi(deps: {
   const { kanban, agents, models, runner, rewinds, slash, dispatcher, settings, canvases, documents, memories, cleanup, schedules, local, accounts, chatgpt, claude, plans, notifications, usage, bus, auth } = deps;
   const app = express();
   const uploads = new Uploads(deps.dataDir);
+  const taskImages = new TaskImages(deps.dataDir, uploads);
   try {
     uploads.prune();
   } catch (e) {
     console.error('pruning staged uploads failed', e);
+  }
+  try {
+    taskImages.sweep(kanban.list({ includeArchived: true }).flatMap((c) => c.images.map((im) => im.path)));
+  } catch (e) {
+    console.error('sweeping task images failed', e);
   }
   // Behind Caddy on the same machine: trust its X-Forwarded-Proto so session cookies get the Secure flag over HTTPS.
   app.set('trust proxy', 'loopback');
@@ -130,9 +137,37 @@ export function createApi(deps: {
   app.get('/api/cards', (_req, res) => {
     res.json(kanban.list());
   });
-  app.post('/api/cards', (req, res) => {
+  // `uploads`: staged images (POST /api/uploads) attached to the new task, placed and listed in its row (#119).
+  app.post('/api/cards', async (req, res) => {
     refuseRunning(req.body);
-    res.status(201).json(kanban.create(req.body, USER));
+    const input = CreateCard.parse(req.body);
+    res.status(201).json(await taskImages.attach(input.uploads, (images) => kanban.create(input, USER, null, images)));
+  });
+  /** Add staged images to a task (#119): at most IMAGE_MAX_PER_TASK in all. */
+  app.post('/api/cards/:id/images', async (req, res) => {
+    const { uploads: ids } = AddCardImages.parse(req.body);
+    const card = kanban.get(req.params.id);
+    if (card.board === 'direct') throw new InvalidError('a direct chat has no description: send the image as a message');
+    if (card.images.length + ids.length > IMAGE_MAX_PER_TASK)
+      throw new InvalidError(`${IMAGE_MAX_PER_TASK} images per task at most (it has ${card.images.length})`);
+    // Read the list again inside the write: another add may have landed while the files were copied.
+    res.status(201).json(
+      await taskImages.attach(ids, (images) => {
+        const now = kanban.get(card.id).images;
+        if (now.length + images.length > IMAGE_MAX_PER_TASK) throw new InvalidError(`${IMAGE_MAX_PER_TASK} images per task at most (it has ${now.length})`);
+        return kanban.setImages(card.id, [...now, ...images], USER);
+      }),
+    );
+  });
+  /** Remove one of a task's images (?path=): the row first, then its file. */
+  app.delete('/api/cards/:id/images', (req, res) => {
+    const path = String(req.query.path ?? '');
+    const card = kanban.get(req.params.id);
+    const gone = card.images.filter((im) => im.path === path);
+    if (!gone.length) throw new NotFoundError(`no image ${path} on this task`);
+    const updated = kanban.setImages(card.id, card.images.filter((im) => im.path !== path), USER);
+    taskImages.drop(gone);
+    res.json(updated);
   });
   app.get('/api/cards/:id', (req, res) => {
     res.json(kanban.get(req.params.id));
@@ -142,7 +177,9 @@ export function createApi(deps: {
     res.json(kanban.update(req.params.id, req.body, USER)); // the dispatcher reacts to the change
   });
   app.delete('/api/cards/:id', (req, res) => {
+    const { images } = kanban.get(req.params.id);
     kanban.remove(req.params.id);
+    taskImages.drop(images);
     res.status(204).end();
   });
   app.get('/api/cards/:id/messages', (req, res) => {
@@ -178,16 +215,29 @@ export function createApi(deps: {
     res.status(201).json(message);
   });
   /** Stage a pasted/dropped image (raw body, the file name in ?name=): checked now, sent with the next message. */
-  app.post('/api/cards/:id/uploads', express.raw({ type: () => true, limit: IMAGE_MAX_BYTES + 1024 }), async (req, res) => {
-    kanban.get(req.params.id);
+  const stage = async (req: express.Request, res: express.Response) => {
     const name = String(req.query.name ?? 'image');
     if (!Buffer.isBuffer(req.body)) throw new InvalidError('send the image bytes as the request body');
     res.status(201).json(await uploads.stage(name, req.body));
+  };
+  const rawImage = express.raw({ type: () => true, limit: IMAGE_MAX_BYTES + 1024 });
+  app.post('/api/cards/:id/uploads', rawImage, async (req, res) => {
+    kanban.get(req.params.id);
+    await stage(req, res);
+  });
+  // No task yet (the New task dialog, #119): staged the same way, attached by POST /api/cards with `uploads`.
+  app.post('/api/uploads', rawImage, stage);
+  /** A staged image removed before it was sent (×, or the dialog cancelled): its file is deleted now. */
+  app.delete('/api/uploads/:id', (req, res) => {
+    uploads.discard(req.params.id);
+    res.status(204).end();
   });
   /** A picture of this conversation (a thumbnail in the chat): only a path one of its messages references. */
   app.get('/api/cards/:id/image', (req, res, next) => {
     const path = String(req.query.path ?? '');
-    const known = kanban
+    const known =
+      kanban.get(req.params.id).images.some((im) => im.path === path) ||
+      kanban
       .messages(req.params.id)
       .some((m) => m.content.some((b) => (b.type === 'image' && b.path === path) || (b.type === 'tool_result' && b.images?.some((i) => i.path === path))));
     if (!known) throw new NotFoundError(`no image ${path} in this conversation`);

@@ -1,7 +1,7 @@
 import { randomUUID } from 'node:crypto';
 import { mkdirSync, readdirSync, readFileSync, rmSync, statSync } from 'node:fs';
 import { join } from 'node:path';
-import { RESUME_KICK, USER, VOICE_MARK } from '@atlas/shared';
+import { IMAGE_KEEP, RESUME_KICK, USER, VOICE_MARK } from '@atlas/shared';
 import type { Agent, Card, CompactResult, ContentBlock, EndedRun, ImageBlock, Model, Run, RunKind, RunStatus, TodoItem, ToolCallDetail, ToolCallTiming } from '@atlas/shared';
 import type { Db } from './store/db.ts';
 import type { Bus } from './events.ts';
@@ -29,6 +29,7 @@ import {
 } from './context.ts';
 import { runTool, toolSpecs } from './tools.ts';
 import { withPictures } from './images.ts';
+import { taskImageBlocks, withTaskImages, workspaceName } from './taskImages.ts';
 import { cardToolSpecs, describeCard, isCardTool, runCardTool, type Terminal } from './cardTools.ts';
 import { canvasToolSpecs, isCanvasTool, runCanvasTool } from './canvasTools.ts';
 import { docToolSpecs, isDocTool, runDocTool } from './docTools.ts';
@@ -484,9 +485,13 @@ export class Runner {
         }
         const seen = upto(transcript);
         const system = this.systemPrompt(agent, card, kind, workdir);
-        const { view, exact } = await this.contextFor(card, transcript, model, provider, system.text, tools, signal);
+        // The task's own images (#119) open the view: not in the transcript, so they follow the task's current list.
+        const taskBlocks = card.board === 'direct' ? [] : taskImageBlocks(card, workdir);
+        const { view, exact } = await this.contextFor(card, transcript, model, provider, system.text, tools, signal, estimateTokens(taskBlocks));
         // The newest pictures carry their bytes (read from their files now); older ones go as a text line.
-        const wire = await withPictures(view);
+        // The task's pictures always go, whatever the number of newer ones (they open the view, the oldest place).
+        const pinned = new Set(taskBlocks.filter((b): b is ImageBlock => b.type === 'image'));
+        const wire = await withPictures(withTaskImages(view, taskBlocks), IMAGE_KEEP, pinned);
 
         const res = await this.call(model.id, () => provider.complete(
           {
@@ -648,9 +653,11 @@ export class Runner {
     system: string,
     tools: ToolSpec[],
     signal: AbortSignal,
+    /** Tokens added to the view outside the transcript (the task's images). */
+    extra = 0,
   ): Promise<{ view: ModelRequest['messages']; exact: boolean }> {
     const window = model.contextWindow;
-    const overhead = estimateTokens(system) + estimateTokens(tools);
+    const overhead = estimateTokens(system) + estimateTokens(tools) + extra;
     const budget = Math.floor(window * COMPACT_AT);
     let conv = this.conversation(card);
     const viewOf = (pruneUpto = conv.pruneUpto) => compactedView(transcript, conv.summary, conv.uptoSeq, pruneUpto, conv.todos);
@@ -1015,7 +1022,17 @@ export class Runner {
     const tail = [
       ...this.memoryBlock(agent, card),
       '',
-      ...(card.board === 'direct' ? [] : ['# Current task', describeCard(card, (id) => this.kanban.ref(id)), card.body || '(no description)', '']),
+      ...(card.board === 'direct'
+        ? []
+        : [
+            '# Current task',
+            describeCard(card, (id) => this.kanban.ref(id)),
+            card.body || '(no description)',
+            ...(card.images.length
+              ? [`Images attached to this task: ${card.images.map((im) => workspaceName(card, im)).join(', ')} (shown as pictures at the start of the conversation; the files are in your workspace).`]
+              : []),
+            '',
+          ]),
       `Today is ${today()}.`,
     ];
     const stable = parts.join('\n') + '\n';

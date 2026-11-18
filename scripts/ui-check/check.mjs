@@ -344,6 +344,13 @@ const IMAGE_MSGS = [
   { id: 'm_uicheckimg4', conversationId: chat.conversationId, seq: 4e6 + 3, role: 'assistant', author: agent, at: now, content: [{ type: 'text', text: 'The title bar is cut at 390 px; my own screenshot shows the same.' }] },
 ];
 let uploadSeq = 0;
+// A task's own images (#119): two on the modal's card and on the thread panel's fixture card (`taskImages` screens);
+// a paste or a drop adds one each (the add answers with the card and its list so far).
+const TIMG = (name) => ({ ...IMG(name), path: `/Users/x/task-images/${name}` });
+const TASK_IMAGES = [TIMG('2026-11-18-board-390.png'), TIMG('2026-11-18-modal.png')];
+let taskAdded = [];
+const withTaskImages = (c) => (c.id === modalCard.id || c.id === 'c_uicheck1' ? { ...c, images: [...TASK_IMAGES, ...(c.id === modalCard.id ? taskAdded : [])] } : c);
+const uploadAnswer = (name) => ({ id: `up_uicheck-${uploadSeq++}`, name: name ?? 'image.png', media_type: 'image/png', width: 640, height: 400, bytes: IMG_PNG.length });
 const TABLE_MSGS = [
   { id: 'm_uichecktbl1', conversationId: chat.conversationId, seq: 3e6, role: 'user', author: 'user', content: [{ type: 'text', text: 'What is left to do?' }], at: now },
   { id: 'm_uichecktbl2', conversationId: chat.conversationId, seq: 3e6 + 1, role: 'assistant', author: agent, at: now, content: [{ type: 'text', text: [
@@ -446,6 +453,11 @@ const SCREENS = [
   { name: 'modal', hash: `#/chat/${chat.id}?card=${modalCard.id}`, ready: '.card-modal', pins: true, keys: ['.cm-title', '.cm-pill', '.cm-h', '.cm-foot button'] },
   // A task of this chat opened beside it (#107): the whole task, its description clamped, the conversation and composer in view.
   { name: 'thread', hash: `#/chat/${chat.id}`, ready: '.chat-pin', pins: true, then: { js: `const pin = [...document.querySelectorAll('.chat-pin')].find((p) => p.textContent.includes('Responsive pass')); if (!pin) throw new Error('no fixture pin'); pin.querySelector('.chat-pin-open').click();`, ready: '.thread-panel .cm-more' }, keys: ['.thread-panel .cm-title', '.thread-panel .cm-pill', '.thread-panel .cm-more', '.thread-panel .cm-h', '.thread-panel .cm-foot button'] },
+  // A task's own images (#119): the New task dialog (paste + drop before Create), the modal (2 saved, paste + drop add
+  // 2 more), and the thread panel beside the chat.
+  { name: 'new-task-images', hash: '#/board', ready: '.board', taskImages: true, then: { js: `document.querySelector('button[aria-label="New task"]').click(); for (let i = 0; i < 30 && !document.querySelector('.nc-desc'); i++) await new Promise((r) => setTimeout(r, 100)); if (!document.querySelector('.nc-desc')) throw new Error('the New task dialog did not open'); const png = await (await fetch('/api/cards/x/image?path=%2FUsers%2Fx%2Ff.png')).blob(); const file = (n) => new File([png], n, { type: 'image/png' }); const paste = (el, dt) => { const ev = new ClipboardEvent('paste', { clipboardData: dt, bubbles: true, cancelable: true }); el.dispatchEvent(ev); return ev.defaultPrevented; }; const dtText = new DataTransfer(); dtText.setData('text/plain', 'plain text'); const textTaken = paste(document.querySelector('.nc-desc'), dtText); const dt1 = new DataTransfer(); dt1.items.add(file('pasted.png')); paste(document.querySelector('.nc-desc'), dt1); const dt2 = new DataTransfer(); dt2.items.add(file('dropped.png')); document.querySelector('.new-card-modal').dispatchEvent(new DragEvent('dragover', { dataTransfer: dt2, bubbles: true, cancelable: true })); document.querySelector('.new-card-modal').dispatchEvent(new DragEvent('drop', { dataTransfer: dt2, bubbles: true, cancelable: true })); await new Promise((r) => setTimeout(r, 600)); const bad = []; if (textTaken) bad.push('pasting plain text was taken as an image paste'); const thumbs = document.querySelectorAll('.nc-images .attach-thumb'); if (thumbs.length !== 2) bad.push(thumbs.length + ' thumbnails after a paste and a drop, want 2'); if (document.querySelector('.nc-images .attach-thumb.bad, .nc-images .attach-thumb.busy')) bad.push('an image failed or is still uploading: ' + (document.querySelector('.nc-images .attach-note')?.textContent ?? '')); if (!document.querySelector('.nc-images .attach-btn')) bad.push('no attach button'); if (bad.length) throw new Error('task images (#119): ' + bad.join('; '));`, ready: '.nc-images .attach-thumb' }, keys: ['.nc-crumb', '.nc-foot button', '.attach-btn'] },
+  { name: 'modal-images', hash: `#/chat/${chat.id}?card=${modalCard.id}`, ready: '.card-modal .task-images .attach-thumb.saved', taskImages: true, then: { js: `const png = await (await fetch(document.querySelector('.task-images img, .msg-image img')?.src ?? '/api/cards/x/image?path=%2FUsers%2Fx%2Ff.png')).blob(); const file = (n) => new File([png], n, { type: 'image/png' }); const paste = (el, dt) => { const ev = new ClipboardEvent('paste', { clipboardData: dt, bubbles: true, cancelable: true }); el.dispatchEvent(ev); return ev.defaultPrevented; }; const dtText = new DataTransfer(); dtText.setData('text/plain', 'plain text'); const textTaken = paste(document.querySelector('.card-modal .cm-desc'), dtText); const dt1 = new DataTransfer(); dt1.items.add(file('pasted.png')); paste(document.querySelector('.card-modal .cm-desc'), dt1); const dt2 = new DataTransfer(); dt2.items.add(file('dropped.png')); document.querySelector('.card-modal .cm-desc-area').dispatchEvent(new DragEvent('dragover', { dataTransfer: dt2, bubbles: true, cancelable: true })); document.querySelector('.card-modal .cm-desc-area').dispatchEvent(new DragEvent('drop', { dataTransfer: dt2, bubbles: true, cancelable: true })); await new Promise((r) => setTimeout(r, 600)); const bad = []; if (textTaken) bad.push('pasting plain text was taken as an image paste'); const saved = document.querySelectorAll('.card-modal .task-images .attach-thumb.saved'); if (saved.length !== 4) bad.push(saved.length + ' saved images after a paste and a drop on 2, want 4'); if (document.querySelector('.card-modal .task-images .attach-thumb:not(.saved)')) bad.push('an image is still uploading or failed: ' + (document.querySelector('.card-modal .attach-note')?.textContent ?? '')); if (bad.length) throw new Error('task images (#119): ' + bad.join('; ')); { const ti = document.querySelector('.card-modal .task-images'), body = ti.closest('.cm-body'); body.scrollTop += ti.getBoundingClientRect().top - body.getBoundingClientRect().top - body.clientHeight / 3; }`, ready: '.card-modal .task-images .attach-thumb.saved' }, keys: ['.cm-title', '.cm-h', '.cm-foot button'] },
+  { name: 'thread-images', hash: `#/chat/${chat.id}`, ready: '.chat-pin', pins: true, taskImages: true, then: { js: `const pin = [...document.querySelectorAll('.chat-pin')].find((p) => p.textContent.includes('Responsive pass')); if (!pin) throw new Error('no fixture pin'); pin.querySelector('.chat-pin-open').click(); await new Promise((r) => setTimeout(r, 400)); const n = document.querySelectorAll('.thread-panel .task-images .attach-thumb.saved').length; if (n !== 2) throw new Error('task images (#119): ' + n + ' images in the thread panel, want 2'); { const ti = document.querySelector('.thread-panel .task-images'), body = ti.closest('.cm-body'); body.scrollTop += ti.getBoundingClientRect().top - body.getBoundingClientRect().top - body.clientHeight / 3; }`, ready: '.thread-panel .task-images .attach-thumb.saved img' }, keys: ['.thread-panel .cm-title', '.thread-panel .cm-h', '.thread-panel .cm-foot button'] },
   { name: 'modal-blocked', hash: `#/chat/${chat.id}?card=${modalCard.id}`, ready: '.card-modal', blocked: true, keys: ['.cm-title', '.ask-kind', '.cm-foot button'] },
   { name: 'panel', hash: `#/chat/${chat.id}`, ready: '.side-doc', pins: true, panel: true, keys: ['.sd-tab', '.sd-ask', '.side-doc h1', '.side-doc h2', '.chat-pin-title'] },
   { name: 'board', hash: '#/board', ready: '.board', keys: ['.board .name', '.card-title', '.nav-item'] },
@@ -538,13 +550,26 @@ handlers.set('Fetch.requestPaused', async ({ requestId, request }) => {
     if (request.method === 'GET' && url.pathname === `/api/cards/${chat.id}/messages` && screen?.system) return await json([...(await get(`/cards/${chat.id}/messages`)), ...SYS_MSGS]);
     if (request.method === 'GET' && url.pathname === `/api/cards/${chat.id}/timeline` && screen?.system) return await json(SYS_TIMELINE);
     if (request.method === 'GET' && url.pathname === `/api/cards/${chat.id}/runs` && screen?.system) return await json([SYS_LATEST]);
+    // Fixture pictures (paths under /Users/x/) on any screen: messages' and tasks' thumbnails.
+    if (request.method === 'GET' && /^\/api\/cards\/[^/]+\/image$/.test(url.pathname) && (url.searchParams.get('path') ?? '').startsWith('/Users/x/'))
+      return await send('Fetch.fulfillRequest', { requestId, responseCode: 200, responseHeaders: [{ name: 'Content-Type', value: 'image/png' }], body: IMG_PNG.toString('base64') });
+    if (screen?.taskImages) {
+      if (request.method === 'GET' && url.pathname === '/api/cards') return await json([...(await get('/cards')), ...(screen.pins ? FIXTURE_CARDS : [])].map(withTaskImages));
+      if (request.method === 'POST' && (url.pathname === '/api/uploads' || /^\/api\/cards\/[^/]+\/uploads$/.test(url.pathname)))
+        return await send('Fetch.fulfillRequest', { requestId, responseCode: 201, responseHeaders: [{ name: 'Content-Type', value: 'application/json' }], body: Buffer.from(JSON.stringify(uploadAnswer(url.searchParams.get('name')))).toString('base64') });
+      if (request.method === 'DELETE' && /^\/api\/uploads\/[^/]+$/.test(url.pathname)) return await send('Fetch.fulfillRequest', { requestId, responseCode: 204, responseHeaders: [] });
+      if (request.method === 'POST' && url.pathname === `/api/cards/${modalCard.id}/images`) {
+        taskAdded = [...taskAdded, TIMG(`2026-11-18-added-${taskAdded.length + 1}.png`)];
+        return await json(withTaskImages({ ...modalCard, updatedAt: new Date(Date.now() + 60_000).toISOString() }));
+      }
+    }
     if (request.method === 'GET' && url.pathname === `/api/cards/${chat.id}/messages` && screen?.images) return await json([...(await get(`/cards/${chat.id}/messages`)), ...IMAGE_MSGS]);
     if (request.method === 'GET' && url.pathname === `/api/cards/${chat.id}/image` && screen?.images)
       return await send('Fetch.fulfillRequest', { requestId, responseCode: 200, responseHeaders: [{ name: 'Content-Type', value: 'image/png' }], body: IMG_PNG.toString('base64') });
     if (request.method === 'POST' && url.pathname === `/api/cards/${chat.id}/uploads` && screen?.images)
       return await send('Fetch.fulfillRequest', {
         requestId, responseCode: 201, responseHeaders: [{ name: 'Content-Type', value: 'application/json' }],
-        body: Buffer.from(JSON.stringify({ id: `up_uicheck-${uploadSeq++}`, name: url.searchParams.get('name') ?? 'image.png', media_type: 'image/png', width: 640, height: 400, bytes: IMG_PNG.length })).toString('base64'),
+        body: Buffer.from(JSON.stringify(uploadAnswer(url.searchParams.get('name')))).toString('base64'),
       });
     if (request.method === 'GET' && url.pathname === '/api/cards' && screen?.table) return await json([...(await get('/cards')), ...TOOL_CARDS]);
     if (request.method === 'GET' && url.pathname === `/api/cards/${chat.id}/messages` && screen?.table) return await json([...(await get(`/cards/${chat.id}/messages`)), ...TABLE_MSGS]);
@@ -740,6 +765,7 @@ for (const w of WIDTHS) {
   await send('Emulation.setTouchEmulationEnabled', { enabled: w < 500, maxTouchPoints: 5 }); // phone: pointer: coarse
   for (let s of SCREENS) {
     screen = s;
+    taskAdded = [];
     await send('Page.navigate', { url: 'about:blank' });
     await sleep(100);
     pageErrors.length = 0;

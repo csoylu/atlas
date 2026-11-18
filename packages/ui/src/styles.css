@@ -457,6 +457,7 @@ main { flex: 1; display: flex; min-height: 0; min-width: 0; position: relative; 
 .nc-crumb { font-size: var(--fs-small); color: var(--muted); font-weight: var(--fw-medium); border: 1px solid var(--line-2); border-radius: 5px; padding: 1px 6px; line-height: var(--lh-tight); }
 .nc-head .icon-btn { margin-left: auto; }
 .nc-title { background: none; border: 0; outline: none; font-size: var(--fs-large); font-weight: var(--fw-bold); letter-spacing: -0.01em; padding: 10px 16px 4px; }
+.nc-images { padding: 0 16px 10px; }
 .nc-desc { background: none; border: 0; outline: none; resize: none; min-height: 72px; max-height: 40vh; field-sizing: content; padding: 4px 16px 10px; line-height: var(--lh-normal); color: var(--text); }
 .nc-props { display: flex; flex-wrap: wrap; gap: 6px; padding: 0 16px 12px; }
 .prop-pill {
@@ -586,10 +587,18 @@ button.artifact:hover .art-open { color: var(--accent); }
 .attach-thumb.busy img { opacity: 0.5; }
 .attach-thumb.bad { border-color: var(--bad, #d33); }
 .attach-thumb .attach-err { position: absolute; left: 4px; bottom: 3px; font-weight: var(--fw-bold); color: var(--bad, #d33); font-size: var(--fs-small); }
-.attach-thumb button {
+.attach-thumb > button:not(.attach-open) {
   position: absolute; top: 2px; right: 2px; width: 20px; height: 20px; padding: 0; border: 0; border-radius: 50%;
   background: rgba(0, 0, 0, 0.6); color: #fff; font-size: var(--fs-base); line-height: var(--lh-tight); display: grid; place-items: center;
 }
+.attach-thumb .attach-open { display: block; width: 100%; height: 100%; padding: 0; border: 0; background: none; cursor: zoom-in; }
+.attach-thumb .attach-open img { width: 100%; height: 100%; object-fit: cover; display: block; }
+/* a task's own images (#119): under its description, in the modal, the thread panel and the New task dialog */
+.task-images { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; min-height: 26px; }
+.task-images .attach-thumb { width: 64px; height: 64px; }
+.attach-btn.labelled { width: auto; gap: 6px; padding: 0 8px 0 6px; font-size: var(--fs-small); color: var(--muted); }
+.drop-zone { border-radius: 8px; outline: 1px dashed transparent; outline-offset: 2px; }
+.drop-zone.dropping { outline-color: var(--accent); background: var(--accent-soft); }
 .attach-note { font-size: var(--fs-small); color: var(--bad, #d33); min-width: 0; flex: 1 1 160px; }
 .msg-images { display: flex; flex-wrap: wrap; gap: 6px; margin: 2px 0 4px; }
 .msg-image { padding: 0; border: 1px solid var(--line-2); border-radius: 8px; overflow: hidden; background: var(--sheet); cursor: zoom-in; max-width: 100%; }
@@ -1159,6 +1168,7 @@ button.tool .icon { color: var(--muted); font-family: var(--mono); }
   display: block; width: 100%; background: none; border: 0; outline: none; font: inherit; font-size: var(--fs-xl); font-weight: var(--fw-bold); letter-spacing: -0.018em;
   line-height: var(--lh-tight); padding: 12px 0 0; resize: none; field-sizing: content; min-height: 0; overflow: hidden; color: var(--text);
 }
+.cm-desc-area { display: flex; flex-direction: column; gap: 8px; flex: none; }
 .cm-body { flex: 1; overflow-y: auto; min-height: 0; padding: 14px 22px 10px; display: flex; flex-direction: column; }
 .cm-desc { background: none; border: 0; outline: none; resize: vertical; min-height: 72px; field-sizing: content; max-height: 40vh; color: var(--muted); line-height: var(--lh-long); font-size: var(--fs-base); padding: 0; flex: none; }
 div.cm-desc { resize: none; field-sizing: initial; max-height: none; cursor: text; color: var(--text); border-radius: 6px; margin: 0 -8px; padding: 4px 8px; }

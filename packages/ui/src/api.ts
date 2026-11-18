@@ -45,8 +45,9 @@ export const api = {
   postMessage: (id: string, text: string, ref?: DocRef, uploads?: string[]) =>
     call<Message>('POST', `/cards/${id}/messages`, { text, ...(ref ? { ref } : {}), ...(uploads?.length ? { uploads } : {}) }),
   /** Stage a pasted/dropped image; its id goes with the next message. */
-  uploadImage: async (id: string, file: File): Promise<Upload> => {
-    const res = await fetch(`/api/cards/${id}/uploads?name=${encodeURIComponent(file.name || 'image')}`, {
+  uploadImage: async (id: string | null, file: File): Promise<Upload> => {
+    // No task yet (the New task dialog): staged without one, attached by createCard({ uploads }).
+    const res = await fetch(`${id ? `/api/cards/${id}/uploads` : '/api/uploads'}?name=${encodeURIComponent(file.name || 'image')}`, {
       method: 'POST',
       headers: { 'content-type': 'application/octet-stream' },
       body: file,
@@ -56,6 +57,11 @@ export const api = {
     if (!res.ok) throw new ApiError(body.error || `upload failed: HTTP ${res.status}`, res.status, body as unknown as Record<string, unknown>);
     return body;
   },
+  /** A staged image removed before it was sent: its file goes now (else pruned after a day). */
+  discardUpload: (id: string) => call<void>('DELETE', `/uploads/${encodeURIComponent(id)}`),
+  /** The task's own images (#119). */
+  addCardImages: (id: string, uploads: string[]) => call<Card>('POST', `/cards/${id}/images`, { uploads }),
+  removeCardImage: (id: string, path: string) => call<Card>('DELETE', `/cards/${id}/images?path=${encodeURIComponent(path)}`),
   // ── Documents and the side panel ──
   documents: (cardId?: string) => call<Doc[]>('GET', '/documents' + (cardId ? `?card=${encodeURIComponent(cardId)}` : '')),
   document: (id: string, version?: number) => call<DocContent>('GET', `/documents/${id}` + (version === undefined ? '' : `?version=${version}`)),

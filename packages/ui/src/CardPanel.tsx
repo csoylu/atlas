@@ -10,7 +10,7 @@ import { ComposerMeta, useChatUsage } from './Usage.tsx';
 import { CARD_HREF, findCard, linkCardIds, linkCardRefsMd } from './cardModal.ts';
 import { StepRow, Turn } from './ChatActivity.tsx';
 import { draftSegments, turns, type Segment } from './chatTurn.ts';
-import { AttachButton, AttachmentStrip, ImageThumbs, imageFiles, isAttachedLine, useAttachments } from './Images.tsx';
+import { AttachButton, AttachmentStrip, ImageThumbs, imageFiles, isAttachedLine, pastedImages, useAttachments } from './Images.tsx';
 import type { ToolOutcome } from './toolRows.ts';
 import { sysLine } from './chatPins.ts';
 import { webSearchResult } from './webRows.ts';
@@ -692,7 +692,7 @@ export const CardComposer = forwardRef<
           placeholder={card.assignee ? `Message @${card.assignee}…  (Enter to send · Shift+Enter for newline)` : 'Assign an agent, then write to it here…'}
           onChange={(e) => setText(e.target.value)}
           onPaste={(e) => {
-            const files = imageFiles(e.clipboardData.items);
+            const files = pastedImages(e.clipboardData);
             if (!files.length) return;
             e.preventDefault(); // an image, not its file name as text
             addFiles(files);
