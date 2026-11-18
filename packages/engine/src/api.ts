@@ -15,7 +15,6 @@ import { parseMemoryRef, type Memories } from './memory.ts';
 import type { MemoryCleanup } from './cleanup.ts';
 import { localTimeZone, upcoming, type Schedules } from './schedules.ts';
 import { isTokenEntry, SECRET_NAME, type SecretStore } from './secrets.ts';
-import { StaleVersionError, type Canvases } from './canvas.ts';
 import type { Documents } from './documents.ts';
 import { findSection, formatDocRef, splitSections } from '@atlas/shared';
 import { workdirOf } from './agents.ts';
@@ -46,7 +45,6 @@ export function createApi(deps: {
   rewinds: Rewinds;
   dispatcher: Dispatcher;
   settings: Settings;
-  canvases: Canvases;
   documents: Documents;
   memories: Memories;
   cleanup: MemoryCleanup;
@@ -69,7 +67,7 @@ export function createApi(deps: {
   /** Login and cross-site checks (auth.ts). */
   auth: Auth;
 }): Server {
-  const { kanban, agents, models, runner, rewinds, dispatcher, settings, canvases, documents, memories, cleanup, schedules, local, accounts, chatgpt, claude, plans, notifications, usage, bus, auth } = deps;
+  const { kanban, agents, models, runner, rewinds, dispatcher, settings, documents, memories, cleanup, schedules, local, accounts, chatgpt, claude, plans, notifications, usage, bus, auth } = deps;
   const app = express();
   // Behind Caddy on the same machine: trust its X-Forwarded-Proto so session cookies get the Secure flag over HTTPS.
   app.set('trust proxy', 'loopback');
@@ -291,45 +289,37 @@ export function createApi(deps: {
     dispatcher.tick(); // a model that answers again unblocks its cards
     res.json(result);
   });
-  app.get('/api/canvases', (_req, res) => {
-    res.json(canvases.list());
-  });
-  app.post('/api/canvases', (req, res) => {
-    res.status(201).json(canvases.create(req.body, USER));
-  });
-  app.get('/api/canvases/:id', (req, res) => {
-    res.json(canvases.get(req.params.id));
-  });
-  app.put('/api/canvases/:id', (req, res) => {
-    res.json(canvases.save(req.params.id, req.body, USER));
-  });
-  app.patch('/api/canvases/:id', (req, res) => {
-    res.json(canvases.rename(req.params.id, String((req.body as { name?: unknown }).name ?? ''), USER));
-  });
-  app.delete('/api/canvases/:id', (req, res) => {
-    canvases.remove(req.params.id);
-    res.status(204).end();
-  });
-  app.get('/api/canvases/:id/versions', (req, res) => {
-    res.json(canvases.versions(req.params.id));
-  });
-  app.post('/api/canvases/:id/restore/:version', (req, res) => {
-    res.json(canvases.restore(req.params.id, Number(req.params.version), USER));
-  });
-
   // ── Documents and side panels (design §16) ───────────────────────────
   app.get('/api/documents', (req, res) => {
-    // Without a card: the Library, every document re-synced (files changed outside Atlas, canvases as whiteboards).
+    // Without a card: the Library, every artifact re-synced (files changed outside Atlas).
     res.json(typeof req.query.card === 'string' ? documents.list({ cardId: req.query.card }) : documents.library());
+  });
+  /** Library search: titles and content, every folder (a content match has a snippet). */
+  app.get('/api/documents/search', (req, res) => {
+    res.json(documents.search(typeof req.query.q === 'string' ? req.query.q : ''));
+  });
+  app.post('/api/documents/:id/move', (req, res) => {
+    const folderId = (req.body as { folderId?: unknown }).folderId;
+    if (folderId !== null && typeof folderId !== 'string') throw new InvalidError('folderId must be a folder id or null (Unfiled)');
+    res.json(documents.move(req.params.id, folderId));
+  });
+  app.get('/api/folders', (_req, res) => {
+    res.json(documents.folders());
+  });
+  app.post('/api/folders', (req, res) => {
+    res.status(201).json(documents.createFolder(String((req.body as { name?: unknown }).name ?? '')));
+  });
+  app.patch('/api/folders/:id', (req, res) => {
+    res.json(documents.renameFolder(req.params.id, String((req.body as { name?: unknown }).name ?? '')));
+  });
+  app.delete('/api/folders/:id', (req, res) => {
+    documents.deleteFolder(req.params.id);
+    res.status(204).end();
   });
   app.post('/api/documents/:id/pin', (req, res) => {
     const pinned = (req.body as { pinned?: unknown }).pinned;
     if (typeof pinned !== 'boolean') throw new InvalidError('pinned must be true or false');
     res.json(documents.pin(req.params.id, pinned));
-  });
-  /** The whiteboard document of a canvas (created on first use): #/canvas/<id> links and « New whiteboard ». */
-  app.post('/api/canvases/:id/document', (req, res) => {
-    res.json(documents.whiteboard(req.params.id, USER));
   });
   app.get('/api/documents/:id', (req, res) => {
     const v = req.query.version;
@@ -658,7 +648,6 @@ export function createApi(deps: {
 
   const onError: ErrorRequestHandler = (err, _req, res, _next) => {
     if (err instanceof ZodError) res.status(400).json({ error: 'invalid request', issues: err.issues });
-    else if (err instanceof StaleVersionError) res.status(409).json({ error: err.message, current: err.current });
     else if (err instanceof NotFoundError) res.status(404).json({ error: err.message });
     else if (err instanceof ConflictError) res.status(409).json({ error: err.message });
     else if (err instanceof InvalidError) res.status(400).json({ error: err.message });

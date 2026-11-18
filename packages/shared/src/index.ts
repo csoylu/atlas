@@ -1,5 +1,5 @@
 import { z } from 'zod';
-import { DocRef, type Doc, type PanelTab } from './documents.ts';
+import { DocRef, type Doc, type Folder, type PanelTab } from './documents.ts';
 
 export * from './documents.ts';
 export * from './cardRefs.ts';
@@ -151,47 +151,6 @@ export const TODO_LIMIT = 50;
 
 /** A user message; `ref` = the document part it is about (« Ask about this » in the side panel). */
 export const PostMessage = z.object({ text: z.string().trim().min(1).max(100_000), ref: DocRef.optional() });
-
-/** Canvas nodes (design §16): one zod entry per renderer kind. Adding a kind = one entry here + one UI renderer. */
-const NodeBase = z.object({
-  id: z.string().min(1),
-  x: z.number(),
-  y: z.number(),
-  w: z.number().min(40),
-  h: z.number().min(30),
-  title: z.string().default(''),
-  /** Optional link to a card. */
-  cardId: z.string().nullable().optional(),
-});
-export const CanvasNode = z.discriminatedUnion('kind', [
-  NodeBase.extend({ kind: z.literal('markdown'), text: z.string() }),
-  NodeBase.extend({ kind: z.literal('html'), html: z.string() }),
-  NodeBase.extend({ kind: z.literal('url'), url: z.string().min(1) }),
-]);
-export type CanvasNode = z.infer<typeof CanvasNode>;
-export type CanvasNodeKind = CanvasNode['kind'];
-
-export interface Canvas {
-  id: string;
-  name: string;
-  nodes: CanvasNode[];
-  version: number;
-  updatedBy: string;
-  updatedAt: string;
-}
-export const CreateCanvas = z.object({ name: z.string().trim().min(1).max(100) });
-export const SaveCanvas = z.object({
-  name: z.string().trim().min(1).max(100).optional(),
-  nodes: z.array(CanvasNode),
-  /** Optimistic concurrency: the version the client edited. */
-  baseVersion: z.number().int(),
-});
-export type SaveCanvas = z.infer<typeof SaveCanvas>;
-export const CanvasOp = z.discriminatedUnion('op', [
-  z.object({ op: z.literal('upsert'), node: CanvasNode }),
-  z.object({ op: z.literal('delete'), id: z.string() }),
-]);
-export type CanvasOp = z.infer<typeof CanvasOp>;
 
 export const RUN_STATUSES = ['running', 'done', 'failed', 'stopped', 'interrupted'] as const;
 export type RunStatus = (typeof RUN_STATUSES)[number];
@@ -560,9 +519,9 @@ export type ServerEvent =
   | { type: 'run.thinking'; runId: string; conversationId: string; text: string }
   /** A tool call started or ended. */
   | { type: 'toolcall.updated'; cardId: string; call: ToolCallTiming }
-  | { type: 'canvas.updated'; canvas: Canvas }
-  | { type: 'canvas.deleted'; id: string }
   | { type: 'document.updated'; doc: Doc }
+  /** Library folders were created, renamed or deleted (a delete also sends its artifacts as document.updated). */
+  | { type: 'folders.updated'; folders: Folder[] }
   | { type: 'memory.updated'; memory: Memory }
   | { type: 'memory.proposal'; proposal: MemoryProposal }
   | { type: 'panel.updated'; chatId: string; tabs: PanelTab[] }

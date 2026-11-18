@@ -29,13 +29,11 @@ import {
 } from './context.ts';
 import { runTool, toolSpecs } from './tools.ts';
 import { cardToolSpecs, describeCard, isCardTool, runCardTool, type Terminal } from './cardTools.ts';
-import { canvasToolSpecs, isCanvasTool, runCanvasTool } from './canvasTools.ts';
 import { docToolSpecs, isDocTool, runDocTool } from './docTools.ts';
 import type { Documents } from './documents.ts';
 import { isTeamTool, runTeamTool, teamToolSpecs } from './teamTools.ts';
 import { cleanupToolSpecs, isCleanupCard, isCleanupTool, runCleanupTool, type MemoryCleanup } from './cleanup.ts';
 import { memoryDeltaNote, renderMemory, SHARED, type Memories } from './memory.ts';
-import type { Canvases } from './canvas.ts';
 import type { Schedules } from './schedules.ts';
 import { workdirOf } from './agents.ts';
 import type { FileLog } from './fileLog.ts';
@@ -134,7 +132,6 @@ export class Runner {
     private kanban: Kanban,
     private agents: Agents,
     private models: Models,
-    private canvases: Canvases,
     private memories: Memories,
     private schedules: Schedules,
     private opts: RunnerOptions,
@@ -373,7 +370,6 @@ export class Runner {
       const tools = [
         ...toolSpecs(),
         ...cardToolSpecs(),
-        ...canvasToolSpecs(),
         ...teamToolSpecs(),
         ...(this.opts.documents ? docToolSpecs() : []),
         ...(cleanup ? cleanupToolSpecs() : []),
@@ -452,8 +448,7 @@ export class Runner {
               const c = runCardTool(u.name, u.input, { kanban: this.kanban, agentId: agent.id, cardId });
               if (c.terminal && !c.isError) terminal = c.terminal;
               r = c;
-            } else if (isCanvasTool(u.name)) r = runCanvasTool(u.name, u.input, { canvases: this.canvases, agentId: agent.id, resolveCard: (ref) => this.kanban.resolve(ref) });
-            else if (this.opts.documents && isDocTool(u.name))
+            } else if (this.opts.documents && isDocTool(u.name))
               r = runDocTool(u.name, u.input, { documents: this.opts.documents, agentId: agent.id, chatId: panelChat, cardId: workCard, cardRef: (id) => this.kanban.ref(id) });
             else if (cleanup && isCleanupTool(u.name)) r = runCleanupTool(u.name, u.input, { cleanup, kanban: this.kanban, agents: this.agents, agentId: agent.id, cardId });
             else if (isTeamTool(u.name)) {
@@ -868,7 +863,7 @@ export class Runner {
                       `${name} also talks to you by voice here: their messages starting with ${VOICE_MARK.trim()} are speech-to-text (often`,
                       'garbled: ask when unclear), and your reply to them is read aloud sentence by sentence. Answer those in a',
                       'few short spoken sentences: plain text, no markdown, lists, tables, code or links (put those in a document',
-                      'or on a canvas and say so). Typed messages (no mark) get normal written answers.',
+                      'or an artifact and say so). Typed messages (no mark) get normal written answers.',
                     ]
                   : []),
               ]
@@ -876,7 +871,7 @@ export class Runner {
     const parts = [
       `You are "${agent.id}", an AI agent in Atlas, where a small team of agents works for ${name}, the user: the only human here.`,
       `Atlas has tasks (assigned to agents, run automatically, block on questions, go to review, shown on a board), direct`,
-      `chats with ${name}, shared canvases ${name} sees live, schedules, and per-agent models and memory.`,
+      `chats with ${name}, artifacts (documents, pages, diagrams, links) in a shared Library, schedules, and per-agent models and memory.`,
       `Role: ${agent.rolePrompt.trim() || `no specific role: help with whatever ${name} asks.`}`,
       '',
       `# ${name}`,
@@ -889,7 +884,7 @@ export class Runner {
       '',
       '# How to work',
       `- Before building anything non-trivial (UI, behaviour, structure): ask ${name} the open questions (options, your`,
-      '  recommendation first), then show the design on a canvas (an html mockup for UI, an svg diagram for system design)',
+      '  recommendation first), then show the design as an artifact (an html mockup for UI, an svg diagram for system design)',
       `  and wait for ${name}'s OK (in a task: task_block needs_input). Build only what was approved. Small, clear fixes`,
       '  can go straight in.',
       `- Act on steps that can be undone. Before anything hard to undo (deleting data, sending, posting, paying, pushing,`,
@@ -902,15 +897,14 @@ export class Runner {
       '',
       '# Workspace',
       `Working directory: ${workdir}. File tools and shell run there; paths outside it are refused.`,
-      `Files there are served at /api/files/${agent.id}/<path>: show pages, built apps (dist/) or images on a canvas`,
-      'with a url node. Canvases: html for mockups, markdown for notes, url nodes for svg diagrams (diagrams/*.svg) and apps. Mention the',
-      'canvas id, and pass show: [node ids] to canvas_write to display nodes inline in the chat.',
+      `Files there are served at /api/files/${agent.id}/<path> (built apps in dist/, images).`,
       ...(this.opts.documents
         ? [
-            'Documents: write designs, specs and reports as docs/*.md, pages as pages/*.html, diagrams as diagrams/*.svg; Atlas',
-            `versions every change. panel_open shows one to ${name} in the side panel beside the chat (real size, tabs; in a task,`,
-            `in the chat it came from, and the document is attached to the task). A message starting with ❝ quotes the part of a`,
-            `document ${name} is asking about (path, version, section): answer that, and edit the file if asked.`,
+            `Artifacts: what you make for ${name} (markdown docs, html pages and mockups, svg diagrams, url links to running`,
+            `apps or served files). artifact_create saves one as a file in your workspace, versioned, in the Library (folders),`,
+            `and shows it in the chat right away; artifact_update makes a new version; artifact_list / artifact_read find and`,
+            `read anyone's. In a task they are attached to it. A message starting with ❝ quotes the part of an artifact ${name}`,
+            'is asking about (path, version, section): answer that, and update it if asked.',
           ]
         : []),
       '',
@@ -954,7 +948,7 @@ export function cleanTitle(raw: string): string {
 const SUMMARY_SYSTEM = [
   "You compress an agent's working conversation so the agent can continue it with less context.",
   'Write what the agent needs to carry on: the goal; what the user asked and decided (their exact words where they matter);',
-  'what was done (files, commands, results, task and canvas ids); what was learned; errors and how they were fixed;',
+  'what was done (files, commands, results, task and artifact ids); what was learned; errors and how they were fixed;',
   'what remains. Keep identifiers, paths, numbers and URLs exact. Plain text, no preamble.',
 ].join(' ');
 

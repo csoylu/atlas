@@ -48,12 +48,12 @@ describe('markdown sections and references (shared)', () => {
 
   it('formats a reference the agent can read and the UI can parse back', () => {
     const sec = findSection(splitSections(DESIGN), 'flow')!;
-    const text = formatDocRef({ id: 'doc_ab12cd34', title: 'Permissions design', path: 'docs/perm.md', canvasId: null }, 2, sec);
+    const text = formatDocRef({ id: 'doc_ab12cd34', title: 'Permissions design', path: 'docs/perm.md' }, 2, sec);
     expect(text).toContain('❝ Permissions design › Flow');
     expect(text).toContain('docs/perm.md, doc_ab12cd34 v2, section #flow');
     expect(text).toContain('> Tool call → policy.');
     expect(parseDocRef(text)).toEqual({ label: 'Permissions design › Flow', docId: 'doc_ab12cd34', version: 2, section: 'flow' });
-    expect(parseDocRef(formatDocRef({ id: 'doc_x', title: 'Board', path: null, canvasId: 'cv_1' }, 4, null))).toEqual({ label: 'Board', docId: 'doc_x', version: 4, section: null });
+    expect(parseDocRef(formatDocRef({ id: 'doc_x', title: 'Board', path: 'links/board.url' }, 4, null))).toEqual({ label: 'Board', docId: 'doc_x', version: 4, section: null });
     expect(parseDocRef('just text')).toBeNull();
   });
 });
@@ -76,7 +76,7 @@ describe('documents: indexing and versions', () => {
   it('refuses files the panel cannot show, missing ones and paths outside the workspace', async () => {
     const { docs, put } = await setup();
     put('notes.txt', 'x');
-    expect(() => docs.indexFile('atlas', 'notes.txt', 'atlas')).toThrow(/\.md, \.html and \.svg/);
+    expect(() => docs.indexFile('atlas', 'notes.txt', 'atlas')).toThrow(/\.md, \.html, \.svg and \.url/);
     expect(() => docs.indexFile('atlas', 'docs/none.md', 'atlas')).toThrow(/no file/);
     expect(() => docs.indexFile('atlas', '../../x.md', 'atlas')).toThrow(/outside/);
   });
@@ -131,30 +131,16 @@ describe('documents: indexing and versions', () => {
     expect(vs[0]!.version).toBe(56);
   });
 
-  it('shows a canvas as a whiteboard document with the canvas versions', async () => {
-    const { docs, engine } = await setup();
-    const cv = engine.canvases.create({ name: 'Board' }, 'user');
-    const d = docs.whiteboard(cv.id, 'atlas');
-    expect(d).toMatchObject({ kind: 'whiteboard', canvasId: cv.id, title: 'Board', path: null });
-    expect(docs.whiteboard(cv.id, 'atlas').id).toBe(d.id);
-    expect(docs.versions(d.id).map((v) => v.version)).toEqual([1]);
-  });
 });
 
 describe('library', () => {
-  it('lists every document fresh: unsynced files, canvases as whiteboards with their current name', async () => {
-    const { docs, put, engine } = await setup();
+  it('lists every artifact fresh: unsynced files, links too', async () => {
+    const { docs, put } = await setup();
     put('docs/a.md', '# A');
-    const cv = engine.canvases.create({ name: 'Sketch' }, 'user');
-    let lib = docs.library();
-    expect(lib.map((d) => [d.kind, d.title]).sort()).toEqual([['markdown', 'A'], ['whiteboard', 'Sketch']]);
-    engine.canvases.rename(cv.id, 'System sketch', 'user');
+    expect(docs.library().map((d) => [d.kind, d.title])).toEqual([['markdown', 'A']]);
     put('diagrams/f.svg', '<svg><title>Flow</title></svg>');
-    lib = docs.library();
-    expect(lib.map((d) => d.title).sort()).toEqual(['A', 'Flow', 'System sketch']);
-    expect(lib.filter((d) => d.kind === 'whiteboard')).toHaveLength(1); // one document per canvas
-    engine.canvases.remove(cv.id);
-    expect(docs.library().map((d) => d.title).sort()).toEqual(['A', 'Flow']);
+    put('links/dev.url', 'http://localhost:5173\n');
+    expect(docs.library().map((d) => [d.kind, d.title]).sort()).toEqual([['diagram', 'Flow'], ['markdown', 'A'], ['url', 'dev.url']]);
   });
 
   it('pins and unpins, and survives the event round trip', async () => {
@@ -250,7 +236,7 @@ describe('panel tools', () => {
     const bad = runDocTool('panel_open', { path: 'docs/perm.md', section: 'Nope' }, ctx);
     expect(bad.isError).toBe(true);
     expect(bad.output).toContain('#overview (Overview)');
-    expect(runDocTool('panel_open', {}, ctx).output).toMatch(/exactly one of path or canvas/);
+    expect(runDocTool('panel_open', {}, ctx).output).toMatch(/give the artifact/);
     expect(runDocTool('panel_close', { path: 'docs/perm.md' }, ctx).output).toContain('0 tabs left');
     expect(runDocTool('panel_close', { path: 'docs/perm.md' }, ctx).isError).toBe(true);
   });
@@ -275,10 +261,113 @@ describe('panel tools', () => {
     engine.kanban.appendMessage(chat.id, 'user', 'user', [{ type: 'text', text: 'plan it' }]);
     engine.runner.wake(chat.id, { kind: 'chat' });
     await engine.runner.settled(chat.id);
-    expect(fake.calls[0]!.tools.map((t) => t.name)).toEqual(expect.arrayContaining(['panel_open', 'panel_close']));
-    expect(fake.calls[0]!.system).toContain('panel_open shows one');
+    expect(fake.calls[0]!.tools.map((t) => t.name)).toEqual(expect.arrayContaining(['artifact_create', 'artifact_update', 'artifact_list', 'artifact_read', 'panel_open', 'panel_close']));
+    expect(fake.calls[0]!.tools.map((t) => t.name).some((n) => n.startsWith('canvas'))).toBe(false);
+    expect(fake.calls[0]!.system).toContain('artifact_create saves one');
+    expect(fake.calls[0]!.system).not.toMatch(/canvas/i);
     const tab = docs.tabs(chat.id)[0]!;
     expect(tab).toMatchObject({ section: 'steps', openedBy: 'atlas', doc: { title: 'Plan', version: 1, cardId: null } });
+  });
+});
+
+describe('artifacts (#120)', () => {
+  it('artifact_create writes the file from the title, files it in a folder (created if new) and shows it', async () => {
+    const { docs, ws, engine } = await setup();
+    const chat = engine.kanban.newChat('atlas');
+    const ctx = { documents: docs, agentId: 'atlas', chatId: chat.id, cardId: null };
+    const r = runDocTool('artifact_create', { kind: 'markdown', title: 'Viewer spec', content: '# Viewer spec\nbody', folder: 'Artifacts redesign' }, ctx);
+    expect(r.isError).toBe(false);
+    expect(r.output).toMatch(/^created Viewer spec \(doc_[\w-]+, docs\/viewer-spec\.md, v1\) in Artifacts redesign; shown in the side panel/);
+    expect(readFileSync(join(ws, 'docs/viewer-spec.md'), 'utf8')).toBe('# Viewer spec\nbody');
+    const d = docs.byPath('atlas', 'docs/viewer-spec.md')!;
+    expect(docs.folder(d.folderId!).name).toBe('Artifacts redesign');
+    expect(docs.tabs(chat.id)[0]!.doc.id).toBe(d.id);
+    // Same title again: a new file, same folder (found case-insensitively).
+    const again = runDocTool('artifact_create', { kind: 'markdown', title: 'Viewer spec', content: 'x', folder: 'artifacts REDESIGN' }, ctx);
+    expect(again.output).toContain('docs/viewer-spec-2.md');
+    expect(docs.folders()).toHaveLength(1);
+  });
+
+  it('links: a .url file holding the address, titled by its name; svg goes to diagrams/', async () => {
+    const { docs } = await setup();
+    const ctx = { documents: docs, agentId: 'atlas', chatId: null, cardId: null };
+    const r = runDocTool('artifact_create', { kind: 'url', title: 'Composer dev server', content: 'http://localhost:5173' }, ctx);
+    expect(r.output).toContain('links/composer-dev-server.url, v1');
+    expect(docs.byPath('atlas', 'links/composer-dev-server.url')).toMatchObject({ kind: 'url', title: 'Composer dev server', folderId: null });
+    expect(runDocTool('artifact_create', { kind: 'url', title: 'bad', content: 'javascript:alert(1)' }, ctx).isError).toBe(true);
+    expect(runDocTool('artifact_create', { kind: 'svg', title: 'Flow', content: '<svg/>' }, ctx).output).toContain('diagrams/flow.svg');
+  });
+
+  it('artifact_update: whole content or one replacement, a new version each; title renames', async () => {
+    const { docs, engine } = await setup();
+    const chat = engine.kanban.newChat('atlas');
+    const ctx = { documents: docs, agentId: 'atlas', chatId: chat.id, cardId: null };
+    runDocTool('artifact_create', { kind: 'html', title: 'Feed', content: '<p>one</p>' }, ctx);
+    const d = docs.byPath('atlas', 'pages/feed.html')!;
+    expect(runDocTool('artifact_update', { artifact: d.id, old_text: 'one', new_text: 'two' }, ctx).output).toMatch(/^updated Feed \(doc_[\w-]+, pages\/feed\.html, v2\)/);
+    expect(runDocTool('artifact_update', { path: 'pages/feed.html', content: '<p>three</p>' }, ctx).output).toContain(', v3)');
+    expect(runDocTool('artifact_update', { artifact: d.id, old_text: 'nope', new_text: 'x' }, ctx).isError).toBe(true);
+    expect(runDocTool('artifact_update', { artifact: d.id, title: 'Price feed health' }, ctx).output).toContain('unchanged Price feed health');
+    expect(docs.get(d.id)).toMatchObject({ title: 'Price feed health', version: 3 });
+    expect(docs.content(d.id, 2).content).toBe('<p>two</p>');
+    const read = runDocTool('artifact_read', { artifact: d.id, version: 1 }, ctx);
+    expect(read.output).toContain('v1 of 3');
+    expect(read.output).toContain('<p>one</p>');
+    expect(runDocTool('artifact_list', {}, ctx).output).toContain('Price feed health · v3 · Unfiled');
+  });
+
+  it('folders: rename, delete moves artifacts to Unfiled; pinned and moved', async () => {
+    const { docs, put, events } = await setup();
+    put('docs/a.md', '# A');
+    const a = docs.indexFile('atlas', 'docs/a.md', 'atlas');
+    const f = docs.createFolder('  Data   feeds ');
+    expect(f.name).toBe('Data feeds');
+    expect(() => docs.createFolder('data FEEDS')).toThrow(/exists/);
+    expect(docs.move(a.id, f.id).folderId).toBe(f.id);
+    expect(docs.renameFolder(f.id, 'Feeds').name).toBe('Feeds');
+    docs.deleteFolder(f.id);
+    expect(docs.get(a.id).folderId).toBeNull();
+    expect(docs.folders()).toEqual([]);
+    expect(events.some((e) => e.type === 'folders.updated')).toBe(true);
+    expect(events.at(-1)).toMatchObject({ type: 'document.updated', doc: { id: a.id, folderId: null } });
+    expect(() => docs.move(a.id, 'fld_none')).toThrow(/not found/);
+  });
+
+  it('search: titles and content (html without tags), title hits first, content hits with a snippet', async () => {
+    const { docs, put } = await setup();
+    put('docs/spec.md', '# Viewer spec\n\nThe version picker lists every version.');
+    put('pages/feed.html', '<html><head><style>.picker{}</style></head><body><h1>Feed</h1><p>No picker here, just prices.</p></body></html>');
+    put('docs/picker.md', '# Picker notes');
+    docs.library();
+    const hits = docs.search('PICKER');
+    expect(hits.map((h) => h.doc.title)).toEqual(['Picker notes', expect.any(String), expect.any(String)]);
+    expect(hits[0]!.snippet).toContain('Picker');
+    const feed = hits.find((h) => h.doc.title === 'Feed')!;
+    expect(feed.snippet).toBe('Feed No picker here, just prices.');
+    expect(docs.search('zzz')).toEqual([]);
+    expect(docs.search('  ')).toEqual([]);
+  });
+
+  it('converts each archived canvas once to an html page in the Canvases folder, keeping its date', async () => {
+    const { docs, engine, ws } = await setup();
+    const db = engine.db;
+    db.prepare("INSERT INTO canvases (id, name, nodes, version, updated_by, updated_at) VALUES ('cv_1', 'Old board', ?, 3, 'atlas', '2026-11-01T10:00:00.000Z')").run(
+      JSON.stringify([
+        { id: 'b', kind: 'html', x: 0, y: 500, w: 400, h: 300, title: 'Mock', html: '<b>hi</b>' },
+        { id: 'a', kind: 'markdown', x: 0, y: 0, w: 400, h: 300, title: 'Notes', text: '# Notes <x>' },
+        { id: 'c', kind: 'url', x: 500, y: 500, w: 400, h: 300, url: '/api/files/atlas/pages/x.html' },
+      ]),
+    );
+    expect(docs.convertCanvases()).toBe(1);
+    expect(docs.convertCanvases()).toBe(0);
+    const d = docs.byPath('atlas', 'pages/canvases/old-board.html')!;
+    expect(d).toMatchObject({ kind: 'html', title: 'Old board', updatedAt: '2026-11-01T10:00:00.000Z' });
+    expect(docs.folder(d.folderId!).name).toBe('Canvases');
+    const html = readFileSync(join(ws, d.path), 'utf8');
+    expect(html.indexOf('Notes')).toBeLessThan(html.indexOf('Mock'));
+    expect(html).toContain('# Notes &lt;x&gt;');
+    expect(html).toContain('srcdoc="&lt;b&gt;hi&lt;/b&gt;"');
+    expect(html).toContain('src="/api/files/atlas/pages/x.html"');
   });
 });
 

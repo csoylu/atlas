@@ -1,5 +1,5 @@
 import { z } from 'zod';
-import { findSection, splitSections, type Doc } from '@atlas/shared';
+import { findSection, splitSections, type Doc, type DocKind } from '@atlas/shared';
 import type { Documents } from './documents.ts';
 import type { ToolSpec } from './providers/types.ts';
 
@@ -15,16 +15,32 @@ export interface DocToolContext {
 }
 
 const Target = {
-  path: z.string().optional().describe('a .md, .html or .svg file in your workspace (e.g. docs/design.md)'),
-  canvas: z.string().optional().describe('a canvas id, shown as a whiteboard'),
+  artifact: z.string().optional().describe('an artifact id (doc_…) or a path in your workspace (e.g. docs/design.md)'),
+  path: z.string().optional().describe('same as artifact: a path in your workspace'),
 };
 
-function resolveDoc(i: { path?: string; canvas?: string }, ctx: DocToolContext): Doc {
-  if (!!i.path === !!i.canvas) throw new Error('give exactly one of path or canvas');
-  return i.path ? ctx.documents.indexFile(ctx.agentId, i.path, ctx.agentId, ctx.cardId) : ctx.documents.whiteboard(i.canvas!, ctx.agentId, ctx.cardId);
+function resolveDoc(i: { artifact?: string; path?: string }, ctx: DocToolContext): Doc {
+  const ref = i.artifact ?? i.path;
+  if (!ref) throw new Error('give the artifact (id or path)');
+  return ctx.documents.resolve(ctx.agentId, ref, ctx.cardId);
 }
 
-/** A markdown heading (id or text) or an html element id; diagrams and whiteboards have no sections. */
+/** « Title (doc_x, path, vN) »: the line the chat card is read from (ui cardModal.ts artifactOf). */
+const label = (doc: Doc) => `${doc.title} (${doc.id}, ${doc.path}, v${doc.version})`;
+
+/** Show an artifact in the chat's side panel (a created or updated one appears right away). */
+function show(doc: Doc, section: string | null, ctx: DocToolContext): string {
+  const attached = doc.cardId ? `; attached to task ${ctx.cardRef?.(doc.cardId) ?? doc.cardId}` : '';
+  if (!ctx.chatId) return `${attached ? attached.slice(2) : 'not attached to a task'}. This task has no chat with the user, so it isn't shown in a panel: the user opens it from the task or the Library.`;
+  ctx.documents.open(ctx.chatId, doc.id, ctx.agentId, section);
+  return `shown in the side panel of chat ${ctx.chatId}${section ? `, scrolled to #${section}` : ''}${attached}`;
+}
+
+const KIND = z.enum(['markdown', 'html', 'svg', 'url']);
+const kindOf = (k: z.infer<typeof KIND>): DocKind => (k === 'svg' ? 'diagram' : k);
+const folderOf = (doc: Doc, ctx: DocToolContext) => (doc.folderId ? ctx.documents.folder(doc.folderId).name : 'Unfiled');
+
+/** A markdown heading (id or text) or an html element id; diagrams and links have no sections. */
 function sectionOf(doc: Doc, section: string | undefined, ctx: DocToolContext): string | null {
   if (!section) return null;
   if (doc.kind === 'html') return section.replace(/^#/, '');
@@ -43,34 +59,97 @@ interface DocTool<S extends z.ZodType> {
 const tool = <S extends z.ZodType>(t: DocTool<S>) => t;
 
 export const DOC_TOOLS = {
+  artifact_create: tool({
+    description:
+      'Create an artifact: a markdown document (specs, designs, reports), an html page (mockups, UI), an svg diagram ' +
+      '(system design) or a url link (a running app, a page served from your workspace at /api/files/<you>/<path>). ' +
+      'It is saved as a file in your workspace (docs/, pages/, diagrams/, links/), versioned, listed in the Library, and ' +
+      'appears in the chat right away (in a task: attached to it). Use it instead of pasting long text. folder: a ' +
+      'Library folder name (created if new); leave it out for Unfiled.',
+    input: z.object({
+      kind: KIND,
+      title: z.string().min(1).max(200),
+      content: z.string().describe('the markdown, html or svg; for url: the address'),
+      folder: z.string().optional(),
+      path: z.string().optional().describe('optional file path in your workspace; default from the title'),
+    }),
+    run: (i, ctx) => {
+      const doc = ctx.documents.create(ctx.agentId, { kind: kindOf(i.kind), title: i.title, content: i.content, path: i.path, folder: i.folder ?? null }, ctx.agentId, ctx.cardId);
+      return `created ${label(doc)} in ${folderOf(doc, ctx)}; ${show(doc, null, ctx)}`;
+    },
+  }),
+  artifact_update: tool({
+    description:
+      'Change an artifact: a new version that appears in the chat right away (older chat cards keep their version). ' +
+      'Give the whole new content, or old_text + new_text for one exact replacement; title renames it. Editing the ' +
+      'file with write_file / edit_file also makes a version, but posts no card.',
+    input: z.object({
+      ...Target,
+      content: z.string().optional(),
+      old_text: z.string().optional(),
+      new_text: z.string().optional(),
+      title: z.string().optional(),
+      section: z.string().optional().describe('scroll the panel to this markdown heading or html id'),
+    }),
+    run: (i, ctx) => {
+      const before = resolveDoc(i, ctx);
+      const doc = ctx.documents.update(before.id, { content: i.content, oldText: i.old_text, newText: i.new_text, title: i.title }, ctx.agentId, ctx.cardId);
+      const same = doc.version === before.version;
+      return `${same ? 'unchanged' : 'updated'} ${label(doc)}${same ? ' (same content)' : ''}; ${show(doc, sectionOf(doc, i.section, ctx), ctx)}`;
+    },
+  }),
+  artifact_list: tool({
+    description: 'List artifacts in the Library (every agent\'s), latest first: id, kind, title, version, folder, path. query searches titles and content.',
+    input: z.object({ query: z.string().optional(), folder: z.string().optional().describe('a folder name, or Unfiled') }),
+    run: (i, ctx) => {
+      let docs = i.query?.trim() ? ctx.documents.search(i.query).map((h) => h.doc) : ctx.documents.library();
+      if (i.folder) {
+        const unfiled = i.folder.trim().toLowerCase() === 'unfiled';
+        const f = unfiled ? null : ctx.documents.folderNamed(i.folder);
+        if (!unfiled && !f) throw new Error(`no folder "${i.folder}"; folders: ${ctx.documents.folders().map((x) => x.name).join(', ') || 'none'}`);
+        docs = docs.filter((d) => d.folderId === (f?.id ?? null));
+      }
+      if (!docs.length) return 'no artifacts';
+      return docs
+        .slice(0, 100)
+        .map((d) => `${d.id} · ${d.kind} · ${d.title} · v${d.version} · ${folderOf(d, ctx)}${d.pinned ? ' · pinned' : ''} · @${d.agentId}:${d.path}`)
+        .join('\n');
+    },
+  }),
+  artifact_read: tool({
+    description: 'Read an artifact\'s content (any agent\'s), at its latest version or an older one.',
+    input: z.object({ ...Target, version: z.number().int().positive().optional() }),
+    run: (i, ctx) => {
+      const ref = i.artifact ?? i.path;
+      const doc = ref && /^doc_[\w-]+$/.test(ref) ? ctx.documents.get(ref) : resolveDoc(i, ctx);
+      const c = ctx.documents.content(doc.id, i.version);
+      const text = c.content.length > 60_000 ? c.content.slice(0, 60_000) + `\n… (${c.content.length - 60_000} more characters: read the file)` : c.content;
+      return `${doc.title} (${doc.id}, ${doc.kind}, v${c.version} of ${doc.version}, ${folderOf(doc, ctx)}, @${doc.agentId}:${doc.path})\n\n${text}`;
+    },
+  }),
   panel_open: tool({
     description:
-      'Show a document to the user in the side panel beside the chat, at real size, in a tab: a markdown doc, an html ' +
-      'page, an svg diagram (files in your workspace, versioned by Atlas) or a canvas as a whiteboard. Use it for designs, ' +
-      'specs and reports instead of pasting long text. section scrolls to a markdown heading (id or text) or an html element ' +
-      'id; call again with another section to scroll there. In a task, the document is attached to the task.',
+      'Show an existing artifact again in the side panel beside the chat (artifact_create / artifact_update already ' +
+      'show theirs). section scrolls to a markdown heading (id or text) or an html element id.',
     input: z.object({ ...Target, section: z.string().optional() }),
     run: (i, ctx) => {
       const doc = resolveDoc(i, ctx);
       const section = sectionOf(doc, i.section, ctx);
-      const what = `${doc.title} (${doc.id}, ${doc.path ?? 'canvas ' + doc.canvasId}, v${doc.version})`;
-      const attached = doc.cardId ? `; attached to task ${ctx.cardRef?.(doc.cardId) ?? doc.cardId}` : '';
-      if (!ctx.chatId) return `${what} is indexed${attached}. This task has no chat with the user, so it isn't shown: the user opens it from the task.`;
-      ctx.documents.open(ctx.chatId, doc.id, ctx.agentId, section);
-      return `opened ${what} in the side panel of chat ${ctx.chatId}${section ? `, scrolled to #${section}` : ''}${attached}`;
+      return `opened ${label(doc)}; ${show(doc, section, ctx)}`;
     },
   }),
   panel_close: tool({
-    description: 'Close a document tab in the side panel beside the chat, or the whole panel (no path or canvas).',
+    description: 'Close an artifact\'s tab in the side panel beside the chat, or the whole panel (no artifact).',
     input: z.object(Target),
     run: (i, ctx) => {
       if (!ctx.chatId) throw new Error('this task has no chat with the user, so there is no panel to close');
-      if (!i.path && !i.canvas) {
+      const ref = i.artifact ?? i.path;
+      if (!ref) {
         ctx.documents.close(ctx.chatId, null);
         return 'closed the panel';
       }
-      const doc = i.path ? ctx.documents.byPath(ctx.agentId, i.path) : ctx.documents.list().find((d) => d.canvasId === i.canvas);
-      if (!doc) throw new Error(`${i.path ?? i.canvas} is not open`);
+      const doc = /^doc_[\w-]+$/.test(ref) ? ctx.documents.get(ref) : ctx.documents.byPath(ctx.agentId, ref);
+      if (!doc) throw new Error(`${ref} is not open`);
       const left = ctx.documents.close(ctx.chatId, doc.id);
       return `closed ${doc.title}; ${left.length} tab${left.length === 1 ? '' : 's'} left`;
     },
