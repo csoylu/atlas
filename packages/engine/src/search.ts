@@ -1,7 +1,7 @@
 import { spawn } from 'node:child_process';
 import { accessSync, constants } from 'node:fs';
 import { open, readdir, stat } from 'node:fs/promises';
-import { delimiter, join, relative } from 'node:path';
+import { delimiter, isAbsolute, join, relative, sep } from 'node:path';
 
 /** Folders never searched or listed. */
 export const SKIP_DIRS = new Set(['node_modules', '.git']);
@@ -96,6 +96,12 @@ export interface GrepOptions {
   signal?: AbortSignal;
 }
 
+/** A path as shown in results: relative to base when under it, else absolute. */
+export function shownPath(base: string, full: string): string {
+  const rel = relative(base, full);
+  return rel === '..' || rel.startsWith('..' + sep) || isAbsolute(rel) ? full : rel;
+}
+
 /** Search with ripgrep when `rg` is given, else in JS. Output lines: `path:line:text` (context `path-line-text`), paths, or `path:count`. */
 export async function grep(o: GrepOptions, rg: string | null = findRg()): Promise<string> {
   const lines = rg ? await grepRg(o, rg) : await grepJs(o);
@@ -118,7 +124,7 @@ async function grepRg(o: GrepOptions, rg: string): Promise<string[]> {
   }
   if (o.ignoreCase) args.push('--ignore-case');
   if (o.glob) args.push('--glob', o.glob);
-  args.push('--regexp', o.pattern, '--', relative(o.base, o.root) || '.');
+  args.push('--regexp', o.pattern, '--', shownPath(o.base, o.root) || '.');
   return new Promise((resolve, reject) => {
     const child = spawn(rg, args, { cwd: o.base, signal: o.signal });
     const out: string[] = [];
@@ -169,7 +175,7 @@ async function grepJs(o: GrepOptions): Promise<string[]> {
   const out: string[] = [];
   for (const full of files) {
     o.signal?.throwIfAborted();
-    const rel = relative(o.base, full);
+    const rel = shownPath(o.base, full);
     if (filter && !filter.test(relative(st.isDirectory() ? o.root : o.base, full))) continue;
     const text = await readText(full);
     if (text == null) continue;
@@ -221,7 +227,7 @@ export async function globFiles(pattern: string, root: string, base: string, lim
   const re = globToRegex(pattern);
   const { files, partial } = await walkFiles(root);
   const hits = await Promise.all(
-    files.filter((f) => re.test(f)).map(async (f) => ({ path: relative(base, join(root, f)), mtime: (await stat(join(root, f))).mtimeMs })),
+    files.filter((f) => re.test(f)).map(async (f) => ({ path: shownPath(base, join(root, f)), mtime: (await stat(join(root, f))).mtimeMs })),
   );
   hits.sort((a, b) => b.mtime - a.mtime || a.path.localeCompare(b.path));
   if (!hits.length) return 'no files match' + (partial ? ' (the tree is too big: searched the first 100000 entries)' : '');
