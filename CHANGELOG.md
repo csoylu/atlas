@@ -6,6 +6,10 @@ computed by `scripts/release/changelog.mjs` from the oldest entry to the newest,
 `Fixed` → patch, `Added` or `Changed` → minor, `Breaking` (data or settings stop working without action) → major.
 Never type a version number.
 
+## Changed · Every change now reaches main through a pull request, and main refuses force-pushes and deletion
+
+CLAUDE.md's Releases section says it: no direct push to main, for anyone; a branch, then a PR based on main; one merged PR = one changelog entry = one release. The GitHub branch protection on main (no force-push, no deletion, admins included) was set on 18 Nov 2026. Requiring a validation by the QA agent before a merge is a separate task. No code change, no migration.
+
 ## Fixed · #139 · Tool rows show their icon again: no empty box on « Looked at #N », « Listed the board » or « Closed the panel »
 
 The row icon carried its name as a CSS class (`card`, `board`, `panel`), so the board's `.card`, `.board` and `.panel` styles turned it into a grey box, a blank area or a filled square, and stretched the icon stack of the « N steps » header. Icon classes are now prefixed `rowic-<name>`. The e2e spec `ui-134` checks the row icons and the header stack in both themes.
