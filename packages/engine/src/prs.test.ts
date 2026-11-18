@@ -213,3 +213,88 @@ describe('pull requests linked to tasks (#189)', () => {
     await idle(c.id);
   });
 });
+
+describe('pull requests of another project (#216)', () => {
+  const DURL = 'https://github.com/datinel/datinel/pull/7';
+  const datinel = (e: Awaited<ReturnType<typeof setup>>['e'], members = ['munih', 'zurich']) => {
+    if (!e.agents.list().some((a) => a.id === 'munih')) e.agents.create({ id: 'munih', modelId: e.agents.get('atlas').modelId });
+    return e.projects.create({ name: 'Datinel', repo: 'datinel/datinel', lead: 'munih', members });
+  };
+  const dcard = (e: Awaited<ReturnType<typeof setup>>['e']) => e.kanban.create({ title: 'Feed', status: 'running', assignee: 'munih', projectId: 'datinel' }, 'user');
+
+  it('task_request_review refuses a PR of another repo than the project’s, and a project without a repo', async () => {
+    const { e } = await setup();
+    datinel(e);
+    const d = dcard(e);
+    expect(() => e.kanban.requestReview(d.id, [URL], 'munih', 'x')).toThrow(
+      /https:\/\/github\.com\/csoylu\/atlas\/pull\/41 is not in datinel\/datinel, the repo of project Datinel/,
+    );
+    const a = card(e);
+    e.kanban.update(a.id, { status: 'running' }, 'dispatcher');
+    expect(() => e.kanban.requestReview(a.id, [DURL], 'atlas', 'x')).toThrow(/is not in csoylu\/atlas, the repo of project Atlas/);
+    const none = e.projects.create({ name: 'Notes', lead: 'munih' });
+    const n = e.kanban.create({ title: 'n', status: 'running', assignee: 'munih', projectId: none.id }, 'user');
+    expect(() => e.kanban.requestReview(n.id, [DURL], 'munih', 'x')).toThrow(/project Notes has no GitHub repo/);
+    expect(e.kanban.get(d.id)).toMatchObject({ status: 'running', prs: [] });
+  });
+
+  it('In review → reviewer run in the same thread → merged → Done, read from the second repo', async () => {
+    const reads: string[] = [];
+    const gh = fakeGitHub();
+    const read = gh.read;
+    gh.read = async (repo, n) => (reads.push(`${repo}#${n}`), read(repo, n));
+    const { e, idle } = await setup({ script: [text('checked')], gh });
+    datinel(e);
+    const d = dcard(e);
+    e.kanban.requestReview(d.id, [DURL], 'munih', 'feed + tests');
+    expect(e.kanban.get(d.id)).toMatchObject({ status: 'review', reviewer: 'zurich', prs: [{ repo: 'datinel/datinel', number: 7, url: DURL }] });
+    gh.pr.ci = 'success';
+    await e.prs.poll();
+    expect(reads).toEqual(['datinel/datinel#7']);
+    expect(await eventually(() => e.runner.runs(d.id)[0])).toMatchObject({ agentId: 'zurich', kind: 'work' });
+    await idle(d.id);
+    gh.pr = { ...gh.pr, state: 'merged', mergeSha: 'e96a8e2ffff' };
+    await e.prs.poll();
+    expect(e.kanban.get(d.id).status).toBe('done');
+    expect(e.db.prepare("SELECT payload FROM card_events WHERE card_id = ? AND kind = 'completed'").get(d.id)).toEqual({
+      payload: JSON.stringify({ by: 'github', summary: 'PR #7 merged into main (e96a8e2)' }),
+    });
+  });
+
+  it('a failed validation, a red CI or a conflict send it back to Ready with the reason', async () => {
+    const { e, gh } = await setup();
+    datinel(e);
+    const d = dcard(e);
+    const note = () => e.kanban.messages(d.id).filter((m) => m.author === 'system').at(-1)!.content[0];
+    const again = () => {
+      e.kanban.update(d.id, { status: 'running' }, 'dispatcher');
+      e.kanban.requestReview(d.id, [DURL], 'munih', 'fixed');
+    };
+    e.kanban.requestReview(d.id, [DURL], 'munih', 'x');
+    gh.pr = { ...gh.pr, ci: 'success', qa: 'failure', qaDescription: 'zurich: the feed drops the last row' };
+    await e.prs.poll();
+    expect(e.kanban.get(d.id).status).toBe('ready');
+    expect(note()).toMatchObject({ text: expect.stringContaining('PR #7: Validation failed (@zurich): zurich: the feed drops the last row') });
+    again();
+    gh.pr = { ...gh.pr, headSha: 'bbbbbbb2222', ci: 'failure', qa: null };
+    await e.prs.poll();
+    expect(e.kanban.get(d.id).status).toBe('ready');
+    expect(note()).toMatchObject({ text: expect.stringContaining('PR #7: CI failed on bbbbbbb') });
+    again();
+    gh.pr = { ...gh.pr, headSha: 'ccccccc3333', ci: 'success', mergeable: false };
+    await e.prs.poll();
+    expect(e.kanban.get(d.id).status).toBe('ready');
+    expect(note()).toMatchObject({ text: expect.stringContaining('PR #7: conflicts with main') });
+  });
+
+  it('a review agent that is not a member of the project: no run, the card says so', async () => {
+    const { e, gh } = await setup();
+    datinel(e, ['munih']);
+    const d = dcard(e);
+    e.kanban.requestReview(d.id, [DURL], 'munih', 'x');
+    gh.pr.ci = 'success';
+    await e.prs.poll();
+    expect(e.runner.runs(d.id)).toEqual([]);
+    expect(e.kanban.get(d.id)).toMatchObject({ status: 'review', waiting: 'review agent @zurich is not a member of project Datinel: add it in Settings → Projects' });
+  });
+});

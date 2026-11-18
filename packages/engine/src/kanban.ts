@@ -513,6 +513,15 @@ export class Kanban {
     if (before.board === 'direct') throw new InvalidError('a direct chat has no pull requests: create a task for the work');
     if (before.status === 'review') throw new InvalidError(`${cardRef(before)} is already in review: its pull request is with @${before.reviewer ?? 'nobody'}`);
     const prs = urls.map(parsePrUrl);
+    // A task's PRs are its project's (#216): the gate and the reviewer's workspace come from that project.
+    const project = projectRow(this.db, before.projectId);
+    if (!project.repo) throw new InvalidError(`project ${project.name} has no GitHub repo: set it in Settings → Projects before handing a pull request to QA`);
+    const stray = prs.filter((p) => p.repo.toLowerCase() !== project.repo!.toLowerCase());
+    if (stray.length)
+      throw new InvalidError(
+        `${stray.map((p) => p.url).join(', ')} ${stray.length > 1 ? 'are' : 'is'} not in ${project.repo}, the repo of project ${project.name} (${cardRef(before)}'s project): ` +
+          'open the PR in that repo, or do the work in a task of the project it belongs to',
+      );
     const setting = (k: string) => (this.db.prepare('SELECT value FROM settings WHERE key = ?').get(k) as { value: string } | undefined)?.value || null;
     const review = setting('review_agent');
     // The review agent's own PR goes to the project's lead (it was the triage agent before projects, #213).

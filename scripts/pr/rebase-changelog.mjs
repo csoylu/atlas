@@ -11,7 +11,7 @@
 // between makes the push fail. Any other conflicting file, a merge commit in the PR, a PR that edits older changelog
 // text, or a failed check: refused with the reason, nothing pushed. The validator's clone (working tree, index, HEAD,
 // branches) is never touched: the fetched commits land under refs/pr-rebase/<pid>/ and are deleted at the end.
-import { spawnSync } from 'node:child_process';
+import { spawn } from 'node:child_process';
 import { mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
@@ -44,19 +44,31 @@ export function moveEntry(pr, base, main) {
   return main.slice(0, pm) + added + main.slice(pm);
 }
 
-/** git in `dir`; returns stdout trimmed of the last newline. Throws with git's stderr. */
+/** One git command, without blocking (the engine runs this in its own process, #216): { status, stdout, stderr }. */
+function run(args, env) {
+  return new Promise((resolve, reject) => {
+    const p = spawn('git', args, { env, stdio: ['ignore', 'pipe', 'pipe'] });
+    const out = [];
+    const err = [];
+    p.stdout.on('data', (d) => out.push(d));
+    p.stderr.on('data', (d) => err.push(d));
+    p.on('error', reject);
+    p.on('close', (status) => resolve({ status, stdout: Buffer.concat(out).toString('utf8'), stderr: Buffer.concat(err).toString('utf8') }));
+  });
+}
+
+/** git in `dir`; resolves to stdout trimmed of the last newline. Throws with git's stderr. */
 function gitIn(dir, env) {
-  return (args, opts = {}) => {
-    const r = spawnSync('git', ['-C', dir, ...args], { encoding: 'utf8', maxBuffer: 50e6, env: { ...process.env, ...env, ...opts.env } });
-    if (r.error) throw r.error;
+  return async (args, opts = {}) => {
+    const r = await run(['-C', dir, ...args], { ...process.env, ...env, ...opts.env });
     if (r.status !== 0 && !opts.allowFail) throw new Error(`git ${args.slice(0, 3).join(' ')} failed: ${(r.stderr || r.stdout).trim()}`);
     return opts.allowFail ? { status: r.status, out: r.stdout.replace(/\n$/, ''), err: r.stderr } : r.stdout.replace(/\n$/, '');
   };
 }
 
 /** Changed lines only (diff -U0 without hunk headers or index lines): what a PR does, wherever main moved it. */
-function changes(git, from, to) {
-  return git(['diff', '--no-color', '--no-ext-diff', '-U0', '--no-renames', from, to, '--', '.', `:(exclude)${FILE}`])
+async function changes(git, from, to) {
+  return (await git(['diff', '--no-color', '--no-ext-diff', '-U0', '--no-renames', from, to, '--', '.', `:(exclude)${FILE}`]))
     .split('\n')
     .filter((l) => !/^(index |@@ )/.test(l))
     .join('\n');
@@ -67,7 +79,7 @@ function changes(git, from, to) {
  * it, push it. `repo` is any clone of the repository (the validator's: left as it was).
  * Returns { oldHead, newHead, onto, commits, lines } (lines: what happened, for the output). Throws when refused.
  */
-export function rebaseChangelogOnly({ repo, branch, sha, base = 'main', remote = 'origin', env = {} }) {
+export async function rebaseChangelogOnly({ repo, branch, sha, base = 'main', remote = 'origin', env = {} }) {
   if (PROTECTED.has(branch) || branch === base) throw new Error(`refused: will not rewrite "${branch}"`);
   const git = gitIn(repo, env);
   const ns = `refs/pr-rebase/${process.pid}-${Date.now()}`;
@@ -75,67 +87,67 @@ export function rebaseChangelogOnly({ repo, branch, sha, base = 'main', remote =
   try {
     // From the remote's URL, not its name: a fetch by name may also update the clone's <remote>/* tracking refs, and
     // the validator's clone must stay as it was.
-    const fetchUrl = git(['remote', 'get-url', remote]);
-    git(['fetch', '-q', '--no-tags', fetchUrl, `+refs/heads/${base}:${ns}/base`, `+refs/heads/${branch}:${ns}/head`]);
-    const onto = git(['rev-parse', `${ns}/base`]);
-    const oldHead = git(['rev-parse', `${ns}/head`]);
+    const fetchUrl = await git(['remote', 'get-url', remote]);
+    await git(['fetch', '-q', '--no-tags', fetchUrl, `+refs/heads/${base}:${ns}/base`, `+refs/heads/${branch}:${ns}/head`]);
+    const onto = await git(['rev-parse', `${ns}/base`]);
+    const oldHead = await git(['rev-parse', `${ns}/head`]);
     if (!oldHead.startsWith(sha.toLowerCase()))
       throw new Error(`refused: ${branch} is at ${oldHead.slice(0, 7)} on ${remote}, not the validated ${sha.slice(0, 7)}: a commit was pushed after the review`);
-    const forkPoint = git(['merge-base', onto, oldHead]);
+    const forkPoint = await git(['merge-base', onto, oldHead]);
     if (forkPoint === onto) throw new Error(`refused: ${branch} already contains ${base} (${onto.slice(0, 7)}): nothing to rebase`);
-    const merges = git(['rev-list', '--merges', `${forkPoint}..${oldHead}`]);
+    const merges = await git(['rev-list', '--merges', `${forkPoint}..${oldHead}`]);
     if (merges) throw new Error(`refused: ${branch} has merge commits (${merges.split('\n').map((s) => s.slice(0, 7)).join(', ')}): rebase it by hand`);
 
     // What git's own merge says: which files conflict, and the tree every other file must end up with.
-    const mt = git(['merge-tree', '--write-tree', '--name-only', '--no-messages', onto, oldHead], { allowFail: true });
+    const mt = await git(['merge-tree', '--write-tree', '--name-only', '--no-messages', onto, oldHead], { allowFail: true });
     if (mt.status > 1) throw new Error(`git merge-tree failed: ${mt.err.trim()}`);
     const [mergedTree, ...conflicted] = mt.out.split('\n').filter(Boolean);
     if (mt.status === 0) throw new Error(`refused: ${branch} merges into ${base} without conflict: nothing to rebase (validate again)`);
     const others = conflicted.filter((f) => f !== FILE);
     if (others.length) throw new Error(`refused: conflicts with ${base} in ${others.join(', ')}${conflicted.includes(FILE) ? ` (and ${FILE})` : ''}: rebase it by hand`);
 
-    const readLog = (rev) => {
-      const r = spawnSync('git', ['-C', repo, 'cat-file', 'blob', `${rev}:${FILE}`], { encoding: 'utf8', maxBuffer: 50e6 }); // exact bytes
+    const readLog = async (rev) => {
+      const r = await run(['-C', repo, 'cat-file', 'blob', `${rev}:${FILE}`], { ...process.env, ...env }); // exact bytes
       if (r.status !== 0) throw new Error(`refused: no ${FILE} in ${rev.slice(0, 7)}: rebase it by hand`);
       return r.stdout;
     };
-    const baseLog = readLog(forkPoint);
-    const mainLog = readLog(onto);
-    const wanted = moveEntry(readLog(oldHead), baseLog, mainLog);
+    const baseLog = await readLog(forkPoint);
+    const mainLog = await readLog(onto);
+    const wanted = moveEntry(await readLog(oldHead), baseLog, mainLog);
     const bad = checkPush(mainLog, wanted);
     if (bad) throw new Error(`refused: after the rebase, ${FILE}: ${bad.replace(/^this push/, 'the PR')}`);
 
     // Replay every commit in a throwaway worktree on main.
     worktree = mkdtempSync(join(tmpdir(), 'pr-rebase-'));
-    git(['worktree', 'add', '-q', '--detach', worktree, onto]);
+    await git(['worktree', 'add', '-q', '--detach', worktree, onto]);
     const wt = gitIn(worktree, env);
-    const commits = git(['rev-list', '--reverse', `${forkPoint}..${oldHead}`]).split('\n').filter(Boolean);
+    const commits = (await git(['rev-list', '--reverse', `${forkPoint}..${oldHead}`])).split('\n').filter(Boolean);
     for (const c of commits) {
-      const pick = wt(['cherry-pick', '--no-commit', c], { allowFail: true });
-      const unmerged = wt(['diff', '--name-only', '--diff-filter=U']).split('\n').filter(Boolean);
+      const pick = await wt(['cherry-pick', '--no-commit', c], { allowFail: true });
+      const unmerged = (await wt(['diff', '--name-only', '--diff-filter=U'])).split('\n').filter(Boolean);
       const stray = unmerged.filter((f) => f !== FILE);
       if (stray.length) throw new Error(`refused: replaying ${c.slice(0, 7)} conflicts in ${stray.join(', ')}: rebase it by hand`);
       if (pick.status !== 0 && !unmerged.length) throw new Error(`git cherry-pick ${c.slice(0, 7)} failed: ${pick.err.trim()}`);
-      writeFileSync(join(worktree, FILE), moveEntry(readLog(c), baseLog, mainLog));
-      wt(['add', '--', FILE]);
-      const [name, email, date] = git(['log', '-1', '--format=%an%x00%ae%x00%aD', c]).split('\0');
-      wt(['commit', '-q', '--allow-empty', '--no-verify', '--cleanup=verbatim', '-C', c], {
+      writeFileSync(join(worktree, FILE), moveEntry(await readLog(c), baseLog, mainLog));
+      await wt(['add', '--', FILE]);
+      const [name, email, date] = (await git(['log', '-1', '--format=%an%x00%ae%x00%aD', c])).split('\0');
+      await wt(['commit', '-q', '--allow-empty', '--no-verify', '--cleanup=verbatim', '-C', c], {
         env: { GIT_AUTHOR_NAME: name, GIT_AUTHOR_EMAIL: email, GIT_AUTHOR_DATE: date },
       });
     }
-    const newHead = wt(['rev-parse', 'HEAD']);
+    const newHead = await wt(['rev-parse', 'HEAD']);
 
     // Checks: nothing is pushed unless all hold.
     const fail = (why) => {
       throw new Error(`auto-rebase aborted, nothing pushed: ${why}`);
     };
-    if (wt(['rev-list', '--count', `${onto}..${newHead}`]) !== String(commits.length)) fail('the commit count changed');
+    if ((await wt(['rev-list', '--count', `${onto}..${newHead}`])) !== String(commits.length)) fail('the commit count changed');
     const msgs = (range) => git(['log', '--format=%B%x00', range]);
-    if (msgs(`${onto}..${newHead}`) !== msgs(`${forkPoint}..${oldHead}`)) fail('a commit message changed');
-    const drift = git(['diff', '--name-only', mergedTree, newHead, '--', '.', `:(exclude)${FILE}`]);
+    if ((await msgs(`${onto}..${newHead}`)) !== (await msgs(`${forkPoint}..${oldHead}`))) fail('a commit message changed');
+    const drift = await git(['diff', '--name-only', mergedTree, newHead, '--', '.', `:(exclude)${FILE}`]);
     if (drift) fail(`files differ from git's merge of ${base} and the PR: ${drift.split('\n').join(', ')}`);
-    if (changes(git, forkPoint, oldHead) !== changes(git, onto, newHead)) fail(`the PR's changes outside ${FILE} are not the same as before`);
-    const newLog = readLog(newHead);
+    if ((await changes(git, forkPoint, oldHead)) !== (await changes(git, onto, newHead))) fail(`the PR's changes outside ${FILE} are not the same as before`);
+    const newLog = await readLog(newHead);
     if (newLog !== wanted) fail(`${FILE} is not main's with the PR's entry on top`);
     const pm = firstEntryOffset(mainLog);
     if (!newLog.startsWith(mainLog.slice(0, pm)) || !newLog.endsWith(mainLog.slice(pm))) fail(`${base}'s ${FILE} text is not kept byte for byte`);
@@ -145,16 +157,16 @@ export function rebaseChangelogOnly({ repo, branch, sha, base = 'main', remote =
     // Push the branch only, and only if it is still the validated head.
     // A push moves the clone's <remote>/<branch> tracking ref, even to the URL on git 2.56 (it matches the URL to the
     // configured remote): snapshot refs/remotes/<remote>/ and put it back as it was right after the push.
-    const url = git(['remote', 'get-url', '--push', remote]);
+    const url = await git(['remote', 'get-url', '--push', remote]);
     const tracking = `refs/remotes/${remote}/`;
-    const trackingRefs = () => new Map(git(['for-each-ref', '--format=%(refname) %(objectname)', tracking]).split('\n').filter(Boolean).map((l) => l.split(' ')));
-    const trackingBefore = trackingRefs();
-    const push = git(['push', '-q', '--porcelain', `--force-with-lease=refs/heads/${branch}:${oldHead}`, url, `${newHead}:refs/heads/${branch}`], { allowFail: true });
-    for (const [ref, oid] of trackingRefs()) {
-      if (!trackingBefore.has(ref)) git(['update-ref', '-d', ref, oid]);
-      else if (trackingBefore.get(ref) !== oid) git(['update-ref', ref, trackingBefore.get(ref), oid]);
+    const trackingRefs = async () => new Map((await git(['for-each-ref', '--format=%(refname) %(objectname)', tracking])).split('\n').filter(Boolean).map((l) => l.split(' ')));
+    const trackingBefore = await trackingRefs();
+    const push = await git(['push', '-q', '--porcelain', `--force-with-lease=refs/heads/${branch}:${oldHead}`, url, `${newHead}:refs/heads/${branch}`], { allowFail: true });
+    for (const [ref, oid] of await trackingRefs()) {
+      if (!trackingBefore.has(ref)) await git(['update-ref', '-d', ref, oid]);
+      else if (trackingBefore.get(ref) !== oid) await git(['update-ref', ref, trackingBefore.get(ref), oid]);
     }
-    for (const [ref, oid] of trackingBefore) if (!git(['for-each-ref', ref])) git(['update-ref', ref, oid, '']);
+    for (const [ref, oid] of trackingBefore) if (!(await git(['for-each-ref', ref]))) await git(['update-ref', ref, oid, '']);
     if (push.status !== 0)
       throw new Error(`auto-rebase not pushed (${branch} moved on ${remote} since ${oldHead.slice(0, 7)}, or the push was refused): ${(push.err || push.out).trim()}`);
     const [entry] = parseChangelog(newLog);
@@ -170,11 +182,11 @@ export function rebaseChangelogOnly({ repo, branch, sha, base = 'main', remote =
     };
   } finally {
     if (worktree) {
-      git(['worktree', 'remove', '--force', worktree], { allowFail: true });
+      await git(['worktree', 'remove', '--force', worktree], { allowFail: true });
       rmSync(worktree, { recursive: true, force: true });
-      git(['worktree', 'prune'], { allowFail: true });
+      await git(['worktree', 'prune'], { allowFail: true });
     }
-    const refs = git(['for-each-ref', '--format=%(refname)', ns], { allowFail: true }).out;
-    for (const r of (refs ?? '').split('\n').filter(Boolean)) git(['update-ref', '-d', r], { allowFail: true });
+    const refs = (await git(['for-each-ref', '--format=%(refname)', ns], { allowFail: true })).out;
+    for (const r of (refs ?? '').split('\n').filter(Boolean)) await git(['update-ref', '-d', r], { allowFail: true });
   }
 }

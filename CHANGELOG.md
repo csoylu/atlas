@@ -6,6 +6,10 @@ computed by `scripts/release/changelog.mjs` from the oldest entry to the newest,
 `Fixed` → patch, `Added` or `Changed` → minor, `Breaking` (data or settings stop working without action) → major.
 Never type a version number.
 
+## Added · #216 · Pull requests of any project go through the same QA review as Atlas's, with that project's own rules
+
+Projects 4/5. Each project has its PR gate: repo, the CI check that must be green (empty = every check green) and whether each PR must add one changelog entry (migration 0050: Atlas keeps `test` and the changelog rule; a new project starts with any check and no changelog rule). The reviewer gives its verdict with a new engine tool, `pr_validate`, which runs the validation script's code with the task's project's gate from any workspace (Atlas's changelog-only auto-rebase, merge and refusals unchanged; `scripts/pr/validate.mjs` stays for the terminal, with `--repo`, `--ci-job`, `--no-changelog`). `task_request_review` refuses a PR from another repo than the task's project's, and a reviewer who is not a member of the project gets no run: the card says « review agent @X is not a member of project Y ».
+
 ## Added · #213 · Projects in the engine: everything you have is now the project « Atlas », and tasks, chats, artifacts and workflows each belong to a project
 
 Projects 1/5 (design §17). New tables `projects` and `project_members`; migration 0048 puts every task, chat, artifact, folder, workflow and memory in « Atlas » (csoylu/atlas), makes every agent a member in its current workspace (nothing moves) and the triage agent its lead. API to list, create, edit, archive and restore projects, and a repo check through gh. Lists and agent tools are scoped to the run's project; only a project's lead may act on or message another project. A project's new tasks go to its lead. Archiving keeps everything, stops its runs, turns its workflows off and makes it read-only. With one project nothing changes; the Projects UI comes later.

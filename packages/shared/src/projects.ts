@@ -32,6 +32,13 @@ export interface Project {
   name: string;
   /** GitHub owner/name, fixed once set; null = no repo. */
   repo: string | null;
+  /**
+   * PR validation gate (#216): the CI check that must be green on a PR's head before QA validates it; null = every
+   * check run on the head green. Atlas: « test ».
+   */
+  ciJob: string | null;
+  /** Each PR must add exactly one CHANGELOG.md entry (and a changelog-only conflict is rebased by the gate). Atlas: on. */
+  changelog: boolean;
   /** Gets the project's new tasks (triage); always a member. null = nobody triages. */
   lead: string | null;
   /** Hue 0-359 of its mark. */
@@ -44,9 +51,19 @@ export interface Project {
   isDefault: boolean;
 }
 
+/** A CI check name; empty = any (every check green). */
+const CiJob = z
+  .string()
+  .trim()
+  .max(100)
+  .transform((s) => s || null)
+  .nullable();
+
 export const CreateProject = z.object({
   name: z.string().trim().min(1).max(60),
   repo: RepoName.nullable().default(null),
+  ciJob: CiJob.default(null),
+  changelog: z.boolean().default(false),
   lead: z.string().min(1).nullable().default(null),
   /** Agents; the lead is added if missing. */
   members: z.array(z.string().min(1)).default([]),
@@ -60,6 +77,8 @@ export const UpdateProject = z
   .object({
     name: z.string().trim().min(1).max(60),
     repo: RepoName.nullable(),
+    ciJob: CiJob,
+    changelog: z.boolean(),
     lead: z.string().min(1).nullable(),
     /** The whole member list (the lead is added if missing). */
     members: z.array(z.string().min(1)),

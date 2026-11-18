@@ -7,6 +7,7 @@ import { InvalidError } from './kanban.ts';
 import type { Agents } from './agents.ts';
 import type { Runner } from './runner.ts';
 import { insertNotification } from './notifications.ts';
+import { isMember, projectRow } from './projects.ts';
 
 /**
  * Tasks linked to their pull requests (#189, design §7.1). A task In review has open PRs; this module reads them from
@@ -95,8 +96,9 @@ export function reviewKick(card: Card, prs: CardPr[]): string {
   const list = prs.map((p) => `PR #${p.number} (${p.url}, branch ${p.branch}, head ${p.headSha})`).join(', ');
   return (
     `You review this task's pull request${prs.length > 1 ? 's' : ''}: ${list}. CI is green. ` +
-    `@${card.assignee ?? 'nobody'} built it. Check it, then validate and merge it the way the project says (its CLAUDE.md), ` +
-    'or mark it failed with the reason. The task moves by itself: merged → done, failed → back to the builder with your reason.'
+    `@${card.assignee ?? 'nobody'} built it. Check it the way the project says (its CLAUDE.md), then give your verdict with pr_validate ` +
+    "(ok with the head sha you checked and merge: true, or fail with the reason for the builder): it applies the project's gate. " +
+    'The task moves by itself: merged → done, failed → back to the builder with your reason.'
   );
 }
 
@@ -288,6 +290,8 @@ export class Prs {
     const agent = this.agents.list().find((a) => a.id === card.reviewer);
     if (!agent) return `reviewer @${card.reviewer} does not exist`;
     if (!agent.enabled) return `reviewer @${agent.id} is disabled`;
+    // The review runs in the reviewer's workspace for the task's project (#216): a non-member has none.
+    if (!isMember(this.db, card.projectId, agent.id)) return `review agent @${agent.id} is not a member of project ${projectRow(this.db, card.projectId).name}: add it in Settings → Projects`;
     const busy = this.runner.workRuns(agent.id).filter((r) => r.cardId !== card.id);
     if (busy.length >= agent.maxRuns) return `waiting for @${agent.id} (busy with ${busy.map((r) => this.kanban.ref(r.cardId)).join(', ')})`;
     return null;

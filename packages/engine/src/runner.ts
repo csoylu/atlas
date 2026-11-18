@@ -45,6 +45,7 @@ import { Background, exitNote, type BgProcess } from './background.ts';
 import type { ShellEnv } from './shellEnv.ts';
 import type { Secrets } from './secrets.ts';
 import { isSecretTool, redactSecretCalls, runSecretTool, secretToolSpecs } from './secretTools.ts';
+import { isPrTool, prToolSpecs, runPrTool, type PrToolContext } from './prTools.ts';
 import { projectRow } from './projects.ts';
 
 interface RunRow {
@@ -100,6 +101,8 @@ export interface RunnerOptions {
   fileLog?: FileLog;
   /** What tool calls do outside the chat (tasks, messages, memories, schedules…), for rewinds (#138). */
   effects?: SideEffects;
+  /** pr_validate (#216) in tests: a fake GitHub, rebase and CI wait. */
+  prTool?: Pick<PrToolContext, 'gh' | 'rebase' | 'wait'>;
 }
 
 export interface WakeOptions {
@@ -488,6 +491,7 @@ export class Runner {
         ...(this.opts.documents ? docToolSpecs() : []),
         ...(cleanup ? cleanupToolSpecs() : []),
         ...(this.opts.secrets ? secretToolSpecs() : []),
+        ...prToolSpecs(first, agent.id),
       ];
       // Documents: a direct chat's panel is its own; a card's is the chat it was created from. Work is attached to its card.
       const panelChat = first.board === 'direct' ? first.id : first.originCard;
@@ -580,6 +584,8 @@ export class Runner {
               r = runDocTool(u.name, u.input, { documents: this.opts.documents, agentId: agent.id, chatId: panelChat, cardId: workCard, cardRef: (id) => this.kanban.ref(id), scope: (asked) => this.kanban.scope(agent.id, cardId, asked) });
             else if (this.opts.secrets && isSecretTool(u.name))
               r = await runSecretTool(u.name, u.input, { secrets: this.opts.secrets, agentId: agent.id, cardId: workCard, workdir, signal, env: (command) => this.shellEnvFor(agent.id, command) });
+            else if (isPrTool(u.name))
+              r = await runPrTool(u.name, u.input, { db: this.db, kanban: this.kanban, agentId: agent.id, cardId, workdir, signal, env: () => this.shellEnvFor(agent.id, ''), ...this.opts.prTool });
             else if (cleanup && isCleanupTool(u.name)) r = runCleanupTool(u.name, u.input, { cleanup, kanban: this.kanban, agents: this.agents, agentId: agent.id, cardId });
             else if (isTeamTool(u.name)) {
               const changeBefore = this.memories.lastChange();

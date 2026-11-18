@@ -54,21 +54,21 @@ function world() {
 describe('moveEntry', () => {
   const base = log(e('Added', 1, 'First'));
   const main = log(e('Fixed', 3, 'From main', 'Main details.'), e('Added', 1, 'First'));
-  it('puts the PR entry (with its details) above main’s entries, main’s text unchanged', () => {
+  it('puts the PR entry (with its details) above main’s entries, main’s text unchanged', async () => {
     const pr = log(e('Fixed', 2, 'Mine', 'Line one.\n\n- detail'), e('Added', 1, 'First'));
     expect(moveEntry(pr, base, main)).toBe(intro + e('Fixed', 2, 'Mine', 'Line one.\n\n- detail') + '\n' + e('Fixed', 3, 'From main', 'Main details.') + '\n' + e('Added', 1, 'First'));
   });
-  it('a commit before the entry exists gives main’s file as it is', () => {
+  it('a commit before the entry exists gives main’s file as it is', async () => {
     expect(moveEntry(base, base, main)).toBe(main);
   });
-  it('refuses a PR that edits the intro or an older entry', () => {
+  it('refuses a PR that edits the intro or an older entry', async () => {
     expect(() => moveEntry(log(e('Fixed', 2, 'Mine'), e('Added', 1, 'First', 'typo fix')), base, main)).toThrow(/more than its new top entry/);
     expect(() => moveEntry(base.replace('Newest', 'Latest'), base, main)).toThrow(/more than its new top entry/);
   });
 });
 
 describe('rebaseChangelogOnly on real git repos', { timeout: 60_000 }, () => {
-  it('changelog-only conflict: rebased, entry on top, older entries byte-identical, code unchanged, validator clone untouched', () => {
+  it('changelog-only conflict: rebased, entry on top, older entries byte-identical, code unchanged, validator clone untouched', async () => {
     const w = world();
     w.g('checkout', '-q', '-b', 'fix/2-mine');
     const pr = w.commit('#2 the fix', { 'CHANGELOG.md': log(e('Fixed', 2, 'Mine'), e('Added', 1, 'First')), 'a.txt': 'a1\nPR\na3\na4\na5\na6\na7\na8\n' });
@@ -79,7 +79,7 @@ describe('rebaseChangelogOnly on real git repos', { timeout: 60_000 }, () => {
     const mainLog = w.show(w.remote('main'));
     const before = w.state();
 
-    const r = w.rebase('fix/2-mine', pr.slice(0, 7));
+    const r = await w.rebase('fix/2-mine', pr.slice(0, 7));
 
     expect(r.oldHead).toBe(pr);
     expect(w.remote('fix/2-mine')).toBe(r.newHead);
@@ -95,7 +95,7 @@ describe('rebaseChangelogOnly on real git repos', { timeout: 60_000 }, () => {
     expect(w.state()).toEqual(before);
   });
 
-  it('fetches and pushes by URL, and puts back any origin/* ref the push moved (git 2.56 does, even by URL)', () => {
+  it('fetches and pushes by URL, and puts back any origin/* ref the push moved (git 2.56 does, even by URL)', async () => {
     const w = world();
     w.g('checkout', '-q', '-b', 'fix/2-mine');
     const pr = w.commit('#2 the fix', { 'CHANGELOG.md': log(e('Fixed', 2, 'Mine'), e('Added', 1, 'First')) });
@@ -111,7 +111,7 @@ describe('rebaseChangelogOnly on real git repos', { timeout: 60_000 }, () => {
     writeFileSync(hook, `#!/bin/sh\ngit update-ref refs/remotes/origin/fix/2-mine ${pr}\ngit update-ref refs/remotes/origin/main ${pr}\ngit update-ref -d refs/remotes/origin/HEAD\n`);
     chmodSync(hook, 0o755);
     const trace = join(w.dev, '..', 'trace.txt');
-    rebaseChangelogOnly({ repo: w.validator, branch: 'fix/2-mine', sha: pr, env: { ...ENV, GIT_TRACE: trace } });
+    await rebaseChangelogOnly({ repo: w.validator, branch: 'fix/2-mine', sha: pr, env: { ...ENV, GIT_TRACE: trace } });
     const cmds = readFileSync(trace, 'utf8').split('\n').filter((l) => /built-in: git (-C \S+ )?(fetch|push) /.test(l));
     expect(cmds.filter((c) => / fetch /.test(c))).toHaveLength(1);
     expect(cmds.filter((c) => / push /.test(c))).toHaveLength(1);
@@ -122,7 +122,7 @@ describe('rebaseChangelogOnly on real git repos', { timeout: 60_000 }, () => {
     expect(remotes()).toBe(remotesBefore);
   });
 
-  it('several commits, an entry with details written then edited: every commit replayed, the final entry on top', () => {
+  it('several commits, an entry with details written then edited: every commit replayed, the final entry on top', async () => {
     const w = world();
     w.g('checkout', '-q', '-b', 'feat/4-big');
     w.commit('#4 part one', { 'b.txt': 'b1\nb2\n' });
@@ -137,7 +137,7 @@ describe('rebaseChangelogOnly on real git repos', { timeout: 60_000 }, () => {
     w.commit('#6', { 'CHANGELOG.md': log(e('Fixed', 6, 'Six'), e('Fixed', 5, 'Five'), e('Added', 1, 'First')) });
     w.g('push', '-q', 'origin', 'main');
 
-    const r = w.rebase('feat/4-big', head);
+    const r = await w.rebase('feat/4-big', head);
 
     expect(r.commits).toBe(3);
     const subjects = execFileSync('git', ['-C', w.origin, 'log', '--format=%s', `${r.onto}..${r.newHead}`], { encoding: 'utf8' }).trim().split('\n');
@@ -149,7 +149,7 @@ describe('rebaseChangelogOnly on real git repos', { timeout: 60_000 }, () => {
     expect(w.show(r.newHead, 'b.txt')).toBe('b1\nb2\n');
   });
 
-  it('another file conflicts too: refused, nothing pushed, validator clone untouched', () => {
+  it('another file conflicts too: refused, nothing pushed, validator clone untouched', async () => {
     const w = world();
     w.g('checkout', '-q', '-b', 'fix/7-x');
     const pr = w.commit('#7', { 'CHANGELOG.md': log(e('Fixed', 7, 'Seven'), e('Added', 1, 'First')), 'b.txt': 'from PR\n' });
@@ -158,12 +158,12 @@ describe('rebaseChangelogOnly on real git repos', { timeout: 60_000 }, () => {
     w.commit('#8', { 'CHANGELOG.md': log(e('Fixed', 8, 'Eight'), e('Added', 1, 'First')), 'b.txt': 'from main\n' });
     w.g('push', '-q', 'origin', 'main');
     const before = w.state();
-    expect(() => w.rebase('fix/7-x', pr)).toThrow(/conflicts with main in b\.txt \(and CHANGELOG\.md\): rebase it by hand/);
+    await expect(w.rebase('fix/7-x', pr)).rejects.toThrow(/conflicts with main in b\.txt \(and CHANGELOG\.md\): rebase it by hand/);
     expect(w.remote('fix/7-x')).toBe(pr);
     expect(w.state()).toEqual(before);
   });
 
-  it('the head moved since the validation: refused, nothing pushed', () => {
+  it('the head moved since the validation: refused, nothing pushed', async () => {
     const w = world();
     w.g('checkout', '-q', '-b', 'fix/9-x');
     const reviewed = w.commit('#9', { 'CHANGELOG.md': log(e('Fixed', 9, 'Nine'), e('Added', 1, 'First')) });
@@ -172,11 +172,11 @@ describe('rebaseChangelogOnly on real git repos', { timeout: 60_000 }, () => {
     w.g('checkout', '-q', 'main');
     w.commit('#10', { 'CHANGELOG.md': log(e('Fixed', 10, 'Ten'), e('Added', 1, 'First')) });
     w.g('push', '-q', 'origin', 'main');
-    expect(() => w.rebase('fix/9-x', reviewed)).toThrow(/not the validated .*pushed after the review/);
+    await expect(w.rebase('fix/9-x', reviewed)).rejects.toThrow(/not the validated .*pushed after the review/);
     expect(w.remote('fix/9-x')).toBe(later);
   });
 
-  it('the head moves while it is being rebased: the push is refused (lease), the new commit stays', () => {
+  it('the head moves while it is being rebased: the push is refused (lease), the new commit stays', async () => {
     const w = world();
     w.g('checkout', '-q', '-b', 'fix/16-x');
     const reviewed = w.commit('#16', { 'CHANGELOG.md': log(e('Fixed', 16, 'Sixteen'), e('Added', 1, 'First')) });
@@ -188,11 +188,11 @@ describe('rebaseChangelogOnly on real git repos', { timeout: 60_000 }, () => {
     // The author pushes at the last moment: from the validator's pre-push hook, after the rebase was built.
     const hook = join(w.validator, '.git/hooks/pre-push');
     writeFileSync(hook, `#!/bin/sh\ngit -C "${w.dev}" push -q origin ${sneaky}:refs/heads/fix/16-x\n`, { mode: 0o755 });
-    expect(() => w.rebase('fix/16-x', reviewed)).toThrow(/not pushed .*moved/);
+    await expect(w.rebase('fix/16-x', reviewed)).rejects.toThrow(/not pushed .*moved/);
     expect(w.remote('fix/16-x')).toBe(sneaky);
   });
 
-  it('refuses a PR that also edits an older entry, a PR with a merge commit, and main itself', () => {
+  it('refuses a PR that also edits an older entry, a PR with a merge commit, and main itself', async () => {
     const w = world();
     w.g('checkout', '-q', '-b', 'fix/11-x');
     const edits = w.commit('#11', { 'CHANGELOG.md': log(e('Fixed', 11, 'Eleven'), e('Added', 1, 'First', 'edited body')) });
@@ -200,7 +200,7 @@ describe('rebaseChangelogOnly on real git repos', { timeout: 60_000 }, () => {
     w.g('checkout', '-q', 'main');
     w.commit('#12', { 'CHANGELOG.md': log(e('Fixed', 12, 'Twelve'), e('Added', 1, 'First')) });
     w.g('push', '-q', 'origin', 'main');
-    expect(() => w.rebase('fix/11-x', edits)).toThrow(/more than its new top entry/);
+    await expect(w.rebase('fix/11-x', edits)).rejects.toThrow(/more than its new top entry/);
     expect(w.remote('fix/11-x')).toBe(edits);
 
     w.g('checkout', '-q', '-b', 'fix/13-x', 'main~1');
@@ -208,21 +208,21 @@ describe('rebaseChangelogOnly on real git repos', { timeout: 60_000 }, () => {
     w.g('merge', '-q', '--no-ff', '-m', 'merge', 'fix/11-x');
     const merged = w.g('rev-parse', 'HEAD');
     w.g('push', '-q', 'origin', 'fix/13-x');
-    expect(() => w.rebase('fix/13-x', merged)).toThrow(/merge commits/);
+    await expect(w.rebase('fix/13-x', merged)).rejects.toThrow(/merge commits/);
 
-    expect(() => w.rebase('main', w.remote('main'))).toThrow(/will not rewrite "main"/);
+    await expect(w.rebase('main', w.remote('main'))).rejects.toThrow(/will not rewrite "main"/);
   });
 
-  it('a PR without conflict, or already on main: refused (nothing to rebase)', () => {
+  it('a PR without conflict, or already on main: refused (nothing to rebase)', async () => {
     const w = world();
     w.g('checkout', '-q', '-b', 'fix/14-x');
     const pr = w.commit('#14', { 'CHANGELOG.md': log(e('Fixed', 14, 'Fourteen'), e('Added', 1, 'First')) });
     w.g('push', '-q', 'origin', 'fix/14-x');
-    expect(() => w.rebase('fix/14-x', pr)).toThrow(/already contains main/);
+    await expect(w.rebase('fix/14-x', pr)).rejects.toThrow(/already contains main/);
     w.g('checkout', '-q', 'main');
     w.commit('#15 code only', { 'c.txt': 'x\n' });
     w.g('push', '-q', 'origin', 'main');
-    expect(() => w.rebase('fix/14-x', pr)).toThrow(/without conflict/);
+    await expect(w.rebase('fix/14-x', pr)).rejects.toThrow(/without conflict/);
     expect(readFileSync(join(w.dev, 'c.txt'), 'utf8')).toBe('x\n');
   });
 });
@@ -291,10 +291,10 @@ describe('validate.mjs --ok --merge on real git repos: no CI on a conflicting he
     log: () => {},
   });
 
-  it('changelog-only conflict, CI never ran on the head: rebases, waits for CI on the new head, validates and merges it', () => {
+  it('changelog-only conflict, CI never ran on the head: rebases, waits for CI on the new head, validates and merges it', async () => {
     const w = conflicting();
     const f = fakeGitHub(w, 'fix/2-mine', { pollsBeforeGreen: 2 });
-    const out = validate(opts(f.oldHead), f.gh, deps(w)).join('\n');
+    const out = (await validate(opts(f.oldHead), f.gh, deps(w))).join('\n');
     const newHead = w.remote('fix/2-mine');
     expect(newHead).not.toBe(f.oldHead);
     expect(f.calls.filter((c) => c[1]!.includes(`commits/${newHead}/check-runs`))).toHaveLength(3); // not run, not run, green
@@ -307,34 +307,34 @@ describe('validate.mjs --ok --merge on real git repos: no CI on a conflicting he
     expect(w.show(main)).toBe(log(e('Fixed', 2, 'Mine'), e('Fixed', 3, 'From main'), e('Added', 1, 'First')));
   });
 
-  it('CI that did run on the old head still counts: red or running there is refused, nothing rebased', () => {
+  it('CI that did run on the old head still counts: red or running there is refused, nothing rebased', async () => {
     for (const ci of [
       [{ id: 1, name: 'test', status: 'completed', conclusion: 'failure' }],
       [{ id: 1, name: 'test', status: 'in_progress', conclusion: null }],
     ]) {
       const w = conflicting();
       const f = fakeGitHub(w, 'fix/2-mine', { oldHeadCi: ci });
-      expect(() => validate(opts(f.oldHead), f.gh, deps(w))).toThrow(/refused: CI job "test" is (failure|still running)/);
+      await expect(validate(opts(f.oldHead), f.gh, deps(w))).rejects.toThrow(/refused: CI job "test" is (failure|still running)/);
       expect(w.remote('fix/2-mine')).toBe(f.oldHead);
       expect(f.statuses()).toHaveLength(0);
     }
   });
 
-  it('without --merge a conflicting PR is refused as before', () => {
+  it('without --merge a conflicting PR is refused as before', async () => {
     const w = conflicting();
     const f = fakeGitHub(w, 'fix/2-mine');
-    expect(() => validate(opts(f.oldHead, false), f.gh, deps(w))).toThrow(/conflicts with main: rebase it/);
+    await expect(validate(opts(f.oldHead, false), f.gh, deps(w))).rejects.toThrow(/conflicts with main: rebase it/);
     expect(w.remote('fix/2-mine')).toBe(f.oldHead);
     expect(f.statuses()).toHaveLength(0);
   });
 
-  it('a PR without conflict and without CI is refused as before, with or without --merge', () => {
+  it('a PR without conflict and without CI is refused as before, with or without --merge', async () => {
     const w = world();
     w.g('checkout', '-q', '-b', 'fix/2-mine');
     w.commit('#2 the fix', { 'CHANGELOG.md': log(e('Fixed', 2, 'Mine'), e('Added', 1, 'First')) });
     w.g('push', '-q', 'origin', 'fix/2-mine');
     const f = fakeGitHub(w, 'fix/2-mine', { oldHeadCi: [] });
-    for (const merge of [true, false]) expect(() => validate(opts(f.oldHead, merge), f.gh, deps(w))).toThrow(/has not run on .* yet/);
+    for (const merge of [true, false]) await expect(validate(opts(f.oldHead, merge), f.gh, deps(w))).rejects.toThrow(/has not run on .* yet/);
     expect(f.statuses()).toHaveLength(0);
     expect(f.calls.some((c) => /\/merge$/.test(c[1]!))).toBe(false);
   });

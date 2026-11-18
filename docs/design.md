@@ -264,7 +264,8 @@ Statuses: `triage → todo → ready → running → (blocked | review) → done
   - CI green, not validated, not yet reviewed on this head → the reviewer's run starts **in the task's own thread**
     (kind `work`, agent = reviewer, kick « You review this task's pull request… », prompt: review, don't fix). One run
     per head (`reviewed_sha`); a new `task_request_review` clears it. The reviewer validates and merges with
-    `scripts/pr/validate.mjs`; the merge then moves the card. Retry on an In review card starts the reviewer again.
+    the `pr_validate` tool (#216: `scripts/pr/validate.mjs` run in-process with the gate of the task's project: repo,
+    CI job, changelog rule); the merge then moves the card. The reviewer must be a member of the task's project. Retry on an In review card starts the reviewer again.
 - **GitHub unreadable** (gh missing, logged out, offline): nothing moves on old data; the card's why-line and the task
   view's banner say « can't read PR #N from GitHub since 10:42: gh: not logged in »; after 15 min one Inbox item
   (`github.unreadable`), archived by itself when a read works again.
