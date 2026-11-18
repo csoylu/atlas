@@ -12,7 +12,11 @@ interface Row {
   card_id: string | null;
   read_at: string | null;
   archived_at: string | null;
+  /** The card's project (#213), from ROW_SELECT. */
+  project_id: string | null;
 }
+/** A notification with its card's project (#213: the Inbox is one list, each row says its project). */
+const ROW_SELECT = 'SELECT n.*, c.project_id FROM notifications n LEFT JOIN cards c ON c.id = n.card_id';
 const toNotification = (r: Row): Notification => ({
   id: r.id,
   at: r.at,
@@ -22,6 +26,7 @@ const toNotification = (r: Row): Notification => ({
   cardId: r.card_id,
   readAt: r.read_at,
   archivedAt: r.archived_at,
+  projectId: r.project_id,
 });
 
 /** Rows the Inbox shows from the card's live state instead (« Needs you »), never as updates. */
@@ -40,7 +45,7 @@ export function insertNotification(db: Db, n: NewNotification, at = new Date()):
   const { lastInsertRowid } = db
     .prepare('INSERT INTO notifications (at, kind, title, body, card_id) VALUES (?, ?, ?, ?, ?)')
     .run(at.toISOString(), n.kind, n.title, n.body, n.cardId ?? null);
-  return toNotification(db.prepare('SELECT * FROM notifications WHERE id = ?').get(lastInsertRowid) as Row);
+  return toNotification(db.prepare(`${ROW_SELECT} WHERE n.id = ?`).get(lastInsertRowid) as Row);
 }
 
 /** Things the user is told about: a row each, an event the app turns into a system notification, and the Inbox. */
@@ -59,7 +64,7 @@ export class Notifications {
   }
 
   list(limit = 50): Notification[] {
-    return (this.db.prepare('SELECT * FROM notifications ORDER BY id DESC LIMIT ?').all(limit) as Row[]).map(toNotification);
+    return (this.db.prepare(`${ROW_SELECT} ORDER BY n.id DESC LIMIT ?`).all(limit) as Row[]).map(toNotification);
   }
 
   /**
@@ -90,7 +95,7 @@ export class Notifications {
       })
       .sort((a, b) => b.since.localeCompare(a.since));
     const updates = (
-      this.db.prepare(`SELECT * FROM notifications WHERE archived_at IS NULL AND kind NOT IN ${LIVE} ORDER BY id DESC LIMIT ?`).all(UPDATES_SHOWN) as Row[]
+      this.db.prepare(`${ROW_SELECT} WHERE n.archived_at IS NULL AND n.kind NOT IN ${LIVE} AND (c.project_id IS NULL OR c.project_id IN (SELECT id FROM projects WHERE status = 'active')) ORDER BY n.id DESC LIMIT ?`).all(UPDATES_SHOWN) as Row[]
     ).map(toNotification);
     return { needsYou, updates, badge: needsYou.length + updates.filter((u) => !u.readAt).length };
   }

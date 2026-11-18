@@ -833,6 +833,41 @@ These override the sections above where they differ.
   so the microphone closes and the orb hides; a timer ends a timed pause (re-armed at engine start); turning voice
   mode on/off clears it. No CPU indicator (Master, 14 Nov 2026).
 
-## 17. Open questions
+## 17. Projects (#213, 18 Nov 2026, `engine/src/projects.ts`, migration 0048)
+
+A project is a repo the team works on: a name, a GitHub repo `owner/name` (fixed once set), a lead, members, a colour
+(a hue Atlas picks from `PROJECT_HUES`, editable), active or archived. Model: diagram « Projects in Atlas: model »
+(@atlas `diagrams/projects-in-atlas-model.svg`); UI: paris's mockup (#212).
+
+- **Global**: agents (one identity each), You, global memory. **Per project**: tasks and direct chats
+  (`cards.project_id`), artifacts and folders (folder names unique per project), workflows (`project_id` null =
+  global: its tasks go to the default project), memories (levels come with #215), secrets (`secrets.project`, #206).
+- **Migration 0048**: everything that existed becomes « Atlas » (csoylu/atlas). Every agent is a member with
+  `workspace` null = its own `agents.workdir` (nothing cloned or moved); the `triage_agent` setting becomes the lead
+  and is removed (Settings → Board's triage agent now reads and writes the default project's lead). New agents join
+  the default project.
+- **Default project**: the oldest active one. What a task, chat, artifact or folder gets when none is given; the last
+  active project can't be archived. With one project nothing behaves differently.
+- **Scoping**: a task's project is set at creation and never changes (`UpdateCard` has no project). A task made by a
+  run gets the run's project (task_create, schedule_create, workflow steps: the workflow's). Its assignee must be a
+  member. Agent tools (task_list/show/update, schedule_*, artifact_*) act on the run's project; `project` may name
+  another one only for a lead (of either project), anyone else gets « only a project's lead can act on another
+  project ». agent_message / task_message: members of the same project; crossing is for a lead.
+- **Triage**: a project's new tasks go to its lead. The review agent stays one global setting (workflows v2).
+- **System prompt**: « # This conversation » names the project, its repo and lead; « # Team (project X) » lists its
+  members only.
+- **API**: `GET/POST /api/projects`, `GET/PATCH /api/projects/:id` (name, lead, members, colour; repo only while
+  none), `POST /api/projects/:id/archive|restore`, `GET /api/projects/repo-check?repo=` (gh with the login-shell env:
+  found, private, default branch, CLAUDE.md / AGENTS.md). Lists (`/api/cards`, `/api/chats`, `/api/documents`,
+  `/api/documents/search`, `/api/folders`, `/api/workflows`) take `?project=` (id or name); without it they show
+  active projects, `?archived=1` adds archived ones. The Inbox stays one list; each row carries its `projectId`.
+  Task numbers stay global.
+- **Archive**: nothing is deleted. Its workflows turn off (in the same transaction), its runs stop, every write
+  (card edits, messages, retries, new tasks/chats/folders/artifacts, turning a workflow on) is refused with « project X
+  is archived: … read-only », and it is hidden unless asked. Restore brings it back; workflows stay off.
+- **Next**: per-project workspaces and main chats (#214), memory and secrets levels (#215), the PR/QA gate for any
+  repo (#216), the UI (Projects page, switcher).
+
+## 18. Open questions
 - Import Hermes data (agents' prompts, memory, open cards) at step 6, or start clean?
 - Does the VPS run the only engine (desktop app connects to it), or does each machine run its own?

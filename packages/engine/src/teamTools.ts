@@ -5,6 +5,7 @@ import type { Kanban } from './kanban.ts';
 import { agentScope, memoryRef, parseMemoryRef, SHARED, type Memories, type Source } from './memory.ts';
 import { describeTrigger, oneStep, type Workflows } from './workflows.ts';
 import type { ToolSpec } from './providers/types.ts';
+import { ProjectArg } from './cardTools.ts';
 
 export interface TeamToolContext {
   kanban: Kanban;
@@ -114,7 +115,7 @@ export const TEAM_TOOLS = {
       'Its agent reads it and replies there; the reply does not come back to you automatically.',
     input: z.object({ id: z.union([z.string(), z.number().int()]).transform(String).describe('task number (#12 or 12) or id'), text: z.string().min(1) }),
     run: ({ id: ref, text }, ctx) => {
-      const id = ctx.kanban.resolve(ref);
+      const id = ctx.kanban.reach(ctx.agentId, ctx.cardId, ctx.kanban.resolve(ref)).id;
       if (id === ctx.cardId) throw new Error('that is your own task: just answer here');
       ctx.kanban.appendMessage(id, 'user', ctx.agentId, [{ type: 'text', text: `[from @${ctx.agentId}, task ${ctx.kanban.ref(ctx.cardId)}] ${text}` }]);
       ctx.deliver(id);
@@ -128,6 +129,7 @@ export const TEAM_TOOLS = {
     input: z.object({ agent: z.string().trim().min(1).describe('agent id, e.g. zurich'), text: z.string().trim().min(1) }),
     run: ({ agent, text }, ctx) => {
       const to = agent.replace(/^@/, '');
+      ctx.kanban.reachAgent(ctx.agentId, ctx.cardId, to);
       const target = ctx.kanban.sendAgentMessage(ctx.agentId, ctx.cardId, to, text);
       ctx.deliver(target.id);
       return `message sent to @${to} (${target.board === 'direct' ? 'its main chat' : `its task ${ctx.kanban.ref(target.id)}`}); its answer will come back here`;
@@ -135,10 +137,10 @@ export const TEAM_TOOLS = {
   }),
   // Schedules are one-step workflows since #170 (« trigger → one agent step »): same tools, same inputs.
   schedule_list: tool({
-    description: 'List schedules: what runs when, for which agent, and the task each one last posted on.',
-    input: z.object({}),
-    run: (_i, { workflows, kanban }) => {
-      const all = workflows.list();
+    description: "List this project's schedules (and global ones): what runs when, for which agent, and the task each one last posted on.",
+    input: z.object({ project: ProjectArg }),
+    run: ({ project }, { workflows, kanban, agentId, cardId }) => {
+      const all = workflows.list({ project: kanban.scope(agentId, cardId, project) });
       if (!all.length) return '(no schedules)';
       return all
         .map((w) => {
@@ -177,8 +179,9 @@ export const TEAM_TOOLS = {
       timezone: z.string().optional(),
       agent: z.string().optional(),
       new_task_each_time: z.boolean().default(false),
+      project: ProjectArg,
     }),
-    run: (i, { workflows, agentId }) => {
+    run: (i, { workflows, agentId, kanban, cardId }) => {
       if (!!i.cron === !!i.at) throw new Error('give exactly one of cron or at');
       const w = workflows.createOneStep(
         {
@@ -190,6 +193,7 @@ export const TEAM_TOOLS = {
           at: i.at ?? null,
           timezone: i.timezone,
           createCard: i.new_task_each_time,
+          projectId: kanban.scope(agentId, cardId, i.project),
         },
         agentId,
       );
@@ -200,8 +204,10 @@ export const TEAM_TOOLS = {
   schedule_delete: tool({
     description: 'Delete a schedule by id. Its tasks stay.',
     input: z.object({ id: z.string() }),
-    run: ({ id }, { workflows, agentId }) => {
-      if (!oneStep(workflows.get(id))) throw new Error(`${id} is a workflow of several steps: Master deletes it in Workflows`);
+    run: ({ id }, { workflows, agentId, kanban, cardId }) => {
+      const w = workflows.get(id);
+      if (w.projectId) kanban.scope(agentId, cardId, w.projectId);
+      if (!oneStep(w)) throw new Error(`${id} is a workflow of several steps: Master deletes it in Workflows`);
       workflows.remove(id, agentId);
       return `schedule ${id} deleted`;
     },

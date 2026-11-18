@@ -6,6 +6,10 @@ computed by `scripts/release/changelog.mjs` from the oldest entry to the newest,
 `Fixed` → patch, `Added` or `Changed` → minor, `Breaking` (data or settings stop working without action) → major.
 Never type a version number.
 
+## Added · #213 · Projects in the engine: everything you have is now the project « Atlas », and tasks, chats, artifacts and workflows each belong to a project
+
+Projects 1/5 (design §17). New tables `projects` and `project_members`; migration 0048 puts every task, chat, artifact, folder, workflow and memory in « Atlas » (csoylu/atlas), makes every agent a member in its current workspace (nothing moves) and the triage agent its lead. API to list, create, edit, archive and restore projects, and a repo check through gh. Lists and agent tools are scoped to the run's project; only a project's lead may act on or message another project. A project's new tasks go to its lead. Archiving keeps everything, stops its runs, turns its workflows off and makes it read-only. With one project nothing changes; the Projects UI comes later.
+
 ## Added · #207 · Agents can store a secret themselves without seeing it, and ask you for one they can't make
 
 Secrets 2/4 (engine). New tool `secret_set`: with `command`, Atlas runs the command and keeps its output as the secret's value without the agent, the transcript or the model ever seeing it; with `value`, the value is replaced by `[secret NAME]` in the stored conversation. A secret an agent makes is granted to that agent only, and an agent can change or delete (`secret_delete`) only its own secrets, never yours, another agent's or a model key. When an agent needs a key only you have, it blocks naming it (`task_block` with `secret`): a « no value » entry appears in Secrets, and the task restarts by itself once you add the value; deleting the entry dismisses it.

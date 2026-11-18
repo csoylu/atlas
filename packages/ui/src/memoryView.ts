@@ -204,5 +204,6 @@ export function digestItem(changes: MemoryChange[], marks: DigestMarks): Notific
     cardId: null,
     readAt: marks.seen && marks.seen >= at ? marks.seen : null,
     archivedAt: null,
+    projectId: null,
   };
 }

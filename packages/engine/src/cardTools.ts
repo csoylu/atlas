@@ -38,23 +38,26 @@ export function describeCard(c: Card, refOf: (id: string) => string = (id) => id
 /** describeCard with parents named by their #number. */
 export const describeWith = (kanban: Kanban) => (c: Card) => describeCard(c, (id) => kanban.ref(id));
 
+/** The project a tool acts on (#213): omitted = the run's own; another one only for a lead. */
+export const ProjectArg = z.string().min(1).optional().describe("project id or name; omitted = this run's project (another project: leads only)");
+
 /** Card ids the tools take: "#12", "12" or the internal id. */
 const CardId = z.union([z.string(), z.number().int()]).transform(String).describe('task number (#12 or 12) or id');
 
 export const CARD_TOOLS = {
   task_list: tool({
-    description: 'List tasks (archived excluded), optionally filtered by status.',
-    input: z.object({ status: z.string().optional() }),
-    run: ({ status }, { kanban }) => {
-      const cards = kanban.list().filter((c) => !status || c.status === status);
+    description: "List this project's tasks (archived excluded), optionally filtered by status.",
+    input: z.object({ status: z.string().optional(), project: ProjectArg }),
+    run: ({ status, project }, { kanban, agentId, cardId }) => {
+      const cards = kanban.list({ project: kanban.scope(agentId, cardId, project) }).filter((c) => !status || c.status === status);
       return cards.length ? cards.map(describeWith(kanban)).join('\n') : '(no tasks)';
     },
   }),
   task_show: tool({
     description: 'Show a task: fields, description, parents, block.',
     input: z.object({ id: CardId }),
-    run: ({ id }, { kanban }) => {
-      const c = kanban.get(kanban.resolve(id));
+    run: ({ id }, { kanban, agentId, cardId }) => {
+      const c = kanban.reach(agentId, cardId, kanban.resolve(id));
       return [describeWith(kanban)(c), c.block ? `blocked (${c.block.kind}): ${c.block.reason}` : '', '', c.body || '(no description)']
         .filter((l, i) => l || i > 1)
         .join('\n');
@@ -72,10 +75,12 @@ export const CARD_TOOLS = {
       priority: z.number().int().min(0).max(3).default(0),
       parents: z.array(CardId).default([]),
       status: Editable.default('ready'),
+      project: ProjectArg,
     }),
-    run: (i, { kanban, agentId, cardId }) => {
+    run: ({ project, ...i }, { kanban, agentId, cardId }) => {
       const origin = kanban.get(cardId).board === 'direct' ? cardId : null;
-      const c = kanban.create({ ...i, assignee: i.assignee ?? null }, agentId, origin);
+      // A task created by a run belongs to the run's project, for good (#213).
+      const c = kanban.create({ ...i, assignee: i.assignee ?? null, projectId: kanban.scope(agentId, cardId, project) }, agentId, origin);
       return `created ${describeWith(kanban)(c)}`;
     },
   }),
@@ -93,7 +98,7 @@ export const CARD_TOOLS = {
       parents: z.array(CardId).optional(),
       status: Editable.optional(),
     }),
-    run: ({ id, ...patch }, { kanban, agentId }) => `updated ${describeWith(kanban)(kanban.update(kanban.resolve(id), patch, agentId))}`,
+    run: ({ id, ...patch }, { kanban, agentId, cardId }) => `updated ${describeWith(kanban)(kanban.update(kanban.reach(agentId, cardId, kanban.resolve(id)).id, patch, agentId))}`,
   }),
   task_complete: tool({
     description: 'Finish your current task: the work is done and verified. The summary is the handoff (what changed, how it was checked).',

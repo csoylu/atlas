@@ -162,13 +162,42 @@ describe('store', () => {
     expect(db.prepare('SELECT doc_id FROM document_versions').all()).toEqual([{ doc_id: 'doc_f' }]);
     expect(db.prepare('SELECT doc_id FROM panel_tabs').all()).toEqual([{ doc_id: 'doc_f' }]);
     expect(db.prepare('SELECT id FROM canvases').all()).toEqual([{ id: 'cv_1' }]);
-    db.prepare("INSERT INTO folders VALUES ('fld_1', 'Feeds', 'x')").run();
+    db.prepare("INSERT INTO folders (id, name, created_at) VALUES ('fld_1', 'Feeds', 'x')").run();
     db.prepare("INSERT INTO documents (id, agent_id, path, kind, title, version, updated_by, updated_at, folder_id) VALUES ('doc_u', 'atlas', 'links/a.url', 'url', 'A', 1, 'atlas', 'x', 'fld_1')").run();
     db.prepare("DELETE FROM folders WHERE id = 'fld_1'").run();
     expect(db.prepare("SELECT folder_id FROM documents WHERE id = 'doc_u'").get()).toEqual({ folder_id: null });
     // Cascades still point at the rebuilt table.
     db.prepare("DELETE FROM documents WHERE id = 'doc_f'").run();
     expect(db.prepare('SELECT COUNT(*) AS n FROM document_versions').get()).toEqual({ n: 0 });
+    db.close();
+  });
+
+  it('0048 projects: everything becomes Atlas, every agent a member in its own workdir, the triage agent its lead', () => {
+    const dir = join(dirname(fileURLToPath(import.meta.url)), 'migrations');
+    const db = new Database(':memory:');
+    db.exec('CREATE TABLE schema_migrations (name TEXT PRIMARY KEY, applied_at TEXT NOT NULL)');
+    db.pragma('foreign_keys = OFF');
+    for (const f of readdirSync(dir).filter((f) => /^\d{4}_.+\.sql$/.test(f) && f < '0048').sort()) {
+      db.exec(readFileSync(join(dir, f), 'utf8'));
+      db.prepare('INSERT INTO schema_migrations (name, applied_at) VALUES (?, ?)').run(f, 'x');
+    }
+    db.pragma('foreign_keys = ON');
+    db.prepare("INSERT INTO agents (id, role_prompt, model_id, workdir) VALUES ('munih', 'r', 'sonnet', '/w/munih')").run();
+    db.prepare("INSERT OR REPLACE INTO settings (key, value) VALUES ('triage_agent', 'munih')").run();
+    db.prepare("INSERT INTO conversations (id, kind) VALUES ('k', 'card')").run();
+    db.prepare("INSERT INTO cards (id, title, status, conversation_id, created_by, created_at, updated_at) VALUES ('c_1', 't', 'ready', 'k', 'user', 'x', 'x')").run();
+    db.prepare("INSERT INTO folders (id, name, created_at) VALUES ('fld_1', 'Feeds', 'x')").run();
+    expect(migrate(db)).toEqual(['0048_projects.sql']);
+    expect(db.prepare('SELECT id, name, repo, lead, status FROM projects').all()).toEqual([{ id: 'atlas', name: 'Atlas', repo: 'csoylu/atlas', lead: 'munih', status: 'active' }]);
+    expect(db.prepare('SELECT agent_id, workspace, clone_state FROM project_members ORDER BY agent_id').all()).toEqual([
+      { agent_id: 'atlas', workspace: null, clone_state: 'ready' },
+      { agent_id: 'munih', workspace: null, clone_state: 'ready' },
+    ]);
+    expect(db.prepare("SELECT workdir FROM agents WHERE id = 'munih'").get()).toEqual({ workdir: '/w/munih' }); // nothing moves
+    expect(db.prepare("SELECT 1 FROM settings WHERE key = 'triage_agent'").get()).toBeUndefined();
+    for (const t of ['cards', 'folders', 'documents', 'workflows', 'memories']) expect(db.prepare(`SELECT COUNT(*) AS n FROM ${t} WHERE project_id IS NOT 'atlas'`).get()).toEqual({ n: 0 });
+    expect(db.prepare('SELECT project_id FROM cards').all()).toEqual([{ project_id: 'atlas' }]);
+    expect(db.pragma('foreign_key_check')).toEqual([]);
     db.close();
   });
 });

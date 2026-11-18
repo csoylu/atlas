@@ -95,8 +95,9 @@ export class Dispatcher {
             this.kanban.appendMessage(c.id, 'user', 'system', [{ type: 'text', text: `The tasks this one waited on are done (${c.parents.map((p) => this.kanban.ref(p)).join(', ')}). Continue where you left off.` }]);
         }
       }
-      const triageAgent = this.settings.get().triageAgent;
       for (const c of this.kanban.list()) {
+        // A project's new tasks go to its lead (#213).
+        const triageAgent = c.status === 'triage' ? this.kanban.leadOf(c.projectId) : null;
         if (c.status !== 'triage' || !triageAgent || this.runner.current(c.id)) continue;
         if (this.agentUsable(triageAgent) || this.failedSinceCanWrote(c.id)) continue;
         const fresh = this.runner.runs(c.id).length === 0;
@@ -230,7 +231,7 @@ export class Dispatcher {
   /** The model of the agent that would act on this card, if it is marked failed. */
   private failedModelFor(cardId: string): string | null {
     const c = this.kanban.get(cardId);
-    const agentId = c.status === 'triage' ? this.settings.get().triageAgent : c.assignee;
+    const agentId = c.status === 'triage' ? this.kanban.leadOf(c.projectId) : c.assignee;
     const own = c.status === 'triage' ? null : c.modelId;
     const modelId = own ?? (agentId ? this.agents.list().find((a) => a.id === agentId)?.modelId : undefined);
     return modelId && this.models.list().find((m) => m.id === modelId)?.lastError ? modelId : null;
@@ -297,8 +298,8 @@ export class Dispatcher {
   reason(c: Card): string | null {
     switch (c.status) {
       case 'triage': {
-        const t = this.settings.get().triageAgent;
-        if (!t) return 'no triage agent set';
+        const t = this.kanban.leadOf(c.projectId);
+        if (!t) return 'no triage agent set: choose the project lead';
         if (this.runner.current(c.id)) return null;
         const bad = this.agentUsable(t);
         if (bad) return bad;

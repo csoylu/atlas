@@ -1,4 +1,4 @@
-import express, { type ErrorRequestHandler } from 'express';
+import express, { type ErrorRequestHandler, type Request } from 'express';
 import { createServer, type IncomingMessage, type Server } from 'node:http';
 import { existsSync } from 'node:fs';
 import { join, relative } from 'node:path';
@@ -18,6 +18,7 @@ import { localTimeZone, upcoming, type Workflows } from './workflows.ts';
 import type { Secrets } from './secrets.ts';
 import { SecretsPasswordError } from './secretFile.ts';
 import type { Documents } from './documents.ts';
+import type { Projects } from './projects.ts';
 import { findSection, formatDocRef, splitSections } from '@atlas/shared';
 import { workdirOf } from './agents.ts';
 import { inside } from './tools.ts';
@@ -76,8 +77,9 @@ export function createApi(deps: {
   env: NodeJS.ProcessEnv;
   /** Login and cross-site checks (auth.ts). */
   auth: Auth;
+  projects: Projects;
 }): Server {
-  const { kanban, agents, models, runner, rewinds, slash, dispatcher, settings, documents, memories, cleanup, workflows, local, accounts, chatgpt, claude, plans, notifications, usage, bus, auth } = deps;
+  const { kanban, agents, models, runner, rewinds, slash, dispatcher, settings, documents, memories, cleanup, workflows, local, accounts, chatgpt, claude, plans, notifications, usage, bus, auth, projects } = deps;
   const app = express();
   const uploads = new Uploads(deps.dataDir);
   const taskImages = new TaskImages(deps.dataDir, uploads);
@@ -149,8 +151,17 @@ export function createApi(deps: {
   });
 
 
-  app.get('/api/cards', (_req, res) => {
-    res.json(kanban.list());
+  /**
+   * Lists take `?project=<id or name>` (#213): that project only. Without it, every active project; `?archived=1`
+   * shows archived projects' too.
+   */
+  const projectQuery = (req: Request): { project?: string; archived: boolean } => {
+    const q = req.query as Record<string, unknown>;
+    return { project: typeof q.project === 'string' && q.project ? projects.get(q.project).id : undefined, archived: q.archived === '1' || q.archived === 'true' };
+  };
+  app.get('/api/cards', (req, res) => {
+    const { project, archived } = projectQuery(req);
+    res.json(kanban.list({ project, archivedProjects: archived }));
   });
   // `uploads`: staged images (POST /api/uploads) attached to the new task, placed and listed in its row (#119).
   app.post('/api/cards', async (req, res) => {
@@ -203,6 +214,7 @@ export function createApi(deps: {
   app.post('/api/cards/:id/messages', async (req, res) => {
     const { text, ref, uploads: ids } = PostMessage.parse(req.body);
     const card = kanban.get(req.params.id);
+    projects.assertActive(card.projectId, 'its tasks and chats'); // archived (#213): read-only
     if (ids.length && !card.assignee) throw new InvalidError('assign an agent before sending images: they go into its workspace');
     // The card's state before this message: « Rewind to here » / Stop go back to it (rewind.ts).
     const snapshot = rewinds.beforeUserMessage(req.params.id);
@@ -278,6 +290,7 @@ export function createApi(deps: {
     res.json(timeline);
   });
   app.post('/api/cards/:id/retry', async (req, res) => {
+    projects.assertActive(kanban.get(req.params.id).projectId, 'its tasks');
     await dispatcher.retry(req.params.id);
     res.json(kanban.get(req.params.id));
   });
@@ -309,8 +322,9 @@ export function createApi(deps: {
   });
 
   /** Direct chats (Kanban.newChat), latest first; the card id is used with the card message/stop/retry/delete routes. */
-  app.get('/api/chats', (_req, res) => {
-    res.json(kanban.directs());
+  app.get('/api/chats', (req, res) => {
+    const { project, archived } = projectQuery(req);
+    res.json(kanban.directs({ project, archivedProjects: archived }));
   });
   app.post('/api/agents/:id/chats', (req, res) => {
     if (!agents.list().some((a) => a.id === req.params.id)) throw new NotFoundError(`agent ${req.params.id} not found`);
@@ -407,22 +421,25 @@ export function createApi(deps: {
   // ── Documents and side panels (design §16) ───────────────────────────
   app.get('/api/documents', (req, res) => {
     // Without a card: the Library, every artifact re-synced (files changed outside Atlas).
-    res.json(typeof req.query.card === 'string' ? documents.list({ cardId: req.query.card }) : documents.library());
+    const { project, archived } = projectQuery(req);
+    res.json(typeof req.query.card === 'string' ? documents.list({ cardId: req.query.card }) : documents.library({ project, archived }));
   });
   /** Library search: titles and content, every folder (a content match has a snippet). */
   app.get('/api/documents/search', (req, res) => {
-    res.json(documents.search(typeof req.query.q === 'string' ? req.query.q : ''));
+    res.json(documents.search(typeof req.query.q === 'string' ? req.query.q : '', 50, projectQuery(req).project));
   });
   app.post('/api/documents/:id/move', (req, res) => {
     const folderId = (req.body as { folderId?: unknown }).folderId;
     if (folderId !== null && typeof folderId !== 'string') throw new InvalidError('folderId must be a folder id or null (Unfiled)');
     res.json(documents.move(req.params.id, folderId));
   });
-  app.get('/api/folders', (_req, res) => {
-    res.json(documents.folders());
+  app.get('/api/folders', (req, res) => {
+    res.json(documents.folders(projectQuery(req).project));
   });
+  /** `projectId`: omitted = the default project. */
   app.post('/api/folders', (req, res) => {
-    res.status(201).json(documents.createFolder(String((req.body as { name?: unknown }).name ?? '')));
+    const b = req.body as { name?: unknown; projectId?: unknown };
+    res.status(201).json(documents.createFolder(String(b.name ?? ''), typeof b.projectId === 'string' ? projects.get(b.projectId).id : undefined));
   });
   app.patch('/api/folders/:id', (req, res) => {
     res.json(documents.renameFolder(req.params.id, String((req.body as { name?: unknown }).name ?? '')));
@@ -744,9 +761,43 @@ export function createApi(deps: {
     );
   });
 
+  // ── Projects (#213, design §17) ─────────────────────────────────────────
+  app.get('/api/projects', (req, res) => {
+    res.json(projects.list({ archived: projectQuery(req).archived }));
+  });
+  /** The New project form: is the repo readable with Master's gh login, its default branch, its CLAUDE.md / AGENTS.md. */
+  app.get('/api/projects/repo-check', async (req, res) => {
+    res.json(await projects.checkRepo(String(req.query.repo ?? '')));
+  });
+  app.get('/api/projects/:id', (req, res) => {
+    res.json(projects.get(req.params.id));
+  });
+  app.post('/api/projects', (req, res) => {
+    res.status(201).json(projects.create(req.body));
+  });
+  /** Name, lead, members, colour; a repo only while it has none. */
+  app.patch('/api/projects/:id', (req, res) => {
+    res.json(projects.update(req.params.id, req.body));
+    dispatcher.tick(); // a new lead triages the waiting tasks
+  });
+  /** Archive (nothing deleted): its workflows go off, its runs stop, its tasks and chats become read-only. */
+  app.post('/api/projects/:id/archive', (req, res) => {
+    const p = projects.get(req.params.id);
+    const on = workflows.list({ project: p.id, archived: true }).filter((w) => w.projectId === p.id && w.enabled);
+    const archived = projects.archive(p.id); // turns its workflows off in the same transaction
+    for (const w of on) bus.emit({ type: 'workflow.updated', workflow: workflows.get(w.id) });
+    for (const c of [...kanban.list({ project: p.id, includeArchived: true }), ...kanban.directs({ project: p.id })]) runner.stop(c.id, `project ${p.name} archived`);
+    res.json(archived);
+  });
+  app.post('/api/projects/:id/restore', (req, res) => {
+    res.json(projects.restore(req.params.id));
+    dispatcher.tick();
+  });
+
   // ── Workflows (#170, design §9) ─────────────────────────────────────────
-  app.get('/api/workflows', (_req, res) => {
-    res.json(workflows.list());
+  app.get('/api/workflows', (req, res) => {
+    const { project, archived } = projectQuery(req);
+    res.json(workflows.list({ project, archived }));
   });
   /** Next firings of a draft time trigger, for the editor's preview. A bad cron or zone comes back as 400 with the reason. */
   app.post('/api/workflows/preview', (req, res) => {

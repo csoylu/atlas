@@ -21,6 +21,7 @@ import { MEMORY_SELECT, staleCardMemories, toMemory } from './memory.ts';
 import { isCleanupCard } from './cleanup.ts';
 import { stripData } from './images.ts';
 import { cardPrs, parsePrUrl } from './prs.ts';
+import { assertActive, defaultProjectId, isMember, leadOf, projectForNewCard, projectRow, resolveProject, scopeFor } from './projects.ts';
 
 interface CardRow {
   id: string;
@@ -44,6 +45,7 @@ interface CardRow {
   origin_card: string | null;
   images: string;
   reviewer: string | null;
+  project_id: string;
 }
 interface MessageRow {
   id: string;
@@ -203,6 +205,7 @@ export class Kanban {
       images: JSON.parse(r.images || '[]') as ImageBlock[],
       reviewer: r.reviewer,
       prs: r.board === 'main' ? cardPrs(this.db, r.id) : [],
+      projectId: r.project_id,
     };
     card.waiting = this.waitingReason(card);
     return card;
@@ -214,13 +217,20 @@ export class Kanban {
     );
   }
 
-  /** Cards on the kanban board (direct chats are not cards on the board: see direct()). */
-  list(opts: { includeArchived?: boolean } = {}): Card[] {
-    const rows = this.db
-      .prepare(
-        `SELECT * FROM cards WHERE board = 'main' ${opts.includeArchived ? '' : "AND status != 'archived'"} ORDER BY priority DESC, created_at`,
-      )
-      .all() as CardRow[];
+  /**
+   * Cards on the kanban board (direct chats are not cards on the board: see direct()). `project`: that project's only
+   * (archived or not). Otherwise the cards of archived projects are left out (#213), unless `archivedProjects`;
+   * `includeArchived` (archived cards) takes every project.
+   */
+  list(opts: { includeArchived?: boolean; project?: string; archivedProjects?: boolean } = {}): Card[] {
+    const where = ["board = 'main'"];
+    const args: string[] = [];
+    if (!opts.includeArchived) where.push("status != 'archived'");
+    if (opts.project) {
+      where.push('project_id = ?');
+      args.push(opts.project);
+    } else if (!opts.includeArchived && !opts.archivedProjects) where.push("project_id IN (SELECT id FROM projects WHERE status = 'active')");
+    const rows = this.db.prepare(`SELECT * FROM cards WHERE ${where.join(' AND ')} ORDER BY priority DESC, created_at, rowid`).all(...args) as CardRow[];
     const links = new Map<string, string[]>();
     for (const l of this.db.prepare('SELECT parent_id, child_id FROM card_links ORDER BY parent_id').all() as {
       parent_id: string;
@@ -252,6 +262,35 @@ export class Kanban {
     const row = this.db.prepare('SELECT * FROM cards WHERE id = ?').get(id) as CardRow | undefined;
     if (!row) throw new NotFoundError(`task ${id} not found`);
     return this.toCard(row, this.parentsOf(id));
+  }
+
+  /**
+   * The project a tool call from `cardId`'s run acts on (#213): its own, or `asked` for a lead (projects.scopeFor).
+   */
+  scope(agentId: string, cardId: string, asked?: unknown): string {
+    return scopeFor(this.db, agentId, this.get(cardId).projectId, asked);
+  }
+
+  /** Refuse a tool call from `cardId`'s run on a card of another project, unless the agent leads one of the two. */
+  reach(agentId: string, cardId: string, targetId: string): Card {
+    const target = this.get(targetId);
+    scopeFor(this.db, agentId, this.get(cardId).projectId, target.projectId);
+    return target;
+  }
+
+  /** Refuse an agent_message to an agent outside the run's project, unless the sender leads it (#213). */
+  reachAgent(agentId: string, cardId: string, to: string): void {
+    const project = this.get(cardId).projectId;
+    if (!this.db.prepare('SELECT 1 FROM agents WHERE id = ?').get(to)) return; // agentInbox says it doesn't exist
+    if (isMember(this.db, project, to) || leadOf(this.db, project) === agentId) return;
+    const leads = this.db.prepare('SELECT 1 FROM projects p JOIN project_members m ON m.project_id = p.id WHERE p.lead = ? AND m.agent_id = ?').get(agentId, to);
+    if (leads) return;
+    throw new InvalidError(`@${to} is not a member of project ${projectRow(this.db, project).name}: only a project's lead can reach agents of another project`);
+  }
+
+  /** The lead of a project (#213): it triages the project's new tasks. */
+  leadOf(projectId: string): string | null {
+    return leadOf(this.db, projectId);
   }
 
   /** Parents that are not done yet. */
@@ -286,14 +325,17 @@ export class Kanban {
     const conv = 'conv_' + id;
     this.db.transaction(() => {
       this.checkAssignee(c.assignee);
+      // A task's project is set here and never changes (#213). Direct chats: the default project until #214.
+      const project = board === 'main' ? projectForNewCard(this.db, c.projectId, c.assignee) : c.projectId ? resolveProject(this.db, c.projectId) : defaultProjectId(this.db);
+      if (board === 'direct') assertActive(this.db, project, 'it takes no new chat');
       if (origin && this.get(origin).board !== 'direct') throw new InvalidError(`origin ${origin} is not a direct chat`);
       this.db.prepare("INSERT INTO conversations (id, agent_id, kind) VALUES (?, ?, 'card')").run(conv, c.assignee);
       this.db
         .prepare(
-          `INSERT INTO cards (id, title, body, status, assignee, priority, conversation_id, created_by, created_at, updated_at, images)
-           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+          `INSERT INTO cards (id, title, body, status, assignee, priority, conversation_id, created_by, created_at, updated_at, images, project_id)
+           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
         )
-        .run(id, c.title, c.body, c.status, c.assignee, c.priority, conv, by, now, now, JSON.stringify(stripData(images)));
+        .run(id, c.title, c.body, c.status, c.assignee, c.priority, conv, by, now, now, JSON.stringify(stripData(images)), project);
       if (board === 'main') {
         const { last } = this.db.prepare('UPDATE card_counter SET last = last + 1 WHERE id = 1 RETURNING last').get() as { last: number };
         this.db.prepare('UPDATE cards SET number = ? WHERE id = ?').run(last, id);
@@ -311,10 +353,11 @@ export class Kanban {
    * so the dispatcher never works it; the user's messages wake the agent in chat mode (Dispatcher.onUserMessage). Its title
    * is NEW_CHAT until the user's first message names it (appendMessage).
    */
-  newChat(agentId: string): Card {
+  /** `projectId`: the chat's project (#213), fixed for good; omitted = the default project. */
+  newChat(agentId: string, projectId?: string): Card {
     const card = this.db
       .transaction(() => {
-        const c = this.insert({ title: NEW_CHAT, status: 'done', assignee: agentId }, 'user', null, 'direct');
+        const c = this.insert({ title: NEW_CHAT, status: 'done', assignee: agentId, projectId }, 'user', null, 'direct');
         this.db.prepare("UPDATE conversations SET kind = 'chat' WHERE id = ?").run(c.conversationId);
         return c.id;
       })
@@ -377,9 +420,11 @@ export class Kanban {
   }
 
   /** Direct chats (chat history), latest activity first: a message bumps the chat's updated_at. */
-  directs(): Card[] {
+  /** `project`: that project's chats (#213); else those of active projects (`archivedProjects`: all). */
+  directs(opts: { project?: string; archivedProjects?: boolean } = {}): Card[] {
+    const scope = opts.project ? 'AND project_id = ?' : opts.archivedProjects ? '' : "AND project_id IN (SELECT id FROM projects WHERE status = 'active')";
     return (
-      this.db.prepare("SELECT id FROM cards WHERE board = 'direct' AND status != 'archived' ORDER BY updated_at DESC, created_at DESC").all() as {
+      this.db.prepare(`SELECT id FROM cards WHERE board = 'direct' AND status != 'archived' ${scope} ORDER BY updated_at DESC, created_at DESC`).all(...(opts.project ? [opts.project] : [])) as {
         id: string;
       }[]
     ).map((r) => this.get(r.id));
@@ -403,7 +448,8 @@ export class Kanban {
     if (p.effort !== undefined) cols.effort = p.effort;
     if (Object.keys(cols).length === 0 && p.parents === undefined) return before;
     this.tx(() => {
-      if (p.assignee !== undefined) this.checkAssignee(p.assignee);
+      assertActive(this.db, before.projectId, cardRef(before));
+      if (p.assignee !== undefined) this.checkAssignee(p.assignee, before.projectId);
       if (p.modelId && !this.db.prepare('SELECT 1 FROM models WHERE id = ?').get(p.modelId)) throw new ConflictError(`model ${p.modelId} does not exist`);
       if (Object.keys(cols).length) {
         // Picking a chat's model or effort isn't activity: it must not move the chat up the history.
@@ -469,9 +515,11 @@ export class Kanban {
     const prs = urls.map(parsePrUrl);
     const setting = (k: string) => (this.db.prepare('SELECT value FROM settings WHERE key = ?').get(k) as { value: string } | undefined)?.value || null;
     const review = setting('review_agent');
-    const reviewer = review && review === before.assignee ? setting('triage_agent') : review;
+    // The review agent's own PR goes to the project's lead (it was the triage agent before projects, #213).
+    const reviewer = review && review === before.assignee ? leadOf(this.db, before.projectId) : review;
     const now = new Date().toISOString();
     this.tx(() => {
+      assertActive(this.db, before.projectId, cardRef(before));
       for (const pr of prs)
         this.db
           .prepare(
@@ -824,9 +872,11 @@ export class Kanban {
       .run(cardId, new Date().toISOString(), kind, JSON.stringify(payload));
   }
 
-  private checkAssignee(agent: string | null): void {
+  /** `project`: the agent must also be one of its members (#213). */
+  private checkAssignee(agent: string | null, project?: string): void {
     if (agent && !this.db.prepare('SELECT 1 FROM agents WHERE id = ?').get(agent))
       throw new ConflictError(`agent ${agent} does not exist`);
+    if (agent && project && !isMember(this.db, project, agent)) throw new InvalidError(`@${agent} is not a member of project ${projectRow(this.db, project).name}`);
   }
 
   /** `parents`: references ("#12", "12" or ids). */

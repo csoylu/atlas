@@ -13,7 +13,7 @@ describe('artifacts helpers', () => {
   it('labels versions and folders', () => {
     expect(versionLabel(3, 3)).toBe('v3');
     expect(versionLabel(1, 3)).toBe('v1 of 3');
-    expect(folderName([{ id: 'f1', name: 'Feeds', createdAt: '' }], 'f1')).toBe('Feeds');
+    expect(folderName([{ id: 'f1', name: 'Feeds', createdAt: '', projectId: 'atlas' }], 'f1')).toBe('Feeds');
     expect(folderName([], null)).toBe('Unfiled');
   });
 });

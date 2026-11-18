@@ -22,6 +22,7 @@ import {
 import type { Db } from './store/db.ts';
 import type { Bus } from './events.ts';
 import { ConflictError, InvalidError, NotFoundError, type Kanban } from './kanban.ts';
+import { assertActive, defaultProjectId, resolveProject } from './projects.ts';
 import { APPROVE, REJECT, cut, describeTrigger, firstLine, localTimeZone, stamp, stepTitle, triggerWhen, upcoming } from './workflowTime.ts';
 
 export { describeTrigger, describeWhen, localTimeZone, oneStep, upcoming } from './workflowTime.ts';
@@ -44,6 +45,7 @@ interface WfRow {
   created_by: string;
   created_at: string;
   updated_at: string;
+  project_id: string | null;
 }
 interface NodeRow {
   workflow_id: string;
@@ -114,6 +116,8 @@ export interface OneStep {
   timezone?: string;
   createCard?: boolean;
   enabled?: boolean;
+  /** omitted = the default project; null = global. */
+  projectId?: string | null;
 }
 
 /**
@@ -167,8 +171,17 @@ export class Workflows {
 
   /* ── Reading ── */
 
-  list(): Workflow[] {
-    const rows = this.db.prepare('SELECT * FROM workflows ORDER BY enabled DESC, next_run_at IS NULL, next_run_at, created_at').all() as WfRow[];
+  /**
+   * `project`: that project's workflows and the global ones (#213). Otherwise every workflow except those of archived
+   * projects (`archived` keeps them).
+   */
+  list(opts: { project?: string; archived?: boolean } = {}): Workflow[] {
+    const where = opts.project
+      ? 'WHERE project_id = ? OR project_id IS NULL'
+      : opts.archived
+        ? ''
+        : "WHERE project_id IS NULL OR project_id IN (SELECT id FROM projects WHERE status = 'active')";
+    const rows = this.db.prepare(`SELECT * FROM workflows ${where} ORDER BY enabled DESC, next_run_at IS NULL, next_run_at, created_at`).all(...(opts.project ? [opts.project] : [])) as WfRow[];
     return rows.map((r) => this.toWorkflow(r));
   }
 
@@ -210,11 +223,14 @@ export class Workflows {
     const now = this.now().toISOString();
     this.tx(() => {
       if (this.db.prepare('SELECT 1 FROM workflows WHERE id = ?').get(id)) throw new ConflictError(`workflow ${id} already exists`);
+      // Its project (#213): omitted = the default one, null = global.
+      const project = c.projectId === undefined ? defaultProjectId(this.db) : c.projectId === null ? null : resolveProject(this.db, c.projectId);
+      if (project) assertActive(this.db, project, 'it takes no new workflow');
       const trigger = this.check(c);
       const next = c.enabled ? this.firstRun(trigger) : null;
       this.db
-        .prepare('INSERT INTO workflows (id, name, enabled, origin, revision, next_run_at, created_by, created_at, updated_at) VALUES (?, ?, ?, NULL, 1, ?, ?, ?, ?)')
-        .run(id, c.name, c.enabled ? 1 : 0, next, by, now, now);
+        .prepare('INSERT INTO workflows (id, name, enabled, origin, revision, next_run_at, created_by, created_at, updated_at, project_id) VALUES (?, ?, ?, NULL, 1, ?, ?, ?, ?, ?)')
+        .run(id, c.name, c.enabled ? 1 : 0, next, by, now, now, project);
       this.writeGraph(id, c);
       this.touched.workflows.add(id);
     });
@@ -234,6 +250,7 @@ export class Workflows {
           { id: 'step1', kind: 'agent', x: 300, y: 120, config: { title, agentId: s.agentId, prompt: s.prompt, newTaskEachRun: s.createCard ?? false } },
         ],
         edges: [{ from: 'trigger', exit: 'start', to: 'step1' }],
+        ...(s.projectId !== undefined ? { projectId: s.projectId } : {}),
       },
       by,
       id,
@@ -265,6 +282,7 @@ export class Workflows {
       const now = this.now().toISOString();
       if (p.name !== undefined) this.db.prepare('UPDATE workflows SET name = ?, updated_at = ? WHERE id = ?').run(p.name, now, id);
       if (p.enabled !== undefined && p.enabled !== !!w.enabled) {
+        if (p.enabled && w.project_id) assertActive(this.db, w.project_id, `workflow « ${w.name} »`);
         const next = p.enabled ? this.firstRun(this.trigger(id)) : null;
         this.db.prepare('UPDATE workflows SET enabled = ?, next_run_at = ?, updated_at = ? WHERE id = ?').run(p.enabled ? 1 : 0, next, now, id);
       }
@@ -333,7 +351,9 @@ export class Workflows {
 
   private fireDue(): void {
     const now = this.now().toISOString();
-    for (const w of this.db.prepare('SELECT * FROM workflows WHERE enabled = 1 AND next_run_at <= ? ORDER BY next_run_at').all(now) as WfRow[]) {
+    // An archived project's workflows never fire (archive turns them off; this guards a stray one).
+    const due = `SELECT * FROM workflows WHERE enabled = 1 AND next_run_at <= ? AND (project_id IS NULL OR project_id IN (SELECT id FROM projects WHERE status = 'active')) ORDER BY next_run_at`;
+    for (const w of this.db.prepare(due).all(now) as WfRow[]) {
       try {
         this.tx(() => void this.fire(w, 'time'));
       } catch (e) {
@@ -357,6 +377,7 @@ export class Workflows {
 
   /** Start a run (inside a transaction). Returns its id, or null if another tick already claimed this time slot. */
   private fire(w: WfRow, trigger: 'time' | 'manual'): string | null {
+    if (w.project_id) assertActive(this.db, w.project_id, `workflow « ${w.name} »`);
     const now = this.now();
     const iso = now.toISOString();
     const t = this.trigger(w.id);
@@ -437,7 +458,7 @@ export class Workflows {
       let card: Card;
       if (c.newTaskEachRun) {
         const title = `${stepTitle(node)} · ${stamp(this.now(), this.zone(w.id), true)}`.slice(0, 200);
-        card = this.kanban.create({ title, body: prompt, assignee: c.agentId, status: 'ready' }, by);
+        card = this.kanban.create({ title, body: prompt, assignee: c.agentId, status: 'ready', projectId: this.projectOf(w.id) }, by);
       } else {
         card = this.ownCard(w.id, node, by);
         if (card.assignee !== c.agentId) card = this.kanban.update(card.id, { assignee: c.agentId }, by);
@@ -453,7 +474,7 @@ export class Workflows {
     }
     if (node.kind === 'approval') {
       const q = fill(node.config.question).trim() || `Continue workflow « ${w.name} »?`;
-      const card = this.kanban.create({ title: stepTitle(node).slice(0, 200), body: q + why, assignee: null, status: 'todo' }, by);
+      const card = this.kanban.create({ title: stepTitle(node).slice(0, 200), body: q + why, assignee: null, status: 'todo', projectId: this.projectOf(w.id) }, by);
       this.kanban.block(card.id, { kind: 'needs_input', reason: q, options: ['Approve', 'Reject'] }, by);
       this.insertStep(runId, node.id, 'approval', 'waiting', { card: card.id });
       this.setRunState(runId, 'waiting');
@@ -616,6 +637,7 @@ export class Workflows {
         body: `The task of step « ${stepTitle(node)} » in workflow ${workflowId}. Each run posts the prompt in this chat and reopens the task, so the conversation keeps what earlier runs did.`,
         assignee: node.config.agentId,
         status: 'todo',
+        projectId: this.projectOf(workflowId),
       },
       by,
     );
@@ -657,6 +679,11 @@ export class Workflows {
       this.touched.runs.add(runId);
       this.touched.workflows.add(this.runRow(runId).workflow_id);
     }
+  }
+
+  /** The project of a workflow's tasks (#213): its own; a global workflow's go to the default project. */
+  private projectOf(workflowId: string): string {
+    return this.row(workflowId).project_id ?? defaultProjectId(this.db);
   }
 
   private cardOrNull(id: string): Card | null {
@@ -716,6 +743,7 @@ export class Workflows {
       createdBy: r.created_by,
       createdAt: r.created_at,
       updatedAt: r.updated_at,
+      projectId: r.project_id,
       nodes: this.nodes(r.id).map(toNode),
       edges: edges.map((e): WorkflowEdge => ({ from: e.from_node, exit: e.exit, to: e.to_node })),
     };

@@ -44,9 +44,18 @@ export class Agents {
     const c = CreateAgent.parse(input);
     if (this.db.prepare('SELECT 1 FROM agents WHERE id = ?').get(c.id)) throw new ConflictError(`agent ${c.id} already exists`);
     if (!this.db.prepare('SELECT 1 FROM models WHERE id = ?').get(c.modelId)) throw new ConflictError(`model ${c.modelId} does not exist`);
-    this.db
-      .prepare('INSERT INTO agents (id, role_prompt, model_id, workdir, max_runs) VALUES (?, ?, ?, ?, ?)')
-      .run(c.id, c.rolePrompt, c.modelId, c.workdir, c.maxRuns);
+    this.db.transaction(() => {
+      this.db
+        .prepare('INSERT INTO agents (id, role_prompt, model_id, workdir, max_runs) VALUES (?, ?, ?, ?, ?)')
+        .run(c.id, c.rolePrompt, c.modelId, c.workdir, c.maxRuns);
+      // A new agent joins the default project, in its own workdir (#213): with one project, everyone is in it.
+      this.db
+        .prepare(
+          `INSERT INTO project_members (project_id, agent_id, clone_state, joined_at)
+           SELECT id, ?, 'ready', ? FROM projects WHERE status = 'active' ORDER BY created_at, rowid LIMIT 1`,
+        )
+        .run(c.id, new Date().toISOString());
+    })();
     return this.get(c.id);
   }
 
@@ -59,8 +68,9 @@ export class Agents {
       .all(id) as { id: string; number: number | null }[];
     if (cards.length)
       throw new ConflictError(`@${id} still has open tasks: ${cards.map(cardRef).join(', ')}. Reassign, finish or close them first.`);
-    if (this.db.prepare("SELECT 1 FROM settings WHERE key = 'triage_agent' AND value = ?").get(id))
-      throw new ConflictError(`@${id} is the triage agent: pick another one in Settings → Board first.`);
+    const leads = this.db.prepare('SELECT name FROM projects WHERE lead = ? ORDER BY created_at').all(id) as { name: string }[];
+    if (leads.length)
+      throw new ConflictError(`@${id} leads ${leads.map((p) => p.name).join(', ')} (the triage agent): pick another one in Settings → Board first.`);
     this.db.transaction(() => {
       // Their direct chat goes with them (kept in the database, archived).
       this.db.prepare("UPDATE cards SET status = 'archived' WHERE board = 'direct' AND assignee = ?").run(id);
