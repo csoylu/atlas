@@ -134,6 +134,7 @@ export class Secrets {
     this.bus.emit({ type: 'secrets.status', status: this.status() });
     this.bus.emit({ type: 'secrets.updated' });
     this.resume();
+    this.valuesChanged();
   }
 
   async unlock(password: string, source: 'env' | 'ui' = 'ui'): Promise<SecretStoreStatus> {
@@ -285,6 +286,7 @@ export class Secrets {
       throw e;
     }
     this.bus.emit({ type: 'secrets.updated' });
+    this.valuesChanged();
     return this.get(c.name);
   }
 
@@ -323,6 +325,7 @@ export class Secrets {
     this.db.prepare('UPDATE secrets SET updated_at = ?, updated_by = ? WHERE name = ?').run(now, who.by, name);
     this.bus.emit({ type: 'secrets.updated' });
     this.resume();
+    this.valuesChanged();
   }
 
   /** The value first, then the row: a crash in between leaves a row with « no value », never a value without a row. */
@@ -398,6 +401,7 @@ export class Secrets {
     }
     this.bus.emit({ type: 'secrets.updated' });
     this.resume();
+    this.valuesChanged();
     return { created: !r };
   }
 
@@ -578,15 +582,71 @@ export class Secrets {
 
   /** Replace every secret value in `text` by [secret NAME]; `hidden` = how many were replaced. */
   redact(text: string): { text: string; hidden: number } {
+    return redactWith(this.values(), text);
+  }
+
+  /**
+   * The same for many texts with one read of the store (#226: the pass over stored artifact versions). `values` is for
+   * a search in SQL only (`instr`): never returned, logged or stored.
+   */
+  redactor(): { values: string[]; redact: (text: string) => string } {
+    const vs = this.values();
+    return { values: vs.map((v) => v.value), redact: (text) => redactWith(vs, text).text };
+  }
+
+  /** Bytes (a file served by /api/files, #226): each value's UTF-8 bytes become `[secret NAME]`. */
+  redactBytes(buf: Buffer): { buf: Buffer; hidden: number } {
     let hidden = 0;
     for (const { name, value } of this.values()) {
-      if (!text.includes(value)) continue;
-      const parts = text.split(value);
-      hidden += parts.length - 1;
-      text = parts.join(`[secret ${name}]`);
+      const needle = Buffer.from(value);
+      let at = buf.indexOf(needle);
+      if (at < 0) continue;
+      const parts: Buffer[] = [];
+      let from = 0;
+      const mark = Buffer.from(`[secret ${name}]`);
+      while (at >= 0) {
+        parts.push(buf.subarray(from, at), mark);
+        hidden++;
+        from = at + needle.length;
+        at = buf.indexOf(needle, from);
+      }
+      parts.push(buf.subarray(from));
+      buf = Buffer.concat(parts);
     }
-    return { text, hidden };
+    return { buf, hidden };
   }
+
+  /**
+   * Called after a value is added or replaced, and when the store unlocks or locks (the known values change): stored
+   * copies of files (artifact versions) are redacted again, so a value added later is not left readable in old ones.
+   */
+  onValues(fn: () => void): void {
+    this.valueListeners.push(fn);
+  }
+
+  private valueListeners: (() => void)[] = [];
+
+  private valuesChanged(): void {
+    for (const fn of this.valueListeners) {
+      try {
+        fn();
+      } catch (e) {
+        // The value is stored already: the pass runs again at the next start. Logged, never silent.
+        console.error('redacting stored files after a secret change failed (retried at the next start):', e);
+      }
+    }
+  }
+}
+
+function redactWith(values: { name: string; value: string }[], text: string): { text: string; hidden: number } {
+  let hidden = 0;
+  for (const { name, value } of values) {
+    if (!text.includes(value)) continue;
+    const parts = text.split(value);
+    hidden += parts.length - 1;
+    text = parts.join(`[secret ${name}]`);
+  }
+  return { text, hidden };
 }
 
 /** An agent secret this agent may use in a run of `projectId`: global or that project's, and granted to it. */

@@ -515,6 +515,21 @@ the diagram « Secrets in Atlas: flow » and the mockup « Settings → Secrets 
   read withholds the output with the reason. Background log files on disk are not rewritten (reads of them are).
   End-to-end tests, the leak audit (canary values searched in SQLite+WAL, files, logs, API, events, model requests,
   snapshots) and the full list of known limits: `docs/qa/210-secrets-leak-audit.md`.
+- **Files** (#226): a value an agent writes into a workspace file (`echo "$KEY" > docs/note.md`) never reaches SQLite
+  or a response. `Documents.record` (every road that stores a file's text: sync after file tools and shells, the
+  Library's re-read, `artifact_create` / `artifact_update`, restore) redacts content, title and name before the row is
+  written, with the same redactor, for every known value. `GET /api/files/…` reads text files (anything but images,
+  audio, video and fonts; svg is text; up to 10 MB) and sends values as `[secret NAME]` (`no-store`), so the Library,
+  the side panel and the screenshot tool never get one. Stored rows from before a value was known (an older engine, a
+  secret added or rotated later): `Documents.redactStored()` runs at each engine start and after every value change
+  (create, new value, `secret_set`, unlock): one SQL `instr` search per value over `document_versions` and
+  `documents` title/name, rewritten in one transaction with `secure_delete` on, then the WAL is checkpointed and
+  truncated, so the old bytes leave the database files too. Chosen over a pass at start only (a value added later
+  would stay readable until the next restart) and over a migration (values are not known to SQL). Accepted limits:
+  the file on disk in the agent's workspace is not rewritten (the agent's own file, like background logs), nor is the
+  rewind snapshot (`checkpoints/`, a git store on disk, not SQLite); an old value forgotten by a rotation is no longer
+  known, so a version stored after the rotation keeps it; files over 10 MB are served as they are. The agents'
+  instructions say never to write a value into a file and to pass it by env.
 - **Server store** (#208, `engine/src/secretFile.ts`): `<dataDir>/secrets.enc`, one JSON file: a header in the clear
   (version, scrypt cost N=2^15 r=8 p=1 and its random salt, the stored names, a key check) and the values encrypted
   with AES-256-GCM (random IV per write, the header as additional data). Key = scrypt(secrets password), 64 bytes: AES

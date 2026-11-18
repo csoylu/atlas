@@ -171,7 +171,19 @@ export async function startEngine(opts: EngineOptions): Promise<Engine> {
   const voice = opts.voice ? new Voice(db, bus, opts.voice) : null;
   let url = '';
   const voiceChat = opts.voice ? new VoiceChat(db, bus, kanban, agents, () => url) : null;
-  const documents = new Documents(db, bus, kanban, opts.dataDir);
+  const documents = new Documents(db, bus, kanban, opts.dataDir, secrets);
+  // Secret values out of stored artifact versions (#226): those stored before the value was known, at each start and
+  // after each value change. A failure is logged and the pass runs again at the next start.
+  const redactStored = () => {
+    const n = documents.redactStored();
+    if (n) console.log(`hid secret values in ${n} stored artifact row(s)`);
+  };
+  try {
+    redactStored();
+  } catch (e) {
+    console.error('redacting stored artifact versions failed (retried at the next start)', e);
+  }
+  secrets.onValues(redactStored);
   const fileLog = new FileLog(db, new Snapshots(join(opts.dataDir, 'checkpoints')));
   const review = new MemoryReview(db, kanban, memories, models, agents, settings, usage);
   if (opts.memoryReview === false) review.after = () => {};
