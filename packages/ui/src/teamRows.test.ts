@@ -21,8 +21,9 @@ describe('team rows', () => {
   });
 
   it('makes times readable', () => {
-    expect(whenText('2026-11-12T00:35:00+01:00')).toMatch(/^Thu 12 Nov \d\d:35$/);
+    // 11:35 UTC is Thursday from UTC−11 to UTC+12 and Friday at UTC+13/+14: the test holds in every timezone.
+    expect(whenText('2026-11-12T11:35:00Z')).toMatch(/^(Thu 12|Fri 13) Nov \d\d:\d\d$/);
     expect(whenText('tomorrow')).toBe('tomorrow');
-    expect(humanTimes('once at 2026-11-12T00:35:00.000Z, ok')).toMatch(/^once at Thu 12 Nov \d\d:35, ok$/);
+    expect(humanTimes('once at 2026-11-12T11:35:00.000Z, ok')).toMatch(/^once at (Thu 12|Fri 13) Nov \d\d:\d\d, ok$/);
   });
 });
