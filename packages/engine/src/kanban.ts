@@ -304,6 +304,13 @@ export class Kanban {
    * The agent's main chat (v3): the one direct chat the sidebar and voice open, named after the agent and never
    * auto-titled. Created on first use, and again if it was deleted or archived; other direct chats are its History.
    */
+  /** The agent's current main chat without creating one (read-only, for the screenshot tool), or null. */
+  existingMainChat(agentId: string): Card | null {
+    const row = this.db.prepare('SELECT main_chat FROM agents WHERE id = ?').get(agentId) as { main_chat: string | null } | undefined;
+    if (!row?.main_chat || !this.db.prepare("SELECT 1 FROM cards WHERE id = ? AND board = 'direct' AND status != 'archived'").get(row.main_chat)) return null;
+    return this.get(row.main_chat);
+  }
+
   mainChat(agentId: string): Card {
     const id = this.db
       .transaction(() => {

@@ -6,6 +6,10 @@ computed by `scripts/release/changelog.mjs` from the oldest entry to the newest,
 `Fixed` → patch, `Added` or `Changed` → minor, `Breaking` (data or settings stop working without action) → major.
 Never type a version number.
 
+## Added · #133 · Agents can take a screenshot of Atlas or of a mockup in one step and see it
+
+New `screenshot` tool: `screenshot({ target: "#/chat/paris", width: 1440, theme: "dark" })` returns the picture directly and saves it under `screenshots/` in the agent's workspace. The target is an app route or a page in a workspace (`pages/x.html`, `/api/files/<agent>/…`); other sites are refused. Options: height, full page, one element (`clip`), wait for an element (`wait_for`), and clicks, typing or key presses before the shot (`actions`). Under 500 px it shoots as a phone (touch). It uses this Atlas's own address (no port lookup) and is read-only: the page sees your data but every write it tries is refused and listed. Page errors and console errors come back with the picture. When something never appears within 15 s it fails and says what, and without Google Chrome it says so. No migration.
+
 ## Fixed · #123 · The Windows installer is attached to releases again
 
 The installer is now named Atlas-<version>-setup.exe, which the release step uploads (it was "Atlas Setup <version>.exe", so the upload found nothing).

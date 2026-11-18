@@ -111,7 +111,7 @@ describe('tools', () => {
   it('describes every tool with a JSON schema', () => {
     const specs = toolSpecs();
     expect(specs.map((s) => s.name)).toEqual([
-      'read_file', 'write_file', 'edit_file', 'list_files', 'grep', 'glob', 'shell', 'shell_output', 'shell_kill', 'web_fetch',
+      'read_file', 'write_file', 'edit_file', 'list_files', 'grep', 'glob', 'shell', 'shell_output', 'shell_kill', 'web_fetch', 'screenshot',
     ]);
     expect(specs[0]!.input_schema).toMatchObject({ type: 'object', required: ['path'] });
   });
