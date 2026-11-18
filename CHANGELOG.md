@@ -83,3 +83,4 @@ Up to 40% of the window, then it scrolls inside; it shrinks back after sending.
 ## Added · #96 · An agent can write to any other agent and get the answer back
 
 ## Changed · The test suite is split: npm test runs the fast tests in about 10 seconds
+x
