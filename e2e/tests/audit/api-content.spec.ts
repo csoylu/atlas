@@ -110,50 +110,61 @@ test.describe('C · artifacts, documents, side panel', () => {
   });
 });
 
-test.describe('H · schedules, notifications', () => {
-  test('[H01] schedule validation + preview', async ({ atlas }) => {
-    const p = { agentId: 'atlas', prompt: 'ping' };
-    expect((await call(atlas, 'POST', '/schedules', { ...p, kind: 'cron', cron: 'not a cron' })).status).toBe(400);
-    expect((await call(atlas, 'POST', '/schedules', { ...p, kind: 'cron' })).status).toBe(400);
-    expect((await call(atlas, 'POST', '/schedules', { ...p, kind: 'at' })).status).toBe(400);
-    expect((await call(atlas, 'POST', '/schedules', { ...p, kind: 'cron', cron: '0 9 * * *', timezone: 'Mars/Olympus' })).status).toBe(400);
-    expect((await call(atlas, 'POST', '/schedules', { agentId: 'ghost', prompt: 'x', kind: 'cron', cron: '0 9 * * *' })).status).toBeGreaterThanOrEqual(400);
-    const pv = await call(atlas, 'POST', '/schedules/preview', { kind: 'cron', cron: '0 9 * * 1-5', at: null, timezone: 'Europe/Paris' });
+test.describe('H · workflows (schedules are one-step workflows since #170), notifications', () => {
+  const T = (cfg: object) => ({ id: 'trigger', kind: 'trigger', x: 0, y: 0, config: cfg });
+  const A = (cfg: object) => ({ id: 'a', kind: 'agent', x: 0, y: 0, config: { agentId: 'atlas', prompt: 'ping', ...cfg } });
+  const wf = (name: string, trigger: object, agent: object = {}) => ({ name, nodes: [T(trigger), A(agent)], edges: [{ from: 'trigger', exit: 'start', to: 'a' }] });
+  const daily = { kind: 'time', repeat: 'cron', cron: '0 9 * * *', timezone: 'Europe/Paris' };
+
+  test('[H01] workflow validation + trigger preview', async ({ atlas }) => {
+    expect((await call(atlas, 'POST', '/workflows', wf('x', { ...daily, cron: 'not a cron' }))).status).toBe(400);
+    expect((await call(atlas, 'POST', '/workflows', wf('x', { ...daily, cron: null }))).status).toBe(400);
+    expect((await call(atlas, 'POST', '/workflows', wf('x', { kind: 'time', repeat: 'at', timezone: 'Europe/Paris' }))).status).toBe(400);
+    expect((await call(atlas, 'POST', '/workflows', wf('x', { ...daily, timezone: 'Mars/Olympus' }))).status).toBe(400);
+    expect((await call(atlas, 'POST', '/workflows', wf('x', daily, { agentId: 'ghost' }))).status).toBe(400);
+    expect((await call(atlas, 'POST', '/workflows', { name: 'x', nodes: [A({})], edges: [] })).status).toBe(400);
+    const pv = await call(atlas, 'POST', '/workflows/preview', { repeat: 'cron', cron: '0 9 * * 1-5', timezone: 'Europe/Paris' });
     expect(pv.body.next.length).toBe(3);
-    expect((await call(atlas, 'POST', '/schedules/preview', { kind: 'cron', cron: '99 * * * *', at: null })).status).toBe(400);
+    expect((await call(atlas, 'POST', '/workflows/preview', { repeat: 'cron', cron: '99 * * * *' })).status).toBe(400);
   });
 
-  test('[H02] schedule CRUD: title defaults to the prompt first line, patch, pause, kind switch needs a time, delete', async ({ atlas }) => {
-    const s = (await call(atlas, 'POST', '/schedules', { agentId: 'atlas', prompt: 'Daily check\nmore', kind: 'cron', cron: '0 9 * * *', timezone: 'Europe/Paris' })).body;
-    expect(s.title).toBe('Daily check');
-    expect(s.nextRunAt).toBeTruthy();
-    expect((await call(atlas, 'PATCH', `/schedules/${s.id}`, { enabled: false })).body.enabled).toBe(false);
-    expect((await call(atlas, 'PATCH', `/schedules/${s.id}`, { cron: '0 10 * * *' })).body.cron).toBe('0 10 * * *');
-    expect((await call(atlas, 'PATCH', `/schedules/${s.id}`, { kind: 'at' })).status).toBe(400);
-    expect((await call(atlas, 'GET', `/schedules/${s.id}`)).status).toBe(200);
-    expect((await call(atlas, 'DELETE', `/schedules/${s.id}`)).status).toBe(204);
-    expect((await call(atlas, 'GET', `/schedules/${s.id}`)).status).toBe(404);
+  test('[H02] workflow CRUD: rename, pause, save graph with revision check (stale save 409), delete', async ({ atlas }) => {
+    const w = (await call(atlas, 'POST', '/workflows', wf('Daily check', daily))).body;
+    expect(w.nextRunAt).toBeTruthy();
+    expect((await call(atlas, 'PATCH', `/workflows/${w.id}`, { enabled: false })).body).toMatchObject({ enabled: false, nextRunAt: null });
+    expect((await call(atlas, 'PATCH', `/workflows/${w.id}`, { name: 'Morning check' })).body.name).toBe('Morning check');
+    const g = { nodes: [T({ ...daily, cron: '0 10 * * *' }), A({})], edges: w.edges };
+    const saved = await call(atlas, 'PUT', `/workflows/${w.id}/graph`, { revision: w.revision, ...g });
+    expect(saved.status).toBe(200);
+    expect(saved.body.revision).toBe(w.revision + 1);
+    expect((await call(atlas, 'PUT', `/workflows/${w.id}/graph`, { revision: w.revision, ...g })).status).toBe(409);
+    expect((await call(atlas, 'GET', `/workflows/${w.id}`)).status).toBe(200);
+    expect((await call(atlas, 'DELETE', `/workflows/${w.id}`)).status).toBe(204);
+    expect((await call(atlas, 'GET', `/workflows/${w.id}`)).status).toBe(404);
   });
 
-  test('[H03] Run now: createCard=true makes a new card each time; false reuses the schedule chat card; Inbox update raised', async ({ atlas }) => {
+  test('[H03] Run now: a new task each run, or one task reused; runs listed; Inbox update raised', async ({ atlas }) => {
     atlas.model.next(tu('task_complete', { summary: 's1' }), tu('task_complete', { summary: 's2' }), tu('task_complete', { summary: 's3' }), tu('task_complete', { summary: 's4' }));
-    const a = (await call(atlas, 'POST', '/schedules', { agentId: 'atlas', prompt: 'make cards', kind: 'cron', cron: '0 9 * * *', createCard: true })).body;
-    const r1 = await call(atlas, 'POST', `/schedules/${a.id}/run`);
+    const card = (r: any) => r.body.steps.find((s: any) => s.cardId).cardId;
+    const done = async (runId: string) => expect.poll(async () => (await call(atlas, 'GET', `/workflow-runs/${runId}`)).body.state, { timeout: 15_000 }).toBe('done');
+    const a = (await call(atlas, 'POST', '/workflows', wf('make cards', daily, { prompt: 'make cards', newTaskEachRun: true }))).body;
+    const r1 = await call(atlas, 'POST', `/workflows/${a.id}/run`);
     expect(r1.status).toBe(200);
-    await expect.poll(async () => (await atlas.card(r1.body.id)).status).toBe('done');
-    const r2 = await call(atlas, 'POST', `/schedules/${a.id}/run`);
-    expect(r2.body.id).not.toBe(r1.body.id);
-    await expect.poll(async () => (await atlas.card(r2.body.id)).status).toBe('done');
-    const b = (await call(atlas, 'POST', '/schedules', { agentId: 'atlas', prompt: 'same card', kind: 'cron', cron: '0 9 * * *', createCard: false })).body;
-    const q1 = await call(atlas, 'POST', `/schedules/${b.id}/run`);
-    await expect.poll(async () => (await atlas.card(q1.body.id)).status).toBe('done');
-    const q2 = await call(atlas, 'POST', `/schedules/${b.id}/run`);
-    expect(q2.body.id).toBe(q1.body.id);
-    expect((await call(atlas, 'POST', '/schedules/ghost/run')).status).toBe(404);
+    await done(r1.body.id);
+    const r2 = await call(atlas, 'POST', `/workflows/${a.id}/run`);
+    expect(card(r2)).not.toBe(card(r1));
+    await done(r2.body.id);
+    const b = (await call(atlas, 'POST', '/workflows', wf('same card', daily, { prompt: 'same card' }))).body;
+    const q1 = await call(atlas, 'POST', `/workflows/${b.id}/run`);
+    await done(q1.body.id);
+    const q2 = await call(atlas, 'POST', `/workflows/${b.id}/run`);
+    expect(card(q2)).toBe(card(q1));
+    expect((await call(atlas, 'GET', `/workflows/${a.id}/runs`)).body.map((r: any) => r.number)).toEqual([2, 1]);
+    expect((await call(atlas, 'POST', '/workflows/ghost/run')).status).toBe(404);
     expect(JSON.stringify((await call(atlas, 'GET', '/inbox')).body.updates)).toMatch(/make cards|same card/);
   });
 
-  test('[H04] agent tools schedule_create / schedule_list / schedule_delete', async ({ atlas }) => {
+  test('[H04] agent tools schedule_create / schedule_list / schedule_delete make one-step workflows', async ({ atlas }) => {
     const ch = await atlas.chat();
     atlas.model.next(
       tu('schedule_create', { prompt: 'tool made', cron: '30 8 * * 1-5', title: 'Tool schedule' }),
@@ -162,18 +173,21 @@ test.describe('H · schedules, notifications', () => {
     );
     await atlas.say(ch.id, 'schedule');
     await expect.poll(() => atlas.model.of('main').length, { timeout: 15_000 }).toBeGreaterThanOrEqual(3);
-    const list = (await call(atlas, 'GET', '/schedules')).body;
-    const mine = list.find((s: any) => s.title === 'Tool schedule');
+    const list = (await call(atlas, 'GET', '/workflows')).body;
+    const mine = list.find((s: any) => s.name === 'Tool schedule');
     expect(mine).toBeTruthy();
     expect(mine.createdBy).toBe('atlas');
     expect(JSON.stringify(atlas.model.of('main')[2]!.req.messages.at(-1))).toContain('Tool schedule');
     atlas.model.next(tu('schedule_delete', { id: mine.id }), say('gone'));
     await atlas.say(ch.id, 'delete it');
-    await expect.poll(async () => (await call(atlas, 'GET', '/schedules')).body.some((s: any) => s.id === mine.id), { timeout: 15_000 }).toBe(false);
+    await expect.poll(async () => (await call(atlas, 'GET', '/workflows')).body.some((s: any) => s.id === mine.id), { timeout: 15_000 }).toBe(false);
   });
 
-  test('[H05] seeded weekly Memory cleanup schedule: Monday 09:00, enabled, agent atlas', async ({ atlas }) => {
-    expect((await call(atlas, 'GET', '/schedules/sch_memory_cleanup')).body).toMatchObject({ cron: '0 9 * * 1', enabled: true, agentId: 'atlas' });
+  test('[H05] seeded weekly Memory cleanup workflow: Monday 09:00, enabled, agent atlas', async ({ atlas }) => {
+    const w = (await call(atlas, 'GET', '/workflows/sch_memory_cleanup')).body;
+    expect(w.enabled).toBe(true);
+    expect(w.nodes.find((n: any) => n.kind === 'trigger').config).toMatchObject({ cron: '0 9 * * 1' });
+    expect(w.nodes.find((n: any) => n.kind === 'agent').config).toMatchObject({ agentId: 'atlas' });
   });
 
   test('[N01] notifications: read lowers the badge, archive-read, archive, bad id 400', async ({ atlas }) => {

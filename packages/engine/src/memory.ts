@@ -417,7 +417,7 @@ export function staleCardMemories(db: Db, cardId: string, by: string): number[] 
  * is the same now (added then forgotten, changed then changed back, pinned then unpinned) is not listed.
  */
 export function memoryDeltaNote(changes: { change: MemoryChange; memory: Memory }[], agentId: string): string | null {
-  const who = (by: string) => (by === 'user' ? 'the user' : by === agentId ? 'you' : by.startsWith('review:') ? 'the background review' : by.startsWith('schedule:') ? 'the memory cleanup' : '@' + by);
+  const who = (by: string) => (by === 'user' ? 'the user' : by === agentId ? 'you' : by.startsWith('review:') ? 'the background review' : by.startsWith('schedule:') || by === 'workflow:sch_memory_cleanup' ? 'the memory cleanup' : by.startsWith('workflow:') ? 'a workflow' : '@' + by);
   const what: Record<MemoryChange['action'], string> = {
     add: 'added', update: 'changed', confirm: 'confirmed', forget: 'forgotten', restore: 'restored', pin: 'pinned', unpin: 'unpinned', stale: 'marked stale', undo: 'undone',
   };

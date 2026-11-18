@@ -1,6 +1,68 @@
 import { useEffect, useMemo, useState } from 'react';
-import type { Agent, Schedule } from '@atlas/shared';
+import type { Agent, CreateWorkflow, Workflow, WorkflowRun } from '@atlas/shared';
 import { api } from './api.ts';
+
+/**
+ * Schedules are one-step workflows since #170 (trigger → one agent step). This page reads /api/workflows and shows each
+ * workflow as a schedule row; one with more steps is a row without editing. Replaced by the Workflows page (#171).
+ */
+interface Schedule {
+  id: string;
+  /** null: a workflow of several steps (or a manual trigger), shown but not edited here. */
+  steps: number | null;
+  revision: number;
+  agentId: string;
+  title: string;
+  kind: 'cron' | 'at' | 'manual';
+  cron: string | null;
+  at: string | null;
+  prompt: string;
+  createCard: boolean;
+  timezone: string;
+  enabled: boolean;
+  nextRunAt: string | null;
+  lastFiredAt: string | null;
+  lastRun: WorkflowRun | null;
+  lastError: string | null;
+  createdAt: string;
+}
+
+function asSchedule(w: Workflow): Schedule {
+  const t = w.nodes.find((n) => n.kind === 'trigger');
+  const agents = w.nodes.flatMap((n) => (n.kind === 'agent' ? [n] : []));
+  const time = t?.kind === 'trigger' && t.config.kind === 'time' ? t.config : null;
+  const one = time && agents.length === 1 && w.nodes.length === 2 ? agents[0]! : null;
+  return {
+    id: w.id,
+    steps: one ? null : w.nodes.length - 1,
+    revision: w.revision,
+    agentId: agents[0]?.config.agentId ?? '',
+    title: w.name,
+    kind: time ? time.repeat : 'manual',
+    cron: time?.cron ?? null,
+    at: time?.at ?? null,
+    prompt: one?.config.prompt ?? '',
+    createCard: one?.config.newTaskEachRun ?? false,
+    timezone: time?.timezone ?? BROWSER_TZ,
+    enabled: w.enabled,
+    nextRunAt: w.nextRunAt,
+    lastFiredAt: w.lastFiredAt,
+    lastRun: w.lastRun,
+    lastError: w.lastError ?? (w.lastRun?.state === 'failed' ? w.lastRun.reason : null),
+    createdAt: w.createdAt,
+  };
+}
+
+/** The graph of a one-step workflow: trigger → the agent step. */
+function graphOf(b: { agentId: string; title: string; prompt: string; kind: 'cron' | 'at'; cron: string | null; at: string | null; timezone: string; createCard: boolean }): Pick<CreateWorkflow, 'nodes' | 'edges'> {
+  return {
+    nodes: [
+      { id: 'trigger', kind: 'trigger', x: 40, y: 120, config: { kind: 'time', repeat: b.kind, cron: b.cron, at: b.at, timezone: b.timezone } },
+      { id: 'step1', kind: 'agent', x: 300, y: 120, config: { title: b.title, agentId: b.agentId, prompt: b.prompt, newTaskEachRun: b.createCard } },
+    ],
+    edges: [{ from: 'trigger', exit: 'start', to: 'step1' }],
+  };
+}
 
 const BROWSER_TZ = Intl.DateTimeFormat().resolvedOptions().timeZone;
 const DAYS = ['Sunday', 'Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday'];
@@ -55,6 +117,7 @@ function cronOf(d: Draft): string {
 
 /** « Weekdays at 09:00 », « Every Monday at 18:30 »… or the cron itself. */
 function describeSchedule(s: Pick<Schedule, 'kind' | 'cron' | 'at'>): string {
+  if (s.kind === 'manual') return 'By hand only';
   if (s.kind === 'at') return 'Once, ' + when(s.at!);
   const p = patternOf(s.cron ?? '');
   if (!p) return `cron ${s.cron}`;
@@ -118,7 +181,7 @@ function draftOf(s: Schedule | null, agents: Agent[]): Draft {
     agentId: s.agentId,
     title: s.title,
     prompt: s.prompt,
-    kind: s.kind,
+    kind: s.kind === 'manual' ? 'cron' : s.kind,
     ...(p ?? (s.cron ? { repeat: 'custom' as const } : {})),
     cron: s.cron ?? base.cron,
     at: s.at ? toLocalInput(s.at) : base.at,
@@ -127,7 +190,7 @@ function draftOf(s: Schedule | null, agents: Agent[]): Draft {
   };
 }
 
-export function SchedulesView(props: { schedules: Schedule[]; agents: Agent[]; onOpenCard(id: string): void; onError(e: unknown): void }) {
+export function SchedulesView(props: { workflows: Workflow[]; agents: Agent[]; onOpenCard(id: string): void; onError(e: unknown): void }) {
   const { agents, onError } = props;
   const [editing, setEditing] = useState<Schedule | 'new' | null>(null);
   const [, tick] = useState(0);
@@ -137,10 +200,10 @@ export function SchedulesView(props: { schedules: Schedule[]; agents: Agent[]; o
   }, []);
   const schedules = useMemo(
     () =>
-      [...props.schedules].sort(
+      props.workflows.map(asSchedule).sort(
         (a, b) => +b.enabled - +a.enabled || (a.nextRunAt ?? '~').localeCompare(b.nextRunAt ?? '~') || a.createdAt.localeCompare(b.createdAt),
       ),
-    [props.schedules],
+    [props.workflows],
   );
 
   return (
@@ -190,7 +253,8 @@ function ScheduleRow(props: { s: Schedule; onEdit(): void; onOpenCard(id: string
       <div className="model-main">
         <div className="model-title">
           <b>{s.title}</b>
-          <span className="badge">@{s.agentId}</span>
+          {s.agentId && <span className="badge">@{s.agentId}</span>}
+          {s.steps !== null && <span className="badge">{s.steps} steps</span>}
           <span className="muted">{describeSchedule(s)}</span>
           {s.kind === 'cron' && s.timezone !== BROWSER_TZ && <span className="muted">({s.timezone})</span>}
         </div>
@@ -202,14 +266,14 @@ function ScheduleRow(props: { s: Schedule; onEdit(): void; onOpenCard(id: string
           ) : (
             <span className="muted">{s.kind === 'at' && s.lastFiredAt ? 'done' : 'paused'}</span>
           )}
-          <span className="muted">{s.createCard ? 'new task each run' : 'one task, keeps history'}</span>
-          {s.lastCardId && (
-            <button className="linklike" onClick={() => props.onOpenCard(s.lastCardId!)} title={s.lastFiredAt ? 'ran ' + new Date(s.lastFiredAt).toLocaleString() : ''}>
-              last run {s.lastFiredAt ? relative(s.lastFiredAt) : ''} → {s.lastCardId}
-            </button>
+          {s.steps === null && <span className="muted">{s.createCard ? 'new task each run' : 'one task, keeps history'}</span>}
+          {s.lastRun && (
+            <span className="muted" title={new Date(s.lastRun.startedAt).toLocaleString()}>
+              last run {relative(s.lastRun.startedAt)} · {s.lastRun.state}
+            </span>
           )}
         </div>
-        {!sameText(s.title, s.prompt) && <div className="schedule-prompt">{s.prompt}</div>}
+        {s.steps === null && !sameText(s.title, s.prompt) && <div className="schedule-prompt">{s.prompt}</div>}
         {s.lastError && <div className="model-error">Last run failed: {s.lastError}</div>}
       </div>
       <div className="model-actions">
@@ -218,7 +282,7 @@ function ScheduleRow(props: { s: Schedule; onEdit(): void; onOpenCard(id: string
             type="checkbox"
             checked={s.enabled}
             disabled={s.kind === 'at' && !s.enabled && !!s.at && new Date(s.at) < new Date()}
-            onChange={(e) => api.updateSchedule(s.id, { enabled: e.target.checked }).catch(onError)}
+            onChange={(e) => api.updateWorkflow(s.id, { enabled: e.target.checked }).catch(onError)}
           />
           <span />
         </label>
@@ -229,17 +293,23 @@ function ScheduleRow(props: { s: Schedule; onEdit(): void; onOpenCard(id: string
           onClick={() => {
             setBusy(true);
             api
-              .runSchedule(s.id)
-              .then((card) => props.onOpenCard(card.id), onError)
+              .runWorkflow(s.id)
+              .then((run) => {
+                const card = run.steps?.find((x) => x.cardId)?.cardId;
+                if (card) props.onOpenCard(card);
+                else if (run.state !== 'running') onError(new Error(run.reason ?? `run ${run.state}`));
+              }, onError)
               .finally(() => setBusy(false));
           }}
         >
           {busy ? 'Starting…' : 'Run now'}
         </button>
-        <button className="ghost" onClick={props.onEdit}>
-          Edit
-        </button>
-        <button className="ghost danger" onClick={() => confirm(`Delete schedule "${s.title}"? Its tasks stay.`) && api.deleteSchedule(s.id).catch(onError)}>
+        {s.steps === null && (
+          <button className="ghost" onClick={props.onEdit}>
+            Edit
+          </button>
+        )}
+        <button className="ghost danger" onClick={() => confirm(`Delete schedule "${s.title}"? Its tasks stay.`) && api.deleteWorkflow(s.id).catch(onError)}>
           Delete
         </button>
       </div>
@@ -259,7 +329,7 @@ function ScheduleForm(props: { schedule: Schedule | null; agents: Agent[]; onDon
   useEffect(() => {
     const t = setTimeout(() => {
       api
-        .previewSchedule({ kind: d.kind, cron: d.kind === 'cron' ? cron || null : null, at, timezone: d.timezone })
+        .previewTrigger({ repeat: d.kind, cron: d.kind === 'cron' ? cron || null : null, at, timezone: d.timezone })
         .then((p) => setPreview(p.next.length ? p : { error: 'that time is already past' }), (e: Error) => setPreview({ error: e.message }));
     }, 250);
     return () => clearTimeout(t);
@@ -270,7 +340,7 @@ function ScheduleForm(props: { schedule: Schedule | null; agents: Agent[]; onDon
     setSaving(true);
     const body = {
       agentId: d.agentId,
-      title: d.title.trim() || undefined,
+      title: d.title.trim() || schedule?.title || d.prompt.trim().split('\n')[0]!.slice(0, 200),
       prompt: d.prompt,
       kind: d.kind,
       cron: d.kind === 'cron' ? cron : null,
@@ -278,7 +348,11 @@ function ScheduleForm(props: { schedule: Schedule | null; agents: Agent[]; onDon
       timezone: d.timezone,
       createCard: d.createCard,
     };
-    (schedule ? api.updateSchedule(schedule.id, { ...body, title: body.title ?? schedule.title }) : api.createSchedule(body))
+    const graph = graphOf(body);
+    (schedule
+      ? api.saveWorkflowGraph(schedule.id, { revision: schedule.revision, ...graph }).then(() => (body.title !== schedule.title ? api.updateWorkflow(schedule.id, { name: body.title }) : undefined))
+      : api.createWorkflow({ name: body.title, ...graph })
+    )
       .then(props.onDone, props.onError)
       .finally(() => setSaving(false));
   };

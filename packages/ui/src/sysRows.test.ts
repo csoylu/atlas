@@ -62,6 +62,11 @@ describe('messageRow', () => {
     expect(r.body).toEqual({ kind: 'markdown', text: 'Check the funding rates.\nThen report.' });
   });
 
+  it('a workflow step prompt (#170) is a scheduled run too', () => {
+    const r = messageRow(msg('user', 'workflow', 'Summarise the night.\n\n— from workflow sch_1a2b3c4d, « Morning » run 3, cron "0 9 * * 1-5" (Europe/Paris).'), 'atlas')!;
+    expect(r).toMatchObject({ icon: 'clock', verb: 'Scheduled run', object: 'Summarise the night.', rest: '« Morning » run 3, cron "0 9 * * 1-5" (Europe/Paris)' });
+  });
+
   it('leaves the user’s messages, card reports and other notes alone', () => {
     expect(messageRow(msg('user', 'user', WORK_KICK), 'atlas')).toBeNull();
     expect(messageRow(msg('user', 'system', '✓ Card “X” (#5) finished: ok'), 'atlas')).toBeNull();

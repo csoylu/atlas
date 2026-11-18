@@ -3,13 +3,13 @@ import { currentToolName, MEMORY_BUDGET, MEMORY_TEXT_MAX, MemoryKind, TODO_LIMIT
 import { renderTodos } from './context.ts';
 import type { Kanban } from './kanban.ts';
 import { agentScope, memoryRef, parseMemoryRef, SHARED, type Memories, type Source } from './memory.ts';
-import { describeWhen, type Schedules } from './schedules.ts';
+import { describeTrigger, oneStep, type Workflows } from './workflows.ts';
 import type { ToolSpec } from './providers/types.ts';
 
 export interface TeamToolContext {
   kanban: Kanban;
   memories: Memories;
-  schedules: Schedules;
+  workflows: Workflows;
   agentId: string;
   cardId: string;
   /** The board card being worked on (null in a direct chat): project memories belong to it. */
@@ -133,23 +133,33 @@ export const TEAM_TOOLS = {
       return `message sent to @${to} (${target.board === 'direct' ? 'its main chat' : `its task ${ctx.kanban.ref(target.id)}`}); its answer will come back here`;
     },
   }),
+  // Schedules are one-step workflows since #170 (« trigger → one agent step »): same tools, same inputs.
   schedule_list: tool({
     description: 'List schedules: what runs when, for which agent, and the task each one last posted on.',
     input: z.object({}),
-    run: (_i, { schedules, kanban }) => {
-      const all = schedules.list();
+    run: (_i, { workflows, kanban }) => {
+      const all = workflows.list();
       if (!all.length) return '(no schedules)';
       return all
-        .map((s) =>
-          [
-            `${s.id} @${s.agentId} "${s.title}": ${describeWhen(s)}`,
-            s.enabled ? `next ${s.nextRunAt}` : 'disabled',
-            s.createCard ? 'new task each time' : `own task ${s.chatCardId ? kanban.ref(s.chatCardId) : '(created on first run)'}`,
-            s.lastError ? `LAST RUN FAILED: ${s.lastError}` : '',
+        .map((w) => {
+          const one = oneStep(w);
+          const trigger = w.nodes.find((n) => n.kind === 'trigger')!;
+          const agent = one?.step.config.agentId ?? w.nodes.flatMap((n) => (n.kind === 'agent' && n.config.agentId ? [n.config.agentId] : []))[0] ?? 'nobody';
+          const last = w.lastRun;
+          return [
+            `${w.id} @${agent} "${w.name}": ${trigger.kind === 'trigger' ? describeTrigger(trigger.config) : ''}`,
+            w.enabled ? (w.nextRunAt ? `next ${w.nextRunAt}` : 'no next run') : 'disabled',
+            one
+              ? one.step.config.newTaskEachRun
+                ? 'new task each time'
+                : `own task ${((own) => (own ? kanban.ref(own) : '(created on first run)'))(workflows.ownTask(w.id, one.step.id))}`
+              : `workflow of ${w.nodes.length - 1} steps (edit it in Workflows, not with these tools)`,
+            last && last.state === 'failed' ? `LAST RUN FAILED: ${last.reason}` : '',
+            w.lastError ? `LAST RUN FAILED: ${w.lastError}` : '',
           ]
             .filter(Boolean)
-            .join(' · '),
-        )
+            .join(' · ');
+        })
         .join('\n');
     },
   }),
@@ -168,11 +178,11 @@ export const TEAM_TOOLS = {
       agent: z.string().optional(),
       new_task_each_time: z.boolean().default(false),
     }),
-    run: (i, { schedules, agentId }) => {
+    run: (i, { workflows, agentId }) => {
       if (!!i.cron === !!i.at) throw new Error('give exactly one of cron or at');
-      const s = schedules.create(
+      const w = workflows.createOneStep(
         {
-          agentId: i.agent ?? agentId,
+          agentId: (i.agent ?? agentId).replace(/^@/, ''),
           title: i.title,
           prompt: i.prompt,
           kind: i.cron ? 'cron' : 'at',
@@ -183,14 +193,16 @@ export const TEAM_TOOLS = {
         },
         agentId,
       );
-      return `scheduled ${s.id} "${s.title}" for @${s.agentId}: ${describeWhen(s)}, first run ${s.nextRunAt}`;
+      const one = oneStep(w)!;
+      return `scheduled ${w.id} "${w.name}" for @${one.step.config.agentId}: ${describeTrigger(one.trigger.config)}, first run ${w.nextRunAt}`;
     },
   }),
   schedule_delete: tool({
     description: 'Delete a schedule by id. Its tasks stay.',
     input: z.object({ id: z.string() }),
-    run: ({ id }, { schedules }) => {
-      schedules.remove(id);
+    run: ({ id }, { workflows, agentId }) => {
+      if (!oneStep(workflows.get(id))) throw new Error(`${id} is a workflow of several steps: Master deletes it in Workflows`);
+      workflows.remove(id, agentId);
       return `schedule ${id} deleted`;
     },
   }),

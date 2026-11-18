@@ -18,6 +18,9 @@ describe('team rows', () => {
       { id: 'sch_2', title: 'Old', failed: true },
     ]);
     expect(scheduleList('(no schedules)')).toEqual([]);
+    // Since #170 a new schedule is a one-step workflow with a wf_ id.
+    expect(scheduleCreated('scheduled wf_1a2b3c4d "Digest" for @atlas: cron "0 9 * * *" (Europe/Paris), first run 2026-11-19T08:00:00.000Z')?.id).toBe('wf_1a2b3c4d');
+    expect(scheduleList('wf_1a2b3c4d @atlas "Build": by hand only · no next run · workflow of 5 steps (edit it in Workflows, not with these tools)')).toMatchObject([{ id: 'wf_1a2b3c4d', when: 'by hand only' }]);
   });
 
   it('makes times readable', () => {

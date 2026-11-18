@@ -4,7 +4,7 @@ import { existsSync } from 'node:fs';
 import { join, relative } from 'node:path';
 import { WebSocketServer } from 'ws';
 import { ZodError } from 'zod';
-import { AddCardImages, CreateCard, CreateModelRequest, IMAGE_MAX_BYTES, IMAGE_MAX_PER_TASK, isTimeZone, PostMessage, RewindRequest, ScheduleWhen, SlashCommand, UpdateModelRequest, UpdateVoice } from '@atlas/shared';
+import { AddCardImages, CreateCard, CreateModelRequest, IMAGE_MAX_BYTES, IMAGE_MAX_PER_TASK, isTimeZone, PostMessage, RewindRequest, SlashCommand, TriggerPreview, UpdateModelRequest, UpdateVoice } from '@atlas/shared';
 import type { Agents } from './agents.ts';
 import type { Models } from './models.ts';
 import type { Runner } from './runner.ts';
@@ -14,7 +14,7 @@ import type { Dispatcher } from './dispatcher.ts';
 import type { Settings } from './settings.ts';
 import { parseMemoryRef, type Memories } from './memory.ts';
 import type { MemoryCleanup } from './cleanup.ts';
-import { localTimeZone, upcoming, type Schedules } from './schedules.ts';
+import { localTimeZone, upcoming, type Workflows } from './workflows.ts';
 import { isTokenEntry, SECRET_NAME, type SecretStore } from './secrets.ts';
 import type { Documents } from './documents.ts';
 import { findSection, formatDocRef, splitSections } from '@atlas/shared';
@@ -54,7 +54,7 @@ export function createApi(deps: {
   documents: Documents;
   memories: Memories;
   cleanup: MemoryCleanup;
-  schedules: Schedules;
+  workflows: Workflows;
   local: Local;
   accounts: Accounts;
   chatgpt: ChatGpt;
@@ -76,7 +76,7 @@ export function createApi(deps: {
   /** Login and cross-site checks (auth.ts). */
   auth: Auth;
 }): Server {
-  const { kanban, agents, models, runner, rewinds, slash, dispatcher, settings, documents, memories, cleanup, schedules, local, accounts, chatgpt, claude, plans, notifications, usage, bus, auth } = deps;
+  const { kanban, agents, models, runner, rewinds, slash, dispatcher, settings, documents, memories, cleanup, workflows, local, accounts, chatgpt, claude, plans, notifications, usage, bus, auth } = deps;
   const app = express();
   const uploads = new Uploads(deps.dataDir);
   const taskImages = new TaskImages(deps.dataDir, uploads);
@@ -723,33 +723,50 @@ export function createApi(deps: {
     );
   });
 
-  // ── Schedules ─────────────────────────────────────────────────────────
-  app.get('/api/schedules', (_req, res) => {
-    res.json(schedules.list());
+  // ── Workflows (#170, design §9) ─────────────────────────────────────────
+  app.get('/api/workflows', (_req, res) => {
+    res.json(workflows.list());
   });
-  /** Next firings of a draft, for the form's preview. Errors (bad cron, unknown zone) come back as 400 with the reason. */
-  app.post('/api/schedules/preview', (req, res) => {
-    const w = ScheduleWhen.parse(req.body);
-    const timezone = typeof req.body?.timezone === 'string' && req.body.timezone ? req.body.timezone : localTimeZone();
+  /** Next firings of a draft time trigger, for the editor's preview. A bad cron or zone comes back as 400 with the reason. */
+  app.post('/api/workflows/preview', (req, res) => {
+    const p = TriggerPreview.parse(req.body);
+    const timezone = p.timezone || localTimeZone();
     if (!isTimeZone(timezone)) throw new InvalidError(`unknown time zone ${timezone}`);
-    res.json({ timezone, next: upcoming({ ...w, timezone }, new Date(), 3) });
+    if (p.repeat === 'cron' && !p.cron) throw new InvalidError('give the cron expression');
+    if (p.repeat === 'at' && !p.at) throw new InvalidError('give the date and time');
+    res.json({ timezone, next: upcoming({ kind: p.repeat, cron: p.cron, at: p.at, timezone }, new Date(), 3) });
   });
-  app.get('/api/schedules/:id', (req, res) => {
-    res.json(schedules.get(req.params.id));
+  app.get('/api/workflows/:id', (req, res) => {
+    res.json(workflows.get(req.params.id));
   });
-  app.post('/api/schedules', (req, res) => {
-    res.status(201).json(schedules.create(req.body, 'user'));
+  app.post('/api/workflows', (req, res) => {
+    res.status(201).json(workflows.create(req.body, 'user'));
   });
-  app.patch('/api/schedules/:id', (req, res) => {
-    res.json(schedules.update(req.params.id, req.body));
+  /** Save the graph; `revision` must be the one loaded, else 409 (saved since). */
+  app.put('/api/workflows/:id/graph', (req, res) => {
+    res.json(workflows.saveGraph(req.params.id, req.body));
   });
-  app.delete('/api/schedules/:id', (req, res) => {
-    schedules.remove(req.params.id);
+  /** Rename, on/off. */
+  app.patch('/api/workflows/:id', (req, res) => {
+    res.json(workflows.update(req.params.id, req.body));
+  });
+  app.delete('/api/workflows/:id', (req, res) => {
+    workflows.remove(req.params.id);
     res.status(204).end();
   });
-  /** Fire now (the planned next run stays). Answers with the card that got the prompt. */
-  app.post('/api/schedules/:id/run', (req, res) => {
-    res.json(schedules.runNow(req.params.id));
+  /** Run now (also when off). A run still going makes it a skipped run, returned as such. */
+  app.post('/api/workflows/:id/run', (req, res) => {
+    res.json(workflows.runNow(req.params.id));
+  });
+  app.get('/api/workflows/:id/runs', (req, res) => {
+    res.json(workflows.runs(req.params.id));
+  });
+  /** One run with its steps. */
+  app.get('/api/workflow-runs/:id', (req, res) => {
+    res.json(workflows.run(req.params.id));
+  });
+  app.post('/api/workflow-runs/:id/stop', (req, res) => {
+    res.json(workflows.stopRun(req.params.id, 'user'));
   });
 
   if (deps.uiDir && existsSync(deps.uiDir)) {

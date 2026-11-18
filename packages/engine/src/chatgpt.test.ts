@@ -219,9 +219,9 @@ describe('ChatGPT plan (Sign in with ChatGPT)', () => {
 
     const board = engine!.kanban.create({ title: 'Board work', status: 'ready', assignee: 'atlas' }, 'user');
     await expect.poll(() => engine!.kanban.messages(board.id).find((m) => m.author === 'atlas')?.content, { timeout: 5000 }).toEqual([{ type: 'text', text: 'Hello from the plan.' }]);
-    const schedule = engine!.schedules.create({ agentId: 'atlas', kind: 'cron', cron: '0 9 * * *', prompt: 'Scheduled work' }, 'user');
-    const scheduled = engine!.schedules.runNow(schedule.id);
-    await expect.poll(() => engine!.kanban.messages(scheduled.id).find((m) => m.author === 'atlas')?.content, { timeout: 5000 }).toEqual([{ type: 'text', text: 'Hello from the plan.' }]);
+    const schedule = engine!.workflows.createOneStep({ agentId: 'atlas', kind: 'cron', cron: '0 9 * * *', prompt: 'Scheduled work' }, 'user');
+    const scheduled = engine!.workflows.runNow(schedule.id).steps!.find((s) => s.kind === 'agent')!.cardId!;
+    await expect.poll(() => engine!.kanban.messages(scheduled).find((m) => m.author === 'atlas')?.content, { timeout: 5000 }).toEqual([{ type: 'text', text: 'Hello from the plan.' }]);
     expect(oa.seen.filter((s) => s.url.endsWith('/responses'))).toHaveLength(2);
 
     // Usage limits still stop all new work, regardless of how the card was created.

@@ -22,7 +22,7 @@ const start = async (fake = new FakeProvider([])) =>
 const ctxFor = (e: Engine, agentId = 'atlas', workCard: string | null = null): TeamToolContext => ({
   kanban: e.kanban,
   memories: e.memories,
-  schedules: e.schedules,
+  workflows: e.workflows,
   agentId,
   cardId: workCard ?? 'c_x',
   workCard,

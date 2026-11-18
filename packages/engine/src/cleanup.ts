@@ -5,7 +5,7 @@ import type { Bus } from './events.ts';
 import type { Agents } from './agents.ts';
 import { ConflictError, InvalidError, NotFoundError, type Kanban } from './kanban.ts';
 import { memoryRef, parseMemoryRef, SHARED, type Memories } from './memory.ts';
-import { localTimeZone, type Schedules } from './schedules.ts';
+import { localTimeZone, type Workflows } from './workflows.ts';
 import type { ToolSpec } from './providers/types.ts';
 
 /**
@@ -15,8 +15,9 @@ import type { ToolSpec } from './providers/types.ts';
  * transaction; nothing changes before that.
  */
 export const CLEANUP_SCHEDULE = 'sch_memory_cleanup';
-export const CLEANUP_BY = 'schedule:' + CLEANUP_SCHEDULE;
-export const isCleanupCard = (card: Pick<Card, 'createdBy'>) => card.createdBy === CLEANUP_BY;
+/** Workflows act as 'workflow:<id>' (#170); cards from before were created by 'schedule:<id>'. */
+export const CLEANUP_BY = 'workflow:' + CLEANUP_SCHEDULE;
+export const isCleanupCard = (card: Pick<Card, 'createdBy'>) => card.createdBy === CLEANUP_BY || card.createdBy === 'schedule:' + CLEANUP_SCHEDULE;
 
 export const CLEANUP_PROMPT = [
   'Weekly memory cleanup. Call memory_review to read every memory of every agent, then file one memory_propose per change:',
@@ -66,13 +67,13 @@ export class MemoryCleanup {
     private memories: Memories,
   ) {}
 
-  /** The built-in schedule, created at startup if missing (Mondays 09:00, engine's zone): disable it to stop it. */
-  ensureSchedule(schedules: Schedules, agents: Agents): void {
-    if (this.db.prepare('SELECT 1 FROM schedules WHERE id = ?').get(CLEANUP_SCHEDULE)) return;
+  /** The built-in one-step workflow, created at startup if missing (Mondays 09:00, engine's zone): turn it off to stop it. */
+  ensureSchedule(workflows: Workflows, agents: Agents): void {
+    if (this.db.prepare('SELECT 1 FROM workflows WHERE id = ?').get(CLEANUP_SCHEDULE)) return;
     const all = agents.list();
     const agent = all.find((a) => a.id === 'atlas') ?? all[0];
     if (!agent) return;
-    schedules.create(
+    workflows.createOneStep(
       { agentId: agent.id, title: 'Memory cleanup', prompt: CLEANUP_PROMPT, kind: 'cron', cron: '0 9 * * 1', timezone: localTimeZone(), createCard: true },
       'system',
       CLEANUP_SCHEDULE,
