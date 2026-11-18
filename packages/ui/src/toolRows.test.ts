@@ -96,8 +96,17 @@ describe('toolRow', () => {
     expect(toolRow('frobnicate', 'not an object')).toMatchObject({ object: 'frobnicate', rest: undefined });
   });
 
+  it('screenshot: target, width and theme, page errors and refused writes (#133)', () => {
+    const out = 'Screenshot of /?theme=dark#/board\nPage errors (2):\n  page error: x\n  console.error: y\nWrites refused (read-only):\n  POST /api/cards';
+    expect(toolRow('screenshot', { target: '#/board', width: 390, theme: 'dark' }, ok(out))).toMatchObject({
+      verb: 'Screenshot', object: '#/board', meta: [{ text: '390 px · dark' }, { text: '2 page errors' }, { text: 'writes refused' }],
+    });
+    expect(toolRow('screenshot', { target: 'pages/x.html' }, ok('Screenshot of /api/files/a/pages/x.html\nPage errors: none')).meta).toEqual([{ text: '1440 px' }]);
+    expect(toolRow('screenshot', { target: '#/x' }, err('screenshot needs Google Chrome, which was not found'))).toMatchObject({ verb: 'Couldn’t take a screenshot' });
+  });
+
   it('every tool the engine has gets its own row (not the generic one)', () => {
-    const tools = ['read_file', 'write_file', 'edit_file', 'list_files', 'grep', 'glob', 'shell', 'shell_output', 'shell_kill', 'web_fetch', 'web_search', 'card_create', 'card_update', 'card_message', 'card_show', 'card_list', 'card_block', 'card_request_review', 'card_complete', 'history_search', 'canvas_create', 'canvas_write', 'canvas_read', 'canvas_list', 'panel_open', 'panel_close', 'memory_edit', 'memory_add', 'memory_update', 'memory_forget', 'memory_search', 'todo_write', 'schedule_create', 'schedule_list', 'schedule_delete'];
+    const tools = ['read_file', 'write_file', 'edit_file', 'list_files', 'grep', 'glob', 'shell', 'shell_output', 'shell_kill', 'web_fetch', 'web_search', 'screenshot', 'card_create', 'card_update', 'card_message', 'card_show', 'card_list', 'card_block', 'card_request_review', 'card_complete', 'history_search', 'canvas_create', 'canvas_write', 'canvas_read', 'canvas_list', 'panel_open', 'panel_close', 'memory_edit', 'memory_add', 'memory_update', 'memory_forget', 'memory_search', 'todo_write', 'schedule_create', 'schedule_list', 'schedule_delete'];
     for (const t of tools) expect(toolRow(t, {}, ok('')).icon, t).not.toBe('wrench');
   });
 });
