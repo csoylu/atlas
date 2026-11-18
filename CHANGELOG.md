@@ -6,6 +6,10 @@ computed by `scripts/release/changelog.mjs` from the oldest entry to the newest,
 `Fixed` → patch, `Added` or `Changed` → minor, `Breaking` (data or settings stop working without action) → major.
 Never type a version number.
 
+## Changed · #142 · Project how-tos moved from agent memory into CLAUDE.md
+
+Master's rule (18 Nov 2026): working how-tos about one project belong in its CLAUDE.md, not in memory. CLAUDE.md gets a How-tos section (setup and shells, live data, tests, UI, files, CI and merging) with the notes agents had saved as shared memories; those memories are archived. No code change, no migration.
+
 ## Changed · #120 · Artifacts replace canvases
 
 Canvases, nodes and whiteboards are gone. Agents now make artifacts: markdown documents, html pages, svg diagrams and links, each a versioned file (artifact_create, artifact_update, artifact_list, artifact_read). In the chat an artifact is a card that says its kind and version ("Updated to v3", "v4 is the latest") and opens that version. The viewer has one header row: tabs, a version picker (with "Restore vN"), Latest, Full size and a ⋯ menu (author, folder, path, source, open in the browser or the Library). The Library has flat folders (rename, delete moves items to Unfiled), "Recently modified" tiles that show the real content, pinned items on top, and search across titles and content. Existing canvases are converted once to html pages in a "Canvases" folder (migration 0041; the old table is kept as an archive). Converted canvases start at v1: their old version history stays only in the archived tables.
