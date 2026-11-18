@@ -1,8 +1,5 @@
 import { execFileSync, spawn, type ChildProcess } from 'node:child_process';
-import { createHash, randomBytes } from 'node:crypto';
 import { existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, writeFileSync } from 'node:fs';
-import { createServer, type Server } from 'node:http';
-import type { AddressInfo } from 'node:net';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, describe, expect, it } from 'vitest';
@@ -10,78 +7,11 @@ import { Bus } from './events.ts';
 import { openDb, type Db } from './store/db.ts';
 import { compareSemver, parseSums, Updater, zipName, type UpdaterOptions } from './updater.ts';
 import { startEngine } from './index.ts';
+import { FakeGitHub, fakeApp, sha } from '../test/updaterKit.ts';
 import { until } from '../test/kit/index.ts';
 
 const mac = process.platform === 'darwin';
-const sha = (b: Buffer) => createHash('sha256').update(b).digest('hex');
 const wait = (ok: () => boolean, ms = 10_000) => until(ok, 'the condition', ms);
-
-/** A fake Atlas.app (just an Info.plist with its version), zipped the way CI's electron-builder zip is. */
-function fakeApp(dir: string, version: string): string {
-  const app = join(dir, 'Atlas.app');
-  mkdirSync(join(app, 'Contents'), { recursive: true });
-  writeFileSync(
-    join(app, 'Contents', 'Info.plist'),
-    `<?xml version="1.0" encoding="UTF-8"?>\n<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">\n<plist version="1.0"><dict><key>CFBundleShortVersionString</key><string>${version}</string></dict></plist>\n`,
-  );
-  return app;
-}
-function zipOf(version: string): Buffer {
-  const dir = mkdtempSync(join(tmpdir(), 'atlas-upd-src-'));
-  const app = fakeApp(dir, version);
-  writeFileSync(join(app, 'Contents', 'payload'), randomBytes(512 * 1024)); // incompressible: something to download in chunks
-  const zip = join(dir, 'a.zip');
-  execFileSync('ditto', ['-c', '-k', '--keepParent', app, zip]);
-  return readFileSync(zip);
-}
-
-/** The fake GitHub: /repos/csoylu/atlas/releases and the release files. */
-class FakeGitHub {
-  server: Server;
-  releases: unknown[] = [];
-  files = new Map<string, Buffer>();
-  status = 200;
-  /** Bytes per 50 ms for the zip (0 = all at once); lets a test kill the process mid-download. */
-  slow = 0;
-  url = '';
-  constructor() {
-    this.server = createServer((req, res) => {
-      if (req.url?.startsWith('/repos/csoylu/atlas/releases')) {
-        res.writeHead(this.status, { 'content-type': 'application/json' });
-        return void res.end(JSON.stringify(this.status === 200 ? this.releases : { message: 'API rate limit exceeded' }));
-      }
-      const f = this.files.get(req.url!.slice(1));
-      if (!f) return void res.writeHead(404).end();
-      res.writeHead(200, { 'content-length': f.length });
-      if (!this.slow) return void res.end(f);
-      let at = 0;
-      const t = setInterval(() => {
-        if (res.destroyed) return clearInterval(t);
-        res.write(f.subarray(at, (at += this.slow)));
-        if (at >= f.length) {
-          clearInterval(t);
-          res.end();
-        }
-      }, 50);
-    });
-  }
-  async listen() {
-    await new Promise<void>((r) => this.server.listen(0, '127.0.0.1', r));
-    this.url = `http://127.0.0.1:${(this.server.address() as AddressInfo).port}`;
-  }
-  /** A published release with its zip (arm64) and SHA256SUMS.txt; `sum` overrides the checksum. */
-  publish(version: string, o: { prerelease?: boolean; draft?: boolean; sum?: string; zip?: boolean } = {}) {
-    const assets: { name: string; browser_download_url: string }[] = [];
-    if (o.zip !== false) {
-      const zip = zipOf(version);
-      const name = zipName(version, 'arm64');
-      this.files.set(`dl/${name}`, zip);
-      this.files.set(`dl/${version}/SHA256SUMS.txt`, Buffer.from(`${o.sum ?? sha(zip)}  ${name}\n${'0'.repeat(64)}  Atlas-${version}-arm64.dmg\n`));
-      assets.push({ name, browser_download_url: `${this.url}/dl/${name}` }, { name: 'SHA256SUMS.txt', browser_download_url: `${this.url}/dl/${version}/SHA256SUMS.txt` });
-    }
-    this.releases.unshift({ tag_name: `v${version}`, draft: !!o.draft, prerelease: !!o.prerelease, body: `## Fixed · notes of ${version}`, published_at: '2026-11-18T10:00:00Z', assets });
-  }
-}
 
 let gh: FakeGitHub;
 const procs: ChildProcess[] = [];

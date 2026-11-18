@@ -7,3 +7,4 @@ out/
 .env
 release/
 !scripts/release/
+e2e/shots

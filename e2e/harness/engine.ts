@@ -2,7 +2,7 @@ import { mkdirSync, mkdtempSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { startEngine, type Engine } from '../../packages/engine/src/index.ts';
+import { startEngine, type Engine, type EngineOptions } from '../../packages/engine/src/index.ts';
 import type { Card, ClearEvent, Timeline } from '@atlas/shared';
 import { Scripted } from './scripted.ts';
 
@@ -11,13 +11,15 @@ const json = { 'content-type': 'application/json' };
 
 /** A throwaway Atlas: real engine + SQLite file + the built UI, with a scripted model. */
 export class TestAtlas {
+  /** What start() was given beyond the data dir and model: a restart reuses it unless overridden. */
+  opts: { version?: string; updates?: EngineOptions['updates'] } = {};
   private constructor(
     public engine: Engine,
     public model: Scripted,
     public dataDir: string,
   ) {}
 
-  static async start(o: { dataDir?: string; model?: Scripted } = {}): Promise<TestAtlas> {
+  static async start(o: { dataDir?: string; model?: Scripted; version?: string; updates?: EngineOptions['updates'] } = {}): Promise<TestAtlas> {
     const model = o.model ?? new Scripted();
     const dataDir = o.dataDir ?? mkdtempSync(join(tmpdir(), 'atlas-e2e-'));
     mkdirSync(join(dataDir, 'workspaces', 'atlas'), { recursive: true });
@@ -29,10 +31,14 @@ export class TestAtlas {
       providers: () => model,
       manageLocal: false,
       memoryReview: false,
+      ...(o.version ? { version: o.version } : {}),
+      ...(o.updates ? { updates: o.updates } : {}),
     });
     // Past the first-run welcome sheet (it would cover the UI).
     await fetch(engine.url + '/api/settings', { method: 'PATCH', headers: json, body: JSON.stringify({ userName: 'Tester', userAbout: 'QA engineer running the Atlas end-to-end tests.' }) });
-    return new TestAtlas(engine, model, dataDir);
+    const a = new TestAtlas(engine, model, dataDir);
+    a.opts = { version: o.version, updates: o.updates };
+    return a;
   }
 
   get url(): string {
@@ -43,9 +49,11 @@ export class TestAtlas {
   }
 
   /** Stop the engine and start a new one on the same data (a crash-safe restart). The port changes. */
-  async restart(): Promise<void> {
-    await this.engine.stop();
-    this.engine = (await TestAtlas.start({ dataDir: this.dataDir, model: this.model })).engine;
+  async restart(o: { version?: string; updates?: EngineOptions['updates'] } = {}): Promise<void> {
+    await this.engine.stop().catch(() => {});
+    const opts = { ...this.opts, ...o };
+    this.engine = (await TestAtlas.start({ dataDir: this.dataDir, model: this.model, ...opts })).engine;
+    this.opts = opts;
   }
   async stop(o: { keepData?: boolean } = {}): Promise<void> {
     await this.engine.stop().catch(() => {});

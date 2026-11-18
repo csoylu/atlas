@@ -12,5 +12,6 @@ If Chromium isn't installed, use Google Chrome: `E2E_CHANNEL=chrome npx playwrig
 Use a checkout path without spaces (native modules fail to build in "Application Support").
 
 Specs: `slash-popup` (#99 step 1), `slash-compact` (2), `slash-clear` (3), `slash-running` (4), `slash-rewind` (5), `slash-restart` (6).
+`updater` (#124): the update badge, notes dialog and Settings → About at 1440 and 390 px, dark and light (screenshots in `shots/updater/`), and an update clicked while two agents work (fake GitHub + fake Atlas.app from `packages/engine/test/updaterKit.ts`; Mac only).
 `harness/conv.ts` = page object for one conversation (composer, popup, rows, toast); `harness/fixtures.ts` = `atlas` + `openSurface`.
-A test marked `test.fail()` documents a known bug: it goes red when the bug is fixed, then remove the line (none right now).
+A test marked `test.fail()` documents a known bug: it goes red when the bug is fixed, then remove the line (right now: the long unbroken word in the update notes, `updater.spec.ts`, #163).
