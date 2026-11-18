@@ -168,8 +168,8 @@ The user's decisions (11 Nov 2026): several Claude **and** ChatGPT subscriptions
   else `anthropic-ratelimit-unified-reset`; ChatGPT: `resets_at`/`resets_in_seconds` in the error or `retry-after`,
   else until Resume), writes a **notification** row (`notifications` table, shown as a system notification by the
   app) and the same call goes to the next one. Text already streamed is never replayed: the run retries and lands on
-  the next one. **All paused**: the call fails transient with `retryAt` = earliest reset; the dispatcher blocks the
-  card `transient` until then (« retrying at 16:40 » / « Mon 09:00 ») and it restarts by itself.
+  the next one. **All paused**: the call fails transient with `retryAt` = earliest reset; the card waits in `todo`
+  with a retry time until then (#131) (« retrying at 16:40 » / « Mon 09:00 ») and it restarts by itself.
 - **Quotas**: every Claude plan response's `anthropic-ratelimit-unified-5h-utilization` / `-5h-reset` and `-7d-…`
   (utilization a fraction, reset unix seconds) and `-status` are stored per subscription; ChatGPT: Codex-style
   `x-codex-primary/secondary-used-percent` / `-window-minutes` / `-reset-after-seconds` if OpenAI sends them, else
@@ -233,8 +233,12 @@ Statuses: `triage → todo → ready → running → (blocked | review) → done
 - **No hidden guards.** If a `ready` card isn't starting, the card shows why, in plain words (agent busy with t_x,
   credential cooling down until 14:05, model unreachable). Every reason is computed from the tables, not from a
   side cache.
-- `blocked` kinds: `needs_input` (a question, options, recommended first), `dependency`, `capability` (missing
-  access), `transient` (with a retry time, auto-unblocks). Answering a question from the UI or a reply on Telegram
+- `blocked` means **needs the user** (#131): kinds `needs_input` (a question, options, recommended first) and
+  `capability` (missing access). What clears without the user waits in `todo` instead: `task_block dependency` takes
+  `waits_on` (task numbers), adds them as parents and the card starts by itself once they are done (with a system note
+  saying so); `transient` (429/5xx, plan paused until a reset, or an agent's « retry later ») keeps its time in the
+  block columns of the `todo` card (`card.retry`, « retrying at 14:05 · why ») and the dispatcher moves it to `ready`
+  then. Both are read from the tables, so a restart keeps them. Old `blocked/dependency` cards stay as they were. Answering a question from the UI or a reply on Telegram
   writes an `answer` event and puts the card back to `ready`.
 - Review: `review` reassigns to a reviewer agent; the reviewer completes or requests changes (back to the builder).
 - Failure limit: 2 failed attempts in a row → `blocked/capability` with both errors. Interruptions and provider
@@ -496,8 +500,8 @@ These override the sections above where they differ.
   The lead agent is also called atlas; in the UI agents always show as `@atlas`.
 - **How runs end** (built in step 5): run kinds `triage` / `work` / `chat`. A work run that stops without
   `card_complete` / `card_request_review` / `card_block` blocks the card (`needs_input`, its last message as the
-  question) instead of retrying in a loop. A failed run blocks it (`transient` with a retry time for 429/5xx,
-  `capability` otherwise). A failed triage waits until the user writes or presses Retry. The user's message on a blocked or
+  question) instead of retrying in a loop. A failed run waits in `todo` with a retry time for 429/5xx
+  (#131), else blocks it `capability`. A failed triage waits until the user writes or presses Retry. The user's message on a blocked or
   review card puts it back to `ready`; elsewhere the agent replies in chat. Every start writes a `system` note
   in the chat saying why the agent started.
 - **Canvas details** (built in step 9): one versioned JSON document per canvas (last 50 versions, restorable).
@@ -554,7 +558,7 @@ These override the sections above where they differ.
   together with a `card_reports` outbox row, in the same transaction as the status change: exactly once per
   transition, crash or not. The dispatcher starts a chat run for each pending report (the agent tells the user in its own
   words) and marks it delivered once a run since the report has ended or the chat owes nothing; an interrupted chat run
-  resumes through §6 recovery, so there is never a second one. Transient and dependency blocks are not reported.
+  resumes through §6 recovery, so there is never a second one. Waiting on tasks and retries are not reported.
   **Stop** (`POST /api/cards/:id/stop`, no confirmation) aborts the run at once: the model call and every running
   command's process group are killed, open tool calls end `error`, and the next run gets the usual synthetic
   « interrupted » result. A stopped work card blocks (`needs_input`, « Stopped by you ») and writing on it resumes it.

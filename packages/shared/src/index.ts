@@ -70,7 +70,13 @@ export const Card = z.object({
   /** 'main': the kanban board. 'direct': the user's direct chat with the assignee (one per agent, never on the board). */
   board: z.enum(['main', 'direct']).default('main'),
   parents: z.array(z.string()),
+  /** Why it is blocked: only on a 'blocked' card, and a blocked card always needs the user (#131). */
   block: Block.nullable(),
+  /**
+   * A temporary failure (rate limit, 5xx, plan paused until a reset, or task_block transient): the card waits in 'todo'
+   * and the dispatcher moves it to 'ready' at `at`. Not the user's problem, so not a block (#131).
+   */
+  retry: z.object({ at: z.string(), reason: z.string() }).nullable().default(null),
   /** Plain-words reason a card isn't moving (« why not running »), computed from the tables. */
   waiting: z.string().nullable(),
   conversationId: z.string(),

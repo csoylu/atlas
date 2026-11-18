@@ -151,7 +151,9 @@ export class Kanban {
   ) {}
 
   private toCard(r: CardRow, parents: string[]): Card {
-    const block: Block | null = r.block_kind
+    // A transient wait is stored in the block columns of a 'todo' card (#131): shown as `retry`, never as a block.
+    const retry = r.status === 'todo' && r.block_kind === 'transient' && r.block_until ? { at: r.block_until, reason: r.block_reason ?? '' } : null;
+    const block: Block | null = r.block_kind && r.status === 'blocked'
       ? {
           kind: r.block_kind,
           reason: r.block_reason ?? '',
@@ -170,6 +172,7 @@ export class Kanban {
       board: r.board === 'direct' ? 'direct' : 'main',
       parents,
       block,
+      retry,
       waiting: null,
       conversationId: r.conversation_id,
       createdBy: r.created_by,
@@ -433,6 +436,7 @@ export class Kanban {
   /** Move a card to 'blocked' with a reason the user can act on (design §7). `stopped`: the user pressed Stop. */
   block(id: string, b: { kind: BlockKind; reason: string; options?: string[]; until?: string | null; stopped?: boolean }, by: string): Card {
     if (this.get(id).board === 'direct') throw new InvalidError(`${id} is a direct chat, not a work task: just answer in the chat`);
+    if (b.kind === 'transient' && !b.stopped) return this.retryLater(id, { reason: b.reason, at: b.until ?? new Date(Date.now() + 15 * 60_000).toISOString() }, by);
     const before = this.get(id);
     this.tx(() => {
       this.db
@@ -448,6 +452,54 @@ export class Kanban {
       }
       if (!b.stopped && by !== 'user' && (b.kind === 'needs_input' || b.kind === 'capability'))
         this.notify({ kind: 'card.blocked', title: before.title, body: b.reason, cardId: id });
+    });
+    return this.emit(id);
+  }
+
+  /**
+   * A temporary failure (#131): the card waits in 'todo' until `at`, when the dispatcher moves it to 'ready'. Not the
+   * user's problem: no block, no Inbox, no report to the origin chat. Kept in the block columns, so a restart keeps it.
+   */
+  retryLater(id: string, r: { reason: string; at: string }, by: string): Card {
+    const before = this.get(id);
+    if (before.board === 'direct') throw new InvalidError(`${id} is a direct chat, not a work task`);
+    this.tx(() => {
+      this.db
+        .prepare(
+          `UPDATE cards SET status = 'todo', block_kind = 'transient', block_reason = ?, block_options = '[]', block_until = ?, updated_at = ?
+           WHERE id = ?`,
+        )
+        .run(r.reason, r.at, new Date().toISOString(), id);
+      this.event(id, 'retry_later', { from: before.status, by, reason: r.reason, until: r.at });
+      if (before.status !== 'todo') this.event(id, 'status', { from: before.status, to: 'todo', by, why: 'retry at ' + r.at });
+    });
+    return this.emit(id);
+  }
+
+  /**
+   * Waiting on other tasks (task_block kind=dependency, #131): they are added to the card's parents and the card waits
+   * in 'todo'. The dispatcher moves it to 'ready' once they are all done, as for any card with open parents. Not the
+   * user's problem: no block, no Inbox. At least one of `on` must still be open, or there is nothing to wait for.
+   */
+  waitOn(id: string, on: string[], reason: string, by: string): Card {
+    const before = this.get(id);
+    if (before.board === 'direct') throw new InvalidError(`${id} is a direct chat, not a work task`);
+    if (!on.length) throw new InvalidError('waits_on is empty: name the task(s) this one waits on (#12)');
+    const targets = on.map((p) => {
+      try {
+        return this.get(this.resolve(p));
+      } catch {
+        throw new InvalidError(`task ${p} does not exist: create a task for that work first, or ask the user (needs_input) if only they can clear it`);
+      }
+    });
+    if (!targets.some((t) => OPEN(t.status)))
+      throw new InvalidError(`${targets.map(cardRef).join(', ')} ${targets.length === 1 ? 'is' : 'are'} already done: nothing to wait for, continue the work`);
+    this.tx(() => {
+      this.setParents(id, [...new Set([...before.parents, ...targets.map((t) => t.id)])]);
+      this.db.prepare("UPDATE cards SET status = 'todo', updated_at = ? WHERE id = ?").run(new Date().toISOString(), id);
+      this.clearBlock(id);
+      this.event(id, 'waiting', { from: before.status, by, on: targets.map(cardRef), reason });
+      if (before.status !== 'todo') this.event(id, 'status', { from: before.status, to: 'todo', by, why: 'waiting on ' + targets.map(cardRef).join(', ') });
     });
     return this.emit(id);
   }
