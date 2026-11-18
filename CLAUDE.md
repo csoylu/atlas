@@ -82,6 +82,10 @@ the phone zoom-out it causes), text under 12px, text off-screen outside a scroll
 messages or the composer, the modal or panel off-screen, uncaught page errors, and key labels that Apple Vision OCR
 (`ocr.swift`) can't read at confidence ≥ 0.5. Exit code 1 on any issue; screenshots + `report.json` in
 `/tmp/…/atlas-ui-check` (`--out DIR`).
+- Beyond layout it also fails on: an error banner the page raised (`.error[role=alert]`, e.g. « task … not found »: a
+  fixture the harness forgot to serve), and two text boxes of the same header overlapping (« All tasks » tab over the
+  « Tasks » title, #224). Fixture tasks (`c_uicheck…`) are served in full (task, messages, runs, timeline, usage); a
+  fixture page that opens an update in the Inbox gets a fake 204 for « mark read » (listed under refused writes).
 - The engine port is read from the running app (`lsof`; it changes on every start), or `--port N`.
 - Read-only: the harness refuses every API write from the page. Pins and the panel come from fixtures added to the
   responses the page sees (4 cards in every pin state, a real document in a panel tab); nothing is stored.
@@ -207,7 +211,8 @@ Project how-tos live in this file, not in agent memory. Add one here (through a 
 - `ui-check` tests the built UI (`npm run build` first: a stale `packages/ui/dist` gives false errors) and needs
   `npm ci` once in the clone ("Cannot find package 'sharp'" otherwise). Several runs at once give false failures
   (layout width, "never showed .settings"): check `pgrep -fl check.mjs`, rerun the failing screens alone with `--only`
-  and `--widths`. The OCR reading "All" as "AIl" on the Memory page is a known quirk.
+  and `--widths`. The OCR reading "All" as "AIl" or "Links" as "LInks" is a known quirk: the
+  comparison folds `i`, `I` and `l` into one letter (nothing else is forgiven).
 - An HTML mockup in the side panel gets the panel's width, so a page with a 640 px breakpoint shows its phone layout
   there: judge the desktop layout full size (`/api/files/<agent>/pages/<file>.html`).
 
