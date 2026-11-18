@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { deletedChatRoute, menuPosition } from './chatHistoryMenu.ts';
+import { deleteChatQuestion, deletedChatRoute, menuPosition } from './chatHistoryMenu.ts';
 
 describe('chat history menu', () => {
   it('opens at the pointer when there is room', () => {
@@ -16,5 +16,14 @@ describe('chat history menu', () => {
   });
   it.each(['#/chat/c_other', '#/chat/new', '#/board', '#/canvas/c_one'])('preserves a different current route %s', hash => {
     expect(deletedChatRoute(hash, 'c_one')).toBeNull();
+  });
+  it('says a chat delete is permanent, and names the agent for its main chat (#232)', () => {
+    const q = deleteChatQuestion({ title: 'Plan the release', assignee: 'atlas' }, false);
+    expect(q).toContain('“Plan the release”');
+    expect(q).toContain("can't be undone");
+    const main = deleteChatQuestion({ title: '@atlas', assignee: 'atlas' }, true);
+    expect(main).toMatch(/^Delete your whole chat with @atlas\?/);
+    expect(main).toContain("can't be undone");
+    expect(main).toContain('/clear');
   });
 });

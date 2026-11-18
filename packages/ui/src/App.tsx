@@ -24,7 +24,7 @@ import { SecretsBadge } from './SecretsPage.tsx';
 import { settingsLabel, settingsRoute, type SettingsPage } from './settingsPages.ts';
 import { registerAgents } from './agentTint.ts';
 import { ChatHistory } from './ChatHistory.tsx';
-import { deletedChatRoute } from './chatHistoryMenu.ts';
+import { deleteChatQuestion, deletedChatRoute } from './chatHistoryMenu.ts';
 import { HeaderSlot, Icon } from './ScreenHeader.tsx';
 import { Palette, ShortcutsSheet, type PaletteContext } from './Palette.tsx';
 import { GO_HASH, globalKey, nextRow } from './keys.ts';
@@ -342,10 +342,10 @@ export function App() {
   // The daily memory digest (#82): one Inbox update, counted in the badge while unread.
   const digest = useMemoryDigest(stream, fail, !!auth && (auth.authenticated || !auth.enabled));
   const shownInbox = useMemo(() => inbox && withDigest(inbox, digest.item), [inbox, digest.item]);
-  /** Deletes a chat after a confirm (sidebar menu, chat header); leaves it if it was on screen. */
+  /** Deletes a History chat after a confirm (sidebar menu; never a main chat); leaves it if it was on screen. */
   const deleteChat = useCallback(
     (chat: Card) => {
-      if (!confirm(`Delete the chat “${chat.title}”?`)) return;
+      if (!confirm(deleteChatQuestion(chat, false))) return;
       api.deleteCard(chat.id).then(() => {
         setChats((cs) => cs.filter((c) => c.id !== chat.id));
         const next = deletedChatRoute(location.hash, chat.id);
