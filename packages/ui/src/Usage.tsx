@@ -46,7 +46,7 @@ export function ComposerMeta(props: { usage: ChatUsage | null; plan: boolean; pi
             {pct !== null && (
               <>
                 <Ring pct={pct} />
-                <span>{pct === 0 && u!.lastInput ? '<1' : pct}% context</span>
+                <span>{pct === 0 && u!.lastInput ? '<1' : pct}%<span className="strip-word"> context</span></span>
                 <span className="strip-dot">·</span>
               </>
             )}

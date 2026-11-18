@@ -1,4 +1,5 @@
 import { Fragment, forwardRef, useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from 'react';
+import { AgentFace } from './AgentFace.tsx';
 import Markdown from 'react-markdown';
 import remarkGfm from 'remark-gfm';
 import { USER, parseDocRef, type Agent, type Card, type ImageBlock, type Message, type Model, type Run, type Timeline, type ToolCallTiming } from '@atlas/shared';
@@ -51,14 +52,21 @@ export function useCardConversation(card: Card, stream: MessageStream, onError: 
   const [timings, setTimings] = useState<Map<string, ToolCallTiming>>(new Map());
   const [timeline, setTimeline] = useState<Timeline>(NO_TIMELINE);
   const lastRun = useRef('');
+  // Messages that arrived live (stream), not with the history load: a card report among them gets the arrival animation (#104).
+  const live = useRef(new Set<string>());
   useEffect(() => {
+    live.current = new Set();
     setTimings(new Map());
     setTimeline(NO_TIMELINE);
     // Ended runs, rewinds, the summary point (#66): reloaded when a run starts or ends and after a rewind or its undo.
     const reloadTimeline = () => api.timeline(card.id).then(setTimeline, onError);
     const offMsg = stream.listen(card.conversationId, (e) => {
       if (e.type === 'message') {
-        setMessages((ms) => (ms.some((x) => x.id === e.message.id) ? ms : [...ms, e.message]));
+        setMessages((ms) => {
+          if (ms.some((x) => x.id === e.message.id)) return ms;
+          live.current.add(e.message.id);
+          return [...ms, e.message];
+        });
         if (e.message.role === 'assistant') setDraft(NO_DRAFT);
       } else if (e.type === 'delta' || e.type === 'thinking') setDraft((d) => addDelta(d, e.type === 'delta' ? 'text' : 'thinking', e.text));
       else if (e.type === 'rewound') {
@@ -96,7 +104,8 @@ export function useCardConversation(card: Card, stream: MessageStream, onError: 
       }
     return map;
   }, [messages]);
-  return { messages, run, draft, results, timings, timeline };
+  const isLive = useCallback((id: string) => live.current.has(id), []);
+  return { messages, run, draft, results, timings, timeline, isLive };
 }
 
 const NO_TIMELINE: Timeline = { runs: [], rewinds: [], summary: null };
@@ -212,7 +221,7 @@ const AskMessage = forwardRef<HTMLDivElement, { card: Card; children?: ReactNode
   return (
     <div ref={ref} className={'msg assistant asking ' + (b ? b.kind : 'review')}>
       <div className="who">
-        {card.assignee && <>{card.assignee} · </>}
+        {card.assignee && <><AgentFace id={card.assignee} />{card.assignee} · </>}
         <span className="ask-kind">{b ? blockLabel[b.kind] : 'Waiting for your review'}</span>
       </div>
       <div className="msg-body">
@@ -358,7 +367,7 @@ export function Activity(props: {
         if (m.author === 'system')
           return (
             <Fragment key={m.id}>
-              <SystemMessage message={m} onOpenCard={cardLinks?.open ?? props.onOpenCard} renderBody={(t) => text(t)} />
+              <SystemMessage message={m} landed={props.convo.isLive(m.id)} onOpenCard={cardLinks?.open ?? props.onOpenCard} renderBody={(t) => text(t)} />
               {after}
             </Fragment>
           );
@@ -370,7 +379,7 @@ export function Activity(props: {
         return (
           <Fragment key={m.id}>
           <div className={'msg ' + m.role + (cont ? ' cont' : '')} data-seq={m.seq}>
-            {!cont && <div className="who">{m.author === USER ? (props.userName ?? 'You') : m.author}</div>}
+            {!cont && <div className="who">{m.author === USER ? (props.userName ?? 'You') : <><AgentFace id={m.author} />{m.author}</>}</div>}
             <div className="msg-body">
               {isAgent(m) ? (
                 renderTurn(ms, running && last, last)
@@ -396,7 +405,7 @@ export function Activity(props: {
       })}
       {draft && !draftJoined && (
         <div className="msg assistant">
-          <div className="who">{card.assignee}</div>
+          <div className="who">{card.assignee && <AgentFace id={card.assignee} />}{card.assignee}</div>
           <div className="msg-body">
             <DraftView segments={draftSegs} cardLinks={cardLinks} />
           </div>
@@ -428,7 +437,7 @@ function DraftView({ segments, cardLinks }: { segments: Segment[]; cardLinks?: C
 }
 
 /** A system message: a card report-back is one compact row that expands to the full report; anything else a note. */
-function SystemMessage({ message: m, onOpenCard, renderBody }: { message: Message; onOpenCard?(id: string): void; renderBody(text: string): ReactNode }) {
+function SystemMessage({ message: m, landed, onOpenCard, renderBody }: { message: Message; landed?: boolean; onOpenCard?(id: string): void; renderBody(text: string): ReactNode }) {
   const text = m.content.map((b) => (b.type === 'text' ? b.text : '')).join(' ');
   const r = parseReport(text);
   if (!r) return <SysNote text={text} onOpenCard={onOpenCard} />;
@@ -447,14 +456,22 @@ function SystemMessage({ message: m, onOpenCard, renderBody }: { message: Messag
   ) : (
     <span className="chat-row-ref">{r.card}</span>
   );
+  // A finished task reads « #99 [Done] » (#104); the other reports keep their verb.
+  const done = r.verb === 'finished';
   return (
     <ChatRow
-      className="card-report"
+      className={'card-report' + (done ? ' done' : '') + (landed ? ' landed' : '')}
       icon={<StatusIcon status={r.icon} />}
       verb={
-        <>
-          {ref} {r.verb}
-        </>
+        done ? (
+          <>
+            {ref} <span className="st-chip done">Done</span>
+          </>
+        ) : (
+          <>
+            {ref} {r.verb}
+          </>
+        )
       }
       object={r.title}
       at={m.at}

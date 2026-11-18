@@ -31,7 +31,7 @@ const ONLY = arg('only', '')?.split(',').filter(Boolean);
 const UI_DIR = arg('ui');
 // --theme dark|light: open every screen with ?theme= (a preview, nothing saved); default = the page's own choice.
 const THEME = arg('theme');
-const MIN_FONT = 12;
+const MIN_FONT = 13; // CLAUDE.md « UI type rules »: no text under 13 px (#112)
 const MIN_CONF = 0.5;
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 
@@ -717,7 +717,8 @@ const OCR_BIN = join(tmpdir(), 'atlas-ui-check-ocr');
 if (!existsSync(OCR_BIN) || statSync(OCR_BIN).mtimeMs < statSync(OCR_SRC).mtimeMs) execFileSync('swiftc', ['-O', '-o', OCR_BIN, OCR_SRC], { stdio: 'inherit' });
 // Vision sometimes answers with Cyrillic / Greek look-alikes (« Аpp »): fold them to Latin before comparing.
 const LOOKALIKE = { а: 'a', в: 'b', е: 'e', к: 'k', м: 'm', н: 'h', о: 'o', р: 'p', с: 'c', т: 't', у: 'y', х: 'x', і: 'i', α: 'a', ο: 'o', ν: 'v', ρ: 'p', τ: 't', ι: 'i', κ: 'k' };
-const norm = (s) => s.toLowerCase().normalize('NFKD').replace(/./g, (c) => LOOKALIKE[c] ?? c).replace(/[^a-z0-9]/g, '');
+// In Inter a capital I and a lowercase l are the same glyph, so OCR reads either: compare them as one letter.
+const norm = (s) => s.replace(/I/g, 'l').toLowerCase().normalize('NFKD').replace(/./g, (c) => LOOKALIKE[c] ?? c).replace(/[^a-z0-9]/g, '');
 /** Smallest edit distance between `p` and any substring of `t` (approximate substring match). */
 function fuzzy(p, t) {
   let prev = new Array(t.length + 1).fill(0);

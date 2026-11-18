@@ -17,7 +17,7 @@ const thinking: ContentBlock = { type: 'thinking', thinking: 'Let me see.', sign
 const reply: ContentBlock = { type: 'text', text: 'Hi there.' };
 
 function render(messages: Message[], draft: Draft): string {
-  const convo = { messages, run: null, draft, results: new Map(), timings: new Map(), timeline: { runs: [], rewinds: [], summary: null } };
+  const convo = { messages, run: null, draft, results: new Map(), timings: new Map(), timeline: { runs: [], rewinds: [], summary: null }, isLive: () => false };
   const html = renderToStaticMarkup(createElement(Activity, { convo, card, stream, empty: '', onError() {} }));
   // What only differs by streaming: the caret, the streaming class, React's generated ids, the seq a landed message
   // carries for memory source links (#82).
