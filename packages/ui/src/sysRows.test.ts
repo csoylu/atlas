@@ -70,13 +70,19 @@ describe('runRow', () => {
 });
 
 describe('rewindRow and summaryRow', () => {
-  const rw = (p: Partial<RewindEvent>): RewindEvent => ({ id: 'rw_1', fromSeq: 5, at: '2026-11-14T18:23:00.000Z', hidden: 13, files: [], filesError: null, undoable: false, ...p });
+  const rw = (p: Partial<RewindEvent>): RewindEvent => ({ id: 'rw_1', fromSeq: 5, at: '2026-11-14T18:23:00.000Z', hidden: 13, files: [], filesError: null, effects: [], undoable: false, ...p });
   it('says what was hidden and put back; Undo while it works', () => {
     const files = [{ path: 'a.ts', change: 'restored' as const }, { path: 'b.ts', change: 'deleted' as const }];
     expect(rewindRow(rw({ files, undoable: true }))).toMatchObject({ icon: 'rewind', tone: 'warn', verb: 'Rewound by you', object: '13 messages hidden', rest: '2 files put back', body: { kind: 'files', files, undoId: 'rw_1' } });
     expect(rewindRow(rw({ hidden: 1 }))).toMatchObject({ object: '1 message hidden', rest: 'no files changed', body: undefined });
     expect(rewindRow(rw({ files: null }))).toMatchObject({ rest: 'putting files back…' });
     expect(rewindRow(rw({ filesError: 'files not restored: no snapshot' }))).toMatchObject({ rest: 'files not restored', body: { error: 'files not restored: no snapshot', undoId: null } });
+  });
+  it('a rewind that did something besides files says so (#138): « no files changed » never alone', () => {
+    const task = { kind: 'task' as const, label: '#131 Mockup', cardId: 'c_1', outcome: 'undone' as const, action: 'closed', why: null };
+    const push = { kind: 'push' as const, label: 'git push', cardId: null, outcome: 'kept' as const, action: 'stays', why: null };
+    expect(rewindRow(rw({ effects: [task] }))).toMatchObject({ rest: 'no files changed · 1 task closed', body: { kind: 'files', files: [], effects: [task], undoId: null } });
+    expect(rewindRow(rw({ effects: [task, push], undoable: true }))).toMatchObject({ rest: 'no files changed · 1 task closed · 1 kept', body: { undoId: 'rw_1' } });
   });
   it('the summary point', () => {
     expect(summaryRow({ uptoSeq: 9, text: 'S' }, 142)).toMatchObject({ icon: 'compress', verb: 'Earlier messages summarized', meta: '142 messages → 1 summary', body: { kind: 'markdown', text: 'S' } });
@@ -96,7 +102,7 @@ describe('timelineRows + distribute', () => {
     const placed = timelineRows(
       {
         runs: [run({ id: 'r1', endedAt: '2026-11-14T10:03:00.000Z' }), run({ id: 'r2', status: 'stopped', error: 'stopped by you', endedAt: '2026-11-14T10:12:00.000Z' })],
-        rewinds: [{ id: 'rw', fromSeq: 4, at: '2026-11-14T10:20:00.000Z', hidden: 2, files: [], filesError: null, undoable: false }],
+        rewinds: [{ id: 'rw', fromSeq: 4, at: '2026-11-14T10:20:00.000Z', hidden: 2, files: [], filesError: null, effects: [], undoable: false }],
         summary: { uptoSeq: 2, text: 'S' },
       },
       ms,
@@ -134,7 +140,7 @@ describe('/clear and /compact rows (#99)', () => {
     const t = {
       runs: [run({ id: 'r1', status: 'stopped', error: 'stopped by you', endedAt: '2026-11-14T10:04:00.000Z' })],
       // A rewind to the first message after the clear sits at the same place, later: it stays.
-      rewinds: [{ id: 'rw', fromSeq: 4, at: '2026-11-14T10:20:00.000Z', hidden: 2, files: [], filesError: null, undoable: false }],
+      rewinds: [{ id: 'rw', fromSeq: 4, at: '2026-11-14T10:20:00.000Z', hidden: 2, files: [], filesError: null, effects: [], undoable: false }],
       summary: { uptoSeq: 5, text: 'S', byUser: true },
       clears: [clear()],
     };

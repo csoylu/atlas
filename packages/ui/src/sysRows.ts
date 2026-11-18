@@ -1,6 +1,6 @@
-import { RESUME_KICK, TRIAGE_KICK, USER, WORK_KICK, type ClearEvent, type EndedRun, type FileChange, type Message, type RewindEvent, type Timeline } from '@atlas/shared';
+import { RESUME_KICK, TRIAGE_KICK, USER, WORK_KICK, type ClearEvent, type EndedRun, type FileChange, type Message, type RewindEvent, type SideEffect, type Timeline } from '@atlas/shared';
 import type { RowTone } from './chatRow.ts';
-import { REWOUND } from './rewindText.ts';
+import { outcomeLine, REWOUND } from './rewindText.ts';
 import type { RowIcon } from './toolRows.ts';
 
 /**
@@ -34,7 +34,7 @@ export type SysBody =
   /** The run's error, then Retry when it is the latest run and nothing runs. */
   | { kind: 'error'; text: string; retry: boolean; agent: string }
   /** What a rewind put back, then Undo while it still works. */
-  | { kind: 'files'; files: FileChange[]; error: string | null; undoId: string | null }
+  | { kind: 'files'; files: FileChange[]; effects: SideEffect[]; error: string | null; undoId: string | null }
   /** A /clear (#99): show or hide the messages before it, then Undo while it still works. */
   | { kind: 'clear'; hidden: number; expanded: boolean; undoId: string | null };
 
@@ -117,8 +117,11 @@ export function rewindRow(e: RewindEvent): SysRow {
     tone: 'warn',
     verb: 'Rewound by you',
     object: `${plural(e.hidden, 'message')} hidden`,
-    rest: files,
-    body: e.files?.length || e.filesError || e.undoable ? { kind: 'files', files: e.files ?? [], error: e.filesError, undoId: e.undoable ? e.id : null } : undefined,
+    rest: outcomeLine(files, e.effects),
+    body:
+      e.files?.length || e.filesError || e.undoable || e.effects.length
+        ? { kind: 'files', files: e.files ?? [], effects: e.effects, error: e.filesError, undoId: e.undoable ? e.id : null }
+        : undefined,
   };
 }
 

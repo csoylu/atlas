@@ -1,8 +1,9 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
-import type { Card, FileChange, RewindPreview, RewindResult, Run } from '@atlas/shared';
+import type { Card, RewindPreview, RewindResult, Run } from '@atlas/shared';
 import { api } from './api.ts';
 import { rewindKey } from './composerKeys.ts';
-import { filesLine, REWOUND } from './rewindText.ts';
+import { effectsLine, filesLine, REWOUND } from './rewindText.ts';
+import { RewindGroups } from './RewindGroups.tsx';
 
 /** How long the « Rewound · Undo » note stays (⌘Z keeps working while the composer is unchanged). */
 const NOTE_MS = 10_000;
@@ -175,6 +176,8 @@ export function RewindNote({ rw }: { rw: Rewind }) {
       </div>
     );
   const r = n.result;
+  const kept = r.effects.filter((e) => e.outcome === 'kept').length;
+  const undoneFx = effectsLine(r.effects.filter((e) => e.outcome === 'undone'));
   return (
     <div className="rewind-note" role="status">
       <RewindIcon />
@@ -184,6 +187,13 @@ export function RewindNote({ rw }: { rw: Rewind }) {
           <span className="rewind-warn" title={r.filesError}>
             {' '}
             · some changes stay
+          </span>
+        )}
+        {undoneFx && ` · ${undoneFx}`}
+        {kept > 0 && (
+          <span className="rewind-warn" title={r.effects.filter((e) => e.outcome === 'kept').map((e) => e.label).join('\n')}>
+            {' '}
+            · {kept} kept
           </span>
         )}
       </span>
@@ -225,26 +235,16 @@ export function RewindConfirm({ rw }: { rw: Rewind }) {
           Your text goes back in the message box to edit and resend.
         </p>
         {p.filesError && <p className="rewind-warn">{cap(p.filesError)}.</p>}
-        {p.files.length ? (
-          <div className="rewind-files">
-            <div className="rewind-files-head">{cap(filesLine(p.files))} in the agent's folder</div>
-            <ul>
-              {p.files.map((f) => (
-                <li key={f.path}>
-                  <span className="rewind-path" title={f.path}>
-                    {f.path}
-                  </span>
-                  <span className={'rewind-change ' + f.change}>{changeLabel[f.change]}</span>
-                </li>
-              ))}
-            </ul>
+        {p.files.length || p.effects.length ? (
+          <div className="rw-groups">
+            <RewindGroups files={p.files} effects={p.effects} keptHead="Kept: already done, can't be taken back" />
           </div>
         ) : p.filesError ? null : (
-          <p>No files changed since then.</p>
+          <p>No files changed since then, and nothing was done elsewhere.</p>
         )}
         <p className="rewind-fine">
-          Only files this chat changed come back; other chats' and tasks' work is left alone. What it did elsewhere (commands, messages, other services) stays
-          done.
+          {p.files.length || p.effects.some((e) => e.outcome === 'undone') ? 'Undo brings back everything listed as undone. ' : ''}Only files this chat changed come
+          back; other chats' work is left alone. Other commands the agent ran (and other services) stay done.
         </p>
         <div className="rewind-actions">
           <button type="button" className="ghost" onClick={cancel}>
@@ -259,7 +259,6 @@ export function RewindConfirm({ rw }: { rw: Rewind }) {
   );
 }
 
-const changeLabel: Record<FileChange['change'], string> = { restored: 'restored', recreated: 'brought back', deleted: 'removed' };
 const cap = (s: string) => s.charAt(0).toUpperCase() + s.slice(1);
 
 /** The small counter-clockwise arrow of « Rewind to here » and the note. */

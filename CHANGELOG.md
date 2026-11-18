@@ -6,6 +6,10 @@ computed by `scripts/release/changelog.mjs` from the oldest entry to the newest,
 `Fixed` → patch, `Added` or `Changed` → minor, `Breaking` (data or settings stop working without action) → major.
 Never type a version number.
 
+## Added · #138 · A rewind says what it undoes and what it keeps, and takes back the tasks, messages, memories and schedules nobody acted on
+
+The « Rewind to this message? » dialog, the note above the composer and the « Rewound by you » row now list two groups: Undone (files, plus tasks the rewound part created that nobody started, closed; messages to agents or tasks not read yet, withdrawn; new memories, archived; new schedules that never ran, turned off) and Kept (a task someone already worked on, a message already read, changed memories, canvases, `git push`), with why. « No files changed » never stands alone when something else happened. Undo brings back everything undone (unless it changed since; the note says so). Two rewinds in a row show as one row, whose Undo undoes both. Tool calls now record what they did in a new `side_effects` table (migration 0043, which also adds `rewinds.effects`); rewinds made before this list nothing.
+
 ## Changed · #126 · A task is done only once its code is on main
 
 CLAUDE.md's Releases section now says it: before finishing a task, check that none of its branches (`<type>/<N>-…`) has commits that are not on origin/main. If one does, merge it first, or block and name the branch. Tasks with no code finish as before. This is a project rule in CLAUDE.md, not an engine check (Master, 18 Nov 2026). No code change, no migration.
