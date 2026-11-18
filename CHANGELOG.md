@@ -6,6 +6,10 @@ computed by `scripts/release/changelog.mjs` from the oldest entry to the newest,
 `Fixed` → patch, `Added` or `Changed` → minor, `Breaking` (data or settings stop working without action) → major.
 Never type a version number.
 
+## Added · #215 · Memory and secrets now belong to a project, plus a global memory for your own rules that every project sees
+
+Projects 3/5 (design §17). Memory has three levels: global (yours, every project), a project's, and an agent's in a project; a run sees global + its project + its own, never another project's (always-on, recall, search, change notes, background review, cleanup). Agents save with scope `self`, `shared` (this project) or `global`. Migration 0052 keeps every memory in « Atlas »; atlas moves your general rules to global afterwards (`PATCH /api/memories/:id {"scope":"global"}`). Always-on budget: 3000 characters per run, global at most 2000. Secrets are global or one project's; a run gets global + its project's. The memory kind « project » is now shown as « task notes ».
+
 ## Added · #214 · Projects get their own workspace and main chat per agent: a member of a second project works in its own clone of that repo, never in another project's folder
 
 Projects 2/5 (design §17). Adding a member to a project clones its repo into `workspaces/<agent>/<project>/` with your gh login (cloning, ready or failed with the reason; Try again; an empty folder without a repo). A run works only in the workspace of its task's project (files, shell, screenshots, artifacts, CLAUDE.md / AGENTS.md) and fails on the card when that clone isn't ready. Each agent has one main chat per project; « Atlas » keeps today's chats and folders exactly as they are. Removing a member stops its runs there, gives its open tasks back to the lead, archives its chat there and keeps its clone on disk until you delete it. Links `/api/files/<agent>/…` still open the same files; another project's files are at `/api/files/<agent>@<project>/…`.

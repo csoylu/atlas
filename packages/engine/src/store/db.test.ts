@@ -226,4 +226,37 @@ describe('store', () => {
     ]);
     db.close();
   });
+
+  it('0052 project memory: agent and shared memories stay in Atlas with their ids, history and keyword index; global needs no project', () => {
+    const db = new Database(':memory:');
+    db.pragma('foreign_keys = ON');
+    db.exec('CREATE TABLE schema_migrations (name TEXT PRIMARY KEY, applied_at TEXT NOT NULL)');
+    const dir = join(dirname(fileURLToPath(import.meta.url)), 'migrations');
+    for (const f of readdirSync(dir).filter((f) => /^\d{4}_.+\.sql$/.test(f) && f < '0052').sort()) {
+      const sql = readFileSync(join(dir, f), 'utf8');
+      if (sql.startsWith('-- atlas: foreign_keys off')) db.pragma('foreign_keys = OFF');
+      db.exec(sql);
+      db.pragma('foreign_keys = ON');
+      db.prepare('INSERT INTO schema_migrations (name, applied_at) VALUES (?, ?)').run(f, 'x');
+    }
+    const add = db.prepare("INSERT INTO memories (kind, scope, text, created_at, confirmed_at, updated_at, updated_by, project_id) VALUES (?, ?, ?, 'x', 'x', 'x', 'user', 'atlas')");
+    const shared = Number(add.run('rule', 'shared', 'Master wants short answers').lastInsertRowid);
+    const own = Number(add.run('fact', 'agent:atlas', 'Clone lives in publish-atlas').lastInsertRowid);
+    db.prepare("INSERT INTO memory_changes (memory_id, at, by, action, before_text, before_kind, before_scope, before_status, before_pinned) VALUES (?, 'x', 'user', 'update', 'old', 'rule', 'shared', 'active', 0)").run(shared);
+    expect(migrate(db)).toEqual(['0052_project_memory.sql']);
+    expect(db.prepare('SELECT id, scope, project_id FROM memories ORDER BY id').all()).toEqual([
+      { id: shared, scope: 'shared', project_id: 'atlas' },
+      { id: own, scope: 'agent:atlas', project_id: 'atlas' },
+    ]);
+    expect(db.prepare('SELECT before_project_id FROM memory_changes').all()).toEqual([{ before_project_id: 'atlas' }]);
+    expect(db.prepare("SELECT rowid FROM memories_fts WHERE memories_fts MATCH 'publish'").all()).toEqual([{ rowid: own }]);
+    // Global: no project; any other scope: a project.
+    db.prepare("INSERT INTO memories (kind, scope, text, created_at, confirmed_at, updated_at, updated_by) VALUES ('preference', 'global', 'Call me Master', 'x', 'x', 'x', 'user')").run();
+    expect(() => db.prepare("INSERT INTO memories (kind, scope, text, created_at, confirmed_at, updated_at, updated_by) VALUES ('rule', 'shared', 'x', 'x', 'x', 'x', 'user')").run()).toThrow(/CHECK/);
+    expect(() => db.prepare("INSERT INTO memories (kind, scope, text, created_at, confirmed_at, updated_at, updated_by, project_id) VALUES ('rule', 'global', 'x', 'x', 'x', 'x', 'user', 'atlas')").run()).toThrow(/CHECK/);
+    db.prepare("UPDATE memories SET text = 'Clone lives in atlas-215' WHERE id = ?").run(own); // triggers rebuilt
+    expect(db.prepare("SELECT rowid FROM memories_fts WHERE memories_fts MATCH 'publish'").all()).toEqual([]);
+    expect(db.pragma('foreign_key_check')).toEqual([]);
+    db.close();
+  });
 });

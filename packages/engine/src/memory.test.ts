@@ -4,7 +4,7 @@ import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import Database from 'better-sqlite3';
-import { MEMORY_BUDGET, type ContentBlock, type Memory, type MemoryChange } from '@atlas/shared';
+import { MEMORY_BUDGET, MEMORY_BUDGET_GLOBAL, type ContentBlock, type Memory, type MemoryChange } from '@atlas/shared';
 import { migrate } from './store/db.ts';
 import { startEngine, type Engine } from './index.ts';
 import { FakeProvider } from './providers/fake.ts';
@@ -25,7 +25,7 @@ const ctxFor = (e: Engine, agentId = 'atlas', workCard: string | null = null): T
   memories: e.memories,
   workflows: e.workflows,
   agentId,
-  cardId: workCard ?? 'c_x',
+  cardId: workCard ?? e.kanban.create({ title: 'tool test', status: 'todo' }, 'user').id,
   workCard,
   source: null,
   deliver: () => {},
@@ -119,7 +119,7 @@ describe('memory v2: store', () => {
     expect(() => m.update(fact.id, { pinned: true }, 'user')).toThrow(/3400\/3000/);
     expect(() => m.update(fact.id, { kind: 'rule' }, 'user')).toThrow(/3400\/3000/);
     // Shared rows count for every agent: munih has room, atlas doesn't.
-    expect(() => m.add({ kind: 'rule', scope: 'shared', text: rule(200) }, 'user')).toThrow(/@atlas would be 3100/);
+    expect(() => m.add({ kind: 'rule', scope: 'shared', text: rule(200) }, 'user')).toThrow(/@atlas in Atlas would be 3100/);
     m.add({ kind: 'rule', scope: 'agent:munih', text: rule(200) }, 'user');
     expect(m.used(V('munih'))).toBe(200);
     // Forgetting makes room again; an agent already over the budget (v1 migration) can still shrink.
@@ -145,7 +145,7 @@ describe('memory v2: tools', () => {
   it('memory_add refuses while similar memories exist, until update: id or new: true', async () => {
     const e = await start();
     const ctx = ctxFor(e);
-    expect(runTeamTool('memory_add', { kind: 'preference', text: 'The user likes short answers' }, ctx)).toMatchObject({ isError: false, output: expect.stringMatching(/^saved m1 \(preference, agent:atlas\) · always-on 28\/3000 chars$/) });
+    expect(runTeamTool('memory_add', { kind: 'preference', text: 'The user likes short answers' }, ctx)).toMatchObject({ isError: false, output: expect.stringMatching(/^saved m1 \(preference, yours\) · always-on 28\/3000 chars \(global 0\/2000\)$/) });
     const refused = runTeamTool('memory_add', { kind: 'preference', scope: 'shared', text: 'User likes answers that are short' }, ctx);
     expect(refused.isError).toBe(true);
     expect(refused.output).toMatch(/^Nothing saved: similar memories exist\.\n- \[m1 · preference · yours · \d{4}-\d\d-\d\d\] The user likes short answers\n.*update: <id>.*new: true/s);
@@ -192,11 +192,11 @@ describe('memory v2: in the system prompt', () => {
     const system = fake.calls[0]!.system;
     const tail = system.slice(fake.calls[0]!.cache!.systemStable);
     expect(tail).toMatch(/^# Memory\nAlways on \(rules, preferences, pinned: \d+\/3000 chars\)/);
-    expect(tail).toContain('Yours:\n- [m1 · rule] Reinstall the Mac app after every change\nShared by all agents:\n- [m2 · preference] Master loves the Linear look');
+    expect(tail).toContain('Project Atlas (shared by its members):\n- [m2 · preference] Master loves the Linear look\nYours in Atlas:\n- [m1 · rule] Reinstall the Mac app after every change');
     const recalled = tail.split('Recalled for this conversation')[1]!.split('\n\n')[0]!.split('\n').slice(1);
     expect(recalled).toHaveLength(8);
     expect(recalled.join('\n')).toContain('The orb overlay is drawn in apps/desktop/src/orb');
-    expect(recalled.join('\n')).toMatch(new RegExp(`\\[m${project.id} · project · \\d{4}-\\d\\d-\\d\\d\\] Orb stutter`));
+    expect(recalled.join('\n')).toMatch(new RegExp(`\\[m${project.id} · task note · \\d{4}-\\d\\d-\\d\\d\\] Orb stutter`));
     expect(recalled.join('\n')).not.toContain('Billing');
     expect(recalled.join('\n')).not.toContain('Reinstall'); // already always on
 
@@ -254,6 +254,6 @@ describe('memory v2: API', () => {
     expect((await call<Memory>('POST', `/memories/changes/${changes[0]!.id}/undo`)).body.status).toBe('archived');
     expect((await call('POST', `/memories/changes/${changes[3]!.id}/undo`)).status).toBe(409);
     expect((await call('GET', '/memories/999')).status).toBe(404);
-    expect((await call<{ used: number; limit: number }>('GET', '/agents/atlas/memory-budget')).body).toEqual({ used: 0, limit: 3000 });
+    expect((await call<{ used: number; limit: number }>('GET', '/agents/atlas/memory-budget')).body).toEqual({ used: 0, limit: 3000, global: 0, globalLimit: MEMORY_BUDGET_GLOBAL, projectId: 'atlas' });
   });
 });

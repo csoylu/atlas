@@ -72,7 +72,7 @@ describe('weekly memory cleanup (#83)', () => {
       (req) => {
         const review = lastResults(req)[0]!.content as string;
         expect(review).toMatch(/## shared/);
-        expect(review).toMatch(new RegExp(`m${seen!.c} · project · stale · confirmed \\d{4}-\\d\\d-\\d\\d · task #\\d+ done\\] DVOL`));
+        expect(review).toMatch(new RegExp(`m${seen!.c} · task note · stale · confirmed \\d{4}-\\d\\d-\\d\\d · task #\\d+ done\\] DVOL`));
         expect(review).toMatch(/always-on of @atlas: \d+\/3000 chars/);
         return [
           use('memory_propose', { action: 'merge', ids: [`m${seen!.b}`, `m${seen!.a}`], text: 'npm is not on PATH: use ~/.nvm/versions/node/v24/bin', reason: 'same fact twice' }),
@@ -161,7 +161,7 @@ describe('weekly memory cleanup (#83)', () => {
     const scouts = e.memories.add({ kind: 'rule', scope: 'agent:scout', text: 'S'.repeat(100) }, 'user');
     const move = e.cleanup.propose(card.id, { action: 'update', ids: [long.id], scope: 'shared', reason: 'everyone needs it' }, 'atlas').proposal;
     // Shared counts for scout too: 2526 + 480 > 3000. Atlas already counts it, so only scout is over.
-    expect(() => e.cleanup.approve(move.id, 'user')).toThrow(/@scout would be 3006\/3000/);
+    expect(() => e.cleanup.approve(move.id, 'user')).toThrow(/@scout in Atlas would be 3006\/3000/);
     expect(e.memories.get(long.id).scope).toBe('agent:atlas');
     e.memories.forget(scouts.id, 'user');
     expect(e.cleanup.approve(move.id, 'user').status).toBe('approved');

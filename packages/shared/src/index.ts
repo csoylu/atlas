@@ -520,8 +520,11 @@ export interface Model {
 export const MEMORY_TEXT_MAX = 500;
 /** Always-on chars a run sees: global + its project + its own there. */
 export const MEMORY_BUDGET = 3000;
-/** The global part of MEMORY_BUDGET: every project keeps at least MEMORY_BUDGET - MEMORY_BUDGET_GLOBAL for itself. */
-export const MEMORY_BUDGET_GLOBAL = 1500;
+/**
+ * The global part of MEMORY_BUDGET: every project keeps at least MEMORY_BUDGET - MEMORY_BUDGET_GLOBAL for itself. 2000:
+ * the user's general rules on 18 Nov 2026 (the 8 shared always-on rows atlas moves to global) take 1936.
+ */
+export const MEMORY_BUDGET_GLOBAL = 2000;
 export const MEMORY_RECALL = 8;
 /** The background memory review reads a chat again after this many new messages (v3). */
 export const MEMORY_REVIEW_EVERY = 20;

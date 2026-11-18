@@ -43,8 +43,8 @@ describe('team: memory, messages between cards, agent and model management', () 
     e.kanban.appendMessage(next.id, 'user', 'user', text('hi'));
     e.runner.wake(next.id);
     await e.runner.settled(next.id);
-    expect(fake.calls[3]!.system).toContain(`Yours:\n- [m${own!.id} · preference] The user likes short answers.`);
-    expect(fake.calls[3]!.system).toContain(`Shared by all agents:\n- [m${shared!.id} · rule] Repo lives in ~/atlas`);
+    expect(fake.calls[3]!.system).toContain(`Yours in Atlas:\n- [m${own!.id} · preference] The user likes short answers.`);
+    expect(fake.calls[3]!.system).toContain(`Project Atlas (shared by its members):\n- [m${shared!.id} · rule] Repo lives in ~/atlas`);
     expect(fake.calls[0]!.tools.map((t) => t.name)).toEqual(expect.arrayContaining(['memory_add', 'memory_update', 'memory_forget', 'memory_search']));
     expect(fake.calls[0]!.tools.map((t) => t.name)).not.toContain('memory_edit');
   });
