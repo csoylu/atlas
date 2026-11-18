@@ -4,7 +4,7 @@ import { existsSync } from 'node:fs';
 import { join, relative } from 'node:path';
 import { WebSocketServer } from 'ws';
 import { ZodError } from 'zod';
-import { AddCardImages, CreateCard, CreateModelRequest, IMAGE_MAX_BYTES, IMAGE_MAX_PER_TASK, isTimeZone, PostMessage, RewindRequest, SlashCommand, TriggerPreview, UpdateModelRequest, UpdateVoice } from '@atlas/shared';
+import { AddCardImages, CreateCard, CreateModelRequest, CreateSecret, UpdateSecret, IMAGE_MAX_BYTES, IMAGE_MAX_PER_TASK, isTimeZone, PostMessage, RewindRequest, SlashCommand, TriggerPreview, UpdateModelRequest, UpdateVoice } from '@atlas/shared';
 import type { Agents } from './agents.ts';
 import type { Models } from './models.ts';
 import type { Runner } from './runner.ts';
@@ -15,7 +15,7 @@ import type { Settings } from './settings.ts';
 import { parseMemoryRef, type Memories } from './memory.ts';
 import type { MemoryCleanup } from './cleanup.ts';
 import { localTimeZone, upcoming, type Workflows } from './workflows.ts';
-import { isTokenEntry, SECRET_NAME, type SecretStore } from './secrets.ts';
+import type { Secrets } from './secrets.ts';
 import type { Documents } from './documents.ts';
 import { findSection, formatDocRef, splitSections } from '@atlas/shared';
 import { workdirOf } from './agents.ts';
@@ -71,7 +71,7 @@ export function createApi(deps: {
   dataDir: string;
   version: string;
   uiDir?: string;
-  secrets?: SecretStore;
+  secrets: Secrets;
   env: NodeJS.ProcessEnv;
   /** Login and cross-site checks (auth.ts). */
   auth: Auth;
@@ -481,26 +481,29 @@ export function createApi(deps: {
     });
   });
 
-  // Model keys. Names and presence only; values go in, never out.
+  // Secrets (#206): model keys and agent secrets. Names and metadata only; values go in, never out.
   app.get('/api/secrets', (_req, res) => {
-    res.json({ store: deps.secrets?.label ?? null, names: (deps.secrets?.names() ?? []).filter((n) => !isTokenEntry(n)) });
+    res.json(deps.secrets.list());
   });
+  app.post('/api/secrets', (req, res) => {
+    res.status(201).json(deps.secrets.create(CreateSecret.parse(req.body), { by: 'user' }));
+  });
+  app.patch('/api/secrets/:name', (req, res) => {
+    res.json(deps.secrets.update(req.params.name, UpdateSecret.parse(req.body), { by: 'user' }));
+  });
+  // A new value: an agent secret's rotation, or a model key (created here when new, like before #206).
   app.put('/api/secrets/:name', (req, res) => {
     const name = req.params.name;
-    if (!deps.secrets) throw new ConflictError(`this engine reads keys from its environment: set ${name} there and restart it`);
-    if (!SECRET_NAME.test(name)) throw new ConflictError(`${name} is not a valid variable name (A-Z, 0-9, _)`);
-    if (isTokenEntry(name)) throw new ConflictError(`${name} belongs to a sign-in (ChatGPT or Claude plan)`);
+    if (!deps.secrets.store) throw new ConflictError(`this engine reads keys from its environment: set ${name} there and restart it`);
     const value = String((req.body as { value?: unknown }).value ?? '').trim();
-    if (!value) throw new ConflictError('the value is empty');
-    deps.secrets.set(name, value);
+    deps.secrets.setValue(name, value, { by: 'user' });
     deps.env[name] = value;
     if (name.startsWith('ATLAS_CLAUDE_')) claude.notify();
     res.status(204).end();
     dispatcher.tick();
   });
   app.delete('/api/secrets/:name', (req, res) => {
-    if (!deps.secrets) throw new ConflictError('this engine reads keys from its environment');
-    if (isTokenEntry(req.params.name)) throw new ConflictError('sign out instead (Settings → Subscriptions)');
+    if (!deps.secrets.store) throw new ConflictError('this engine reads keys from its environment');
     deps.secrets.delete(req.params.name);
     delete deps.env[req.params.name];
     if (req.params.name.startsWith('ATLAS_CLAUDE_')) claude.notify();

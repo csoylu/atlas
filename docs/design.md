@@ -462,6 +462,39 @@ without new code.
 Permissions per agent: allowed tools, allowed paths, shell on/off, network on/off. Dangerous shell patterns
 (`rm -rf` outside the workdir, `git push --force`, writing to `~/.ssh`) require the user's approval in the UI.
 
+### 10b. Secrets (#206, 18 Nov 2026, `engine/src/secrets.ts`)
+API keys, tokens and RPC URLs agents use in shell commands as `$NAME`, and the model keys Atlas itself uses. Design:
+the diagram « Secrets in Atlas: flow » and the mockup « Settings → Secrets (#205) » (Library → Secrets).
+- **Values only in the secret store** (`SecretStore`: desktop = OS keychain via Electron safeStorage, `secrets.json`).
+  SQLite holds the metadata, table `secrets` (migration 0046): name (PK, `A-Z0-9_`, fixed once created), description,
+  kind `model_key` | `agent`, grant `none` | `agents` | `all` (+ the agents), project (null = global; projects are not built yet), created by (`user` or an agent id) and
+  in which task, updated at/by, last used at/by. Model keys are never granted (a CHECK and the API refuse it); plan
+  sign-in tokens (`isTokenEntry`) have no row and are never listed.
+- **Two writes, ordered so a crash is harmless** (rule 2): create = row, then value (a store write that fails removes
+  the row; a crash in between leaves a row shown as « no value »); delete = value, then row. At start (and on each list)
+  `sync()` gives a `model_key` row to every stored name without one (before #206 the store held only model keys, and
+  every agent secret gets its row before its value, so an orphan value is never taken for an agent secret) and drops
+  model-key rows whose value is gone (API keys page).
+- **API** `GET /api/secrets` → `{ store, names, secrets: SecretInfo[] }` (metadata + `hasValue`), `POST` (create an
+  agent secret), `PATCH /:name` (description, grant), `PUT /:name` (new value; a new name there is a model key, as
+  before), `DELETE /:name`. No response ever holds a value; `secrets.updated` events tell the UI to reload.
+- **Shell env**: every command (foreground and `background: true`) gets the agent's base env (#136) minus every model
+  key, plan token and engine password (server mode keeps them in its own environment), plus the agent's granted
+  secrets read from the store at that command (a rotation applies to the next command). A command that mentions
+  (`$NAME`/`${NAME}`) a secret not granted to it, or a granted one with no value, does not run and says why; an
+  unreadable store stops the command. `last_used` is set when a command mentions the name.
+- **Instructions**: a « # Secrets » block lists the granted names and descriptions (never values), says to use `$NAME`
+  and never to print them.
+- **Redactor** (best effort: an encoded or split value slips through): one choke point in the runner, after every
+  tool (shell, background output and exit notes, read_file, grep, web_fetch, card and team tools…) and before the
+  result is stored or sent to the model; also the live shell tail and full outputs saved to `outputs/`. Every stored
+  value of 8 chars or more (all agent secrets, not only this agent's, model keys, the tokens inside plan sign-ins, and
+  the model keys and passwords of the engine environment) becomes `[secret NAME]`, longest first; the count goes in
+  `tool_calls.secrets_hidden` (`ToolCallTiming.secretsHidden`, the chat's « 1 secret hidden »). A store that can't be
+  read withholds the output with the reason. Background log files on disk are not rewritten (reads of them are).
+- Still to come (#205 series): the Settings → Secrets page, the agents' `secret_set` tool, the server's encrypted
+  `secrets.enc` store with its lock.
+
 ## 11. Artifacts (replaced canvases, #120, 18 Nov 2026)
 - An artifact is a file in an agent's workspace: markdown (`docs/*.md`), html (`pages/*.html`), svg (`diagrams/*.svg`)
   or url (`*.url`, one address). Each is a row in `documents`, versioned in `document_versions` (last 50 kept).

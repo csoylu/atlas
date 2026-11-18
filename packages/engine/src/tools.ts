@@ -32,8 +32,13 @@ export interface ToolContext {
   onOutput?: (chunk: string) => void;
   /** The engine this agent runs in, for screenshot (#133); omitted = screenshot is refused. */
   engine?: EngineAccess;
-  /** Environment of shell commands (#136: login PATH, agent as git author); omitted = the engine's own. */
-  env?: () => Promise<NodeJS.ProcessEnv>;
+  /**
+   * Environment of a shell command (#136: login PATH, agent as git author; #206: the agent's granted secrets, read at
+   * each command); omitted = the engine's own. Throws when a secret can't be given: the command does not run.
+   */
+  env?: (command: string) => Promise<NodeJS.ProcessEnv>;
+  /** Hides secret values (#206) in full outputs saved to the outputs folder; the tool result itself is redacted by the runner. */
+  redact?: (text: string) => string;
 }
 
 interface Tool<S extends z.ZodType> {
@@ -123,7 +128,7 @@ export function readable(ctx: Pick<ToolContext, 'workdir' | 'outputsDir'>, p: st
 async function saveOutput(ctx: ToolContext, kind: string, text: string | Buffer, ext = 'txt'): Promise<string> {
   await mkdir(ctx.outputsDir, { recursive: true });
   const path = join(ctx.outputsDir, `${kind}-${Date.now().toString(36)}-${randomUUID().slice(0, 6)}.${ext}`);
-  await writeFile(path, text);
+  await writeFile(path, typeof text === 'string' && ctx.redact ? ctx.redact(text) : text);
   return path;
 }
 
@@ -346,11 +351,11 @@ export const TOOLS = {
       if (background) {
         if (!ctx.background) throw new Error('background processes are not available here');
         const { registry, agentId, cardId } = ctx.background;
-        const env = ctx.env ? await ctx.env() : process.env;
+        const env = ctx.env ? await ctx.env(command) : process.env;
         const p = registry.start({ command, cwd: ctx.workdir, logDir: ctx.outputsDir, agentId, cardId, env });
         return `started ${p.id} in the background (pid ${p.pid}); its output goes to ${p.logPath}. shell_output("${p.id}") reads new output, shell_kill("${p.id}") stops it; a message comes here when it ends.`;
       }
-      const env = ctx.env ? await ctx.env() : process.env;
+      const env = ctx.env ? await ctx.env(command) : process.env;
       const { code, sig, out } = await runForeground(command, timeout_s, env, ctx);
       const head = `exit ${code ?? sig}${sig === 'SIGKILL' ? ` (killed after ${timeout_s}s)` : ''}\n`;
       if (out.length <= OUTPUT_CAP) return head + out;

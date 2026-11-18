@@ -33,7 +33,7 @@ describe('secrets', () => {
     expect(engine.models.get('sonnet').credentialPresent).toBe(true);
     const listed = await (await fetch(engine.url + '/api/secrets')).text();
     expect(listed).not.toContain('sk-test');
-    expect(JSON.parse(listed)).toEqual({ store: 'test store', names: ['ATLAS_LOCAL_API_KEY', 'ANTHROPIC_API_KEY'] });
+    expect(JSON.parse(listed)).toMatchObject({ store: 'test store', names: ['ATLAS_LOCAL_API_KEY', 'ANTHROPIC_API_KEY'] });
     expect((await put(engine.url + '/api/secrets/bad-name', 'x')).status).toBe(409);
     expect((await fetch(engine.url + '/api/secrets/ANTHROPIC_API_KEY', { method: 'DELETE' })).status).toBe(204);
     expect(engine.models.get('sonnet').credentialPresent).toBe(false);
