@@ -10,6 +10,7 @@ import { realProviders } from './models.ts';
 import { TRIAGE_KICK, WORK_KICK } from './dispatcher.ts';
 import { pausedNote } from './runner.ts';
 import { ModelError } from './providers/types.ts';
+import { until } from '../test/kit/index.ts';
 
 let engine: Engine | undefined;
 afterEach(async () => {
@@ -29,13 +30,6 @@ async function setup(fake: FakeProvider | null, maxTurns?: number) {
   return engine;
 }
 
-async function until(cond: () => boolean, what: string, ms = 3000) {
-  const end = Date.now() + ms;
-  while (!cond()) {
-    if (Date.now() > end) throw new Error(`timed out waiting for ${what}`);
-    await new Promise((r) => setTimeout(r, 10));
-  }
-}
 
 const use = (name: string, input: unknown): ContentBlock => ({ type: 'tool_use', id: 't_' + Math.random().toString(36).slice(2, 8), name, input });
 const text = (t: string): ContentBlock[] => [{ type: 'text', text: t }];

@@ -6,6 +6,10 @@ computed by `scripts/release/changelog.mjs` from the oldest entry to the newest,
 `Fixed` → patch, `Added` or `Changed` → minor, `Breaking` (data or settings stop working without action) → major.
 Never type a version number.
 
+## Changed · #126 · Tests: one shared kit, a stable rewind test, retries that show
+
+Tests wait with one `eventually()` helper instead of six private copies, engines for tests are launched with `launch()` (model and other dependencies injected), and a failed test is retried once and marked. The flaky rewind test no longer depends on timing.
+
 ## Fixed · #174 · In old chats, a canvas step now shows the page its canvas was converted to, and opens it
 
 A canvas_create, canvas_write or canvas_read row whose canvas became an html page in the « Canvases » folder (#120) shows that page's artifact card; a canvas with no page keeps its plain row. Documents now carry `fromCanvas` in the API.

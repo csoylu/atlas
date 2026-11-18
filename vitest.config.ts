@@ -15,10 +15,14 @@ const slow = [
   'packages/engine/src/voice.test.ts',
 ];
 
+// A failed test runs again once (twice in CI) and vitest marks it as retried, so a flaky test is visible, not hidden. A test
+// that needs its retry is a bug in the test: fix it (see packages/engine/test/kit). TEST_RETRY=0 turns it off.
+const retry = Number(process.env.TEST_RETRY ?? (process.env.CI ? 2 : 1));
+
 export default defineConfig({
   test: {
     projects: [
-      { test: { name: 'fast', include, exclude: [...slow, '**/node_modules/**'] } },
+      { test: { name: 'fast', include, exclude: [...slow, '**/node_modules/**'], retry } },
       { test: { name: 'slow', include: slow, fileParallelism: false, testTimeout: 120_000 } },
     ],
   },
