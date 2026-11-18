@@ -5,7 +5,8 @@ import { api, subscribe, type AuthState } from './api.ts';
 import { Board } from './Board.tsx';
 import { Inbox } from './Inbox.tsx';
 import { systemTitle } from './inboxView.ts';
-import { CardModal } from './CardModal.tsx';
+import { CHAT_MIN, SCREEN_MIN } from './docPanel.ts';
+import { TaskSplit, ThreadPanel } from './ThreadPanel.tsx';
 import { findCard, splitHash, withCard } from './cardModal.ts';
 import { useMessageStream } from './useMessages.ts';
 import { useMemoryDigest } from './MemoryDigest.tsx';
@@ -32,9 +33,11 @@ import { LAST_AGENT, TOGGLE_PANEL } from './ChatView.tsx';
 /**
  * Route in the URL hash, so reloads and the Electron window keep the place: #/inbox/<item>, #/board, #/library/<docId>,
  * #/workflows[/<id>[/runs[/<run id>]]], #/chat/<id> or #/settings/<page>. Old links #/doc/<id> go to the Library viewer, #/schedules to #/workflows, #/canvas/<id> to the Library. Old settings hashes (#/agents, #/models, #/settings/canvas) are rewritten in place.
- * `?card=<id>` on any route opens that card's ticket modal over it (#/chat/c_1?card=c_2).
+ * `?card=<id>` on any route opens that task in the side panel on the right of it (#/chat/c_1?card=c_2, #222).
  */
 type View = 'inbox' | 'chat' | 'board' | 'library' | 'workflows' | 'settings';
+/** The screen under the task panel, for its « ‹ Back » button (overlay and phone). */
+const BACK: Record<View, string> = { inbox: 'Inbox', chat: 'Chat', board: 'Board', library: 'Library', workflows: 'Workflows', settings: 'Settings' };
 type Route = { view: View; target: string | null; card: string | null; /** What follows #/settings/memory: a scope or m12. */ rest: string };
 function useRoute(): [Route, (hash: string) => void] {
   const parse = (): Route => ({ rest: '', ...parseView(), card: splitHash(location.hash).card });
@@ -251,7 +254,7 @@ export function App() {
   registerAgents(agents.map((a) => a.id));
   const openId = route.card;
   const open = cards.find((c) => c.id === openId) ?? null;
-  /** Opens a card's ticket modal over the current view (or closes it): `?card=` in the hash, so it survives reloads. */
+  /** Opens a task in the side panel beside the current view (or closes it): `?card=` in the hash, so it survives reloads. */
   const cardsNow = useRef(cards);
   cardsNow.current = cards;
   const setOpenId = useCallback((ref: string | null) => {
@@ -259,6 +262,7 @@ export function App() {
     const id = ref === null ? null : (findCard(cardsNow.current, ref)?.id ?? ref);
     location.hash = withCard(location.hash, id);
   }, []);
+  const closeCard = useCallback(() => setOpenId(null), [setOpenId]);
   useEffect(() => {
     if (route.view === 'settings' && route.target) localStorage.setItem('atlas.settings', route.target);
   }, [route.view, route.target]);
@@ -272,7 +276,7 @@ export function App() {
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
       const st = keyState.current;
-      const blocked = st.palette || st.help || !!document.querySelector('.card-modal, .modal-scrim, .new-card-modal');
+      const blocked = st.palette || st.help || !!document.querySelector('.modal-scrim, .new-card-modal') || !!document.activeElement?.closest('.thread-panel');
       const a = globalKey(e, e.target, { gAt: st.gAt, now: Date.now(), blocked });
       if (a?.kind !== 'goPrefix') st.gAt = null;
       if (!a) return;
@@ -440,7 +444,7 @@ export function App() {
       <Icon.menu />
     </button>
   );
-  /** The ticket modal's « open on the right »: in the chat the card came from (or the chat on screen), else full size. */
+  /** The task panel's « open on the right »: in the chat the card came from (or the chat on screen), else full size. */
   const openDoc = (doc: Doc, card: Card) => {
     const target = card.originCard && chats.some((c) => c.id === card.originCard) ? card.originCard : (openChat?.id ?? null);
     if (!target) return go('#/library/' + doc.id);
@@ -568,20 +572,7 @@ export function App() {
           )}
       <HeaderSlot.Provider value={headSlot}>
       <main>
-        {route.view === 'inbox' ? (
-          <Inbox
-            inbox={shownInbox}
-            digest={digest}
-            cards={cards}
-            agents={agents}
-            selected={route.target}
-            onSelect={selectInbox}
-            onOpenCard={setOpenId}
-            menuButton={menuButton}
-            stream={stream}
-            onError={fail}
-          />
-        ) : route.view === 'chat' ? (
+        {route.view === 'chat' ? (
           <ChatView
             agents={agents}
             chats={chats}
@@ -595,6 +586,50 @@ export function App() {
             onOpenChat={(id) => go('#/chat/' + (id ?? 'new'))}
             onOpenMain={openMain}
             onOpenCard={setOpenId}
+            openCard={open}
+            onCloseCard={closeCard}
+            onError={fail}
+          />
+        ) : (
+        <TaskSplit
+          open={!!open}
+          screenMin={route.view === 'board' ? CHAT_MIN : SCREEN_MIN}
+          panel={(mode, resize) =>
+            open && (
+              <ThreadPanel
+                key={open.id}
+                card={open}
+                mode={mode}
+                resize={resize}
+                back={BACK[route.view]}
+                autoFocus
+                plan={!!onPlanCard(open)}
+                models={models}
+                cards={cards}
+                chats={chats}
+                onOpen={setOpenId}
+                onOpenChat={(id) => go('#/chat/' + id)}
+                onOpenDoc={(doc) => openDoc(doc, open)}
+                agents={agents}
+                stream={stream}
+                onClose={closeCard}
+                onError={fail}
+                userName={settings?.userName ?? null}
+              />
+            )
+          }
+        >
+        {route.view === 'inbox' ? (
+          <Inbox
+            inbox={shownInbox}
+            digest={digest}
+            cards={cards}
+            agents={agents}
+            selected={route.target}
+            onSelect={selectInbox}
+            onOpenCard={setOpenId}
+            menuButton={menuButton}
+            stream={stream}
             onError={fail}
           />
         ) : route.view === 'settings' ? (
@@ -656,23 +691,7 @@ export function App() {
           onCreateAsked={clearCreateAsk}
         />
         )}
-        {open && (
-          <CardModal
-            key={open.id}
-            card={open}
-            plan={!!onPlanCard(open)}
-            models={models}
-            cards={cards}
-            chats={chats}
-            onOpen={setOpenId}
-            onOpenChat={(id) => go('#/chat/' + id)}
-            onOpenDoc={(doc) => openDoc(doc, open)}
-            agents={agents}
-            stream={stream}
-            onClose={() => setOpenId(null)}
-            onError={fail}
-            userName={settings?.userName ?? null}
-          />
+        </TaskSplit>
         )}
       </main>
       </HeaderSlot.Provider>

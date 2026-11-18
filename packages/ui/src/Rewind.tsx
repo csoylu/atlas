@@ -152,7 +152,8 @@ export function useRewind(card: Card, run: Run | null, onError: (e: unknown) => 
 export type Rewind = ReturnType<typeof useRewind>;
 
 /** A modal is open (card modal, palette, a confirm…): Esc there only closes it (card #78). */
-const inModal = () => !!document.querySelector('[aria-modal="true"]');
+/** A dialog, or the task panel (#222): Esc closes it first, it never stops a run underneath. */
+const inModal = () => !!document.querySelector('[aria-modal="true"], .thread-panel');
 
 const isMac = () => /Mac|iPhone|iPad/.test(navigator.platform || navigator.userAgent);
 

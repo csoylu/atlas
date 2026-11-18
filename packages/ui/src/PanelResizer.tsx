@@ -12,7 +12,7 @@ export interface PanelResize {
  * clamped to the chat view `view` (measured live, so a smaller window never pushes the panel off-screen).
  * No resize on a phone (full screen).
  */
-export function usePanelResize(view: RefObject<HTMLElement | null>, mode: PanelMode): PanelResize | undefined {
+export function usePanelResize(view: RefObject<HTMLElement | null>, mode: PanelMode, screenMin?: number): PanelResize | undefined {
   const [stored, setStored] = useState(() => parsePanelWidth(localStorage.getItem(PANEL_WIDTH_KEY)));
   const [viewWidth, setViewWidth] = useState(0);
   useLayoutEffect(() => {
@@ -25,8 +25,8 @@ export function usePanelResize(view: RefObject<HTMLElement | null>, mode: PanelM
   }, [view]);
   const drag = useRef<{ x: number; w: number } | null>(null);
   if (mode === 'full' || !viewWidth) return undefined;
-  const bounds = panelBounds(viewWidth, mode);
-  const width = panelWidth(stored, viewWidth, mode);
+  const bounds = panelBounds(viewWidth, mode, screenMin);
+  const width = panelWidth(stored, viewWidth, mode, screenMin);
   const save = (w: number | null) => {
     setStored(w);
     if (w === null) localStorage.removeItem(PANEL_WIDTH_KEY);

@@ -113,7 +113,7 @@ export function Inbox(props: {
 
   useEffect(() => {
     const key = (e: KeyboardEvent) => {
-      if (document.querySelector('.card-modal')) return;
+      if (document.activeElement?.closest('.thread-panel')) return; // the task panel's own keys
       const k = inboxKey(e, e.target);
       if (!k) return;
       if (k.kind === 'next' || k.kind === 'prev') {

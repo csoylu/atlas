@@ -3,7 +3,7 @@ import type { Card } from '@atlas/shared';
 import type { TestAtlas } from './engine.ts';
 import type { Surface } from './fixtures.ts';
 
-/** The conversation on screen (a direct chat, or a task's ticket modal) as the user drives it. */
+/** The conversation on screen (a direct chat, or a task in its side panel) as the user drives it. */
 export class Conv {
   readonly scope: Locator;
   readonly box: Locator;
@@ -13,7 +13,7 @@ export class Conv {
     readonly card: Card,
     readonly surface: Surface,
   ) {
-    this.scope = surface === 'task chat' ? page.getByRole('dialog', { name: 'E2E task' }) : page.locator('body');
+    this.scope = surface === 'task chat' ? page.locator('.thread-panel') : page.locator('body');
     this.box = this.scope.getByPlaceholder(/Message @atlas/);
   }
   get id(): string {

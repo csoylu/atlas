@@ -1,8 +1,8 @@
 import { CARD_REF_RE, docKindOf, parseCardRef, type Card, type DocKind, type Run, type TodoItem } from '@atlas/shared';
 
 /**
- * Pure helpers for the ticket modal (CardModal): the `?card=` hash parameter that opens it over any view, the live
- * status pill, dangerous tool calls (drawn red in the activity), card ids in system lines, and the focus trap.
+ * Pure helpers for the task view (CardView): the `?card=` hash parameter that opens it beside any view, the live
+ * status pill, dangerous tool calls (drawn red in the activity) and card ids in system lines.
  */
 
 /** "#/chat/c_1?card=c_2" → { path: "#/chat/c_1", card: "c_2" }. */
@@ -83,16 +83,6 @@ export function linkCardIds(text: string): (string | { card: string })[] {
   }
   if (last < text.length) out.push(text.slice(last));
   return out;
-}
-
-/** Focus trap: where Tab (or Shift+Tab) goes from `current` among the modal's focusable elements; null = let it be. */
-export function trapFocus<T>(items: T[], current: T | null, back: boolean): T | null {
-  if (!items.length) return null;
-  const i = current === null ? -1 : items.indexOf(current);
-  if (i < 0) return back ? items[items.length - 1]! : items[0]!;
-  if (back && i === 0) return items[items.length - 1]!;
-  if (!back && i === items.length - 1) return items[0]!;
-  return null;
 }
 
 /** Prefix of the hrefs linkCardRefsMd writes: "#card:#12". */

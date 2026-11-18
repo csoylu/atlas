@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import type { Card } from '@atlas/shared';
-import { findCard, isDangerous, linkCardIds, linkCardRefsMd, pillStatus, proseRefLabel, splitHash, statusChip, todoList, trapFocus, withCard } from './cardModal.ts';
+import { findCard, isDangerous, linkCardIds, linkCardRefsMd, pillStatus, proseRefLabel, splitHash, statusChip, todoList, withCard } from './cardModal.ts';
 
 describe('card hash', () => {
   it('splits the card parameter off any route', () => {
@@ -86,20 +86,6 @@ describe('card references', () => {
     );
     expect(linkCardRefsMd('`#12` [see #12](http://x/#12) ```\n#1\n``` # Title', known)).toBe('`#12` [see #12](http://x/#12) ```\n#1\n``` # Title');
     expect(linkCardRefsMd('https://github.com/a/b/issues#1 then #1', known)).toBe('https://github.com/a/b/issues#1 then [#1](#card:%231)');
-  });
-});
-
-describe('trapFocus', () => {
-  const items = ['a', 'b', 'c'];
-  it('wraps at both ends', () => {
-    expect(trapFocus(items, 'c', false)).toBe('a');
-    expect(trapFocus(items, 'a', true)).toBe('c');
-  });
-  it('leaves the middle to the browser', () => expect(trapFocus(items, 'b', false)).toBeNull());
-  it('pulls focus back in from outside', () => {
-    expect(trapFocus(items, 'x', false)).toBe('a');
-    expect(trapFocus(items, null, true)).toBe('c');
-    expect(trapFocus([], 'a', false)).toBeNull();
   });
 });
 

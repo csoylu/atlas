@@ -67,11 +67,15 @@ test.describe('U · screens (Playwright, real UI, scripted model)', () => {
     await expect.poll(async () => (await call(atlas, 'GET', `/cards/${c.id}`)).body.status).toBe('done');
   });
 
-  test('[U05] ticket modal: opens from ?card=, edits the description inline (saved), closes with Esc (status/assignee pickers NOT exercised)', async ({ page, atlas }) => {
+  test('[U05] task panel: opens from ?card= beside the board, edits the description inline (saved), closes with Esc (status/assignee pickers NOT exercised)', async ({ page, atlas }) => {
     const bad = watch(page);
     const c = (await call(atlas, 'POST', '/cards', { title: 'modal card', body: 'first body', status: 'todo' })).body;
     await page.goto(atlas.url + `/#/board?card=${c.id}`);
     await expect(page.getByText('first body').first()).toBeVisible();
+    // A side panel, not a modal: the board stays on screen beside it, its card marked as open.
+    await expect(page.locator('.thread-panel')).toBeVisible();
+    await expect(page.locator('[aria-modal="true"]')).toHaveCount(0);
+    await expect(page.locator('.board-screen')).toBeVisible();
     await page.getByText('first body').first().click();
     const ta = page.getByRole('textbox', { name: /Description/ }).first();
     await ta.fill('edited body');

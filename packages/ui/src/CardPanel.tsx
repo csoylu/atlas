@@ -114,10 +114,10 @@ const NO_TIMELINE: Timeline = { runs: [], rewinds: [], summary: null };
 
 type Conversation = ReturnType<typeof useCardConversation>;
 
-/** The direct chat pane (ChatView): the conversation with the chat's agent, no card fields. Cards open in CardModal. */
+/** The direct chat pane (ChatView): the conversation with the chat's agent, no card fields. Cards open in the task panel (ThreadPanel). */
 export function CardPanel(props: {
   card: Card;
-  /** Opens a card (links in system lines) in the ticket modal. */
+  /** Opens a card (links in system lines) in the task panel. */
   onOpen(id: string): void;
   agents: Agent[];
   stream: MessageStream;

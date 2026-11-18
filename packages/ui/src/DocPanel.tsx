@@ -150,14 +150,14 @@ export function DocPanel(props: {
 }
 
 /**
- * The documents attached to a card (ticket modal, inbox item): a list; picking one shows it below in the shared
+ * The documents attached to a card (task panel, inbox item): a list; picking one shows it below in the shared
  * viewer, the card's other documents as tabs. « Open in panel » (when given) shows it beside the card's chat.
  */
 export function CardDocs({ cardId, stream, onOpenInPanel, onShow, onError }: {
   cardId: string;
   stream: MessageStream;
   onOpenInPanel?(doc: Doc): void;
-  /** A task's view (#192): a row opens the document there (full modal, or the chat's panel), not inline below. */
+  /** A task's view (#192): a row opens the document there (over the task in its panel, or the chat's documents panel), not inline below. */
   onShow?(doc: Doc): void;
   onOpenCard?(id: string): void;
   onError(e: unknown): void;
@@ -241,7 +241,7 @@ export interface DocToRead {
 }
 
 /**
- * A document read from the ticket modal (#192): the shared viewer filling the modal, over the task (which stays as it
+ * A document read from the task panel (#192): the shared viewer filling the panel, over the task (which stays as it
  * was: scroll, draft). « ‹ Task » or Esc goes back. The chip's version and section are shown; the task's other
  * documents are not tabs here, its Artifacts list is one click away.
  */
@@ -268,7 +268,7 @@ export function TaskDocReader(props: { read: DocToRead; stream: MessageStream; o
       aria-label="Artifact"
       tabIndex={-1}
       onKeyDown={(e) => {
-        // Esc goes back to the task (a menu inside closes first); the modal's own Esc sees it handled.
+        // Esc goes back to the task (a menu inside closes first); the panel's own Esc sees it handled.
         if (e.key !== 'Escape' || e.defaultPrevented) return;
         e.preventDefault();
         onBack();
