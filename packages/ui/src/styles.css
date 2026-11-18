@@ -598,7 +598,12 @@ button.artifact:hover .art-open { color: var(--accent); }
 /* a task's own images (#119): under its description, in the modal, the thread panel and the New task dialog */
 .task-images { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; min-height: 26px; }
 .task-images .attach-thumb { width: 64px; height: 64px; }
-.attach-btn.labelled { width: auto; gap: 6px; padding: 0 8px 0 6px; font-size: var(--fs-small); color: var(--muted); }
+/* empty state (#146): icon and label on one row; the negative margin lines the icon up with the text above it,
+   the padding keeps the hover background around it */
+.attach-btn.labelled {
+  display: inline-flex; align-items: center; width: auto; gap: 6px; padding: 0 8px 0 6px; margin-left: -6px;
+  font-size: var(--fs-small); line-height: var(--lh-tight); color: var(--muted); white-space: nowrap;
+}
 .drop-zone { border-radius: 8px; outline: 1px dashed transparent; outline-offset: 2px; }
 .drop-zone.dropping { outline-color: var(--accent); background: var(--accent-soft); }
 .attach-note { font-size: var(--fs-small); color: var(--bad, #d33); min-width: 0; flex: 1 1 160px; }
