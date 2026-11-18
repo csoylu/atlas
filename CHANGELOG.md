@@ -1,14 +1,14 @@
 # Changelog
 
 Newest on top. One push to main = one entry = one release (docs/updater.md). Each entry is a heading
-`## Fixed · #174 · In old chats, a canvas step now shows the page its canvas was converted to, and opens it
-
-A canvas_create, canvas_write or canvas_read row whose canvas became an html page in the « Canvases » folder (#120) shows that page's artifact card; a canvas with no page keeps its plain row. Documents now carry `fromCanvas` in the API.
-
-## Kind · #task · One plain sentence`, then optional details. The kind sets the version (Semantic Versioning,
+`## Kind · #task · One plain sentence`, then optional details. The kind sets the version (Semantic Versioning,
 computed by `scripts/release/changelog.mjs` from the oldest entry to the newest, starting at 0.3.0 = v3, cad983f):
 `Fixed` → patch, `Added` or `Changed` → minor, `Breaking` (data or settings stop working without action) → major.
 Never type a version number.
+
+## Fixed · #174 · In old chats, a canvas step now shows the page its canvas was converted to, and opens it
+
+A canvas_create, canvas_write or canvas_read row whose canvas became an html page in the « Canvases » folder (#120) shows that page's artifact card; a canvas with no page keeps its plain row. Documents now carry `fromCanvas` in the API.
 
 ## Fixed · #145 · In an expanded « N steps » group, the timeline line now runs through the middle of every row icon.
 
