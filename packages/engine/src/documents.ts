@@ -1,10 +1,10 @@
 import { randomUUID } from 'node:crypto';
-import { readFileSync, readdirSync, statSync, writeFileSync } from 'node:fs';
-import { join, relative, sep } from 'node:path';
-import { DOC_FOLDERS, docKindOf, docTitle, type Doc, type DocContent, type DocVersion, type PanelTab } from '@atlas/shared';
+import { mkdirSync, readFileSync, readdirSync, statSync, writeFileSync } from 'node:fs';
+import { dirname, join, relative, sep } from 'node:path';
+import { DOC_FOLDERS, KIND_FILE, docKindOf, docTitle, type Doc, type DocContent, type DocHit, type DocKind, type DocVersion, type Folder, type PanelTab } from '@atlas/shared';
 import type { Db } from './store/db.ts';
 import type { Bus } from './events.ts';
-import type { Canvases } from './canvas.ts';
+import { canvasPage } from './canvasPage.ts';
 import { ConflictError, InvalidError, NotFoundError, type Kanban } from './kanban.ts';
 import { inside } from './tools.ts';
 
@@ -18,8 +18,7 @@ const SCAN_CAP = 500;
 interface Row {
   id: string;
   agent_id: string;
-  path: string | null;
-  canvas_id: string | null;
+  path: string;
   kind: Doc['kind'];
   title: string;
   card_id: string | null;
@@ -28,6 +27,8 @@ interface Row {
   updated_at: string;
   file_stamp: string | null;
   pinned_at: string | null;
+  folder_id: string | null;
+  name: string | null;
   /** COALESCE(chat_id, the card's origin chat), from DOC_SELECT. */
   chat: string | null;
 }
@@ -37,7 +38,6 @@ const toDoc = (r: Row): Doc => ({
   id: r.id,
   agentId: r.agent_id,
   path: r.path,
-  canvasId: r.canvas_id,
   kind: r.kind,
   title: r.title,
   cardId: r.card_id,
@@ -45,6 +45,7 @@ const toDoc = (r: Row): Doc => ({
   updatedBy: r.updated_by,
   updatedAt: r.updated_at,
   pinned: r.pinned_at !== null,
+  folderId: r.folder_id,
   chatId: r.chat,
 });
 
@@ -63,7 +64,6 @@ export class Documents {
     private db: Db,
     private bus: Bus,
     private kanban: Kanban,
-    private canvases: Canvases,
     /** An agent's workspace folder. */
     private workdirOf: (agentId: string) => string,
   ) {}
@@ -81,54 +81,207 @@ export class Documents {
     return (rows as Row[]).map(toDoc);
   }
 
-  /**
-   * The Library: every document, fresh. Re-reads every agent's doc folders (edits made outside Atlas, files no run has
-   * synced yet) and makes every canvas a whiteboard document, then lists them, latest first.
-   */
+  /** The Library: every artifact, fresh (re-reads every agent's artifact folders: edits made outside Atlas), latest first. */
   library(): Doc[] {
     const agents = this.db.prepare('SELECT id FROM agents').all() as { id: string }[];
     for (const a of agents) this.sync(a.id, a.id);
-    this.syncWhiteboards();
     return this.list();
   }
 
-  /** Pin a document on top of the Library, or unpin it. */
+  /** Pin an artifact on top of its folder, or unpin it. */
   pin(id: string, pinned: boolean): Doc {
     this.get(id);
     this.db.prepare('UPDATE documents SET pinned_at = ? WHERE id = ?').run(pinned ? new Date().toISOString() : null, id);
-    const doc = this.get(id);
-    this.bus.emit({ type: 'document.updated', doc });
-    return doc;
+    return this.emitDoc(id);
   }
 
-  /** Every canvas gets its whiteboard document, with the canvas's current name and version. */
-  private syncWhiteboards(): void {
-    const canvases = this.db.prepare('SELECT id, name, version, updated_by, updated_at FROM canvases').all() as {
-      id: string;
-      name: string;
-      version: number;
-      updated_by: string;
-      updated_at: string;
-    }[];
-    const changed: string[] = [];
+  /** Move an artifact to a folder (null: Unfiled). */
+  move(id: string, folderId: string | null): Doc {
+    this.get(id);
+    if (folderId) this.folder(folderId);
+    this.db.prepare('UPDATE documents SET folder_id = ? WHERE id = ?').run(folderId, id);
+    return this.emitDoc(id);
+  }
+
+  /* ── Library folders (flat) ──────────────────────────────────────────── */
+
+  folders(): Folder[] {
+    return (this.db.prepare('SELECT * FROM folders ORDER BY name COLLATE NOCASE').all() as { id: string; name: string; created_at: string }[]).map((r) => ({
+      id: r.id,
+      name: r.name,
+      createdAt: r.created_at,
+    }));
+  }
+
+  folder(id: string): Folder {
+    const f = this.folders().find((x) => x.id === id);
+    if (!f) throw new NotFoundError(`folder ${id} not found`);
+    return f;
+  }
+
+  /** A folder by name (case-insensitive), if any. */
+  folderNamed(name: string): Folder | null {
+    return this.folders().find((f) => f.name.toLowerCase() === name.trim().toLowerCase()) ?? null;
+  }
+
+  createFolder(name: string): Folder {
+    const n = folderName(name);
+    if (this.folderNamed(n)) throw new ConflictError(`a folder named "${n}" exists already`);
+    const id = 'fld_' + randomUUID().slice(0, 8);
+    this.db.prepare('INSERT INTO folders (id, name, created_at) VALUES (?, ?, ?)').run(id, n, new Date().toISOString());
+    this.emitFolders();
+    return this.folder(id);
+  }
+
+  renameFolder(id: string, name: string): Folder {
+    this.folder(id);
+    const n = folderName(name);
+    const other = this.folderNamed(n);
+    if (other && other.id !== id) throw new ConflictError(`a folder named "${n}" exists already`);
+    this.db.prepare('UPDATE folders SET name = ? WHERE id = ?').run(n, id);
+    this.emitFolders();
+    return this.folder(id);
+  }
+
+  /** Delete a folder: its artifacts move to Unfiled (nothing else is deleted). */
+  deleteFolder(id: string): void {
+    this.folder(id);
+    const moved = (this.db.prepare('SELECT id FROM documents WHERE folder_id = ?').all(id) as { id: string }[]).map((r) => r.id);
     this.db
       .transaction(() => {
-        for (const c of canvases) {
-          const row = this.db.prepare('SELECT id, title, version FROM documents WHERE canvas_id = ?').get(c.id) as { id: string; title: string; version: number } | undefined;
-          if (!row) {
-            const id = newId();
-            this.db
-              .prepare("INSERT INTO documents (id, agent_id, canvas_id, kind, title, version, updated_by, updated_at) VALUES (?, ?, ?, 'whiteboard', ?, ?, ?, ?)")
-              .run(id, c.updated_by, c.id, c.name, c.version, c.updated_by, c.updated_at);
-            changed.push(id);
-          } else if (row.title !== c.name || row.version !== c.version) {
-            this.db.prepare('UPDATE documents SET title = ?, version = ?, updated_by = ?, updated_at = ? WHERE id = ?').run(c.name, c.version, c.updated_by, c.updated_at, row.id);
-            changed.push(row.id);
-          }
-        }
+        this.db.prepare('UPDATE documents SET folder_id = NULL WHERE folder_id = ?').run(id);
+        this.db.prepare('DELETE FROM folders WHERE id = ?').run(id);
       })
       .immediate();
-    for (const id of changed) this.bus.emit({ type: 'document.updated', doc: this.get(id) });
+    this.emitFolders();
+    for (const d of moved) this.emitDoc(d);
+  }
+
+  /* ── Search: titles and latest content, every folder ─────────────────── */
+
+  search(query: string, limit = 50): DocHit[] {
+    const q = query.trim().toLowerCase();
+    if (!q) return [];
+    const rows = this.db
+      .prepare(
+        `SELECT d.id, v.content FROM documents d JOIN document_versions v ON v.doc_id = d.id AND v.version = d.version
+         ORDER BY d.updated_at DESC`,
+      )
+      .all() as { id: string; content: string }[];
+    const hits: DocHit[] = [];
+    for (const r of rows) {
+      const doc = this.get(r.id);
+      const inTitle = doc.title.toLowerCase().includes(q);
+      const text = searchableText(doc.kind, r.content);
+      const at = text.toLowerCase().indexOf(q);
+      if (!inTitle && at < 0) continue;
+      hits.push({ doc, snippet: at < 0 ? null : snippetAt(text, at, q.length) });
+      if (hits.length >= limit) break;
+    }
+    // Title matches first, then content matches; latest first within each.
+    return [...hits.filter((h) => h.doc.title.toLowerCase().includes(q)), ...hits.filter((h) => !h.doc.title.toLowerCase().includes(q))];
+  }
+
+  /* ── artifact_create / artifact_update ───────────────────────────────── */
+
+  /**
+   * A new artifact: its file is written in the agent's workspace (docs/, pages/, diagrams/ or links/, from the title
+   * unless `path` is given) and indexed as v1. A link's content is its address.
+   */
+  create(agentId: string, a: { kind: DocKind; title: string; content: string; path?: string; folder?: string | null }, by: string, cardId: string | null = null): Doc {
+    const root = this.workdirOf(agentId);
+    const spec = KIND_FILE[a.kind];
+    let rel = a.path?.trim() ? this.rel(agentId, a.path.trim()) : null;
+    if (rel && docKindOf(rel) !== a.kind) throw new InvalidError(`${rel}: a ${a.kind} artifact needs a .${spec.ext} file`);
+    if (!rel) {
+      const base = slug(a.title) || 'untitled';
+      rel = `${spec.dir}/${base}.${spec.ext}`;
+      for (let n = 2; this.exists(root, rel); n++) rel = `${spec.dir}/${base}-${n}.${spec.ext}`;
+    } else if (this.exists(root, rel)) throw new ConflictError(`${rel} exists already: use artifact_update`);
+    const content = a.kind === 'url' ? a.content.trim() + '\n' : a.content;
+    if (a.kind === 'url' && !/^(https?:\/\/|\/api\/files\/)/.test(content.trim())) throw new InvalidError('a link is an http(s) address or /api/files/<agent>/<path>');
+    if (Buffer.byteLength(content) > MAX_DOC_BYTES) throw new InvalidError(`artifacts are at most ${MAX_DOC_BYTES} bytes`);
+    const folder = a.folder?.trim() ? (this.folderNamed(a.folder) ?? this.createFolder(a.folder)) : null;
+    const full = inside(root, rel);
+    mkdirSync(dirname(full), { recursive: true });
+    writeFileSync(full, content);
+    const doc = this.record(agentId, rel, content, stampOf(full).stamp, by, cardId, a.title.trim()).doc;
+    if (folder) this.db.prepare('UPDATE documents SET folder_id = ? WHERE id = ?').run(folder.id, doc.id);
+    return folder ? this.emitDoc(doc.id) : doc;
+  }
+
+  /** A new version of an artifact: the whole content, or one exact replacement in it. */
+  update(id: string, change: { content?: string; oldText?: string; newText?: string; title?: string }, by: string, cardId: string | null = null): Doc {
+    const doc = this.get(id);
+    const current = this.content(id).content;
+    let next: string;
+    if (change.content !== undefined) next = doc.kind === 'url' ? change.content.trim() + '\n' : change.content;
+    else if (change.oldText !== undefined) {
+      const n = current.split(change.oldText).length - 1;
+      if (n !== 1) throw new InvalidError(n ? `old_text is found ${n} times: add context so it is unique` : 'old_text is not in the artifact');
+      next = current.replace(change.oldText, () => change.newText ?? '');
+    } else if (change.title === undefined) throw new InvalidError('give content, old_text/new_text or title');
+    else next = current;
+    if (Buffer.byteLength(next) > MAX_DOC_BYTES) throw new InvalidError(`artifacts are at most ${MAX_DOC_BYTES} bytes`);
+    if (change.title !== undefined) this.db.prepare('UPDATE documents SET name = ? WHERE id = ?').run(change.title.trim() || null, id);
+    const full = inside(this.workdirOf(doc.agentId), doc.path);
+    writeFileSync(full, next);
+    const res = this.record(doc.agentId, doc.path, next, stampOf(full).stamp, by, cardId);
+    // A rename alone: the title changes without a new version.
+    if (!res.changed && change.title !== undefined) {
+      this.db.prepare('UPDATE documents SET title = ? WHERE id = ?').run(docTitle(doc.path, next, change.title.trim() || null), id);
+      return this.emitDoc(id);
+    }
+    return res.doc;
+  }
+
+  /** An artifact by id, or by a path in the agent's workspace (indexed on the way). */
+  resolve(agentId: string, ref: string, cardId: string | null = null): Doc {
+    if (/^doc_[\w-]+$/.test(ref)) return this.get(ref);
+    return this.byPath(agentId, ref) ?? this.indexFile(agentId, ref, agentId, cardId);
+  }
+
+  /**
+   * Canvases are gone (#120): each canvas still in the archive table becomes an html page in its author's workspace
+   * (pages/canvases/…, folder « Canvases »), once. Its date stays the canvas's, so the Library's recent list is not
+   * flooded. Returns how many were converted.
+   */
+  convertCanvases(): number {
+    let todo: { id: string; name: string; nodes: string; updated_by: string; updated_at: string }[];
+    try {
+      todo = this.db
+        .prepare('SELECT c.id, c.name, c.nodes, c.updated_by, c.updated_at FROM canvases c WHERE NOT EXISTS (SELECT 1 FROM documents d WHERE d.from_canvas = c.id) ORDER BY c.updated_at')
+        .all() as typeof todo;
+    } catch {
+      return 0; // no archive table (a fresh database)
+    }
+    if (!todo.length) return 0;
+    const agents = (this.db.prepare('SELECT id FROM agents ORDER BY rowid').all() as { id: string }[]).map((a) => a.id);
+    if (!agents.length) return 0;
+    const folder = this.folderNamed('Canvases') ?? this.createFolder('Canvases');
+    let n = 0;
+    for (const c of todo) {
+      const agentId = agents.includes(c.updated_by) ? c.updated_by : agents.includes('atlas') ? 'atlas' : agents[0]!;
+      const root = this.workdirOf(agentId);
+      let nodes: unknown[] = [];
+      try {
+        nodes = JSON.parse(c.nodes) as unknown[];
+      } catch {
+        nodes = [];
+      }
+      const html = canvasPage(c.name, nodes as Parameters<typeof canvasPage>[1], c.updated_at);
+      let rel = `pages/canvases/${slug(c.name) || 'canvas'}.html`;
+      for (let i = 2; this.exists(root, rel); i++) rel = `pages/canvases/${slug(c.name) || 'canvas'}-${i}.html`;
+      const full = inside(root, rel);
+      mkdirSync(dirname(full), { recursive: true });
+      writeFileSync(full, html);
+      const doc = this.record(agentId, rel, html, stampOf(full).stamp, c.updated_by, null, c.name).doc;
+      this.db.prepare('UPDATE documents SET folder_id = ?, from_canvas = ?, updated_at = ? WHERE id = ?').run(folder.id, c.id, c.updated_at, doc.id);
+      this.db.prepare('UPDATE document_versions SET updated_at = ? WHERE doc_id = ?').run(c.updated_at, doc.id);
+      this.emitDoc(doc.id);
+      n++;
+    }
+    return n;
   }
 
   /** The document of a workspace file, if indexed. */
@@ -146,7 +299,7 @@ export class Documents {
     const root = this.workdirOf(agentId);
     const full = inside(root, path);
     const rel = this.rel(agentId, path);
-    if (!docKindOf(rel)) throw new InvalidError(`${rel}: the panel shows .md, .html and .svg files`);
+    if (!docKindOf(rel)) throw new InvalidError(`${rel}: artifacts are .md, .html, .svg and .url files`);
     let st: ReturnType<typeof stampOf>;
     try {
       st = stampOf(full);
@@ -166,18 +319,18 @@ export class Documents {
   sync(agentId: string, by: string, cardId: string | null = null): Doc[] {
     const root = this.workdirOf(agentId);
     const changed: Doc[] = [];
-    const known = this.db.prepare('SELECT * FROM documents WHERE agent_id = ? AND path IS NOT NULL').all(agentId) as Row[];
+    const known = this.db.prepare('SELECT * FROM documents WHERE agent_id = ?').all(agentId) as Row[];
     const seen = new Set<string>();
     for (const r of known) {
-      seen.add(r.path!);
+      seen.add(r.path);
       let st: ReturnType<typeof stampOf>;
       try {
-        st = stampOf(inside(root, r.path!));
+        st = stampOf(inside(root, r.path));
       } catch {
         continue; // deleted or moved: keep the versions
       }
       if (st.stamp === r.file_stamp || !st.isFile || st.size > MAX_DOC_BYTES) continue;
-      const res = this.record(agentId, r.path!, readFileSync(inside(root, r.path!), 'utf8'), st.stamp, by, cardId);
+      const res = this.record(agentId, r.path, readFileSync(inside(root, r.path), 'utf8'), st.stamp, by, cardId);
       if (res.changed) changed.push(res.doc);
     }
     for (const rel of this.scan(root)) {
@@ -189,32 +342,9 @@ export class Documents {
     return changed;
   }
 
-  /** The document showing a canvas as a whiteboard (created on first use). */
-  whiteboard(canvasId: string, agentId: string, cardId: string | null = null): Doc {
-    const canvas = this.canvases.get(canvasId);
-    const row = this.db.prepare('SELECT * FROM documents WHERE canvas_id = ?').get(canvasId) as Row | undefined;
-    const now = new Date().toISOString();
-    if (row) {
-      this.db
-        .prepare('UPDATE documents SET title = ?, version = ?, updated_by = ?, updated_at = ?, card_id = COALESCE(card_id, ?) WHERE id = ?')
-        .run(canvas.name, canvas.version, canvas.updatedBy, canvas.updatedAt || now, cardId, row.id);
-    } else {
-      this.db
-        .prepare("INSERT INTO documents (id, agent_id, canvas_id, kind, title, card_id, version, updated_by, updated_at) VALUES (?, ?, ?, 'whiteboard', ?, ?, ?, ?, ?)")
-        .run(newId(), agentId, canvasId, canvas.name, cardId, canvas.version, canvas.updatedBy, canvas.updatedAt || now);
-    }
-    const doc = toDoc(this.db.prepare(DOC_SELECT + ' WHERE d.canvas_id = ?').get(canvasId) as Row);
-    this.bus.emit({ type: 'document.updated', doc });
-    return doc;
-  }
-
-  /** A version's text (default the latest, re-synced from the file first). Whiteboards: empty, at the canvas version. */
+  /** A version's text (default the latest, re-synced from the file first). */
   content(id: string, version?: number): DocContent {
     let doc = this.get(id);
-    if (doc.kind === 'whiteboard') {
-      const canvas = this.canvases.get(doc.canvasId!);
-      return { doc: { ...doc, version: canvas.version, title: canvas.name }, version: canvas.version, content: '' };
-    }
     if (version === undefined) {
       doc = this.resync(doc);
       version = doc.version;
@@ -227,8 +357,7 @@ export class Documents {
   }
 
   versions(id: string): DocVersion[] {
-    const doc = this.get(id);
-    if (doc.kind === 'whiteboard') return this.canvases.versions(doc.canvasId!);
+    this.get(id);
     return (
       this.db
         .prepare('SELECT version, updated_by, updated_at FROM document_versions WHERE doc_id = ? ORDER BY version DESC')
@@ -239,22 +368,16 @@ export class Documents {
   /** Go back to an earlier version: the file gets that content again, recorded as a new version (undoable). */
   restore(id: string, version: number, by: string): Doc {
     const doc = this.get(id);
-    if (doc.kind === 'whiteboard') {
-      this.canvases.restore(doc.canvasId!, version, by);
-      return this.whiteboard(doc.canvasId!, doc.agentId);
-    }
     const { content } = this.content(id, version);
-    const full = inside(this.workdirOf(doc.agentId), doc.path!);
+    const full = inside(this.workdirOf(doc.agentId), doc.path);
     writeFileSync(full, content);
-    return this.record(doc.agentId, doc.path!, content, stampOf(full).stamp, by, null).doc;
+    return this.record(doc.agentId, doc.path, content, stampOf(full).stamp, by, null).doc;
   }
 
   attach(id: string, cardId: string): Doc {
     this.kanban.get(cardId);
     this.db.prepare('UPDATE documents SET card_id = ? WHERE id = ?').run(cardId, id);
-    const doc = this.get(id);
-    this.bus.emit({ type: 'document.updated', doc });
-    return doc;
+    return this.emitDoc(id);
   }
 
   /* ── Side panel tabs (one panel per direct chat) ─────────────────────── */
@@ -346,7 +469,6 @@ export class Documents {
   }
 
   private resync(doc: Doc): Doc {
-    if (!doc.path) return doc;
     const root = this.workdirOf(doc.agentId);
     let st: ReturnType<typeof stampOf>;
     try {
@@ -359,7 +481,7 @@ export class Documents {
     return this.record(doc.agentId, doc.path, readFileSync(inside(root, doc.path), 'utf8'), st.stamp, doc.agentId, null).doc;
   }
 
-  /** docs/, pages/, diagrams/ files the panel can show (3 levels deep, capped). */
+  /** docs/, pages/, diagrams/, links/ artifact files (3 levels deep, capped). */
   private scan(root: string): string[] {
     const out: string[] = [];
     const walk = (dir: string, depth: number) => {
@@ -380,19 +502,19 @@ export class Documents {
     return out;
   }
 
-  private record(agentId: string, rel: string, content: string, stamp: string, by: string, cardId: string | null): { doc: Doc; changed: boolean } {
+  private record(agentId: string, rel: string, content: string, stamp: string, by: string, cardId: string | null, name: string | null = null): { doc: Doc; changed: boolean } {
     const kind = docKindOf(rel)!;
-    const title = docTitle(rel, content);
     const now = new Date().toISOString();
     let changed = false;
     const doc = this.db
       .transaction(() => {
         const row = this.db.prepare('SELECT * FROM documents WHERE agent_id = ? AND path = ?').get(agentId, rel) as Row | undefined;
+        const title = docTitle(rel, content, row?.name ?? name);
         if (!row) {
           const id = newId();
           this.db
-            .prepare('INSERT INTO documents (id, agent_id, path, kind, title, card_id, version, updated_by, updated_at, file_stamp) VALUES (?, ?, ?, ?, ?, ?, 1, ?, ?, ?)')
-            .run(id, agentId, rel, kind, title, cardId, by, now, stamp);
+            .prepare('INSERT INTO documents (id, agent_id, path, kind, title, card_id, version, updated_by, updated_at, file_stamp, name) VALUES (?, ?, ?, ?, ?, ?, 1, ?, ?, ?, ?)')
+            .run(id, agentId, rel, kind, title, cardId, by, now, stamp, name);
           this.db.prepare('INSERT INTO document_versions VALUES (?, 1, ?, ?, ?)').run(id, content, by, now);
           changed = true;
           return this.get(id);
@@ -418,6 +540,25 @@ export class Documents {
     return { doc, changed };
   }
 
+  private emitDoc(id: string): Doc {
+    const doc = this.get(id);
+    this.bus.emit({ type: 'document.updated', doc });
+    return doc;
+  }
+
+  private emitFolders(): void {
+    this.bus.emit({ type: 'folders.updated', folders: this.folders() });
+  }
+
+  private exists(root: string, rel: string): boolean {
+    try {
+      statSync(inside(root, rel));
+      return true;
+    } catch {
+      return false;
+    }
+  }
+
   private emitPanel(chatId: string): PanelTab[] {
     const tabs = this.tabs(chatId);
     this.bus.emit({ type: 'panel.updated', chatId, tabs });
@@ -426,3 +567,42 @@ export class Documents {
 }
 
 const newId = () => 'doc_' + randomUUID().slice(0, 8);
+
+/** A file name from a title: « Artifacts viewer spec » → artifacts-viewer-spec. */
+export const slug = (title: string) =>
+  title
+    .normalize('NFKD')
+    .replace(/[\u0300-\u036f]/g, '')
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, '-')
+    .replace(/^-+|-+$/g, '')
+    .slice(0, 60)
+    .replace(/-+$/, '');
+
+function folderName(name: string): string {
+  const n = name.trim().replace(/\s+/g, ' ');
+  if (!n) throw new InvalidError('a folder needs a name');
+  if (n.length > 60) throw new InvalidError('folder names are at most 60 characters');
+  return n;
+}
+
+/** The text search looks in: html and svg without their tags, scripts and styles. */
+export function searchableText(kind: DocKind, content: string): string {
+  if (kind === 'markdown' || kind === 'url') return content;
+  return content
+    .replace(/<(script|style)\b[\s\S]*?<\/\1>/gi, ' ')
+    .replace(/<[^>]+>/g, ' ')
+    .replace(/&nbsp;/g, ' ')
+    .replace(/&amp;/g, '&')
+    .replace(/&lt;/g, '<')
+    .replace(/&gt;/g, '>')
+    .replace(/\s+/g, ' ');
+}
+
+/** About 120 characters around a match, on one line, with … where cut. */
+export function snippetAt(text: string, at: number, len: number): string {
+  const from = Math.max(0, at - 50);
+  const to = Math.min(text.length, at + len + 70);
+  const s = text.slice(from, to).replace(/\s+/g, ' ').trim();
+  return (from > 0 ? '…' : '') + s + (to < text.length ? '…' : '');
+}

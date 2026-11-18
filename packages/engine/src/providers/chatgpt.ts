@@ -67,7 +67,7 @@ export function responsesBody(req: ModelRequest): Record<string, unknown> {
             {
               type: 'namespace',
               name: NAMESPACE,
-              description: 'Atlas tools: files and shell in the agent workspace, tasks, canvas, team.',
+              description: 'Atlas tools: files and shell in the agent workspace, tasks, artifacts, team.',
               tools: req.tools.map((t) => ({ type: 'function', name: t.name, description: t.description, parameters: t.input_schema })),
             },
           ],

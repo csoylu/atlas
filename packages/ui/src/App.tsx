@@ -30,14 +30,14 @@ import { LAST_AGENT, TOGGLE_PANEL } from './ChatView.tsx';
 
 /**
  * Route in the URL hash, so reloads and the Electron window keep the place: #/inbox/<item>, #/board, #/library/<docId>,
- * #/schedules, #/chat/<id> or #/settings/<page>. Old links #/doc/<id> and #/canvas/<id> go to the Library viewer. Old settings hashes (#/agents, #/models, #/settings/canvas) are rewritten in place.
+ * #/schedules, #/chat/<id> or #/settings/<page>. Old links #/doc/<id> go to the Library viewer, #/canvas/<id> to the Library. Old settings hashes (#/agents, #/models, #/settings/canvas) are rewritten in place.
  * `?card=<id>` on any route opens that card's ticket modal over it (#/chat/c_1?card=c_2).
  */
-type View = 'inbox' | 'chat' | 'board' | 'library' | 'canvas' | 'schedules' | 'settings';
-type Route = { view: View; canvasId: string | null; card: string | null; /** What follows #/settings/memory: a scope or m12. */ rest: string };
+type View = 'inbox' | 'chat' | 'board' | 'library' | 'schedules' | 'settings';
+type Route = { view: View; target: string | null; card: string | null; /** What follows #/settings/memory: a scope or m12. */ rest: string };
 function useRoute(): [Route, (hash: string) => void] {
   const parse = (): Route => ({ rest: '', ...parseView(), card: splitHash(location.hash).card });
-  const parseView = (): { view: View; canvasId: string | null; rest?: string } => {
+  const parseView = (): { view: View; target: string | null; rest?: string } => {
     const { path, card } = splitHash(location.hash);
     const [, view, id] = path.split('/');
     // Settings pages, old settings hashes, and #/settings/memory[/<scope> | /m12] (old #/library/memory… links too, #87).
@@ -45,20 +45,19 @@ function useRoute(): [Route, (hash: string) => void] {
     if (settings) {
       // The query stays (?card=…&msg=… from a memory's source link).
       if (path !== settings.path) history.replaceState(null, '', settings.path + location.hash.slice(path.length));
-      return { view: 'settings', canvasId: settings.page, rest: settings.rest };
+      return { view: 'settings', target: settings.page, rest: settings.rest };
     }
-    if (view === 'library') return { view: 'library', canvasId: id ? decodeURIComponent(id) : null };
-    // Old links: #/doc/<id> is the Library viewer; #/canvas/<id> too, once its whiteboard document is known.
-    if (view === 'doc' || (view === 'canvas' && !id)) {
+    if (view === 'library') return { view: 'library', target: id ? decodeURIComponent(id) : null };
+    // Old links: #/doc/<id> is the Library viewer; #/canvas/<id> (canvases are gone, #120) the Library's Canvases folder.
+    if (view === 'doc' || view === 'canvas') {
       const want = withCard('#/library' + (view === 'doc' && id ? '/' + id : ''), card);
       history.replaceState(null, '', want);
-      return { view: 'library', canvasId: view === 'doc' && id ? decodeURIComponent(id) : null };
+      return { view: 'library', target: view === 'doc' && id ? decodeURIComponent(id) : null };
     }
-    if (view === 'canvas') return { view: 'canvas', canvasId: id! };
-    if (view === 'chat') return { view: 'chat', canvasId: id || null };
-    if (view === 'schedules') return { view: 'schedules', canvasId: null };
-    if (view === 'inbox') return { view: 'inbox', canvasId: id ? decodeURIComponent(id) : null };
-    return { view: 'board', canvasId: null };
+    if (view === 'chat') return { view: 'chat', target: id || null };
+    if (view === 'schedules') return { view: 'schedules', target: null };
+    if (view === 'inbox') return { view: 'inbox', target: id ? decodeURIComponent(id) : null };
+    return { view: 'board', target: null };
   };
   const [route, setRoute] = useState(parse);
   useEffect(() => {
@@ -182,10 +181,7 @@ export function App() {
         else if (e.type === 'run.updated') stream.push(e.run.cardId, { type: 'run', run: e.run });
         else if (e.type === 'toolcall.updated') stream.push(e.cardId, { type: 'toolcall', call: e.call });
         else if (e.type === 'conversation.rewound') stream.push(e.conversationId, { type: 'rewound' });
-        else if (e.type === 'canvas.updated') {
-          stream.push('canvas:' + e.canvas.id, { type: 'canvas', canvas: e.canvas });
-          stream.push('canvases', { type: 'canvases' });
-        } else if (e.type === 'canvas.deleted') stream.push('canvases', { type: 'canvases' });
+        else if (e.type === 'folders.updated') stream.push('folders', { type: 'folders', folders: e.folders });
         else if (e.type === 'document.updated') {
           stream.push('doc:' + e.doc.id, { type: 'doc', doc: e.doc });
           stream.push('docs', { type: 'doc', doc: e.doc });
@@ -253,19 +249,8 @@ export function App() {
     location.hash = withCard(location.hash, id);
   }, []);
   useEffect(() => {
-    if (route.view === 'settings' && route.canvasId) localStorage.setItem('atlas.settings', route.canvasId);
-  }, [route.view, route.canvasId]);
-  // #/canvas/<id> (old links, « Open in Library » on inline canvases): to its whiteboard in the Library.
-  useEffect(() => {
-    if (route.view !== 'canvas' || !route.canvasId) return;
-    api.whiteboardDoc(route.canvasId).then(
-      (d) => location.replace(withCard('#/library/' + d.id, splitHash(location.hash).card)),
-      (e) => {
-        fail(e);
-        location.replace('#/library');
-      },
-    );
-  }, [route.view, route.canvasId]);
+    if (route.view === 'settings' && route.target) localStorage.setItem('atlas.settings', route.target);
+  }, [route.view, route.target]);
   /** The Inbox item in the URL: replaces the history entry (J/K would fill Back with every row). */
   const selectInbox = useCallback((key: string | null) => {
     location.replace(withCard('#/inbox' + (key ? '/' + encodeURIComponent(key) : ''), splitHash(location.hash).card));
@@ -381,7 +366,7 @@ export function App() {
     { view: 'library', label: 'Library', hash: '#/library', icon: <Icon.library />, keys: 'G then L' },
     { view: 'schedules', label: 'Schedules', hash: '#/schedules', icon: <Icon.clock />, keys: 'G then S' },
   ];
-  const openChat = route.view === 'chat' ? chats.find((c) => c.id === route.canvasId) : undefined;
+  const openChat = route.view === 'chat' ? chats.find((c) => c.id === route.target) : undefined;
   const badge = shownInbox?.badge ?? 0;
   const activeSchedules = schedules.filter((s) => s.enabled).length;
   /** An agent is busy while one of its cards runs or one of its chats is answering. */
@@ -415,14 +400,14 @@ export function App() {
         : { parts: [], title: 'Chat' }
       : route.view === 'board'
         ? { parts: [], title: 'Tasks' }
-        : route.view === 'library' || route.view === 'canvas'
-          ? route.canvasId && route.view === 'library'
+        : route.view === 'library'
+          ? route.target
             ? { parts: [<a key="l" className="crumb-link" href="#/library">Library</a>], title: libraryTitle ?? 'Document' }
             : { parts: [], title: 'Library' }
           : route.view === 'schedules'
             ? { parts: [], title: 'Schedules', sub: `${activeSchedules} active of ${schedules.length}` }
             : route.view === 'settings'
-              ? { parts: [<span key="s" className="crumb-part">Settings</span>], title: settingsLabel(route.canvasId as SettingsPage) }
+              ? { parts: [<span key="s" className="crumb-part">Settings</span>], title: settingsLabel(route.target as SettingsPage) }
               : { parts: [], title: 'Document' };
   const paletteCtx: PaletteContext = {
     view: route.view,
@@ -482,7 +467,7 @@ export function App() {
             {agents.map((a) => (
               <button
                 key={a.id}
-                className={'nav-item agent-item' + (route.view === 'chat' && (route.canvasId === a.id || (!!a.mainChat && route.canvasId === a.mainChat)) ? ' active' : '')}
+                className={'nav-item agent-item' + (route.view === 'chat' && (route.target === a.id || (!!a.mainChat && route.target === a.mainChat)) ? ' active' : '')}
                 title={`Chat with @${a.id}${busy(a.id) ? ' · working…' : ''}`}
                 onClick={() => nav0('#/chat/' + (a.mainChat ?? a.id))}
               >
@@ -574,7 +559,7 @@ export function App() {
             digest={digest}
             cards={cards}
             agents={agents}
-            selected={route.canvasId}
+            selected={route.target}
             onSelect={selectInbox}
             onOpenCard={setOpenId}
             menuButton={menuButton}
@@ -586,7 +571,7 @@ export function App() {
             agents={agents}
             chats={chats}
             loaded={chatsLoaded}
-            target={route.canvasId}
+            target={route.target}
             planAgents={planAgents}
             models={models}
             userName={settings?.userName ?? null}
@@ -599,7 +584,7 @@ export function App() {
           />
         ) : route.view === 'settings' ? (
           <SettingsView
-            page={route.canvasId as SettingsPage}
+            page={route.target as SettingsPage}
             memoryRest={route.rest}
             cards={cards}
             chats={chats}
@@ -620,9 +605,9 @@ export function App() {
             onOpenUpdate={() => setUpdateOpen(true)}
             onError={fail}
           />
-        ) : route.view === 'library' || route.view === 'canvas' ? (
+        ) : route.view === 'library' ? (
           <Library
-            docId={route.view === 'library' ? route.canvasId : null}
+            docId={route.target}
             cards={cards}
             chats={chats}
             stream={stream}

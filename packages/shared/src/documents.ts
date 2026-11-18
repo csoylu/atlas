@@ -1,32 +1,60 @@
 import { z } from 'zod';
 
 /**
- * Documents (design §16 « Side panel »): files in an agent's workspace that Atlas indexes, versions and renders in the
- * panel beside a chat. A whiteboard is an existing canvas shown as a document.
+ * Artifacts (design §16 « Artifacts », #120; called documents in the code): files in an agent's workspace that Atlas
+ * indexes, versions and renders in the panel beside a chat and in the Library. A link (url) is a `.url` file holding
+ * the address.
  */
-export const DOC_KINDS = ['markdown', 'html', 'diagram', 'whiteboard'] as const;
+export const DOC_KINDS = ['markdown', 'html', 'diagram', 'url'] as const;
 export type DocKind = (typeof DOC_KINDS)[number];
 
-/** Folders whose .md / .html / .svg files are indexed automatically; any such file can be opened with panel_open. */
-export const DOC_FOLDERS = ['docs', 'pages', 'diagrams'] as const;
+/** Folders whose artifact files are indexed automatically; any such file can be shown with panel_open. */
+export const DOC_FOLDERS = ['docs', 'pages', 'diagrams', 'links'] as const;
+/** Where artifact_create writes each kind, and with which extension. */
+export const KIND_FILE: Record<DocKind, { dir: (typeof DOC_FOLDERS)[number]; ext: string }> = {
+  markdown: { dir: 'docs', ext: 'md' },
+  html: { dir: 'pages', ext: 'html' },
+  diagram: { dir: 'diagrams', ext: 'svg' },
+  url: { dir: 'links', ext: 'url' },
+};
+/** The word for a kind (chat cards: « Document · v2 »). */
+export const KIND_WORD: Record<DocKind, string> = { markdown: 'Document', html: 'Page', diagram: 'Diagram', url: 'Link' };
 
-/** Kind of a workspace file by extension, or null if the panel can't show it. */
-export function docKindOf(path: string): Exclude<DocKind, 'whiteboard'> | null {
+/** Kind of a workspace file by extension, or null if it is not an artifact. */
+export function docKindOf(path: string): DocKind | null {
   const ext = path.toLowerCase().split('.').pop();
   if (ext === 'md' || ext === 'markdown') return 'markdown';
   if (ext === 'html' || ext === 'htm') return 'html';
   if (ext === 'svg') return 'diagram';
+  if (ext === 'url') return 'url';
   return null;
+}
+
+/** The address a link artifact holds: its first non-empty line (a Windows « URL=… » shortcut works too). */
+export function linkOf(content: string): string {
+  const line = content.split('\n').map((l) => l.trim()).find((l) => l && !/^\[.*\]$/.test(l)) ?? '';
+  return line.replace(/^URL=/i, '');
+}
+
+/** A Library folder (flat: no nesting). */
+export interface Folder {
+  id: string;
+  name: string;
+  createdAt: string;
+}
+
+/** A Library search hit: titles and content, every folder. `snippet` is set when the match is in the content. */
+export interface DocHit {
+  doc: Doc;
+  snippet: string | null;
 }
 
 export interface Doc {
   id: string;
-  /** Whose workspace the file is in (whiteboards: who opened it first). */
+  /** Whose workspace the file is in. */
   agentId: string;
-  /** Path relative to the agent's workspace; null for whiteboards. */
-  path: string | null;
-  /** Whiteboards: the canvas. */
-  canvasId: string | null;
+  /** Path relative to the agent's workspace. */
+  path: string;
   kind: DocKind;
   title: string;
   /** The card it is attached to (shown in the ticket modal's Documents). */
@@ -34,8 +62,10 @@ export interface Doc {
   version: number;
   updatedBy: string;
   updatedAt: string;
-  /** Pinned in the Library (on top of the list). */
+  /** Pinned in the Library (on top of its folder). */
   pinned: boolean;
+  /** Library folder; null = Unfiled. */
+  folderId: string | null;
   /** The direct chat it was first opened in, else the chat its card came from (the Library's chat filter). */
   chatId: string | null;
 }
@@ -46,7 +76,7 @@ export interface DocVersion {
   updatedAt: string;
 }
 
-/** One version's text (whiteboards: empty, the canvas is read through the canvas API). */
+/** One version's text. */
 export interface DocContent {
   doc: Doc;
   version: number;
@@ -131,15 +161,19 @@ export function changedSections(before: string, after: string): Set<string> {
   return new Set(splitSections(after).filter((s) => old.get(s.id) !== s.text.trim()).map((s) => s.id));
 }
 
-/** Title of a document: first markdown heading, html <title>/<h1>, svg <title>, else the file name. */
-export function docTitle(path: string, content: string): string {
+/**
+ * Title of a document: first markdown heading, html <title>/<h1>, svg <title>; else the name it was created with
+ * (artifact_create's title), else the file name.
+ */
+export function docTitle(path: string, content: string, name: string | null = null): string {
   const kind = docKindOf(path);
+  if (kind === 'url') return name || path.split('/').pop()!;
   const clean = (s: string | undefined) => s?.replace(/<[^>]+>/g, '').replace(/\s+/g, ' ').trim().slice(0, 120);
   const t =
     kind === 'markdown'
       ? clean(/^#{1,3}\s+(.+)$/m.exec(content)?.[1])
       : clean(/<title[^>]*>([\s\S]*?)<\/title>/i.exec(content)?.[1] ?? /<h1[^>]*>([\s\S]*?)<\/h1>/i.exec(content)?.[1]);
-  return t || path.split('/').pop()!;
+  return t || name || path.split('/').pop()!;
 }
 
 /* ── The reference carried by a message (« Ask about this ») ─────────────── */
@@ -150,9 +184,9 @@ const EXCERPT_CAP = 1500;
  * The text block put before the user's message: the label the UI shows as a quote chip, where it is (path, doc id,
  * version, section), and the quoted section so the agent knows exactly what is meant.
  */
-export function formatDocRef(doc: Pick<Doc, 'id' | 'title' | 'path' | 'canvasId'>, version: number, section: DocSection | null): string {
+export function formatDocRef(doc: Pick<Doc, 'id' | 'title' | 'path'>, version: number, section: DocSection | null): string {
   const label = section?.title ? `${doc.title} › ${section.title}` : doc.title;
-  const where = doc.path ?? `canvas ${doc.canvasId}`;
+  const where = doc.path;
   const head = `❝ ${label}\n(the user is asking about ${where}, ${doc.id} v${version}${section ? `, section #${section.id}` : ''}; quoted below)`;
   if (!section) return head;
   const body = section.text.trim();

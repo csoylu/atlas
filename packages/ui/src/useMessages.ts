@@ -1,5 +1,5 @@
 import { useMemo } from 'react';
-import type { Doc, Memory, MemoryProposal, PanelTab, Canvas, ClaudePlanStatus, LocalPull, LocalStatus, Message, Run, ToolCallTiming, VoiceStatus } from '@atlas/shared';
+import type { Doc, Folder, Memory, MemoryProposal, PanelTab, ClaudePlanStatus, LocalPull, LocalStatus, Message, Run, ToolCallTiming, VoiceStatus } from '@atlas/shared';
 
 /** Fan-out of live chat events to whichever card panel is listening. */
 export type LiveEvent =
@@ -11,8 +11,8 @@ export type LiveEvent =
   | { type: 'toolcall'; call: ToolCallTiming }
   /** A rewind hid messages, or its undo brought them back: reload the conversation. */
   | { type: 'rewound' }
-  | { type: 'canvas'; canvas: Canvas }
-  | { type: 'canvases' }
+  /** Library folders changed (key 'folders'). */
+  | { type: 'folders'; folders: Folder[] }
   | { type: 'local'; status: LocalStatus }
   | { type: 'pull'; pull: LocalPull }
   | { type: 'usage' }

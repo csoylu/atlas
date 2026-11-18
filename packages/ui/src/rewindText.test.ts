@@ -24,7 +24,7 @@ describe('rewind wording', () => {
     expect(outcomeLine('no files changed', [fx('task', 'undone')])).toBe('no files changed · 1 task closed');
     expect(effectsLine([fx('task', 'undone'), fx('task', 'undone'), fx('message', 'undone', 'withdrawn'), fx('push', 'kept')])).toBe('2 tasks closed · 1 message withdrawn · 1 kept');
     expect(
-      effectsLine([fx('task', 'undone'), fx('message', 'undone', 'withdrawn'), fx('memory', 'undone', 'archived'), fx('schedule', 'undone', 'turned off'), fx('canvas', 'kept')]),
+      effectsLine([fx('task', 'undone'), fx('message', 'undone', 'withdrawn'), fx('memory', 'undone', 'archived'), fx('schedule', 'undone', 'turned off'), fx('artifact', 'kept')]),
     ).toBe('1 task closed · 3 more undone · 1 kept');
     expect(effectsLine([fx('memory', 'undone', 'archived'), fx('memory', 'undone', 'archived')])).toBe('2 memories archived');
   });

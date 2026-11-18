@@ -13,18 +13,31 @@ afterEach(async () => {
 });
 
 describe('api', () => {
-  it('serves the Library: canvases as whiteboards, pin, and the whiteboard of a canvas', async () => {
-    engine = await startEngine({ dbFile: ':memory:', dataDir: mkdtempSync(join(tmpdir(), 'atlas-')), port: 0, dispatch: false });
-    const post = (path: string, body: unknown) =>
-      fetch(engine!.url + path, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify(body) });
-    const canvas = (await (await post('/api/canvases', { name: 'Sketch' })).json()) as { id: string };
-    const doc = (await (await post(`/api/canvases/${canvas.id}/document`, {})).json()) as { id: string; kind: string; agentId: string };
-    expect(doc).toMatchObject({ kind: 'whiteboard', agentId: 'user' });
+  it('serves the Library: pin, folders (delete → Unfiled), move, search', async () => {
+    const dataDir = mkdtempSync(join(tmpdir(), 'atlas-'));
+    engine = await startEngine({ dbFile: ':memory:', dataDir, port: 0, dispatch: false });
+    const send = (method: string, path: string, body?: unknown) =>
+      fetch(engine!.url + path, { method, headers: { 'content-type': 'application/json' }, body: body === undefined ? undefined : JSON.stringify(body) });
+    const doc = engine.documents.create('atlas', { kind: 'markdown', title: 'Spec', content: '# Spec\nThe version picker.' }, 'atlas');
     const lib = (await (await fetch(engine.url + '/api/documents')).json()) as { id: string }[];
     expect(lib.map((d) => d.id)).toEqual([doc.id]);
-    expect(await (await post(`/api/documents/${doc.id}/pin`, { pinned: true })).json()).toMatchObject({ id: doc.id, pinned: true });
-    expect((await post(`/api/documents/${doc.id}/pin`, { pinned: 'yes' })).status).toBe(400);
-    expect((await post('/api/documents/doc_none/pin', { pinned: true })).status).toBe(404);
+    expect(await (await send('POST', `/api/documents/${doc.id}/pin`, { pinned: true })).json()).toMatchObject({ id: doc.id, pinned: true });
+    expect((await send('POST', `/api/documents/${doc.id}/pin`, { pinned: 'yes' })).status).toBe(400);
+    expect((await send('POST', '/api/documents/doc_none/pin', { pinned: true })).status).toBe(404);
+
+    const f = (await (await send('POST', '/api/folders', { name: 'Data feeds' })).json()) as { id: string; name: string };
+    expect((await send('POST', '/api/folders', { name: 'data feeds' })).status).toBe(409);
+    expect((await send('POST', '/api/folders', { name: ' ' })).status).toBe(400);
+    expect(await (await send('POST', `/api/documents/${doc.id}/move`, { folderId: f.id })).json()).toMatchObject({ folderId: f.id });
+    expect((await send('POST', `/api/documents/${doc.id}/move`, { folderId: 3 })).status).toBe(400);
+    expect(await (await send('PATCH', `/api/folders/${f.id}`, { name: 'Feeds' })).json()).toMatchObject({ name: 'Feeds' });
+    expect((await send('DELETE', `/api/folders/${f.id}`)).status).toBe(204);
+    expect(await (await fetch(engine.url + '/api/folders')).json()).toEqual([]);
+    expect(engine.documents.get(doc.id).folderId).toBeNull();
+
+    const hits = (await (await fetch(engine.url + '/api/documents/search?q=picker')).json()) as { doc: { id: string }; snippet: string }[];
+    expect(hits).toEqual([{ doc: expect.objectContaining({ id: doc.id }), snippet: expect.stringContaining('version picker') }]);
+    expect((await send('GET', '/api/canvases')).status).not.toBe(200);
   });
 
   it('reports the version and data folder for Settings → About', async () => {

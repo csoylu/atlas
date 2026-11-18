@@ -1,11 +1,11 @@
 import { createContext, useContext, useEffect, useMemo, useState, type ReactNode } from 'react';
-import type { Doc, Message, ToolCallTiming, parseDocRef } from '@atlas/shared';
+import { KIND_WORD, type Message, type ToolCallTiming, type parseDocRef } from '@atlas/shared';
+import { useLatestVersion } from './artifacts.ts';
 import { ChatRow, PathObject, RowIconSvg, RowMeta } from './ChatRow.tsx';
-import { InlineCanvas } from './canvas/InlineCanvas.tsx';
 import { artifactOf, isDangerous, todoList, type Artifact } from './cardModal.ts';
-import { endedOnFailure, groupSummary, groupTurn, shownNodes, type Segment, type Step } from './chatTurn.ts';
+import { endedOnFailure, groupSummary, groupTurn, type Segment, type Step } from './chatTurn.ts';
 import { CardRefLink, cardDetail, type DetailContext, type TurnCards } from './CardStepDetail.tsx';
-import { CanvasName, canvasDetail } from './CanvasStepDetail.tsx';
+import { teamDetail } from './TeamStepDetail.tsx';
 import { fileDetail, isLiveShell } from './FileStepDetail.tsx';
 import { ImageThumbs } from './Images.tsx';
 import { webDetail } from './WebStepDetail.tsx';
@@ -17,8 +17,8 @@ import { KindIcon } from './Viewer.tsx';
 type DocRef = NonNullable<ReturnType<typeof parseDocRef>>;
 
 /**
- * One agent turn (#59): its text, tool calls as compact rows, « N steps » groups, and the pinned items (inline canvas,
- * document chip, question, live plan). `live`: the turn's run is still going. `last`: no message after it (a group
+ * One agent turn (#59): its text, tool calls as compact rows, « N steps » groups, and the pinned items (artifact
+ * card, question, live plan). `live`: the turn's run is still going. `last`: no message after it (a group
  * that ended on a failure then opens on it).
  */
 export function Turn(props: {
@@ -61,38 +61,21 @@ function SegmentView(p: Parameters<typeof Turn>[0] & { s: Segment; now: number; 
   const row = <StepRow step={s.step} timing={p.timings.get(s.step.id)} now={p.now} at={s.step.at} defaultOpen={plan} plan={plan} />;
   if (s.kind === 'step') return row;
   if (s.pin === 'doc') {
-    // The row (no details: the chip is them), then the document chip.
+    // The artifact card alone (mockup #106): it says the kind, the version and « Updated to vN ».
     const art = artifactOf(s.step.name, s.step.input, s.step.result?.content);
-    return art ? (
-      <>
-        <StepRow step={s.step} timing={p.timings.get(s.step.id)} now={p.now} at={s.step.at} bare />
-        <ArtifactChip art={art} onOpen={p.onOpenArtifact} />
-      </>
-    ) : (
-      row
-    );
-  }
-  if (s.pin === 'canvas') {
-    // The row (no thumbnail: the inline canvas under it is the detail), then the shown nodes.
-    const show = shownNodes(s.step.name, s.step.input)!;
-    return (
-      <>
-        <StepRow step={s.step} timing={p.timings.get(s.step.id)} now={p.now} at={s.step.at} bare />
-        <InlineCanvas canvasId={show.canvasId} nodeIds={show.nodeIds} stream={p.stream} />
-      </>
-    );
+    return art ? <ArtifactChip art={art} stream={p.stream} onOpen={p.onOpenArtifact} /> : row;
   }
   return row;
 }
 
 /** One tool call (or thinking block) as a row; nested inside a group's timeline. */
-export function StepRow({ step, timing, now, at, nested, defaultOpen, forceOpen, plan, bare }: { step: Step; timing?: ToolCallTiming; now: number; at?: string; nested?: boolean; defaultOpen?: boolean; forceOpen?: boolean; plan?: boolean; bare?: boolean }) {
+export function StepRow({ step, timing, now, at, nested, defaultOpen, forceOpen, plan }: { step: Step; timing?: ToolCallTiming; now: number; at?: string; nested?: boolean; defaultOpen?: boolean; forceOpen?: boolean; plan?: boolean }) {
   const { row } = step;
   const ctx = useContext(TurnContext);
   const { cards } = ctx;
   const running = step.state === 'running';
   const cut = step.state === 'cut';
-  const plain = row.object === undefined ? undefined : row.dir !== undefined ? <PathObject dir={row.dir} name={row.object} /> : row.icon === 'canvas' && /^cv_\w+$/.test(row.object) ? <CanvasName id={row.object} /> : row.object;
+  const plain = row.object === undefined ? undefined : row.dir !== undefined ? <PathObject dir={row.dir} name={row.object} /> : row.object;
   const object = row.ref ? (
     <>
       <CardRefLink ref_={row.ref} cards={cards} />
@@ -119,12 +102,8 @@ export function StepRow({ step, timing, now, at, nested, defaultOpen, forceOpen,
       autoOpen={isLiveShell(step)}
       className={'step' + (plan ? ' plan' : '') + (step.kind === 'tool' && isDangerous(step.name, step.input) ? ' danger' : '')}
     >
-      {bare ? null : (
-        <>
-          {ctx.cardId && step.result?.images?.length ? <ImageThumbs cardId={ctx.cardId} images={step.result.images} /> : null}
-          {stepDetail(step, ctx, timing)}
-        </>
-      )}
+      {ctx.cardId && step.result?.images?.length ? <ImageThumbs cardId={ctx.cardId} images={step.result.images} /> : null}
+      {stepDetail(step, ctx, timing)}
     </ChatRow>
   );
 }
@@ -172,7 +151,7 @@ export function StepsGroup({ steps, timings, now, at, failedEnd }: { steps: Step
 }
 
 /**
- * A step's expanded view: web tools (#65), card & team tools (#62), files & shell (#63), canvas, memory and schedules (#64), the plan's
+ * A step's expanded view: web tools (#65), card & team tools (#62), files & shell (#63), memory and schedules (#64), the plan's
  * checklist, thinking text, else input JSON + output. null: nothing to expand.
  */
 function stepDetail(step: Step, ctx: DetailContext, timing?: ToolCallTiming): ReactNode {
@@ -183,7 +162,7 @@ function stepDetail(step: Step, ctx: DetailContext, timing?: ToolCallTiming): Re
   if (card) return card;
   const file = fileDetail(step, timing);
   if (file) return file;
-  const other = step.result?.isError ? undefined : canvasDetail(step, ctx);
+  const other = step.result?.isError ? undefined : teamDetail(step, ctx);
   if (other !== undefined) return other;
   const todos = step.name === 'todo_write' ? todoList(step.input) : null;
   if (todos && !step.result?.isError)
@@ -226,27 +205,36 @@ function useNow(on: boolean): number {
   return now;
 }
 
-const ARTIFACT_KIND: Record<Artifact['kind'], string> = { doc: 'Document', page: 'Page', diagram: 'Diagram', whiteboard: 'Whiteboard' };
-const ARTIFACT_DOC_KIND = { doc: 'markdown', page: 'html', diagram: 'diagram', whiteboard: 'whiteboard' } as const satisfies Record<Artifact['kind'], Doc['kind']>;
-
-/** A document the agent opened in the panel: a chip in the thread; clicking it shows it there again. */
-export function ArtifactChip({ art, onOpen }: { art: Artifact; onOpen?(ref: DocRef): void }) {
+/**
+ * An artifact an agent created, updated or showed: a card in the thread (#120) that stays on its version. « Kind · vN »,
+ * « Updated to vN · Kind » after an update, « · vM is the latest » once a newer version exists; clicking shows that
+ * version in the panel.
+ */
+export function ArtifactChip({ art, stream, onOpen }: { art: Artifact; stream: MessageStream; onOpen?(ref: DocRef): void }) {
+  const latest = useLatestVersion(art.docId, stream);
   const body = (
     <>
       <span className={'art-icon ' + art.kind} aria-hidden="true">
-        <KindIcon kind={ARTIFACT_DOC_KIND[art.kind]} />
+        <KindIcon kind={art.kind} />
       </span>
       <span className="art-text">
         <span className="art-title">{art.title}</span>
         <span className="art-meta">
-          {ARTIFACT_KIND[art.kind]} · {art.where.replace(/^canvas /, '')} · v{art.version}
+          {art.updated ? (
+            <>
+              <span className="art-upd">Updated to v{art.version}</span> · {KIND_WORD[art.kind]}
+            </>
+          ) : (
+            `${KIND_WORD[art.kind]} · v${art.version}`
+          )}
           {art.section ? ` · #${art.section}` : ''}
+          {latest !== null && latest > art.version && <span className="art-old"> · v{latest} is the latest</span>}
         </span>
       </span>
     </>
   );
   return onOpen ? (
-    <button type="button" className="artifact" title="Show it in the panel" onClick={() => onOpen({ docId: art.docId, version: art.version, section: art.section, label: art.title })}>
+    <button type="button" className="artifact" title={`Show v${art.version} in the panel`} onClick={() => onOpen({ docId: art.docId, version: art.version, section: art.section, label: art.title })}>
       {body}
       <span className="art-open">Open</span>
     </button>

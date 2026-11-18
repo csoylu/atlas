@@ -1,10 +1,11 @@
 import { useEffect, useState } from 'react';
-import type { Doc, DocRef, PanelTab } from '@atlas/shared';
+import { KIND_WORD, type Doc, type DocRef, type PanelTab } from '@atlas/shared';
 import { api } from './api.ts';
 import type { MessageStream } from './useMessages.ts';
 import { activeTab, byline, panelMode, type PanelMode } from './docPanel.ts';
 import { ArtifactViewer, KindIcon } from './Viewer.tsx';
 import { Icon } from './ScreenHeader.tsx';
+import { PopItem } from './HeadMenu.tsx';
 import { libraryHref } from './library.ts';
 
 /** What « Ask about this » puts in the composer: the reference sent with the message and the chip's label. */
@@ -42,14 +43,16 @@ export function usePanelMode(): PanelMode {
 }
 
 /**
- * The panel beside a direct chat (design §16 « Chat », mockup linear.html?screen=chat): the shared viewer with the
- * chat's documents as tabs, « Open in Library », close; « opened by @x · attached to card Y » and « Ask about this ».
+ * The panel beside a direct chat (#120, mockup #106 v2): the shared viewer with the chat's artifacts as tabs, in ONE
+ * head row: tabs, version, Latest, Full size, ⋯ (opened by, folder, path, source, Open in the Library), ×. On a phone
+ * (full) it is the whole screen with « ‹ Back ». A chat card asks for its own version with `want`.
  */
 export function DocPanel(props: {
   chatId: string;
   tabs: PanelTab[];
   mode: PanelMode;
   userName: string | null;
+  want: { docId: string; version: number; key: string } | null;
   stream: MessageStream;
   onAsk(q: Quote): void;
   onOpenCard(id: string): void;
@@ -57,61 +60,78 @@ export function DocPanel(props: {
   onError(e: unknown): void;
 }) {
   const { chatId, tabs, onError } = props;
+  const [full, setFull] = useState(false);
   const tab = activeTab(tabs);
-  if (!tab) return null;
-  const doc = tab.doc;
-  const unseen = tab.seenVersion < doc.version && doc.kind !== 'whiteboard';
+  const doc = tab?.doc;
+  const unseen = !!tab && !!doc && tab.seenVersion < doc.version;
+  // Pages, diagrams and links have no section marks: showing the new version is seeing it.
+  useEffect(() => {
+    if (!doc || !unseen || doc.kind === 'markdown') return;
+    const t = setTimeout(() => void api.panelSeen(chatId, doc.id).catch(onError), 1500);
+    return () => clearTimeout(t);
+  }, [chatId, doc, unseen, onError]);
+  if (!tab || !doc) return null;
+  const phone = props.mode === 'full';
+  const mode = phone || full ? 'full' : props.mode;
   return (
-    <aside className={'side-doc ' + props.mode} aria-label="Documents">
+    <aside className={'side-doc ' + mode} aria-label="Artifacts">
       <ArtifactViewer
         doc={doc}
         mode="panel"
         tabs={tabs.map((t) => ({
           doc: t.doc,
-          dot: t.seenVersion < t.doc.version && t.doc.kind !== 'whiteboard',
+          dot: t.seenVersion < t.doc.version,
           onClose: () => void api.panelClose(chatId, t.doc.id).catch(onError),
         }))}
         onTab={(d) => void api.panelFocus(chatId, d.id).catch(onError)}
-        actions={
+        lead={
+          (phone || props.mode === 'overlay') && (
+            <button type="button" className="sd-btn sd-back" title="Back to the chat" onClick={props.onHide}>
+              ‹ Back
+            </button>
+          )
+        }
+        want={props.want && props.want.docId === doc.id ? props.want : null}
+        tools={
+          !phone && (
+            <button
+              type="button"
+              className={'sd-btn icon-only' + (full ? ' on' : '')}
+              title={full ? 'Back to the side panel' : 'Full size'}
+              aria-label={full ? 'Back to the side panel' : 'Full size'}
+              aria-pressed={full}
+              onClick={() => setFull(!full)}
+            >
+              {full ? <Icon.shrink /> : <Icon.expand />}
+            </button>
+          )
+        }
+        by={byline({ openedBy: tab.openedBy, cardTitle: null }, props.userName)}
+        menu={(close) => (
           <>
-            <a className="sd-btn icon-only" href={libraryHref(doc.id)} title="Open in Library" aria-label="Open in Library">
-              <Icon.ext />
-            </a>
-            {props.mode !== 'side' && (
-              <button className="sd-btn" title="Back to the chat" onClick={props.onHide}>
-                ‹ Chat
-              </button>
+            {doc.cardId && tab.cardTitle && (
+              <PopItem
+                icon={<Icon.board />}
+                onClick={() => {
+                  close();
+                  props.onOpenCard(doc.cardId!);
+                }}
+              >
+                Open the task “{tab.cardTitle}”
+              </PopItem>
             )}
-            <button className="sd-btn icon-only" title="Close the panel" aria-label="Close the panel" onClick={() => api.panelClose(chatId, null).catch(onError)}>
+            <a className="pop-row" role="menuitem" href={libraryHref(doc.id)} onClick={close}>
+              <Icon.library />
+              <span className="pop-t">Open in the Library</span>
+            </a>
+          </>
+        )}
+        end={
+          !phone && (
+            <button type="button" className="sd-btn icon-only" title="Close the panel" aria-label="Close the panel" onClick={() => api.panelClose(chatId, null).catch(onError)}>
               <Icon.x />
             </button>
-          </>
-        }
-        meta={
-          <>
-            <span className="sd-by-t">
-              {byline(tab, props.userName).replace(/ · attached to card .*$/, '')}
-              {tab.cardTitle && doc.cardId && (
-                <>
-                  {' · attached to task '}
-                  <button className="sd-link" onClick={() => props.onOpenCard(doc.cardId!)}>
-                    “{tab.cardTitle}”
-                  </button>
-                </>
-              )}
-            </span>
-            <span className="sd-sp" />
-            {unseen && doc.kind !== 'markdown' && (
-              <button className="doc-chg" title="Mark as seen" onClick={() => api.panelSeen(chatId, doc.id).catch(onError)}>
-                changed
-              </button>
-            )}
-            {doc.kind !== 'markdown' && (
-              <button className="sd-ask" onClick={() => props.onAsk({ ref: { docId: doc.id, version: doc.version, section: null }, label: doc.title })}>
-                Ask about this
-              </button>
-            )}
-          </>
+          )
         }
         section={tab.section}
         scrollKey={tab.focusedAt}
@@ -119,7 +139,6 @@ export function DocPanel(props: {
         stream={props.stream}
         onAsk={(s, v) => props.onAsk({ ref: { docId: doc.id, version: v, section: s?.id ?? null }, label: s?.title ? `${doc.title} › ${s.title}` : doc.title })}
         onSeen={() => void api.panelSeen(chatId, doc.id).catch(onError)}
-        onOpenCard={props.onOpenCard}
         onError={onError}
       />
     </aside>
@@ -130,7 +149,7 @@ export function DocPanel(props: {
  * The documents attached to a card (ticket modal, inbox item): a list; picking one shows it below in the shared
  * viewer, the card's other documents as tabs. « Open in panel » (when given) shows it beside the card's chat.
  */
-export function CardDocs({ cardId, stream, onOpenInPanel, onOpenCard, onError }: { cardId: string; stream: MessageStream; onOpenInPanel?(doc: Doc): void; onOpenCard?(id: string): void; onError(e: unknown): void }) {
+export function CardDocs({ cardId, stream, onOpenInPanel, onError }: { cardId: string; stream: MessageStream; onOpenInPanel?(doc: Doc): void; onOpenCard?(id: string): void; onError(e: unknown): void }) {
   const [docs, setDocs] = useState<Doc[]>([]);
   const [shown, setShown] = useState<string | null>(null);
   useEffect(() => {
@@ -142,7 +161,7 @@ export function CardDocs({ cardId, stream, onOpenInPanel, onOpenCard, onError }:
   const doc = docs.find((d) => d.id === shown) ?? null;
   return (
     <>
-      <h3 className="cm-h">Documents</h3>
+      <h3 className="cm-h">Artifacts</h3>
       <div className="cm-docs">
         {docs.map((d) => (
           <button key={d.id} className={'cm-doc' + (d.id === shown ? ' on' : '')} aria-expanded={d.id === shown} onClick={() => setShown(d.id === shown ? null : d.id)}>
@@ -151,7 +170,7 @@ export function CardDocs({ cardId, stream, onOpenInPanel, onOpenCard, onError }:
             </span>
             <span className="cm-doc-title">{d.title}</span>
             <span className="cm-doc-meta">
-              {d.path ?? 'whiteboard'} · v{d.version}
+              {KIND_WORD[d.kind]} · v{d.version}
             </span>
             <span className="cm-doc-open">{d.id === shown ? 'hide' : 'show ↓'}</span>
           </button>
@@ -163,23 +182,31 @@ export function CardDocs({ cardId, stream, onOpenInPanel, onOpenCard, onError }:
           mode="inline"
           tabs={docs.length > 1 ? docs.map((d) => ({ doc: d })) : undefined}
           onTab={(d) => setShown(d.id)}
-          actions={
+          menu={(close) => (
             <>
               {onOpenInPanel && (
-                <button className="sd-btn" title="Show it beside the task's chat" onClick={() => onOpenInPanel(doc)}>
-                  Open in panel
-                </button>
+                <PopItem
+                  icon={<Icon.panel />}
+                  onClick={() => {
+                    close();
+                    onOpenInPanel(doc);
+                  }}
+                >
+                  Show it beside the task's chat
+                </PopItem>
               )}
-              <a className="sd-btn icon-only" href={libraryHref(doc.id)} title="Open in Library" aria-label="Open in Library">
-                <Icon.ext />
+              <a className="pop-row" role="menuitem" href={libraryHref(doc.id)} onClick={close}>
+                <Icon.library />
+                <span className="pop-t">Open in the Library</span>
               </a>
-              <button className="sd-btn icon-only" title="Hide" aria-label="Hide the document" onClick={() => setShown(null)}>
-                <Icon.x />
-              </button>
             </>
+          )}
+          end={
+            <button type="button" className="sd-btn icon-only" title="Hide" aria-label="Hide the artifact" onClick={() => setShown(null)}>
+              <Icon.x />
+            </button>
           }
           stream={stream}
-          onOpenCard={onOpenCard}
           onError={onError}
         />
       )}
