@@ -13,7 +13,6 @@ import { FileLog } from './fileLog.ts';
 import { Snapshots } from './snapshots.ts';
 import { Dispatcher } from './dispatcher.ts';
 import { Settings } from './settings.ts';
-import { Canvases } from './canvas.ts';
 import { Documents } from './documents.ts';
 import { workdirOf } from './agents.ts';
 import { Memories } from './memory.ts';
@@ -89,7 +88,6 @@ export interface Engine {
   slash: Slash;
   dispatcher: Dispatcher;
   settings: Settings;
-  canvases: Canvases;
   documents: Documents;
   memories: Memories;
   cleanup: MemoryCleanup;
@@ -133,7 +131,6 @@ export async function startEngine(opts: EngineOptions): Promise<Engine> {
   const claude = new ClaudePlan(bus, opts.secrets, env, plans, opts.claude);
   models.setClaude(claude);
   const usage = new Usage(db, bus);
-  const canvases = new Canvases(db, bus);
   const memories = new Memories(db, bus);
   const schedules = new Schedules(db, bus, kanban);
   const cleanup = new MemoryCleanup(db, bus, memories);
@@ -141,12 +138,12 @@ export async function startEngine(opts: EngineOptions): Promise<Engine> {
   const voice = opts.voice ? new Voice(db, bus, opts.voice) : null;
   let url = '';
   const voiceChat = opts.voice ? new VoiceChat(db, bus, kanban, agents, () => url) : null;
-  const documents = new Documents(db, bus, kanban, canvases, (id) => workdirOf(agents.get(id), opts.dataDir));
+  const documents = new Documents(db, bus, kanban, (id) => workdirOf(agents.get(id), opts.dataDir));
   const fileLog = new FileLog(db, new Snapshots(join(opts.dataDir, 'checkpoints')));
   const review = new MemoryReview(db, kanban, memories, models, agents, settings, usage);
   if (opts.memoryReview === false) review.after = () => {};
   const effects = new SideEffects(db, kanban, memories, schedules);
-  const runner = new Runner(db, bus, kanban, agents, models, canvases, memories, schedules, { fileLog, effects, dataDir: opts.dataDir, leaseMs: opts.leaseMs, maxTurns: opts.maxTurns, usage, user: () => settings.user(), documents, cleanup, review, isVoiceChat: voiceChat ? (id) => voiceChat.isVoiceChat(id) : undefined, engine: () => ({ url, cookie: () => (auth.enabled ? auth.issue().token : null), answer: (method, path) => screenshotAnswer(kanban, method, path) }) });
+  const runner = new Runner(db, bus, kanban, agents, models, memories, schedules, { fileLog, effects, dataDir: opts.dataDir, leaseMs: opts.leaseMs, maxTurns: opts.maxTurns, usage, user: () => settings.user(), documents, cleanup, review, isVoiceChat: voiceChat ? (id) => voiceChat.isVoiceChat(id) : undefined, engine: () => ({ url, cookie: () => (auth.enabled ? auth.issue().token : null), answer: (method, path) => screenshotAnswer(kanban, method, path) }) });
   const rewinds = new Rewinds(db, bus, kanban, agents, runner, opts.dataDir, fileLog, effects);
   const dispatcher = new Dispatcher(bus, kanban, agents, models, settings, runner);
   const slash = new Slash(db, bus, kanban, runner);
@@ -171,7 +168,6 @@ export async function startEngine(opts: EngineOptions): Promise<Engine> {
     slash,
     dispatcher,
     settings,
-    canvases,
     documents,
     memories,
     cleanup,
@@ -198,6 +194,13 @@ export async function startEngine(opts: EngineOptions): Promise<Engine> {
     server.listen(opts.port, host, () => resolve());
   });
   // Finish a rewind a stopped engine left half done, before any run resumes and touches the files (rule 2).
+  // Canvases were replaced by artifacts (#120): each one left in the archive becomes an html page, once.
+  try {
+    const n = documents.convertCanvases();
+    if (n) console.log(`converted ${n} canvas(es) to artifacts`);
+  } catch (e) {
+    console.error('canvas conversion failed', e);
+  }
   await rewinds.recover().catch((e: unknown) => console.error('rewind recovery failed', e));
   runner.start();
   // Watch/autostart the local server; off by default for in-memory (test) engines so they never touch a real Ollama.
@@ -222,7 +225,6 @@ export async function startEngine(opts: EngineOptions): Promise<Engine> {
     slash,
     dispatcher,
     settings,
-    canvases,
     documents,
     memories,
     cleanup,

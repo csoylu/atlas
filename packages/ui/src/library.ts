@@ -1,13 +1,13 @@
 import type { Doc, DocKind } from '@atlas/shared';
 
-/** The Library's type tabs (design §16): All, Docs, Pages, Diagrams, Whiteboards. */
-export type LibTab = 'all' | 'docs' | 'pages' | 'diagrams' | 'whiteboards';
+/** The Library's type tabs (design §16, #120): All, Docs, Pages, Diagrams, Links. */
+export type LibTab = 'all' | 'docs' | 'pages' | 'diagrams' | 'links';
 export const LIB_TABS: { id: LibTab; label: string; kind: DocKind | null }[] = [
   { id: 'all', label: 'All', kind: null },
   { id: 'docs', label: 'Docs', kind: 'markdown' },
   { id: 'pages', label: 'Pages', kind: 'html' },
   { id: 'diagrams', label: 'Diagrams', kind: 'diagram' },
-  { id: 'whiteboards', label: 'Whiteboards', kind: 'whiteboard' },
+  { id: 'links', label: 'Links', kind: 'url' },
 ];
 
 /** Filters: agent (whose workspace / who made it), card (attached to), chat (opened in or came from). null = any. */
@@ -16,8 +16,11 @@ export interface LibFilter {
   card: string | null;
   chat: string | null;
 }
+/** The folder column: every artifact, the Unfiled ones, or one folder (its id). */
+export type LibFolder = 'all' | 'unfiled' | string;
 export interface LibView {
   tab: LibTab;
+  folder: LibFolder;
   filter: LibFilter;
 }
 const NO_FILTER: LibFilter = { agent: null, card: null, chat: null };
@@ -33,11 +36,28 @@ export function parseLibView(raw: string | null): LibView {
   const tab = LIB_TABS.some((t) => t.id === v.tab) ? v.tab! : 'all';
   const f = (v.filter ?? {}) as Partial<LibFilter>;
   const s = (x: unknown) => (typeof x === 'string' && x ? x : null);
-  return { tab, filter: { agent: s(f.agent), card: s(f.card), chat: s(f.chat) } };
+  return { tab, folder: s(v.folder) ?? 'all', filter: { agent: s(f.agent), card: s(f.card), chat: s(f.chat) } };
 }
 
 export const filterCount = (f: LibFilter) => (f.agent ? 1 : 0) + (f.card ? 1 : 0) + (f.chat ? 1 : 0);
 export const clearFilter = (): LibFilter => ({ ...NO_FILTER });
+
+export function inFolder(d: Doc, folder: LibFolder): boolean {
+  return folder === 'all' ? true : folder === 'unfiled' ? d.folderId === null : d.folderId === folder;
+}
+
+/** Artifacts per folder column entry: all, unfiled, and each folder id. */
+export function folderCounts(docs: Doc[]): Map<LibFolder, number> {
+  const n = new Map<LibFolder, number>([['all', docs.length], ['unfiled', 0]]);
+  for (const d of docs) {
+    const k = d.folderId ?? 'unfiled';
+    n.set(k, (n.get(k) ?? 0) + 1);
+  }
+  return n;
+}
+
+/** « Recently modified »: the 4 latest-changed, as live tiles on top of the list. */
+export const recentDocs = (docs: Doc[], n = 4): Doc[] => [...docs].sort((a, b) => b.updatedAt.localeCompare(a.updatedAt)).slice(0, n);
 
 export function matches(d: Doc, tab: LibTab, f: LibFilter): boolean {
   const kind = LIB_TABS.find((t) => t.id === tab)?.kind;
@@ -50,7 +70,7 @@ export function matches(d: Doc, tab: LibTab, f: LibFilter): boolean {
 
 const WEEK = 7 * 24 * 3600_000;
 
-/** Pinned on top, then this week, then earlier; latest first in each. Empty groups are left out. */
+/** Pinned on top (of the folder shown), then this week, then earlier; latest first in each. Empty groups are left out. */
 export function groupDocs(docs: Doc[], now = Date.now()): { id: 'pinned' | 'week' | 'earlier'; label: string; docs: Doc[] }[] {
   const sorted = [...docs].sort((a, b) => b.updatedAt.localeCompare(a.updatedAt));
   const groups = [
@@ -62,7 +82,7 @@ export function groupDocs(docs: Doc[], now = Date.now()): { id: 'pinned' | 'week
 }
 
 /** The short type badge of a row. */
-export const TYPE_LABEL: Record<DocKind, string> = { markdown: 'md', html: 'html', diagram: 'svg', whiteboard: 'board' };
+export const TYPE_LABEL: Record<DocKind, string> = { markdown: 'md', html: 'html', diagram: 'svg', url: 'link' };
 
 /** « just now », « 2 min ago », « 3 h ago », « yesterday », « 12 Nov »: the viewer's « v2 · 2 min ago ». */
 export function relAgo(iso: string, now = Date.now()): string {

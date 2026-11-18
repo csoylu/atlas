@@ -55,6 +55,7 @@ describe('store', () => {
       db.prepare('INSERT INTO schema_migrations (name, applied_at) VALUES (?, ?)').run(f, 'x');
     }
     db.prepare("INSERT INTO conversations (id, kind) VALUES ('k', 'chat')").run();
+    db.prepare("INSERT INTO conversations (id, kind) VALUES ('cv', 'chat')").run();
     db.prepare("INSERT INTO cards (id, title, status, conversation_id, created_by, created_at, updated_at) VALUES ('c', 't', 'triage', 'k', 'can', 'x', 'x')").run();
     db.prepare("INSERT INTO messages (id, conversation_id, seq, role, author, content, at) VALUES ('m1', 'k', 1, 'user', 'can', '[]', 'x'), ('m2', 'k', 2, 'assistant', 'atlas', '[]', 'x')").run();
     db.prepare(`INSERT INTO card_events (card_id, at, kind, payload) VALUES ('c', 'x', 'created', '{"by":"can"}')`).run();
@@ -122,7 +123,7 @@ describe('store', () => {
       version.run(id, JSON.stringify(nodes));
       db.prepare("INSERT INTO documents (id, agent_id, canvas_id, kind, title, version, updated_by, updated_at) VALUES (?, 'atlas', ?, 'whiteboard', ?, 1, 'user', 'x')").run('doc_' + id, id, id);
     }
-    expect(migrate(db)).toContain('0037_drop_drawings.sql');
+    db.exec(readFileSync(join(dir, '0037_drop_drawings.sql'), 'utf8'));
     expect(db.prepare('SELECT id FROM canvases ORDER BY id').all()).toEqual([{ id: 'cv_empty' }, { id: 'cv_mixed' }]);
     expect(db.prepare('SELECT canvas_id FROM documents ORDER BY canvas_id').all()).toEqual([{ canvas_id: 'cv_empty' }, { canvas_id: 'cv_mixed' }]);
     const kinds = (json: string) => (JSON.parse(json) as { kind: string }[]).map((n) => n.kind);
@@ -131,6 +132,43 @@ describe('store', () => {
       ['cv_empty', []],
       ['cv_mixed', ['html']],
     ]);
+    db.close();
+  });
+
+  it('0041 artifacts: whiteboard docs go, file docs stay (url kind and folders allowed), canvases stay archived', () => {
+    const dir = join(dirname(fileURLToPath(import.meta.url)), 'migrations');
+    const db = new Database(':memory:');
+    db.exec('CREATE TABLE schema_migrations (name TEXT PRIMARY KEY, applied_at TEXT NOT NULL)');
+    db.pragma('foreign_keys = OFF');
+    for (const f of readdirSync(dir).filter((f) => /^\d{4}_.+\.sql$/.test(f) && f < '0041').sort()) {
+      db.exec(readFileSync(join(dir, f), 'utf8'));
+      db.prepare('INSERT INTO schema_migrations (name, applied_at) VALUES (?, ?)').run(f, 'x');
+    }
+    db.pragma('foreign_keys = ON');
+    db.prepare("INSERT INTO canvases (id, name, nodes, version, updated_by, updated_at) VALUES ('cv_1', 'Board', '[]', 1, 'user', 'x')").run();
+    db.pragma('foreign_keys = OFF');
+    db.prepare("INSERT INTO conversations (id, kind) VALUES ('cv', 'chat')").run();
+    db.prepare("INSERT INTO cards (id, title, status, conversation_id, created_at, updated_at, created_by) VALUES ('c_1', 'chat', 'todo', 'cv', 'x', 'x', 'user')").run();
+    const doc = db.prepare('INSERT INTO documents (id, agent_id, path, canvas_id, kind, title, version, updated_by, updated_at, pinned_at) VALUES (?, ?, ?, ?, ?, ?, 1, ?, ?, ?)');
+    doc.run('doc_w', 'atlas', null, 'cv_1', 'whiteboard', 'Board', 'user', 'x', null);
+    doc.run('doc_f', 'atlas', 'docs/a.md', null, 'markdown', 'A', 'atlas', 'x', 'p');
+    for (const id of ['doc_w', 'doc_f']) {
+      db.prepare("INSERT INTO document_versions VALUES (?, 1, 'c', 'atlas', 'x')").run(id);
+      db.prepare("INSERT INTO panel_tabs VALUES ('c_1', ?, 'atlas', 'x', 'x', NULL, 1)").run(id);
+    }
+    db.pragma('foreign_keys = ON');
+    expect(migrate(db)).toContain('0041_artifacts.sql');
+    expect(db.prepare('SELECT id, kind, pinned_at, folder_id FROM documents').all()).toEqual([{ id: 'doc_f', kind: 'markdown', pinned_at: 'p', folder_id: null }]);
+    expect(db.prepare('SELECT doc_id FROM document_versions').all()).toEqual([{ doc_id: 'doc_f' }]);
+    expect(db.prepare('SELECT doc_id FROM panel_tabs').all()).toEqual([{ doc_id: 'doc_f' }]);
+    expect(db.prepare('SELECT id FROM canvases').all()).toEqual([{ id: 'cv_1' }]);
+    db.prepare("INSERT INTO folders VALUES ('fld_1', 'Feeds', 'x')").run();
+    db.prepare("INSERT INTO documents (id, agent_id, path, kind, title, version, updated_by, updated_at, folder_id) VALUES ('doc_u', 'atlas', 'links/a.url', 'url', 'A', 1, 'atlas', 'x', 'fld_1')").run();
+    db.prepare("DELETE FROM folders WHERE id = 'fld_1'").run();
+    expect(db.prepare("SELECT folder_id FROM documents WHERE id = 'doc_u'").get()).toEqual({ folder_id: null });
+    // Cascades still point at the rebuilt table.
+    db.prepare("DELETE FROM documents WHERE id = 'doc_f'").run();
+    expect(db.prepare('SELECT COUNT(*) AS n FROM document_versions').get()).toEqual({ n: 0 });
     db.close();
   });
 });

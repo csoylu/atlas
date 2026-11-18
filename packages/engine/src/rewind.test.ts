@@ -314,7 +314,7 @@ describe('rewind', () => {
         call('task_create', { title: 'Worked task', status: 'todo' }),
         call('memory_add', { kind: 'fact', text: 'the build lives in dist' }),
         call('schedule_create', { prompt: 'digest', title: 'Daily digest', cron: '0 9 * * *' }),
-        call('canvas_create', { name: 'Sketch' }),
+        call('artifact_create', { kind: 'markdown', title: 'Sketch', content: '# Sketch' }),
         ...write('echo git push origin main'),
       ],
       text('did things'),
@@ -339,7 +339,7 @@ describe('rewind', () => {
       ['task', 'kept', 'stays'],
       ['memory', 'undone', 'archived'],
       ['schedule', 'undone', 'turned off'],
-      ['canvas', 'kept', 'stays'],
+      ['artifact', 'kept', 'stays'],
       ['push', 'kept', 'stays'],
       ['message', 'undone', 'withdrawn'],
     ]);

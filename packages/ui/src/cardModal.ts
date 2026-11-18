@@ -1,4 +1,4 @@
-import { CARD_REF_RE, parseCardRef, type Card, type Run, type TodoItem } from '@atlas/shared';
+import { CARD_REF_RE, docKindOf, parseCardRef, type Card, type DocKind, type Run, type TodoItem } from '@atlas/shared';
 
 /**
  * Pure helpers for the ticket modal (CardModal): the `?card=` hash parameter that opens it over any view, the live
@@ -133,23 +133,29 @@ export function todoList(input: unknown): TodoItem[] | null {
   return todos.every(ok) ? todos : null;
 }
 
-/** A document an agent showed with panel_open, read from the tool's result line: the chat shows it as a chip. */
+/**
+ * An artifact an agent created, updated or showed (artifact_create / artifact_update / panel_open, #120), read from the
+ * tool's result line « created|updated|unchanged|opened Title (doc_x, path, vN) … »: the chat shows it as a card that
+ * stays on that version.
+ */
 export interface Artifact {
   docId: string;
   version: number;
   title: string;
-  /** Workspace path, or « canvas <id> » for a whiteboard. */
+  /** Workspace path. */
   where: string;
-  kind: 'doc' | 'page' | 'diagram' | 'whiteboard';
+  kind: DocKind;
   section: string | null;
+  /** artifact_update made this version: the card says « Updated to vN ». */
+  updated: boolean;
 }
+const ARTIFACT_TOOLS = new Set(['artifact_create', 'artifact_update', 'panel_open']);
 export function artifactOf(name: string, input: unknown, result: string | undefined): Artifact | null {
-  if (name !== 'panel_open' || !result) return null;
-  // « opened <title> (doc_x, <path | canvas id>, vN) in the side panel… » or « <title> (…) is indexed… »
-  const m = /^(?:opened )?(.*) \((doc_[\w-]+), ([^()]+), v(\d+)\)/.exec(result);
+  if (!ARTIFACT_TOOLS.has(name) || !result) return null;
+  const m = /^(created|updated|unchanged|opened) (.*) \((doc_[\w-]+), ([^()]+), v(\d+)\)/.exec(result);
   if (!m) return null;
-  const where = m[3]!;
-  const kind = where.startsWith('canvas ') ? 'whiteboard' : /\.html?$/i.test(where) ? 'page' : /\.svg$/i.test(where) ? 'diagram' : 'doc';
+  const where = m[4]!;
+  const kind = docKindOf(where) ?? 'markdown';
   const section = input && typeof input === 'object' && typeof (input as { section?: unknown }).section === 'string' ? (input as { section: string }).section : null;
-  return { docId: m[2]!, version: Number(m[4]), title: m[1]!, where, kind, section };
+  return { docId: m[3]!, version: Number(m[5]), title: m[2]!, where, kind, section, updated: m[1] === 'updated' };
 }

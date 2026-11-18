@@ -4,7 +4,7 @@ import { thinkingRow, toolRow, type RowIcon, type RowModel, type ToolOutcome } f
 
 /**
  * An agent's turn in the chat (#59): its consecutive messages split into text, single steps, « N steps » groups and
- * pinned items that are never folded (inline canvas, document chip, the card_block question, the live plan).
+ * pinned items that are never folded (the artifact card, the card_block question, the live plan).
  */
 
 /** running: no result yet in a live turn · cut: no result and the run is over (stopped, interrupted). */
@@ -27,7 +27,7 @@ export interface Step {
   at: string;
 }
 
-export type Pin = 'canvas' | 'doc' | 'ask' | 'plan';
+export type Pin = 'doc' | 'ask' | 'plan';
 
 export type Segment =
   | { kind: 'text'; key: string; text: string }
@@ -36,14 +36,6 @@ export type Segment =
   | { kind: 'pin'; pin: Pin; step: Step };
 
 type Use = Extract<ContentBlock, { type: 'tool_use' | 'server_tool_use' }>;
-
-/** canvas_write({ id, show: [...] }) → the nodes to draw inline. */
-export function shownNodes(name: string, input: unknown): { canvasId: string; nodeIds: string[] } | null {
-  if (name !== 'canvas_write' || !input || typeof input !== 'object') return null;
-  const o = input as { id?: unknown; show?: unknown };
-  const ids = Array.isArray(o.show) ? o.show.filter((x): x is string => typeof x === 'string') : [];
-  return typeof o.id === 'string' && ids.length ? { canvasId: o.id, nodeIds: ids } : null;
-}
 
 /**
  * Split a turn (one agent's consecutive messages) into segments. 2+ tool calls in a row (text breaks the row) fold
@@ -103,7 +95,6 @@ function pinOf(s: Step, livePlan: boolean): Pin | null {
   const ok = s.result && !s.result.isError;
   if (currentToolName(s.name) === 'task_block') return 'ask';
   if (s.name === 'todo_write' && livePlan) return 'plan';
-  if (ok && shownNodes(s.name, s.input)) return 'canvas';
   if (ok && artifactOf(s.name, s.input, s.result!.content)) return 'doc';
   return null;
 }

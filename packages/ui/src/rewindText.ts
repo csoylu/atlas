@@ -20,7 +20,8 @@ export const EFFECT_KIND: Record<SideEffect['kind'], string> = {
   memory_change: 'Memory',
   schedule: 'Schedule',
   schedule_delete: 'Schedule deleted',
-  canvas: 'Canvas',
+  artifact: 'Artifact',
+  canvas: 'Canvas', // rows recorded before #120
   push: 'Pushed',
 };
 

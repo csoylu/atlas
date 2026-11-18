@@ -37,7 +37,7 @@ export interface Mark {
   agentMessages: number;
   memories: number;
   schedules: number;
-  canvases: number;
+  documents: number;
 }
 
 const PUSH = /\bgit\b[^\n;&|]*\bpush\b/;
@@ -54,7 +54,7 @@ export class SideEffects {
   /** Taken right before a synchronous tool call (nothing else writes in between). */
   mark(): Mark {
     const max = (t: string) => (this.db.prepare(`SELECT COALESCE(MAX(rowid), 0) AS n FROM ${t}`).get() as { n: number }).n;
-    return { cards: max('cards'), messages: max('messages'), agentMessages: max('agent_messages'), memories: max('memories'), schedules: max('schedules'), canvases: max('canvases') };
+    return { cards: max('cards'), messages: max('messages'), agentMessages: max('agent_messages'), memories: max('memories'), schedules: max('schedules'), documents: max('documents') };
   }
 
   /** After a tool call that succeeded: record what it did outside the chat, if anything. */
@@ -118,13 +118,14 @@ export class SideEffects {
       case 'schedule_delete':
         if (typeof i.id === 'string') add('schedule_delete', i.id, i.id);
         return;
-      case 'canvas_create':
-        for (const c of newer<{ id: string; name: string }>('canvases', mark.canvases, 'id, name')) add('canvas', c.id, `${c.name} created`);
+      case 'artifact_create':
+        for (const d of newer<{ id: string; title: string }>('documents', mark.documents, 'id, title')) add('artifact', d.id, `${d.title} created`);
         return;
-      case 'canvas_write': {
-        if (typeof i.id !== 'string') return;
-        const c = this.db.prepare('SELECT name FROM canvases WHERE id = ?').get(i.id) as { name: string } | undefined;
-        add('canvas', i.id, `${c?.name ?? i.id} edited`);
+      case 'artifact_update': {
+        const key = typeof i.artifact === 'string' ? i.artifact : typeof i.path === 'string' ? i.path : null;
+        if (!key) return;
+        const d = this.db.prepare('SELECT id, title FROM documents WHERE id = ? OR path = ?').get(key, key) as { id: string; title: string } | undefined;
+        add('artifact', d?.id ?? key, `${d?.title ?? key} updated`);
         return;
       }
     }

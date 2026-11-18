@@ -71,7 +71,7 @@ describe('UI type rules', () => {
   it('no literal font styles inline in tsx', () => {
     const bad: string[] = [];
     // The HTML renderer's starter page runs in its own sandboxed iframe (a user document, not Atlas UI): no tokens there.
-    const EXEMPT = ['canvas/renderers/html.tsx'];
+    const EXEMPT: string[] = [];
     for (const f of files(SRC).filter((f) => f.endsWith('.tsx') && !EXEMPT.includes(f.slice(SRC.length + 1)))) {
       const src = readFileSync(f, 'utf8');
       // style={{ fontSize: 13 }}, fontWeight, lineHeight, fontFamily, and SVG attributes fontSize="…"

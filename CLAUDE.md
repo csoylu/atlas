@@ -1,7 +1,7 @@
 # Atlas — instructions for Claude
 
 A personal agent harness: several named agents, each with its own model, tools and memory, working off a shared
-kanban board, on a schedule, with a shared canvas. One human user, who gives their name and a short description on
+kanban board, on a schedule, with shared artifacts. One human user, who gives their name and a short description on
 first launch (Settings → About you). Full design: `docs/design.md`. Read it before any structural change.
 
 ## Stack (decided)
@@ -9,15 +9,16 @@ first launch (Settings → About you). Full design: `docs/design.md`. Read it be
 - Engine: one Node process (`packages/engine`). Interface: React + Vite (`packages/ui`). Desktop: Electron (`apps/desktop`)
   wraps both. Server mode: the same engine on a VPS, UI opened in a browser.
 - SQLite (`better-sqlite3`, WAL mode) is the single source of truth. No second store, no JSON state files.
-- Canvas: our own board of html / url / markdown nodes. Diagrams are svg documents. Excalidraw was removed in v3
-  (17 Nov 2026, migration 0037 dropped drawing nodes); don't bring a whiteboard library back without asking.
+- Artifacts (#120, 18 Nov 2026): markdown, html, svg and url files in an agent's workspace, versioned, grouped in flat
+  Library folders. They replaced canvases and whiteboards (migration 0041; old canvases were converted to html pages
+  in the « Canvases » folder). No board, no x/y nodes: don't bring a canvas or whiteboard back without asking.
 - Models: Anthropic Messages API (API key), any OpenAI-compatible endpoint (llama.cpp, Ollama,
   LM Studio) for local models.
 
 ## Layout
 ```
 packages/engine   agent loop, tools, providers, scheduler, dispatcher, kanban, store (SQLite), HTTP + WebSocket API
-packages/ui       React app: chat, board, canvas, schedules, settings, logs
+packages/ui       React app: chat, board, Library (artifacts), schedules, settings, logs
 packages/shared   types and zod schemas shared by engine and UI (API contract)
 apps/desktop      Electron main process: opens the UI window. Dev: loads Vite (:5173), engine runs under system Node.
                   In-process engine (better-sqlite3 rebuilt for Electron) comes with packaging.
@@ -66,7 +67,7 @@ node scripts/orb-check/check.mjs   # voice orb overlay: screenshots of every sta
 
 **Responsive check** (`scripts/ui-check/check.mjs`, macOS: needs Google Chrome and Xcode's `swiftc`). Opens the running
 Atlas app's UI in headless Chrome at 1440 / 1100 / 900 / 390 px (390 = phone, touch) on every main screen: chat with
-pins, ticket modal, side panel, board, inbox, Library (list, a doc, a whiteboard), schedules, every settings page. It reports page-wide horizontal overflow (and
+pins, ticket modal, side panel, board, inbox, Library (list with tiles, search, a doc, its version picker), schedules, every settings page. It reports page-wide horizontal overflow (and
 the phone zoom-out it causes), text under 12px, text off-screen outside a scroller, pins or chat buttons covering
 messages or the composer, the modal or panel off-screen, uncaught page errors, and key labels that Apple Vision OCR
 (`ocr.swift`) can't read at confidence ≥ 0.5. Exit code 1 on any issue; screenshots + `report.json` in

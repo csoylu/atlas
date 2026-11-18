@@ -60,6 +60,7 @@ function ChatWithPanel(props: Parameters<typeof ChatView>[0] & { chat: Card }) {
   const mode = usePanelMode();
   const [quote, setQuote] = useState<Quote | null>(null);
   const [hidden, setHidden] = useState(false);
+  const [want, setWant] = useState<{ docId: string; version: number; key: string } | null>(null);
   // An agent opening or focusing a tab shows the panel again.
   const lastFocus = tabs.reduce((m, t) => (t.focusedAt > m ? t.focusedAt : m), '');
   useEffect(() => setHidden(false), [lastFocus]);
@@ -99,7 +100,11 @@ function ChatWithPanel(props: Parameters<typeof ChatView>[0] & { chat: Card }) {
         onShowDocs={() => setHidden(false)}
         onHideDocs={show ? () => setHidden(true) : undefined}
         onOpenRef={(r) => {
-          api.panelOpen(chat.id, r.docId, r.section).then(() => setHidden(false), onError);
+          // A chat card opens its own version (an older card shows the version it was posted with).
+          api.panelOpen(chat.id, r.docId, r.section).then(() => {
+            setWant({ docId: r.docId, version: r.version, key: String(Date.now()) });
+            setHidden(false);
+          }, onError);
         }}
       />
       {thread && (
@@ -128,6 +133,7 @@ function ChatWithPanel(props: Parameters<typeof ChatView>[0] & { chat: Card }) {
           tabs={tabs}
           mode={mode}
           userName={props.userName}
+          want={want}
           stream={stream}
           onOpenCard={props.onOpenCard}
           onHide={() => setHidden(true)}

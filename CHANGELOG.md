@@ -6,6 +6,10 @@ computed by `scripts/release/changelog.mjs` from the oldest entry to the newest,
 `Fixed` → patch, `Added` or `Changed` → minor, `Breaking` (data or settings stop working without action) → major.
 Never type a version number.
 
+## Changed · #120 · Artifacts replace canvases
+
+Canvases, nodes and whiteboards are gone. Agents now make artifacts: markdown documents, html pages, svg diagrams and links, each a versioned file (artifact_create, artifact_update, artifact_list, artifact_read). In the chat an artifact is a card that says its kind and version ("Updated to v3", "v4 is the latest") and opens that version. The viewer has one header row: tabs, a version picker (with "Restore vN"), Latest, Full size and a ⋯ menu (author, folder, path, source, open in the browser or the Library). The Library has flat folders (rename, delete moves items to Unfiled), "Recently modified" tiles that show the real content, pinned items on top, and search across titles and content. Existing canvases are converted once to html pages in a "Canvases" folder (migration 0041; the old table is kept as an archive). Converted canvases start at v1: their old version history stays only in the archived tables.
+
 ## Changed · #131 · A task waiting on another task or retrying later waits in Todo, not Blocked: Blocked now always means it needs you
 
 `task_block` with kind `dependency` now takes `waits_on` (task numbers): those tasks become the card's parents, the card waits in Todo with « waiting on #112 (running) » and starts by itself when they are done, with a note telling the agent so. A dependency with no task is refused (the agent creates the task first, or asks you). Temporary failures (rate limits, 5xx, every subscription paused until a reset, an agent's « retry later ») also wait in Todo with « retrying at 14:05 · why » and restart at that time. Neither shows the orange « ! », goes to the Inbox, or is reported to the chat. Both survive a restart. Cards already blocked as « waiting on other work » stay as they are. No migration.

@@ -3,42 +3,41 @@ import { join } from 'node:path';
 import { test, expect } from '../../harness/fixtures.ts';
 import { call, idleCard, tu, say } from '../../harness/audit.ts';
 
-test.describe('C · canvases, documents, side panel', () => {
-  test('[C01] canvas CRUD + versioned save: stale baseVersion 409 with current, bad node kind 400, rename, versions, restore, delete', async ({ atlas }) => {
-    const c = (await call(atlas, 'POST', '/canvases', { name: 'Board' })).body;
-    expect((await call(atlas, 'POST', '/canvases', { name: '' })).status).toBe(400);
-    const node = { id: 'n1', kind: 'markdown', x: 0, y: 0, w: 200, h: 100, text: 'hi' };
-    const s1 = await call(atlas, 'PUT', `/canvases/${c.id}`, { nodes: [node], baseVersion: c.version });
-    expect(s1.status).toBe(200);
-    const stale = await call(atlas, 'PUT', `/canvases/${c.id}`, { nodes: [], baseVersion: c.version });
-    expect(stale.status).toBe(409);
-    expect(stale.body.current).toBeTruthy();
-    expect((await call(atlas, 'PUT', `/canvases/${c.id}`, { nodes: [{ ...node, kind: 'excalidraw' }], baseVersion: s1.body.version })).status).toBe(400);
-    expect((await call(atlas, 'PATCH', `/canvases/${c.id}`, { name: 'Renamed' })).body.name).toBe('Renamed');
-    const vs = (await call(atlas, 'GET', `/canvases/${c.id}/versions`)).body;
-    expect(vs.length).toBeGreaterThanOrEqual(2);
-    expect((await call(atlas, 'POST', `/canvases/${c.id}/restore/${vs[vs.length - 1].version}`)).status).toBe(200);
-    expect((await call(atlas, 'DELETE', `/canvases/${c.id}`)).status).toBe(204);
-    expect((await call(atlas, 'GET', `/canvases/${c.id}`)).status).toBe(404);
+test.describe('C · artifacts, documents, side panel', () => {
+  test('[C01] artifact folders (#120): create, empty name 400, rename, move, pin, delete moves items to Unfiled; canvases API gone', async ({ atlas }) => {
+    const ch = await atlas.chat();
+    atlas.model.next(tu('artifact_create', { kind: 'markdown', title: 'Folder doc', content: '# Folder doc' }), say('done'));
+    await atlas.say(ch.id, 'make a doc');
+    await expect.poll(async () => (await call(atlas, 'GET', '/documents')).body.length, { timeout: 15_000 }).toBe(1);
+    const doc = (await call(atlas, 'GET', '/documents')).body[0];
+    const f = await call(atlas, 'POST', '/folders', { name: 'Specs' });
+    expect(f.status).toBe(201);
+    expect((await call(atlas, 'POST', '/folders', { name: '' })).status).toBe(400);
+    expect((await call(atlas, 'PATCH', `/folders/${f.body.id}`, { name: 'Designs' })).body.name).toBe('Designs');
+    expect((await call(atlas, 'POST', `/documents/${doc.id}/move`, { folderId: f.body.id })).body.folderId).toBe(f.body.id);
+    expect((await call(atlas, 'POST', `/documents/${doc.id}/pin`, { pinned: true })).body.pinned).toBe(true);
+    expect((await call(atlas, 'POST', `/documents/${doc.id}/pin`, { pinned: 'yes' })).status).toBe(400);
+    expect((await call(atlas, 'DELETE', `/folders/${f.body.id}`)).status).toBe(204);
+    expect((await call(atlas, 'GET', `/documents/${doc.id}`)).body.folderId ?? null).toBeNull();
+    expect((await call(atlas, 'GET', '/canvases')).status).toBe(404);
   });
 
-  test('[C02] canvas tools: canvas_create / canvas_write (upsert html+markdown) / canvas_list / canvas_read', async ({ atlas }) => {
+  test('[C02] artifact tools (#120): artifact_create / artifact_update (one replacement = one version) / artifact_list / artifact_read', async ({ atlas }) => {
     const ch = await atlas.chat();
     atlas.model.next(
-      tu('canvas_create', { name: 'Agent board' }),
-      (req: any) => {
-        const id = /cv_[0-9a-f]+/.exec(JSON.stringify(req.messages.at(-1)))?.[0] ?? 'missing';
-        return tu('canvas_write', { id, upsert: [{ id: 'a', kind: 'markdown', text: 'note' }, { id: 'b', kind: 'html', html: '<b>x</b>' }] });
-      },
-      tu('canvas_list', {}),
+      tu('artifact_create', { kind: 'html', title: 'Agent page', content: '<h1>One</h1>' }),
+      tu('artifact_update', { path: 'pages/agent-page.html', old_text: 'One', new_text: 'Two' }),
+      tu('artifact_list', {}),
+      tu('artifact_read', { path: 'pages/agent-page.html' }),
       say('done'),
     );
-    await atlas.say(ch.id, 'make a canvas');
-    await expect.poll(() => atlas.model.of('main').length, { timeout: 15_000 }).toBeGreaterThanOrEqual(4);
-    const list = (await call(atlas, 'GET', '/canvases')).body;
+    await atlas.say(ch.id, 'make a page');
+    await expect.poll(() => atlas.model.of('main').length, { timeout: 15_000 }).toBeGreaterThanOrEqual(5);
+    const list = (await call(atlas, 'GET', '/documents')).body;
     expect(list.length).toBe(1);
-    const cv = (await call(atlas, 'GET', `/canvases/${list[0].id}`)).body;
-    expect(cv.nodes.map((n: any) => n.id).sort()).toEqual(['a', 'b']);
+    expect(list[0].kind).toBe('html');
+    expect(list[0].version).toBe(2);
+    expect(JSON.stringify(atlas.model.of('main').at(-1))).toContain('<h1>Two</h1>');
   });
 
   test('[C03] documents: write_file docs/x.md is indexed; an outside edit makes a version; restore writes the file back; pin validates', async ({ atlas }) => {
@@ -98,12 +97,16 @@ test.describe('C · canvases, documents, side panel', () => {
     expect(JSON.stringify(r.body.content)).toContain('the quoted text');
   });
 
-  test('[C06] whiteboard document for a canvas shows in the Library', async ({ atlas }) => {
-    const c = (await call(atlas, 'POST', '/canvases', { name: 'WB' })).body;
-    const d = (await call(atlas, 'POST', `/canvases/${c.id}/document`)).body;
-    expect(d.id).toBeTruthy();
-    expect((await call(atlas, 'GET', '/documents')).body.some((x: any) => x.id === d.id)).toBe(true);
-    expect((await call(atlas, 'POST', `/canvases/ghost/document`)).status).toBe(404);
+  test('[C06] Library search (#120): titles and content across folders, a content match has a snippet', async ({ atlas }) => {
+    const ch = await atlas.chat();
+    atlas.model.next(tu('artifact_create', { kind: 'markdown', title: 'Release notes', content: '# Release notes\n\nThe zebra crossing is fixed.' }), say('done'));
+    await atlas.say(ch.id, 'notes');
+    await expect.poll(async () => (await call(atlas, 'GET', '/documents')).body.length, { timeout: 15_000 }).toBe(1);
+    const byTitle = (await call(atlas, 'GET', '/documents/search?q=release')).body;
+    expect(byTitle.map((h: any) => h.doc.title)).toEqual(['Release notes']);
+    const byBody = (await call(atlas, 'GET', '/documents/search?q=zebra')).body;
+    expect(byBody[0].snippet).toContain('zebra');
+    expect((await call(atlas, 'GET', '/documents/search?q=nothing-matches-this')).body).toEqual([]);
   });
 });
 
