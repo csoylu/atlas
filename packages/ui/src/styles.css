@@ -818,6 +818,8 @@ button.tool .icon { color: var(--muted); font-family: var(--mono); }
   .menu-open .scrim { display: block; position: fixed; inset: 0; z-index: 20; background: var(--scrim); }
   .workspace { padding: 0; }
   .screen-head { padding: 0 6px 0 0; gap: 4px; }
+  /* Mac app: the sidebar is a drawer here, so the header starts at the window's left edge, under the traffic lights (x 14–66). */
+  .electron-mac .screen-head { padding-left: 72px; }
   .menu-btn { display: inline-grid; place-items: center; width: 44px; height: 44px; color: var(--muted); }
   .crumb-sub { display: none; }
   .sheet { border-radius: 0; border-width: 0; }
