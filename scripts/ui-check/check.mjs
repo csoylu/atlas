@@ -15,6 +15,7 @@ import { createServer, request as httpRequest } from 'node:http';
 import { connect as netConnect } from 'node:net';
 import { join, dirname, extname } from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { SPEC_AUDIT, FONT_SCALE, FONT_EXCEPTIONS, MIN_CONTRAST } from './spec-audit.mjs';
 
 const HERE = dirname(fileURLToPath(import.meta.url));
 const CHROME = '/Applications/Google Chrome.app/Contents/MacOS/Google Chrome';
@@ -31,6 +32,8 @@ const ONLY = arg('only', '')?.split(',').filter(Boolean);
 const UI_DIR = arg('ui');
 // --theme dark|light: open every screen with ?theme= (a preview, nothing saved); default = the page's own choice.
 const THEME = arg('theme');
+// --spec: also audit the #112 visual pass from computed styles (font scale, contrast, measures, faces, chips).
+const SPEC = process.argv.includes('--spec');
 const MIN_FONT = 13; // CLAUDE.md « UI type rules »: no text under 13 px (#112)
 const MIN_CONF = 0.5;
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
@@ -440,6 +443,8 @@ const SCREENS = [
   { name: 'thread-images', hash: `#/chat/${chat.id}`, ready: '.chat-pin', pins: true, taskImages: true, then: { js: `const pin = [...document.querySelectorAll('.chat-pin')].find((p) => p.textContent.includes('Responsive pass')); if (!pin) throw new Error('no fixture pin'); pin.querySelector('.chat-pin-open').click(); await new Promise((r) => setTimeout(r, 400)); const n = document.querySelectorAll('.thread-panel .task-images .attach-thumb.saved').length; if (n !== 2) throw new Error('task images (#119): ' + n + ' images in the thread panel, want 2'); { const ti = document.querySelector('.thread-panel .task-images'), body = ti.closest('.cm-body'); body.scrollTop += ti.getBoundingClientRect().top - body.getBoundingClientRect().top - body.clientHeight / 3; }`, ready: '.thread-panel .task-images .attach-thumb.saved img' }, keys: ['.thread-panel .cm-title', '.thread-panel .cm-h', '.thread-panel .cm-foot button'] },
   { name: 'modal-blocked', hash: `#/chat/${chat.id}?card=${modalCard.id}`, ready: '.card-modal', blocked: true, keys: ['.cm-title', '.ask-kind', '.cm-foot button'] },
   { name: 'panel', hash: `#/chat/${chat.id}`, ready: '.side-doc', pins: true, panel: true, keys: ['.sd-tab', '.sd-ver-btn', '.side-doc h1', '.side-doc h2', '.chat-pin-title'] },
+  // The phone drawer (hamburger): sidebar rows 40 / 44 px, faces, 13 px labels.
+  { name: 'drawer', hash: `#/chat/${chat.id}`, ready: '.menu-btn', then: { js: `document.querySelector('.menu-btn').click(); await new Promise((r) => setTimeout(r, 400));`, ready: '.scrim' }, keys: ['.nav-item', '.side-group'] },
   { name: 'board', hash: '#/board', ready: '.board', keys: ['.board .name', '.card-title', '.nav-item'] },
   { name: 'inbox', hash: `#/inbox/${INBOX_CARDS[0].id}`, ready: '.ibx-q', inbox: true, keys: ['.ibx-det h2', '.ibx-opt b', '.ibx-k', '.ni-l2', '.nav-item'] },
   { name: 'inbox-list', hash: '#/inbox', ready: '.ni', inbox: true, keys: ['.ni-l2', '.ni-l3', '.ibx-group', '.tabbtn'] },
@@ -773,6 +778,7 @@ for (const w of WIDTHS) {
       if (!ready) s = { ...s, ready: s.then.ready };
     }
     const issues = ready ? await evaluate(CHECK(w, h)) : [`never showed ${s.ready}; page says: ` + (await evaluate('(async () => document.body.innerText.slice(0, 120) + " | " + self.origin + " " + location.href + " | " + (await fetch("/api/chats").then(r => r.status + " " + r.headers.get("content-type"), e => String(e))))()')).replace(/\s+/g, ' ')];
+    if (SPEC && ready) issues.push(...(await evaluate(SPEC_AUDIT(w, FONT_SCALE, FONT_EXCEPTIONS, MIN_CONTRAST))));
     issues.push(...pageErrors.splice(0));
     const keys = ready ? await evaluate(KEYS(s.keys)) : [];
     if (process.env.UI_CHECK_EVAL) console.log(key, JSON.stringify(await evaluate(process.env.UI_CHECK_EVAL)));
