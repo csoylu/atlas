@@ -218,7 +218,15 @@ export class Updater {
         throw new Error(`Could not reach GitHub: ${e instanceof Error ? (e.cause instanceof Error ? e.cause.message : e.message) : String(e)}`);
       });
       if (!res.ok) throw new Error(`GitHub answered ${res.status} ${res.statusText}${res.status === 403 ? ' (rate limit: try again later)' : ''}`);
-      const list = (await res.json()) as GitHubRelease[];
+      const body = await res.text();
+      let list: GitHubRelease[];
+      try {
+        list = JSON.parse(body) as GitHubRelease[];
+      } catch (e) {
+        // A captive portal or a proxy answers 200 with a web page: Master gets a sentence, the engine log the cause.
+        console.error(`update check: GitHub's answer is not JSON (${res.headers.get('content-type') ?? 'no content-type'}): ${body.slice(0, 200)}`, e);
+        throw new Error('GitHub did not answer with a release list (a wifi login page or a proxy may be in the way)');
+      }
       if (!Array.isArray(list)) throw new Error('GitHub answered something that is not a list of releases');
       const current = parseSemver(this.opts.version) ? this.opts.version : null;
       const arch = this.opts.host?.arch ?? (process.arch === 'arm64' ? 'arm64' : 'x64');

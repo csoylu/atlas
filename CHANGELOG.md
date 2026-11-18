@@ -6,6 +6,10 @@ computed by `scripts/release/changelog.mjs` from the oldest entry to the newest,
 `Fixed` → patch, `Added` or `Changed` → minor, `Breaking` (data or settings stop working without action) → major.
 Never type a version number.
 
+## Fixed · #162 · When GitHub answers the update check with a web page (wifi login page, proxy), Settings → About now says so in a sentence instead of a JSON parser message
+
+The check still fails loudly: the error reads « GitHub did not answer with a release list (a wifi login page or a proxy may be in the way) », and the engine log keeps the real cause (content type, start of the page, parser error).
+
 ## Added · #178 · A test that only passed on a retry is now named in the test output and as a warning in CI
 
 vitest retries a failed test (twice in CI), which let a flaky test pass quietly. A small reporter (`scripts/test/retryReporter.ts`) now lists every test that failed and then passed on a retry, by name and file: in the console, and on GitHub Actions as a `::warning` annotation (vitest's own « Flaky Tests » section in the job summary and its failure annotations are kept). A run with no flaky test prints nothing. It reports only; the run stays green, fix the test.
