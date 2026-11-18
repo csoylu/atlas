@@ -8,7 +8,7 @@ import { startEngine, type Engine } from './index.ts';
 import { FakeProvider } from './providers/fake.ts';
 import { toolInput, type ModelRequest } from './providers/types.ts';
 import { realProviders } from './models.ts';
-import { estimateTokens, INTERRUPTED, SUMMARY_LEAD, TODO_LEAD } from './context.ts';
+import { estimateTokens, INTERRUPTED, serverToolProblem, SUMMARY_LEAD, TODO_LEAD } from './context.ts';
 import { runCardTool } from './cardTools.ts';
 import { pausedNote } from './runner.ts';
 
@@ -360,6 +360,64 @@ describe('context management (design §8)', () => {
     expect(engine.runner.runs(card.id)[0]!.status).toBe('done');
     expect(JSON.parse(events(engine, card.id, 'compaction_failed')[0]!.payload).error).toBe('summary model overloaded');
     expect(conv(engine, card.conversationId).last_input_tokens).toBeNull(); // a degraded view's size is not the conversation's
+  });
+
+  it('a client tool and a web search in one answer, then pruning: every request is valid (#144)', async () => {
+    const search = { type: 'server_tool_use' as const, id: 'srv_1', name: 'web_search', input: { query: 'atlas' } };
+    const found = { type: 'web_search_tool_result' as const, tool_use_id: 'srv_1', content: [{ type: 'web_search_result', url: 'https://ex.com', title: 'Ex', encrypted_content: 'e' }] };
+    const big = (i: number) => ({ type: 'tool_use' as const, id: 'u' + i, name: 'shell', input: { command: `printf 'log ${i} %07990d' 0` } });
+    let turn = 0;
+    // #142's shape: tool + search in one answer, the search's result opening the next answer; then 12 big tool rounds.
+    const script = Array.from({ length: 30 }, () => (req: ModelRequest) => {
+      if (!req.tools.length) return text('Earlier: searched and ran steps.');
+      const n = turn++;
+      if (n === 0) return [big(0), search];
+      if (n === 1) return [found, { type: 'text' as const, text: 'Ex says hi.' }, big(1)];
+      return n < 12 ? [big(n)] : text('All steps done.');
+    });
+    const fake = new FakeProvider(script);
+    const { engine } = await setup(fake);
+    engine.models.update(engine.agents.get('atlas').modelId, { contextWindow: 24_000 });
+    const card = engine.kanban.create({ title: 'Search and work', assignee: 'atlas' }, 'user');
+    engine.kanban.appendMessage(card.id, 'user', 'user', text('look it up, then run the steps'));
+    engine.runner.wake(card.id);
+    await engine.runner.settled(card.id);
+
+    expect(engine.runner.runs(card.id)[0]!.status).toBe('done');
+    expect(turn).toBe(13);
+    const stored = engine.kanban.messages(card.id);
+    expect(stored[1]!.content.map((b) => b.type)).toEqual(['tool_use', 'server_tool_use']); // stored as the provider sent it
+    expect(stored[3]!.content[0]).toEqual(found);
+    expect(events(engine, card.id, 'pruned').length + events(engine, card.id, 'compacted').length).toBeGreaterThan(0);
+    for (const [i, call] of fake.calls.entries()) expect(serverToolProblem(call.messages), `call ${i}`).toBeNull();
+    // Before trimming reached it, the pair went whole, in the answer that holds the result.
+    const whole = fake.calls.find((c) => JSON.stringify(c.messages).includes('web_search_tool_result'))!;
+    const withResult = whole.messages.find((x) => x.content.some((b) => b.type === 'web_search_tool_result'))!;
+    expect(withResult.content.slice(0, 2)).toEqual([search, found]);
+    // After it, both halves are text.
+    const last = JSON.stringify(fake.calls.at(-1)!.messages);
+    expect(last).not.toContain('srv_1');
+    expect(last).toContain('(searched the web: {\\"query\\":\\"atlas\\"})');
+  }, 15_000);
+
+  it('a conversation stored pruned between the two halves of a search (#142) is sent valid', async () => {
+    const fake = new FakeProvider([text('Back on track.')]);
+    const { engine } = await setup(fake);
+    const card = engine.kanban.create({ title: 'Poisoned', assignee: 'atlas' }, 'user');
+    const add = (role: 'user' | 'assistant', content: Parameters<typeof engine.kanban.appendMessage>[3]) =>
+      engine.kanban.appendMessage(card.id, role, role === 'user' ? 'tool' : 'atlas', content, role === 'assistant' ? engine.kanban.messages(card.id).at(-1)!.seq : undefined);
+    engine.kanban.appendMessage(card.id, 'user', 'user', text('go'));
+    add('assistant', [{ type: 'tool_use', id: 'a', name: 'shell', input: { command: 'ls' } }, { type: 'server_tool_use', id: 'srv_9', name: 'web_search', input: { query: 'x' } }]);
+    add('user', [{ type: 'tool_result', tool_use_id: 'a', content: 'ok' }]);
+    add('assistant', [{ type: 'web_search_tool_result', tool_use_id: 'srv_9', content: [] }, { type: 'text', text: 'next' }]);
+    engine.kanban.appendMessage(card.id, 'user', 'user', text('continue'));
+    // The prune point #142 had: the request half pruned to text, its result kept.
+    engine.db.prepare('UPDATE conversations SET prune_upto_seq = 3 WHERE id = ?').run(card.conversationId);
+    engine.runner.wake(card.id);
+    await engine.runner.settled(card.id);
+    expect(engine.runner.runs(card.id)[0]!.status).toBe('done');
+    expect(serverToolProblem(fake.calls[0]!.messages)).toBeNull();
+    expect(JSON.stringify(fake.calls[0]!.messages)).not.toContain('srv_9');
   });
 
   it('decides with the provider’s real token count, chars/4 only without one', async () => {

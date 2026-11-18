@@ -6,6 +6,10 @@ computed by `scripts/release/changelog.mjs` from the oldest entry to the newest,
 `Fixed` → patch, `Added` or `Changed` → minor, `Breaking` (data or settings stop working without action) → major.
 Never type a version number.
 
+## Fixed · #144 · A run that searched the web while calling a tool no longer dies with an API 400 once its history is trimmed
+
+When the model asked for a tool and a web search in the same answer, Anthropic sent the search's result at the start of the next answer. Once pruning reached that point it turned the search request into text and kept the result alone, and every retry failed with "Each `web_search_tool_result` block must have a corresponding `server_tool_use` block before it". The request sent to the model now always keeps the two together (or turns both into text), after pruning, summaries and fallback trimming too. Conversations already stuck this way (#142) work again on their next run: the stored messages are not changed. If a history still can't be sent, the run stops with the message and block at fault. No migration.
+
 ## Fixed · #125 · Small and dimmed text is readable again in both themes (contrast 4.5:1 or more)
 
 Inbox kind labels, the +/− line counts, the Stop button, timestamps and counts on hovered or selected rows, paused schedules, inactive memories and the disabled Voice fields were under 4.5:1. They now use darker text colours instead of see-through text, and the faint text colour is one step stronger. Includes the `--spec` contrast audit of `scripts/ui-check` (#113).

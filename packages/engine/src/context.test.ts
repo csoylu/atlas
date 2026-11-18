@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import type { ContentBlock, Message } from '@atlas/shared';
-import { buildMessages, compactedView, degrade, estimateTokens, INTERRUPTED, measuredSize, needsTurn, pickCut, pickPrune, pruneMessages, SUMMARY_LEAD, TODO_LEAD } from './context.ts';
+import { buildMessages, compactedView, degrade, estimateTokens, INTERRUPTED, measuredSize, needsTurn, pairServerTools, pickCut, pickPrune, pruneMessages, serverToolProblem, SUMMARY_LEAD, TODO_LEAD } from './context.ts';
 
 let seq = 0;
 const m = (role: 'user' | 'assistant', content: ContentBlock[], contextUpto: number | null = null) => ({
@@ -184,5 +184,97 @@ describe('todo re-injection', () => {
     ]);
     expect(view[0]!.role).toBe('user');
     expect(view[1]!.role).toBe('assistant');
+  });
+});
+
+describe('provider web search pairs (#144)', () => {
+  const search = (id: string): ContentBlock => ({ type: 'server_tool_use', id, name: 'web_search', input: { query: 'q ' + id } });
+  const found = (id: string): ContentBlock => ({ type: 'web_search_tool_result', tool_use_id: id, content: [{ type: 'web_search_result', url: 'https://ex.com/' + id, title: 'Ex', encrypted_content: 'e' }] });
+  const use = (id: string, size = 10): ContentBlock => ({ type: 'tool_use', id, name: 'shell', input: { command: 'x'.repeat(size) } });
+  const result = (id: string, size = 10): ContentBlock => ({ type: 'tool_result', tool_use_id: id, content: 'o'.repeat(size) });
+  const thinking: ContentBlock = { type: 'thinking', thinking: 'hm', signature: 'sig' };
+
+  /** #142's shape: a client tool and a web search in one answer, the search's result opening the next answer. */
+  function mixedTurn() {
+    seq = 0;
+    const msgs = [m('user', t('look it up'))];
+    msgs.push(m('assistant', [thinking, use('a'), search('s')], 1));
+    msgs.push(m('user', [result('a')]));
+    msgs.push(m('assistant', [found('s'), thinking, use('b')], 3));
+    for (let i = 0; i < 6; i++) {
+      msgs.push(m('user', [result(i ? 'c' + (i - 1) : 'b', 2000)]));
+      msgs.push(m('assistant', [thinking, use('c' + i, 800)], seq));
+    }
+    msgs.push(m('user', [result('c5')]));
+    return msgs;
+  }
+
+  it('moves the search next to its result when the answer came in two parts', () => {
+    const view = compactedView(mixedTurn(), null, null);
+    expect(serverToolProblem(view)).toBeNull();
+    expect(view[1]!.content.map((b) => b.type)).toEqual(['thinking', 'tool_use']);
+    expect(view[3]!.content.map((b) => b.type)).toEqual(['server_tool_use', 'web_search_tool_result', 'thinking', 'tool_use']);
+    expect(view[3]!.content[1]).toEqual(found('s')); // kept verbatim (encrypted_content replays)
+  });
+
+  it('builds a valid view at every prune point and every summary point', () => {
+    const msgs = mixedTurn();
+    const seqs = [null, ...msgs.map((x) => x.seq)];
+    for (const prune of seqs)
+      for (const upto of [null, ...msgs.filter((x, i) => msgs[i + 1]?.role === 'assistant').map((x) => x.seq)]) {
+        const view = compactedView(msgs, upto == null ? null : 'earlier work', upto, prune);
+        expect(serverToolProblem(view), `prune ${prune}, summary ${upto}`).toBeNull();
+      }
+    // #142: pruned up to the tool_result between the two halves. Both become text, nothing else changes.
+    const view = compactedView(msgs, null, null, 3);
+    const json = JSON.stringify(view);
+    expect(json).not.toContain('server_tool_use');
+    expect(json).not.toContain('web_search_tool_result');
+    expect(json).toContain('(searched the web: {\\"query\\":\\"q s\\"})');
+    expect(json).toContain('(web search: 1 results: Ex <https://ex.com/s>; results omitted to fit the context)');
+  });
+
+  it('degrading keeps the pair whole or makes both halves text', () => {
+    const view = compactedView(mixedTurn(), null, null);
+    for (let budget = 0; budget < estimateTokens(view); budget += 50) expect(serverToolProblem(degrade(view, budget, 0)), `budget ${budget}`).toBeNull();
+  });
+
+  it('keeps a search still running in the last answer (pause_turn), not one left without a result earlier', () => {
+    const paused = [{ role: 'user' as const, content: t('go') }, { role: 'assistant' as const, content: [search('p')] }];
+    expect(pairServerTools(paused)).toEqual(paused);
+    const before = [
+      { role: 'user' as const, content: t('go') },
+      { role: 'assistant' as const, content: [search('p'), use('a')] },
+      { role: 'user' as const, content: [result('a')] },
+      { role: 'assistant' as const, content: [use('b')] },
+      { role: 'user' as const, content: [result('b')] },
+    ];
+    const out = pairServerTools(before);
+    expect(out[1]!.content[0]).toEqual({ type: 'text', text: '(searched the web: {"query":"q p"})' });
+    expect(serverToolProblem(out)).toBeNull();
+    // The answer just after a client tool that also started a search: the search may still come back.
+    expect(serverToolProblem(pairServerTools(before.slice(0, 3)))).toBeNull();
+    expect(pairServerTools(before.slice(0, 3))[1]!.content[0]).toEqual(search('p'));
+  });
+
+  it('drops a message emptied by the move and merges its neighbours', () => {
+    const view = pairServerTools([
+      { role: 'user', content: t('go') },
+      { role: 'assistant', content: [search('s')] },
+      { role: 'user', content: t('more') },
+      { role: 'assistant', content: [found('s'), { type: 'text', text: 'done' }] },
+    ]);
+    expect(view.map((x) => x.role)).toEqual(['user', 'assistant']);
+    expect(view[0]!.content).toEqual([...t('go'), ...t('more')]);
+    expect(view[1]!.content.map((b) => b.type)).toEqual(['server_tool_use', 'web_search_tool_result', 'text']);
+  });
+
+  it('names the message and block the API would refuse', () => {
+    expect(serverToolProblem([{ role: 'user', content: t('x') }, { role: 'assistant', content: [thinking, found('z')] }])).toBe(
+      'messages.1.content.1: web_search_tool_result z without its server_tool_use before it in the same message',
+    );
+    expect(serverToolProblem([{ role: 'assistant', content: [search('y')] }, { role: 'user', content: t('x') }, { role: 'assistant', content: t('ok') }])).toBe(
+      'messages.0.content.0: server_tool_use y without its web_search_tool_result',
+    );
   });
 });
