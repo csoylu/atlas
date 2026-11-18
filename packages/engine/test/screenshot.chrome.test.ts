@@ -4,6 +4,8 @@ import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
+import { execFileSync } from 'node:child_process';
+import { readdirSync } from 'node:fs';
 import sharp from 'sharp';
 import { startEngine, type Engine } from '../src/index.ts';
 import { FakeProvider } from '../src/providers/fake.ts';
@@ -93,6 +95,23 @@ describe.skipIf(!ready)('screenshot with Chrome', () => {
     expect(clip.images![0]).toMatchObject({ width: 400, height: 200 });
     const after = await shoot({ target: 'pages/mock.html', actions: [{ click: '#go' }], wait_for: '#after' });
     expect(after.isError, after.output).toBe(false);
+  }, 30_000);
+
+  it('leaves no browser and no profile behind, after a shot and after a failure', async () => {
+    const left = () => {
+      let ps = '';
+      try {
+        ps = execFileSync('pgrep', ['-f', 'atlas-shot-chrome-'], { encoding: 'utf8' });
+      } catch {
+        // pgrep exits 1 when nothing matches
+      }
+      return { ps: ps.trim(), dirs: readdirSync(tmpdir()).filter((d) => d.startsWith('atlas-shot-chrome-')) };
+    };
+    await shoot({ target: 'pages/mock.html' });
+    await shoot({ target: 'pages/none.html' }).catch(() => {});
+    await shoot({ target: '/api/files/atlas/pages/none.html' });
+    await new Promise((r) => setTimeout(r, 500));
+    expect(left()).toEqual({ ps: '', dirs: [] });
   }, 30_000);
 
   it('fails loudly, naming the selector, when wait_for never appears', async () => {

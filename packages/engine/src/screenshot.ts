@@ -209,7 +209,7 @@ interface Browser {
 
 /** Start Chrome into `b` as it goes, so the caller cleans up whatever was started even when a step fails. */
 async function launch(b: Browser, chromePath: string, signal: AbortSignal, onSpawn?: (pid: number) => void): Promise<WebSocket> {
-  const profile = (b.profile = await mkdtemp(join(tmpdir(), 'atlas-shot-')));
+  const profile = (b.profile = await mkdtemp(join(tmpdir(), 'atlas-shot-chrome-')));
   const args = ['--headless=new', '--remote-debugging-port=0', `--user-data-dir=${profile}`, '--no-first-run', '--no-default-browser-check', '--hide-scrollbars', '--mute-audio', '--disable-extensions', '--disable-background-networking', '--disable-sync', 'about:blank'];
   const child = (b.child = spawn(chromePath, args, { stdio: 'ignore', detached: process.platform !== 'win32' }));
   if (child.pid) onSpawn?.(child.pid);
