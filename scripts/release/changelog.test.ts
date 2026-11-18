@@ -98,5 +98,5 @@ describe('CI entry check (one push = one entry)', () => {
     commit(file('## Fixed · g', '## Fixed · f', '## Fixed · e', '## Fixed · d', '## Added · a', '## Added · b', '## Fixed · c'));
     expect(run(c3).stderr).toMatch(/adds 2 CHANGELOG.md entries/);
     expect(run('0000000000000000000000000000000000000000').status).toBe(0); // new branch push: nothing to compare
-  });
+  }, 60_000); // several git repos + bash: slow when the machine is loaded (#124)
 });

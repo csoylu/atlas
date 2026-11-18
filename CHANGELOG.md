@@ -6,6 +6,10 @@ computed by `scripts/release/changelog.mjs` from the oldest entry to the newest,
 `Fixed` → patch, `Added` or `Changed` → minor, `Breaking` (data or settings stop working without action) → major.
 Never type a version number.
 
+## Changed · #124 · The app updater is tested end to end: release pipeline, bad and cut downloads, killed swaps, updates while agents work, and the update screens in both themes
+
+About 60 new tests, no app code changed: `scripts/release/pipeline.test.ts` (CI workflow and the one-entry rule on real git histories), `packages/engine/test/updater.qa.test.ts` (fake GitHub: rate limit, bad checksum, cut and stalled downloads, SIGKILL during the download and the swap, several versions skipped) and `e2e/tests/updater.spec.ts` (badge, notes dialog and Settings → About at 1440 and 390 px in both themes, an update clicked while two agents work). Three known bugs are kept as `it.fails` / `test.fail` tests until fixed. Report: docs/qa/124-updater-report.md.
+
 ## Added · #148 · `npm run ui:check:fast` runs the UI check at the four widths in parallel (about 80 s instead of 3 min)
 
 `scripts/ui-check/parallel.mjs` starts one `check.mjs` per width (1440, 1100, 900, 390), each with its own Chrome and output folder, and exits 1 if any width reports an issue or dies (killed by a signal, or never started), and names the signal. Same flags as `ui:check`, except `--widths` and `--out`, which it refuses (exit 2). Test tooling only: no change in the app.

@@ -11,7 +11,7 @@ import { FakeGitHub, fakeApp, sha, zipOf } from './updaterKit.ts';
 /**
  * QA of the app updater (#124): the cases the build task's own tests (src/updater.test.ts) do not cover. Everything runs
  * against a fake release server and fake Atlas.app bundles in temp folders: never the installed app or the live database.
- * Cases still done by hand are listed in docs/qa/updater.md.
+ * Cases still done by hand are listed in docs/qa/124-updater-report.md.
  */
 const mac = process.platform === 'darwin';
 const wait = async (ok: () => boolean, ms = 10_000) => {

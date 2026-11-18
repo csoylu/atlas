@@ -10,7 +10,7 @@ import { zipName } from '../../packages/engine/src/updater.ts';
 /**
  * QA of the release pipeline (#124): the rules in docs/updater.md as tests that need no GitHub. The workflow file is read
  * as text (its job graph), the version and the one-entry check are run against real git history. What only the real
- * CI can show (timings, tags, the release page) is in docs/qa/updater.md with the run ids.
+ * CI can show (timings, tags, the release page) is in docs/qa/124-updater-report.md with the run ids.
  */
 const root = join(import.meta.dirname, '..', '..');
 const ci = readFileSync(join(root, '.github/workflows/ci.yml'), 'utf8');
@@ -121,7 +121,8 @@ function repo() {
   return { dir, git, push, entry, log };
 }
 
-describe('releases from real git history (docs/updater.md steps 1-3)', () => {
+// Real git repos + bash: slow when the machine is loaded (load 50-90 gave >5 s), so a generous timeout for the whole block.
+describe('releases from real git history (docs/updater.md steps 1-3)', { timeout: 60_000 }, () => {
   it('a push with exactly one entry passes and gets the next version; the notes are that entry', () => {
     const r = repo();
     const p = r.push(r.entry('Fixed', '#2 · Something is fixed'));

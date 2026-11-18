@@ -10,7 +10,7 @@ import { FakeGitHub, fakeApp } from '../../packages/engine/test/updaterKit.ts';
 
 /**
  * QA of the app updater (#124, #123, docs/updater.md): the UI (badge, dialog, Settings → About) at 1440 and 390 px in both
- * themes, with screenshots in results/updater/; and an update clicked while agents are working. A fake GitHub and a fake
+ * themes, with screenshots in shots/updater/ (gitignored); and an update clicked while agents are working. A fake GitHub and a fake
  * Atlas.app in a temp folder: never the installed app or the live database. Mac only (the installer swaps a .app).
  */
 test.skip(process.platform !== 'darwin', 'the updater installs a Mac .app bundle');
