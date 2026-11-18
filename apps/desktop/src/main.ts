@@ -111,7 +111,7 @@ async function start() {
   mkdirSync(dataDir, { recursive: true });
   // The built UI ships as an extra resource in the packaged app; in a local build it sits in packages/ui/dist.
   const uiDir = app.isPackaged ? join(process.resourcesPath, 'ui') : join(app.getAppPath(), '../../packages/ui/dist');
-  engine = await startEngine({ dbFile: join(dataDir, 'atlas.db'), dataDir, port: 0, uiDir, secrets: new KeychainStore(), version: app.getVersion(), voice: voiceHost(), updates: updateHost() });
+  engine = await startEngine({ dbFile: join(dataDir, 'atlas.db'), dataDir, port: 0, uiDir, secrets: new KeychainStore(), version: app.getVersion(), voice: voiceHost(), updates: updateHost(), shellPath: 'login' });
   createWindow(engine.url);
   if (engine.voice) followVoice(engine, engine.voice);
   startTray(engine);

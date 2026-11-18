@@ -33,6 +33,7 @@ import { Notifications } from './notifications.ts';
 import { Voice, type VoiceHost } from './voice.ts';
 import { VoiceChat } from './voiceChat.ts';
 import { Updater, type UpdateHost } from './updater.ts';
+import { ShellEnv, type ShellPathOptions } from './shellEnv.ts';
 
 export interface EngineOptions {
   /** SQLite file, or ':memory:'. */
@@ -71,6 +72,12 @@ export interface EngineOptions {
   version?: string;
   /** Desktop app on a Mac: voice mode (Settings → Voice). Absent in server mode and dev: the page is hidden. */
   voice?: VoiceHost;
+  /**
+   * PATH of agent shells (#136): 'login' reads the user's login shell once at start (desktop app, local dev);
+   * 'engine' keeps the engine's own (server mode; default, so tests never run a login shell). Tests pass options
+   * (a fake login shell).
+   */
+  shellPath?: 'login' | 'engine' | ShellPathOptions;
   /**
    * App updates from GitHub releases (#123). The packaged Mac app passes a host (it can install); without it the
    * engine can't install and doesn't check by itself (dev, server). Tests point api/fetch at a fake release server.
@@ -135,6 +142,7 @@ export async function startEngine(opts: EngineOptions): Promise<Engine> {
   const schedules = new Schedules(db, bus, kanban);
   const cleanup = new MemoryCleanup(db, bus, memories);
   const settings = new Settings(db);
+  const shellEnv = new ShellEnv(typeof opts.shellPath === 'object' ? opts.shellPath : { mode: opts.shellPath ?? 'engine' });
   const voice = opts.voice ? new Voice(db, bus, opts.voice) : null;
   let url = '';
   const voiceChat = opts.voice ? new VoiceChat(db, bus, kanban, agents, () => url) : null;
@@ -143,7 +151,7 @@ export async function startEngine(opts: EngineOptions): Promise<Engine> {
   const review = new MemoryReview(db, kanban, memories, models, agents, settings, usage);
   if (opts.memoryReview === false) review.after = () => {};
   const effects = new SideEffects(db, kanban, memories, schedules);
-  const runner = new Runner(db, bus, kanban, agents, models, memories, schedules, { fileLog, effects, dataDir: opts.dataDir, leaseMs: opts.leaseMs, maxTurns: opts.maxTurns, usage, user: () => settings.user(), documents, cleanup, review, isVoiceChat: voiceChat ? (id) => voiceChat.isVoiceChat(id) : undefined, engine: () => ({ url, cookie: () => (auth.enabled ? auth.issue().token : null), answer: (method, path) => screenshotAnswer(kanban, method, path) }) });
+  const runner = new Runner(db, bus, kanban, agents, models, memories, schedules, { fileLog, effects, dataDir: opts.dataDir, leaseMs: opts.leaseMs, maxTurns: opts.maxTurns, usage, user: () => settings.user(), documents, cleanup, review, isVoiceChat: voiceChat ? (id) => voiceChat.isVoiceChat(id) : undefined, engine: () => ({ url, cookie: () => (auth.enabled ? auth.issue().token : null), answer: (method, path) => screenshotAnswer(kanban, method, path) }), shellEnv });
   const rewinds = new Rewinds(db, bus, kanban, agents, runner, opts.dataDir, fileLog, effects);
   const dispatcher = new Dispatcher(bus, kanban, agents, models, settings, runner);
   const slash = new Slash(db, bus, kanban, runner);
@@ -181,6 +189,7 @@ export async function startEngine(opts: EngineOptions): Promise<Engine> {
     usage,
     voice,
     updater,
+    shellEnv,
     bus,
     dataDir: opts.dataDir,
     version: opts.version ?? 'dev',

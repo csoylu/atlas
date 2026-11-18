@@ -86,6 +86,13 @@ engine it runs in (no port lookup), refuses every write from the page (the main-
 fails after 15 s naming what never appeared, and returns page errors + refused writes with the picture (saved under
 `screenshots/`). Unit tests: `screenshot.test.ts` (fast); real Chrome: `test/screenshot.chrome.test.ts` (slow project).
 
+**Agent shell environment** (#136, `packages/engine/src/shellEnv.ts`): every agent command (shell foreground and
+`background: true`) runs with the PATH of the user's login shell, read once at engine start (`$SHELL -ilc`, from the
+system PATH, 15 s timeout), plus `GIT_AUTHOR_NAME`/`GIT_COMMITTER_NAME` = the agent id (the email stays the user's
+git config). Desktop and `main.ts` without a password use the login shell; server mode, Windows and tests keep the
+engine's PATH. A failure is logged and shown in Settings → About & data, never silent. Never spawn an agent command
+with `process.env` directly: take `ctx.env()`.
+
 ## Releases (#123, docs/updater.md)
 - **One push to main = one CHANGELOG.md entry = one release.** Whoever pushes to main adds exactly one entry at the
   top: `## Fixed|Added|Changed|Breaking · #task · One plain sentence for Master`, then optional details. The version

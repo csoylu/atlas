@@ -13,7 +13,9 @@ const uiDir = join(root, 'packages/ui/dist');
 // Server mode: a login password (design §12). Unset: no login, localhost only.
 const password = process.env.ATLAS_PASSWORD || null;
 
-const engine = await startEngine({ dbFile: join(dataDir, 'atlas.db'), dataDir, port, host, uiDir, password });
+// Agent shells (#136): on the user's own machine they get the login shell's PATH; a server keeps its own environment.
+const shellPath = password ? 'engine' : 'login';
+const engine = await startEngine({ dbFile: join(dataDir, 'atlas.db'), dataDir, port, host, uiDir, password, shellPath });
 console.log(`engine listening on ${engine.url} (data: ${dataDir}; ${password ? 'login required' : 'no login, localhost only'})`);
 
 let stopping = false;

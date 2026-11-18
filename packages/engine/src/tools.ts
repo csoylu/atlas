@@ -32,6 +32,8 @@ export interface ToolContext {
   onOutput?: (chunk: string) => void;
   /** The engine this agent runs in, for screenshot (#133); omitted = screenshot is refused. */
   engine?: EngineAccess;
+  /** Environment of shell commands (#136: login PATH, agent as git author); omitted = the engine's own. */
+  env?: () => Promise<NodeJS.ProcessEnv>;
 }
 
 interface Tool<S extends z.ZodType> {
@@ -344,10 +346,12 @@ export const TOOLS = {
       if (background) {
         if (!ctx.background) throw new Error('background processes are not available here');
         const { registry, agentId, cardId } = ctx.background;
-        const p = registry.start({ command, cwd: ctx.workdir, logDir: ctx.outputsDir, agentId, cardId });
+        const env = ctx.env ? await ctx.env() : process.env;
+        const p = registry.start({ command, cwd: ctx.workdir, logDir: ctx.outputsDir, agentId, cardId, env });
         return `started ${p.id} in the background (pid ${p.pid}); its output goes to ${p.logPath}. shell_output("${p.id}") reads new output, shell_kill("${p.id}") stops it; a message comes here when it ends.`;
       }
-      const { code, sig, out } = await runForeground(command, timeout_s, ctx);
+      const env = ctx.env ? await ctx.env() : process.env;
+      const { code, sig, out } = await runForeground(command, timeout_s, env, ctx);
       const head = `exit ${code ?? sig}${sig === 'SIGKILL' ? ` (killed after ${timeout_s}s)` : ''}\n`;
       if (out.length <= OUTPUT_CAP) return head + out;
       const path = await saveOutput(ctx, 'shell', out);
@@ -468,9 +472,9 @@ export function landedLines(text: string, spans: Span[], replacement: string): n
 }
 
 /** A foreground command: its own process group (Unix), killed whole on stop, timeout or restart. */
-function runForeground(command: string, timeout_s: number, { workdir, signal, onSpawn, onOutput }: ToolContext): Promise<{ code: number | null; sig: NodeJS.Signals | null; out: string }> {
+function runForeground(command: string, timeout_s: number, env: NodeJS.ProcessEnv, { workdir, signal, onSpawn, onOutput }: ToolContext): Promise<{ code: number | null; sig: NodeJS.Signals | null; out: string }> {
   return new Promise((resolvePromise, reject) => {
-    const child = spawn(command, { cwd: workdir, shell: true, env: process.env, detached: process.platform !== 'win32' });
+    const child = spawn(command, { cwd: workdir, shell: true, env, detached: process.platform !== 'win32' });
     if (child.pid) onSpawn?.(child.pid);
     const killTree = () => {
       if (!child.pid) return;
