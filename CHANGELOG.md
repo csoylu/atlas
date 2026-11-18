@@ -6,6 +6,10 @@ computed by `scripts/release/changelog.mjs` from the oldest entry to the newest,
 `Fixed` → patch, `Added` or `Changed` → minor, `Breaking` (data or settings stop working without action) → major.
 Never type a version number.
 
+## Changed · #141 · A pull request can only merge into main once the QA agent has validated it
+
+GitHub cannot make an account approve its own pull request, and every agent uses Master's account, so the validation is a commit status, `qa/validated`, set on the PR's head commit by `scripts/pr/validate.mjs`. main requires it and the CI job `test`; a new commit on the PR clears it. The script refuses a PR not based on main, a head that moved since the review, red CI and a PR without exactly one changelog entry. CLAUDE.md's Releases section describes the flow. No code change in the app, no migration.
+
 ## Fixed · #144 · A run that searched the web while calling a tool no longer dies with an API 400 once its history is trimmed
 
 When the model asked for a tool and a web search in the same answer, Anthropic sent the search's result at the start of the next answer. Once pruning reached that point it turned the search request into text and kept the result alone, and every retry failed with "Each `web_search_tool_result` block must have a corresponding `server_tool_use` block before it". The request sent to the model now always keeps the two together (or turns both into text), after pruning, summaries and fallback trimming too. Conversations already stuck this way (#142) work again on their next run: the stored messages are not changed. If a history still can't be sent, the run stops with the message and block at fault. No migration.
