@@ -31,7 +31,7 @@ const ONLY = arg('only', '')?.split(',').filter(Boolean);
 const UI_DIR = arg('ui');
 // --theme dark|light: open every screen with ?theme= (a preview, nothing saved); default = the page's own choice.
 const THEME = arg('theme');
-const MIN_FONT = 12;
+const MIN_FONT = 13; // CLAUDE.md « UI type rules »: no text under 13 px (#112)
 const MIN_CONF = 0.5;
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 

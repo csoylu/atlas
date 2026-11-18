@@ -38,6 +38,20 @@ apps/desktop      Electron main process: opens the UI window. Dev: loads Vite (:
    provider must stay green. `npm run typecheck && npm test` before every commit (`npm test` = fast project, ~10 s; `npm run test:full` also runs the slow project: real voice models + the 50-SIGKILL crash test, `CRASH_KILLS=n` shortens it. Run it when you touch voice, the store, runs or leases).
 7. Shared types go in `packages/shared`; the UI never imports engine code directly, only the API.
 
+## UI type rules
+Same scale as OpenCode (packages/ui/src/styles/theme.css). Enforced by `packages/ui/src/typeRules.test.ts` and ui-check.
+- **Tokens** (styles.css, the « type tokens » block): sizes `--fs-small` 13, `--fs-base` 14, `--fs-large` 16, `--fs-xl` 20 px;
+  weights `--fw-regular` 440, `--fw-medium` 530, `--fw-bold` 670; line heights `--lh-tight` 130% (one-line labels),
+  `--lh-normal` 150%, `--lh-long` 180% (chat messages, descriptions, documents). Families: `--font`, `--mono`.
+  Mono text uses the same size tokens.
+- **No literal** font-family, font-size, font-weight or line-height in CSS or in inline styles: always a token. Need a
+  fifth size? Ask first, don't add one.
+- **No text under 13 px.** Allowed exceptions, each marked `/* type-exception: why */` on its line: inputs at 16 px on
+  phone (iOS zooms in below 16), and a letter inside a tile too small for 13 px (aria-hidden).
+- **Contrast:** text colours that carry information reach 4.5:1 on `--app`, `--panel` and `--raised` in both themes
+  (`--faint` is the floor). Placeholders and disabled text may be lower.
+- **@font-face** only through the fontsource imports in `main.tsx`.
+
 ## Commands
 ```
 cp .env.example .env   # model keys (gitignored); see .env.example
