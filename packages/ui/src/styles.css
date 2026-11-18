@@ -47,8 +47,10 @@
   --scrim: rgba(0, 0, 0, 0.5);
   --siwc-bg: #ffffff;
   --siwc-ink: #0d0d0d;
-  /* Usage by source (Usage page chart): Claude clay, ChatGPT green, local/other slate. */
+  /* Usage by source (Usage page chart): Claude API clay, Claude plan violet, removed integration sand, ChatGPT green, local/other slate. */
   --src-anthropic: #d9825c;
+  --src-claude-plan: #a78bfa;
+  --src-claude-code: #c9a27e;
   --src-chatgpt: #34b088;
   --src-local: #8b939c;
 }
@@ -88,6 +90,8 @@
   --siwc-bg: #0d0d0d;
   --siwc-ink: #ffffff;
   --src-anthropic: #c8693f;
+  --src-claude-plan: #7c5cd6;
+  --src-claude-code: #a07a55;
   --src-chatgpt: #12936f;
   --src-local: #7d8691;
 }
@@ -947,11 +951,15 @@ button.tool .icon { color: var(--muted); font-family: var(--mono); }
 .usage-stack { width: 100%; display: flex; flex-direction: column-reverse; border-radius: 3px 3px 0 0; overflow: hidden; min-height: 0; }
 .usage-stack > span { display: block; flex-basis: 0; min-height: 2px; }
 .src-anthropic { background: var(--src-anthropic); }
+.src-claude_plan { background: var(--src-claude-plan); }
+.src-claude_code { background: var(--src-claude-code); }
 .src-chatgpt { background: var(--src-chatgpt); }
 .src-openai_compat { background: var(--src-local); }
-.usage-axis > span:not(.usage-legend) { white-space: nowrap; }
-.usage-axis { display: flex; justify-content: space-between; align-items: center; gap: 12px; font-size: var(--fs-small); color: var(--faint); margin-top: -8px; }
-.usage-legend { display: inline-flex; gap: 14px; flex-wrap: wrap; justify-content: center; }
+.usage-axis { position: relative; height: calc(var(--fs-small) * 1.3); font-size: var(--fs-small); line-height: var(--lh-tight); color: var(--faint); margin-top: -8px; }
+.usage-tick { position: absolute; top: 0; transform: translateX(-50%); white-space: nowrap; }
+.usage-tick.start { transform: none; }
+.usage-tick.end { transform: translateX(-100%); }
+.usage-legend { display: flex; gap: 14px; flex-wrap: wrap; justify-content: center; font-size: var(--fs-small); color: var(--faint); }
 .usage-legend span { display: inline-flex; align-items: center; gap: 6px; }
 .usage-legend i, .src-dot { display: inline-block; width: 8px; height: 8px; border-radius: 2px; }
 .src-dot { margin-right: 8px; vertical-align: 0; }
@@ -965,8 +973,7 @@ button.tool .icon { color: var(--muted); font-family: var(--mono); }
   .usage-stats { grid-template-columns: repeat(2, minmax(0, 1fr)); }
   .usage-table th:nth-child(2), .usage-table td:nth-child(2), .usage-table th:nth-child(4), .usage-table td:nth-child(4) { display: none; }
   .usage-chart { gap: 2px; }
-  .usage-axis { flex-wrap: wrap; row-gap: 8px; }
-  .usage-legend { order: 3; flex-basis: 100%; justify-content: flex-start; }
+  .usage-legend { justify-content: flex-start; }
 }
 
 /* Composer status strip (option C): gauges on the left, model · effort pill on the right. */
