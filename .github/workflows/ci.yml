@@ -1,18 +1,53 @@
 name: CI
 
+# One push to main = one CHANGELOG.md entry = one release (docs/updater.md, card #123).
+#  - pull requests: typecheck + tests only.
+#  - push to main: the push must add exactly one changelog entry; tests; build the Mac app (arm64 + x64: dmg + zip +
+#    SHA256SUMS.txt); tag v<version> and publish a GitHub release whose notes are that entry. No release when a step
+#    fails. Then the Windows installer is built and added to the release (a Windows failure does not block the Mac).
+#  - workflow_dispatch on a branch: the same build as a pre-release v<version>-test.<run> (the app's updater ignores
+#    pre-releases), to try the pipeline without touching main.
 on:
   push:
     branches: [main]
-    tags: ['v*']
   pull_request:
   workflow_dispatch:
-    inputs:
-      build_apps:
-        description: Build the macOS and Windows apps
-        type: boolean
-        default: true
+
+permissions:
+  contents: read
 
 jobs:
+  # The version and the release notes come from CHANGELOG.md (scripts/release/changelog.mjs); nobody types a number.
+  changelog:
+    if: github.event_name != 'pull_request'
+    runs-on: ubuntu-latest
+    outputs:
+      version: ${{ steps.v.outputs.version }}
+      prerelease: ${{ steps.v.outputs.prerelease }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+      - name: One new entry in this push
+        if: github.event_name == 'push'
+        env:
+          BEFORE: ${{ github.event.before }}
+        run: scripts/release/check-push.sh "$BEFORE"
+      - id: v
+        name: Version
+        run: |
+          v=$(node scripts/release/changelog.mjs version)
+          if [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
+            echo "version=$v-test.${{ github.run_number }}" >> "$GITHUB_OUTPUT"; echo "prerelease=true" >> "$GITHUB_OUTPUT"
+          else
+            if git rev-parse -q --verify "refs/tags/v$v" >/dev/null; then echo "::error::tag v$v already exists: did this push add a changelog entry?"; exit 1; fi
+            echo "version=$v" >> "$GITHUB_OUTPUT"; echo "prerelease=false" >> "$GITHUB_OUTPUT"
+          fi
+          echo "version $v"
+
   test:
     runs-on: macos-latest
     steps:
@@ -25,18 +60,16 @@ jobs:
       - run: npm run typecheck
       - run: npm test
 
-  # Installers are built on each OS (native modules: better-sqlite3 is rebuilt for Electron there).
-  app:
-    needs: test
-    if: startsWith(github.ref, 'refs/tags/v') || (github.event_name == 'workflow_dispatch' && inputs.build_apps)
+  # Each Mac chip on its own runner: native modules (better-sqlite3, sharp, sherpa-onnx) install for the runner's chip.
+  mac:
+    needs: [changelog, test]
     strategy:
-      fail-fast: false
       matrix:
         include:
           - os: macos-latest
-            args: --mac dmg --arm64 --x64
-          - os: windows-latest
-            args: --win nsis --x64
+            arch: arm64
+          - os: macos-15-intel
+            arch: x64
     runs-on: ${{ matrix.os }}
     steps:
       - uses: actions/checkout@v4
@@ -47,16 +80,68 @@ jobs:
       - run: npm ci
       - run: npm -w @atlas/ui run build
       - run: npm -w @atlas/desktop run build
-      - name: Package
+      - name: Package (unsigned)
         working-directory: apps/desktop
-        # Unsigned for now: no Apple/Windows signing certificates yet.
         env:
           CSC_IDENTITY_AUTO_DISCOVERY: 'false'
-        run: npx electron-builder ${{ matrix.args }} --publish never
+        run: npx electron-builder --mac dmg zip --${{ matrix.arch }} --publish never -c.extraMetadata.version=${{ needs.changelog.outputs.version }}
+      - name: Checksums
+        working-directory: apps/desktop/release
+        run: shasum -a 256 Atlas-*.zip Atlas-*.dmg | tee SHA256SUMS-${{ matrix.arch }}.txt
       - uses: actions/upload-artifact@v4
         with:
-          name: atlas-${{ matrix.os }}
+          name: mac-${{ matrix.arch }}
           path: |
-            apps/desktop/release/*.dmg
-            apps/desktop/release/*.exe
+            apps/desktop/release/Atlas-*.zip
+            apps/desktop/release/Atlas-*.dmg
+            apps/desktop/release/SHA256SUMS-*.txt
           if-no-files-found: error
+
+  release:
+    needs: [changelog, mac]
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/download-artifact@v4
+        with:
+          path: out
+          merge-multiple: true
+      - name: Publish
+        env:
+          GH_TOKEN: ${{ github.token }}
+          V: ${{ needs.changelog.outputs.version }}
+          PRE: ${{ needs.changelog.outputs.prerelease }}
+        run: |
+          cat out/SHA256SUMS-*.txt > out/SHA256SUMS.txt && rm out/SHA256SUMS-*.txt
+          cat out/SHA256SUMS.txt
+          node scripts/release/changelog.mjs notes > "$RUNNER_TEMP/notes.md"
+          pre=""; [ "$PRE" = "true" ] && pre="--prerelease"
+          gh release create "v$V" out/* --target "$GITHUB_SHA" --title "Atlas $V" --notes-file "$RUNNER_TEMP/notes.md" $pre
+
+  windows:
+    needs: [changelog, release]
+    runs-on: windows-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: npm
+      - run: npm ci
+      - run: npm -w @atlas/ui run build
+      - run: npm -w @atlas/desktop run build
+      - name: Package (unsigned)
+        working-directory: apps/desktop
+        env:
+          CSC_IDENTITY_AUTO_DISCOVERY: 'false'
+        run: npx electron-builder --win nsis --x64 --publish never -c.extraMetadata.version=${{ needs.changelog.outputs.version }}
+      - name: Add to the release
+        working-directory: apps/desktop/release
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: gh release upload "v${{ needs.changelog.outputs.version }}" Atlas-*.exe
