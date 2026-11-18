@@ -5,7 +5,7 @@ import { defineConfig } from 'vitest/config';
 //  - slow: real voice models (real-time audio, CPU-timing sensitive) and the 50-SIGKILL crash test. They run
 //          one file at a time so they do not starve each other (parallel runs made the voice timing asserts flaky).
 //          `npm run test:full` runs both; CI / before a release / when you touched voice or the store.
-const include = ['packages/*/src/**/*.test.ts', 'packages/*/test/**/*.test.ts', 'apps/*/src/**/*.test.ts'];
+const include = ['packages/*/src/**/*.test.ts', 'packages/*/test/**/*.test.ts', 'apps/*/src/**/*.test.ts', 'scripts/**/*.test.ts'];
 const slow = [
   'packages/engine/test/crash.test.ts',
   'packages/voice/**/*.test.ts',

@@ -398,6 +398,36 @@ export interface About {
   /** Voice mode is available (the desktop app on a Mac): shows Settings → Voice. */
   voice: boolean;
 }
+/** A published release newer than the running app (GET /api/update). */
+export interface AppRelease {
+  version: string;
+  /** The release notes: its CHANGELOG.md entry (markdown). */
+  notes: string;
+  publishedAt: string;
+}
+export type UpdatePhase = 'idle' | 'downloading' | 'verifying' | 'installing' | 'failed';
+/** App updates from GitHub releases (#123, docs/updater.md): Settings → About, the sidebar badge and its dialog. */
+export interface UpdateStatus {
+  current: string;
+  /** Null when this app can install an update by itself (the packaged Mac app); else why not (dev, server, Windows). */
+  cannotInstall: string | null;
+  checking: boolean;
+  checkedAt: string | null;
+  /** The last check failed (no network, GitHub refused): shown as is. */
+  checkError: string | null;
+  /** Releases newer than the running version, newest first; empty = up to date. */
+  releases: AppRelease[];
+  phase: UpdatePhase;
+  /** The version being (or last tried to be) installed. */
+  target: string | null;
+  received: number;
+  total: number | null;
+  /** Why the last install failed (phase 'failed'). */
+  error: string | null;
+  lastUpdate: { from: string; to: string; at: string } | null;
+  /** Agents with a run going now: they are interrupted by the restart and resume after it. */
+  working: { agent: string; card: number | null; title: string }[];
+}
 export const UpdateSettings = z
   .object({
     triageAgent: z.string().nullable(),
@@ -669,7 +699,8 @@ export type ServerEvent =
   | { type: 'notification.created'; notification: Notification }
   /** Notifications were read or archived: reload the Inbox. */
   | { type: 'inbox.changed' }
-  | { type: 'voice.updated'; status: VoiceStatus };
+  | { type: 'voice.updated'; status: VoiceStatus }
+  | { type: 'update.updated'; status: UpdateStatus };
 
 /* ── Voice mode (desktop only): « Hi Atlas », all local (docs/voice-research.md) ─────────────────────── */
 

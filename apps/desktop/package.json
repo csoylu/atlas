@@ -58,12 +58,20 @@
             "arm64",
             "x64"
           ]
+        },
+        {
+          "target": "zip",
+          "arch": [
+            "arm64",
+            "x64"
+          ]
         }
       ],
       "category": "public.app-category.developer-tools",
       "extendInfo": {
         "NSMicrophoneUsageDescription": "Atlas listens for « Hi Atlas » and what you say next. Audio is processed on this Mac only."
-      }
+      },
+      "artifactName": "${productName}-${version}-${arch}.${ext}"
     },
     "win": {
       "target": [

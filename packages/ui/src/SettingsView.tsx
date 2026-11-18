@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useState } from 'react';
-import type { About, Agent, Card, ChatGptStatus, Model, Settings } from '@atlas/shared';
+import type { About, UpdateStatus, Agent, Card, ChatGptStatus, Model, Settings } from '@atlas/shared';
 import { api } from './api.ts';
 import { AgentsView } from './AgentsView.tsx';
 import { MemoryPage } from './MemoryPage.tsx';
@@ -14,6 +14,7 @@ import { VoiceSettings } from './VoiceSettings.tsx';
 import { SETTINGS_GROUPS, type SettingsPage } from './settingsPages.ts';
 import { THEMES, type ThemeChoice } from './theme.ts';
 import type { MessageStream } from './useMessages.ts';
+import { UpdateAbout } from './UpdateDialog.tsx';
 
 /**
  * Settings (design §12): a second navigation inside the sheet, grouped (Team, Models, Insight, App), and the page on
@@ -35,6 +36,9 @@ export function SettingsView(props: {
   onSettings(s: Settings): void;
   onAgentsChanged(): void;
   onModelsChanged(): void;
+  /** App updates (#123): Settings → About shows the version, the last check and « Check now ». */
+  update: UpdateStatus | null;
+  onOpenUpdate(): void;
   onError(e: unknown): void;
 }) {
   const { page, stream, onError } = props;
@@ -148,7 +152,7 @@ export function SettingsView(props: {
               </section>
             )
           ) : (
-            <AboutData onError={onError} />
+            <AboutData update={props.update} onOpenUpdate={props.onOpenUpdate} onError={onError} />
           )}
         </div>
         )}
@@ -210,7 +214,7 @@ function Appearance(props: { theme: ThemeChoice; onTheme(t: ThemeChoice): void }
   );
 }
 
-function AboutData({ onError }: { onError(e: unknown): void }) {
+function AboutData({ update, onOpenUpdate, onError }: { update: UpdateStatus | null; onOpenUpdate(): void; onError(e: unknown): void }) {
   const [about, setAbout] = useState<About | null>(null);
   useEffect(() => {
     api.about().then(setAbout, onError);
@@ -225,6 +229,10 @@ function AboutData({ onError }: { onError(e: unknown): void }) {
         <dl className="about-list">
           <dt>Version</dt>
           <dd className="num">{about.version}</dd>
+          <dt>Updates</dt>
+          <dd>
+            <UpdateAbout status={update} onOpen={onOpenUpdate} onError={onError} />
+          </dd>
           <dt>Runs as</dt>
           <dd>{about.server ? 'Server (login required)' : 'Desktop app on this machine'}</dd>
           <dt>Data folder</dt>
