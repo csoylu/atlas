@@ -1669,6 +1669,9 @@ button.msg-quote:hover { color: var(--text); }
 .sd-path { font-family: var(--mono); font-size: var(--fs-small); color: var(--faint); min-width: 0; overflow: hidden; text-overflow: ellipsis; }
 .sd-src pre { margin: 0; padding: 16px 20px; font: var(--fs-small)/var(--lh-normal) var(--mono); white-space: pre-wrap; overflow-wrap: anywhere; color: var(--text); }
 .cm-doc.on { border-color: var(--accent); }
+/* A document read from the ticket modal (#192): fills the modal over the task, which stays mounted underneath. */
+.card-modal { position: relative; }
+.cm-reader { position: absolute; inset: 0; z-index: 2; display: flex; flex-direction: column; background: var(--panel); outline: none; }
 .cm-doc-icon .kind-icon { display: block; }
 
 /* ── Library (mockup linear.html?screen=library) ─────────── */

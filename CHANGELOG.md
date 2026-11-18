@@ -6,6 +6,12 @@ computed by `scripts/release/changelog.mjs` from the oldest entry to the newest,
 `Fixed` → patch, `Added` or `Changed` → minor, `Breaking` (data or settings stop working without action) → major.
 Never type a version number.
 
+## Fixed · #192 · A document chip in a task's thread opens the document again, from the task window and from the task beside a chat
+
+In the task window, a chip (or a row of the task's Artifacts) shows the document over the whole window at the chip's
+version and section; « ‹ Task » or Esc goes back to the task as it was. Beside a chat, the chip opens it in the chat's
+documents panel. A chip's section given by its heading text (« 7. Open questions ») now scrolls there too.
+
 ## Changed · #188 · Merging a PR whose only conflict is the changelog no longer needs a hand rebase: the validation script rebases it by itself
 
 `node scripts/pr/validate.mjs <pr> --ok --sha <head> --as <who> "…" --merge` on a PR that conflicts with main in CHANGELOG.md only now replays its commits onto main in a throwaway worktree, puts its entry back on top with main's entries byte-identical, checks that every other file equals git's own merge and that the PR's changed lines are the same as before, pushes the branch with `--force-with-lease`, waits for CI `test` on the new head, then validates and merges that head (it prints the old → new head). CI red on the new head: `qa/validated` = failure, no merge. Another conflicting file, merge commits in the PR, edits to older changelog text or a head that moved: refused as before, the author rebases. CHANGELOG.md, the one-entry rule, versions and release notes are unchanged.

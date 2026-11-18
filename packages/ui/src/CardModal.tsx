@@ -29,7 +29,9 @@ export function CardModal(props: CardViewProps) {
         e.preventDefault();
         onClose();
       } else if (e.key === 'Tab' && dialog.current) {
-        const items = [...dialog.current.querySelectorAll<HTMLElement>(FOCUSABLE)].filter((el) => el.offsetParent !== null);
+        // A document open over the task (#192): Tab stays in it.
+        const root = dialog.current.querySelector<HTMLElement>('.cm-reader') ?? dialog.current;
+        const items = [...root.querySelectorAll<HTMLElement>(FOCUSABLE)].filter((el) => el.offsetParent !== null);
         const next = trapFocus(items, document.activeElement as HTMLElement | null, e.shiftKey);
         if (next) {
           e.preventDefault();

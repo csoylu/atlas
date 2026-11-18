@@ -235,7 +235,7 @@ export function ArtifactChip({ art, stream, onOpen }: { art: Artifact; stream: M
     </>
   );
   return onOpen ? (
-    <button type="button" className="artifact" title={`Show v${art.version} in the panel`} onClick={() => onOpen({ docId: art.docId, version: art.version, section: art.section, label: art.title })}>
+    <button type="button" className="artifact" title={`Open v${art.version}`} onClick={() => onOpen({ docId: art.docId, version: art.version, section: art.section, label: art.title })}>
       {body}
       <span className="art-open">Open</span>
     </button>

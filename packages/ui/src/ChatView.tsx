@@ -123,6 +123,14 @@ function ChatWithPanel(props: Parameters<typeof ChatView>[0] & { chat: Card }) {
           onOpenChat={(id) => (id === chat.id ? setThreadId(null) : props.onOpenChat(id))}
           // A document of the task opens in this chat's documents panel, in the thread's place.
           onOpenDoc={(doc) => api.panelOpen(chat.id, doc.id).then(() => (setThreadId(null), setHidden(false)), onError)}
+          // A chip in the task's thread (#192): its version and section, in the same panel.
+          onOpenRef={(r) =>
+            api.panelOpen(chat.id, r.docId, r.section).then(() => {
+              setWant({ docId: r.docId, version: r.version, key: String(Date.now()) });
+              setThreadId(null);
+              setHidden(false);
+            }, onError)
+          }
           onClose={() => setThreadId(null)}
           onError={onError}
         />
