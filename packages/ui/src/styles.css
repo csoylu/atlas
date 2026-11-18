@@ -1328,7 +1328,7 @@ span.chat-row-ref { cursor: inherit; }
 .row-stack { display: flex; flex: none; }
 .row-stack-ic { width: 16px; height: 16px; display: grid; place-items: center; margin-left: -4px; background: var(--panel); border-radius: 50%; box-shadow: 0 0 0 2px var(--panel); }
 .row-stack-ic:first-child { margin-left: 0; }
-.row-stack-ic.x { color: var(--neg-ink); }
+.row-stack-ic.rowic-x { color: var(--neg-ink); }
 .chat-row.steps > .chat-row-line .chat-row-icon { width: auto; }
 .chat-row.steps > .chat-row-line .chat-row-rest { color: var(--text); }
 .chat-row.steps > .chat-row-body { padding: 4px 4px 6px; }

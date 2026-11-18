@@ -6,6 +6,10 @@ computed by `scripts/release/changelog.mjs` from the oldest entry to the newest,
 `Fixed` → patch, `Added` or `Changed` → minor, `Breaking` (data or settings stop working without action) → major.
 Never type a version number.
 
+## Fixed · #139 · Tool rows show their icon again: no empty box on « Looked at #N », « Listed the board » or « Closed the panel »
+
+The row icon carried its name as a CSS class (`card`, `board`, `panel`), so the board's `.card`, `.board` and `.panel` styles turned it into a grey box, a blank area or a filled square, and stretched the icon stack of the « N steps » header. Icon classes are now prefixed `rowic-<name>`. The e2e spec `ui-134` checks the row icons and the header stack in both themes.
+
 ## Fixed · #123 · A flaky updater test no longer blocks releases
 
 The test that checks a second update keeps only the latest previous app sometimes read the app while the helper was swapping it; it now waits through the swap. 0.17.1 was not published because of it; this release carries its Windows fix too.
