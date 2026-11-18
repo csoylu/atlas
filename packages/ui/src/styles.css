@@ -974,7 +974,7 @@ button.tool .icon { color: var(--muted); font-family: var(--mono); }
   .composer-strip .pick-menu { flex: 1 1 auto; }
 }
 /* The same in a chat made narrow by a wide side panel (#211; .chat-pane is the container). */
-@container (max-width: 560px) {
+@container (max-width: 460px) {
   .strip-word, .strip-ctx .strip-dot, .strip-ctx .num { display: none; }
   .strip-gauges { flex: 0 0 auto; }
   .composer-strip .pick-menu { flex: 1 1 auto; }
