@@ -795,6 +795,8 @@ export interface Workflow extends WorkflowGraph {
   lastError: string | null;
   /** The latest run that ran (a skipped one only when none did), with its steps, for lists. */
   lastRun: WorkflowRun | null;
+  /** The states of the last 10 runs that ran (skipped ones left out), oldest first: the list's run strip (#234). */
+  recentRuns: WorkflowRunState[];
   createdBy: string;
   createdAt: string;
   updatedAt: string;

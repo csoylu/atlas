@@ -104,20 +104,22 @@ test('a schedule migrated from before workflows shows on the list and runs', asy
     await page.goto(atlas.url + '/#/schedules'); // old links land on Workflows
     await expect.poll(() => page.evaluate(() => location.hash)).toBe('#/workflows');
     const row = page.locator('.wf-row').filter({ hasText: 'Morning summary' });
-    await expect(row).toContainText('from Schedules');
+    await expect(row).toContainText('Weekdays at 09:00');
     await expect(row).toContainText('@atlas');
+    await expect(page.locator('.crumb-sub')).toHaveText('2 on'); // with the built-in Memory cleanup
     atlas.model.next(tu('task_complete', { summary: 'night summarised' }));
     await row.getByRole('button', { name: 'Run now' }).click();
     // Run now opens the task it started, as it did for a schedule.
     await expect.poll(() => page.evaluate(() => location.hash)).toContain('card=');
     await page.keyboard.press('Escape');
-    await expect(row.locator('.st-chip')).toContainText('Done', { timeout: 20_000 });
-    await expect(row.getByRole('button', { name: /run 1 .* → #\d+/ })).toBeVisible();
+    await expect(row.locator('.wfl-last .st')).toHaveText('Done', { timeout: 20_000 });
+    await expect(row.locator('.wfl-strip i.done')).toHaveCount(1);
+    await expect(row.getByRole('button', { name: /^→ #\d+$/ })).toBeVisible();
     const w = await get(atlas, '/workflows/sch_e2e');
     expect(w.lastRun).toMatchObject({ number: 1, state: 'done', trigger: 'manual' });
 
     // Its canvas: trigger → the one agent step; on a phone, the steps as a list.
-    await row.getByRole('button', { name: 'Open' }).click();
+    await row.locator('.wfl-name').click();
     await expect(page.locator('.wf-node[data-id="step1"]')).toContainText('Morning summary');
     await page.setViewportSize({ width: 390, height: 844 });
     await expect(page.locator('.wf-phone .wf-node')).toHaveCount(2);

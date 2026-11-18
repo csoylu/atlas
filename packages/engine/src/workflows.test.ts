@@ -177,6 +177,7 @@ describe('workflows (#170, design §9)', () => {
     wf.tick();
     expect(wf.run(r.id)).toMatchObject({ state: 'failed', reason: '« check » failed: no access to the server (nothing is linked to « failed »)' });
     expect(wf.get(w.id).lastRun).toMatchObject({ number: 3, state: 'failed' });
+    expect(wf.get(w.id).recentRuns).toEqual(['done', 'failed', 'failed']);
   });
 
   it('an answer that is neither approve nor reject asks again; a blocked or in-review agent task makes the run wait', async () => {

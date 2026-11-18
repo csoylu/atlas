@@ -367,3 +367,89 @@ export function refOf(id: string, cards: Card[]): string {
   const c = cards.find((x) => x.id === id);
   return c ? cardRef(c) : "its task";
 }
+
+/* ── The list page (#234, mockup /api/files/paris/pages/workflows-234.html) ── */
+
+export type ListGroup = 'on' | 'off' | 'past';
+
+/** A one-off (« Once ») workflow whose date has gone. */
+export function isPastOnce(w: Workflow, now = new Date()): boolean {
+  const t = w.nodes.find((n) => n.kind === 'trigger');
+  return t?.kind === 'trigger' && t.config.kind === 'time' && t.config.repeat === 'at' && !!t.config.at && new Date(t.config.at) < now;
+}
+
+/** On, Off, or Past: a one-off that is off and whose date has gone (it can't run on its own again). */
+export function listGroup(w: Workflow, now = new Date()): ListGroup {
+  if (w.enabled) return 'on';
+  return isPastOnce(w, now) ? 'past' : 'off';
+}
+
+/** The header's count: « 5 on · 1 off · 2 past », only the non-empty groups. */
+export function groupCount(ws: Workflow[], now = new Date()): string {
+  const n = { on: 0, off: 0, past: 0 };
+  for (const w of ws) n[listGroup(w, now)]++;
+  return (['on', 'off', 'past'] as const)
+    .filter((g) => n[g])
+    .map((g) => `${n[g]} ${g}`)
+    .join(' · ');
+}
+
+/** The run strip: 10 slots, the latest run on the right, empty slots on the left. */
+export function runStrip(states: WorkflowRun['state'][], slots = 10): (WorkflowRun['state'] | null)[] {
+  const last = states.slice(-slots);
+  return [...Array<null>(slots - last.length).fill(null), ...last];
+}
+
+export interface Template {
+  key: string;
+  name: string;
+  description: string;
+  /** The workflow it creates, for the given agents (the first ones in the list). */
+  build(agents: string[]): { name: string; nodes: WorkflowNode[]; edges: WorkflowEdge[] };
+}
+
+const tplAgent = (id: string, x: number, title: string, agentId: string | null, prompt: string): WorkflowNode => ({ id, kind: 'agent', x, y: 80, config: { title, agentId, prompt, newTaskEachRun: true } });
+const tplTime = (cron: string): WorkflowNode => ({ id: 'trigger', kind: 'trigger', x: 40, y: 80, config: { kind: 'time', repeat: 'cron', cron, at: null, timezone: BROWSER_TZ } });
+
+/** The empty page's three examples (#234). Time ones are created off: Master reads them on the canvas, then turns them on. */
+export const TEMPLATES: Template[] = [
+  {
+    key: 'morning',
+    name: 'Morning report',
+    description: 'An agent writes a short report of what happened since yesterday.',
+    build: ([a = null]) => ({
+      name: 'Morning report',
+      nodes: [tplTime('0 9 * * 1-5'), tplAgent('step1', 300, 'Morning report', a, 'Write a short report of what happened since yesterday: tasks finished, tasks blocked, anything that needs me.')],
+      edges: [{ from: 'trigger', exit: 'start', to: 'step1' }],
+    }),
+  },
+  {
+    key: 'weekly',
+    name: 'Weekly check',
+    description: 'An agent checks something every week (dependencies, costs, memory) and opens a task if it finds a problem.',
+    build: ([a = null]) => ({
+      name: 'Weekly check',
+      nodes: [tplTime('0 9 * * 1'), tplAgent('step1', 300, 'Weekly check', a, 'Check the project dependencies for updates and security advisories. If something needs work, open a task for it.')],
+      edges: [{ from: 'trigger', exit: 'start', to: 'step1' }],
+    }),
+  },
+  {
+    key: 'approve',
+    name: 'Task with your OK',
+    description: 'One agent does the work, you approve it, then a second agent finishes it.',
+    build: ([a = null, b = a]) => ({
+      name: 'Task with your OK',
+      nodes: [
+        { id: 'trigger', kind: 'trigger', x: 40, y: 80, config: { kind: 'manual' } },
+        tplAgent('step1', 300, 'Do the work', a, 'Describe the work here.'),
+        { id: 'ok', kind: 'approval', x: 560, y: 80, config: { title: 'Your OK', question: 'Approve this? {{previous.summary}}' } },
+        tplAgent('step2', 820, 'Finish it', b, 'Finish the approved work: {{previous.summary}}'),
+      ],
+      edges: [
+        { from: 'trigger', exit: 'start', to: 'step1' },
+        { from: 'step1', exit: 'done', to: 'ok' },
+        { from: 'ok', exit: 'approved', to: 'step2' },
+      ],
+    }),
+  },
+];
