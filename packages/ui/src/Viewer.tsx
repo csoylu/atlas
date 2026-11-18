@@ -1,20 +1,17 @@
-import { lazy, Suspense, useEffect, useMemo, useRef, useState, type ReactNode } from 'react';
+import { useEffect, useMemo, useRef, useState, type ReactNode } from 'react';
 import Markdown from 'react-markdown';
 import remarkGfm from 'remark-gfm';
-import { changedSections, splitSections, type Canvas, type Doc, type DocContent, type DocSection, type DocVersion } from '@atlas/shared';
+import { changedSections, linkOf, splitSections, USER, type Doc, type DocContent, type DocSection, type DocVersion } from '@atlas/shared';
 import { api, ApiError } from './api.ts';
 import type { MessageStream } from './useMessages.ts';
-import { InlineCanvas } from './canvas/InlineCanvas.tsx';
-import { SANDBOX } from './canvas/renderers/html.tsx';
 import { diagramWidth } from './docPanel.ts';
 import { Icon } from './ScreenHeader.tsx';
+import { PopButton, PopItem } from './HeadMenu.tsx';
 import { relAgo } from './library.ts';
+import { fileUrl, folderName, isImageUrl, sandboxFor, SANDBOX, useFolders, versionLabel } from './artifacts.ts';
 
-const CanvasBoard = lazy(() => import('./canvas/CanvasBoard.tsx').then((m) => ({ default: m.CanvasBoard })));
-
-/** Where the viewer is: the chat's side panel, the Library (whiteboards edit in place), or inside a card / inbox item. */
+/** Where the viewer is: the chat's side panel, the Library, or inside a card / inbox item. */
 export type ViewerMode = 'panel' | 'library' | 'inline';
-type Pane = 'preview' | 'source' | 'history';
 
 export interface ViewerTab {
   doc: Doc;
@@ -23,11 +20,11 @@ export interface ViewerTab {
   onClose?(): void;
 }
 
-/** A document kind's line icon (tabs, Library rows). */
+/** An artifact kind's line icon (tabs, chat cards, Library rows and tiles). */
 export function KindIcon({ kind }: { kind: Doc['kind'] }) {
   const d =
-    kind === 'whiteboard' ? (
-      <><rect x="2" y="2.5" width="12" height="9" rx="1" /><path d="M5 14l3-2.5 3 2.5M5 6.5h3M5 8.5h6" /></>
+    kind === 'url' ? (
+      <><path d="M6.6 9.4a2.6 2.6 0 0 0 3.7 0l2.2-2.2a2.6 2.6 0 0 0-3.7-3.7l-.7.7" /><path d="M9.4 6.6a2.6 2.6 0 0 0-3.7 0L3.5 8.8a2.6 2.6 0 0 0 3.7 3.7l.7-.7" /></>
     ) : kind === 'html' ? (
       <><rect x="2" y="3" width="12" height="10" rx="1.2" /><path d="M2 6h12M6.5 8.5 5 10l1.5 1.5M9.5 8.5 11 10l-1.5 1.5" /></>
     ) : kind === 'diagram' ? (
@@ -42,23 +39,33 @@ export function KindIcon({ kind }: { kind: Doc['kind'] }) {
   );
 }
 
+const who = (id: string) => (id === USER ? 'you' : '@' + id);
+
 /**
- * The one artifact viewer (design §16 « Library », « Chat »), shared by the chat's side panel, the Library and the
- * card modal / inbox: a head with the documents' tabs and actions, then Preview / Source / History. History lists the
- * versions: view an old one (Preview shows it, with « Restore »), or restore it straight away.
+ * The one artifact viewer (#120, mockup #106 v2), shared by the chat's side panel, the Library and the card modal /
+ * inbox. ONE head row in every state: tabs (or the title), the version picker (« vN », « vN of M » in warn colours on
+ * an old version), « Latest » on an old version, « Source × » while the source shows, the caller's tools (Full
+ * size, Pin), ⋯, and the caller's end (×). The ⋯ menu has who / folder / path, Show source (or address), Open in the
+ * browser (links), Ask about this, then the caller's items (Open in the Library; Pin and Move to in the Library).
  */
 export function ArtifactViewer(props: {
   doc: Doc;
   mode: ViewerMode;
-  /** The tabs in the head; without them the head shows the document's title. */
+  /** The tabs in the head; without them the head shows the artifact's title. */
   tabs?: ViewerTab[];
   onTab?(doc: Doc): void;
-  /** Left of the tabs (« ‹ Library »). */
+  /** Left of the tabs (« ‹ Back », « ‹ Library »). */
   lead?: ReactNode;
-  /** Right of the head (open in Library, close…). */
-  actions?: ReactNode;
-  /** A line under Preview / Source / History (who opened it, Ask about this…). */
-  meta?: ReactNode;
+  /** Between the version controls and ⋯ (Full size, Pin). */
+  tools?: ReactNode;
+  /** Right of ⋯ (close). */
+  end?: ReactNode;
+  /** The ⋯ menu's first line: « Opened by @x » (chat); default « By @author ». */
+  by?: string;
+  /** The ⋯ menu's last items. */
+  menu?(close: () => void): ReactNode;
+  /** A version to show (a chat card opens its own); a new key shows it again. */
+  want?: { version: number; key: string } | null;
   /** Markdown section (or html element id) to scroll to; a new scrollKey scrolls again. */
   section?: string | null;
   scrollKey?: string;
@@ -67,37 +74,37 @@ export function ArtifactViewer(props: {
   stream: MessageStream;
   onAsk?(section: DocSection | null, version: number): void;
   onSeen?(): void;
-  onOpenCard?(id: string): void;
-  /** The whiteboard was deleted (Library editor). */
-  onDeleted?(): void;
   onError(e: unknown): void;
 }) {
   const { doc, onError } = props;
-  const [pane, setPane] = useState<Pane>('preview');
   const [version, setVersion] = useState<number | null>(null);
+  const [src, setSrc] = useState(false);
+  const folders = useFolders(props.stream, onError);
   useEffect(() => {
     setVersion(null);
-    setPane('preview');
+    setSrc(false);
   }, [doc.id]);
+  // A chat card asks for its version: the latest one is shown live (null), an older one fixed.
+  const wantKey = props.want ? `${props.want.key}:${props.want.version}` : null;
+  useEffect(() => {
+    if (props.want) setVersion(props.want.version < doc.version ? props.want.version : null);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [wantKey]);
 
-  const restore = (v: number) => {
-    const what = doc.kind === 'whiteboard' ? 'The canvas' : 'The file';
-    if (!confirm(`Restore v${v}? ${what} gets that content again, as a new version (you can undo it the same way).`)) return;
-    api.restoreDoc(doc.id, v).then(() => {
-      setVersion(null);
-      setPane('preview');
-    }, onError);
-  };
+  const shown = version ?? doc.version;
+  const old = version !== null && version < doc.version;
+  const restore = (v: number) => api.restoreDoc(doc.id, v).then(() => setVersion(null), onError);
+  const isLink = doc.kind === 'url';
 
   return (
     <div className={'viewer ' + props.mode}>
       <div className="sd-head">
         {props.lead}
         {props.tabs ? (
-          <div className="sd-tabs" role="tablist" aria-label="Documents">
+          <div className="sd-tabs" role="tablist" aria-label="Artifacts">
             {props.tabs.map((t) => (
               <div key={t.doc.id} className={'sd-tab' + (t.doc.id === doc.id ? ' on' : '')}>
-                <button role="tab" aria-selected={t.doc.id === doc.id} title={t.doc.path ?? t.doc.title} onClick={() => t.doc.id !== doc.id && props.onTab?.(t.doc)}>
+                <button role="tab" aria-selected={t.doc.id === doc.id} title={t.doc.path} onClick={() => t.doc.id !== doc.id && props.onTab?.(t.doc)}>
                   <KindIcon kind={t.doc.kind} />
                   <span className="sd-tab-t">{t.doc.title}</span>
                   {t.dot && <span className="sd-dot" title="Changed since you looked" />}
@@ -114,52 +121,98 @@ export function ArtifactViewer(props: {
           <div className="sd-title">
             <KindIcon kind={doc.kind} />
             <b>{doc.title}</b>
-            <span className="sd-path">{doc.path ?? 'whiteboard'}</span>
+            {props.mode === 'library' && <span className="sd-path">{doc.path}</span>}
           </div>
         )}
-        {props.actions}
-      </div>
-      <div className="sd-sub" role="tablist" aria-label="View">
-        {(['preview', 'source', 'history'] as Pane[]).map((p) => (
-          <button key={p} type="button" role="tab" aria-selected={pane === p} className={'tabbtn' + (pane === p ? ' on' : '')} onClick={() => setPane(p)}>
-            {p === 'history' && <Icon.clock />}
-            {p === 'preview' ? 'Preview' : p === 'source' ? 'Source' : 'History'}
+        <PopButton
+          className={'sd-ver-btn' + (old ? ' old' : '')}
+          title={old ? `Showing v${shown}; the latest is v${doc.version}` : `Versions (v${doc.version}, ${relAgo(doc.updatedAt)})`}
+          ariaLabel={`Version ${versionLabel(shown, doc.version)}: versions`}
+          label={
+            <>
+              {versionLabel(shown, doc.version)}
+              <Icon.chevDown />
+            </>
+          }
+        >
+          {(close) => (
+            <VersionMenu
+              doc={doc}
+              shown={shown}
+              onView={(v) => {
+                setVersion(v === doc.version ? null : v);
+                close();
+              }}
+              onRestore={(v) => {
+                close();
+                void restore(v);
+              }}
+              onError={onError}
+            />
+          )}
+        </PopButton>
+        {old && (
+          <button type="button" className="sd-btn sd-latest-btn" title="Back to the latest version" onClick={() => setVersion(null)}>
+            Latest
           </button>
-        ))}
-        <span className="sd-ver" title={new Date(doc.updatedAt).toLocaleString()}>
-          {version !== null ? `v${version} of ${doc.version}` : `v${doc.version} · ${relAgo(doc.updatedAt)}`}
-        </span>
+        )}
+        {src && (
+          <button type="button" className="sd-btn sd-src-on" title="Back to the preview" onClick={() => setSrc(false)}>
+            {isLink ? 'Address' : 'Source'} ×
+          </button>
+        )}
+        {props.tools}
+        <PopButton className="sd-btn icon-only" title="More" ariaLabel="More" label={<Icon.dots />}>
+          {(close) => (
+            <>
+              <div className="pop-info">
+                <span>{props.by ?? `By ${who(doc.agentId)}`}</span>
+                <span>
+                  <Icon.folder />
+                  {folderName(folders, doc.folderId)}
+                </span>
+                <span className="pop-path">{doc.path}</span>
+              </div>
+              <div className="pop-sep" />
+              <PopItem
+                icon={<Icon.code />}
+                onClick={() => {
+                  setSrc(!src);
+                  close();
+                }}
+              >
+                {src ? 'Show the preview' : isLink ? 'Show the address' : 'Show the source'}
+              </PopItem>
+              {isLink && <OpenInBrowser doc={doc} version={version} onDone={close} onError={onError} />}
+              {props.onAsk && doc.kind !== 'markdown' && (
+                <PopItem
+                  icon={<Icon.ask />}
+                  onClick={() => {
+                    props.onAsk!(null, shown);
+                    close();
+                  }}
+                >
+                  Ask about this
+                </PopItem>
+              )}
+              {props.menu?.(close)}
+            </>
+          )}
+        </PopButton>
+        {props.end}
       </div>
-      {props.meta && pane === 'preview' && <div className="sd-by">{props.meta}</div>}
-      {pane === 'preview' ? (
+      {src ? (
+        <Source key={doc.id} doc={doc} version={version} onError={onError} />
+      ) : (
         <DocBody
           key={doc.id}
           doc={doc}
-          mode={props.mode}
           version={version}
-          onVersion={setVersion}
-          onRestore={restore}
           section={props.section}
           scrollKey={props.scrollKey}
           seenVersion={props.seenVersion}
-          stream={props.stream}
           onAsk={props.onAsk}
           onSeen={props.onSeen}
-          onOpenCard={props.onOpenCard}
-          onDeleted={props.onDeleted}
-          onError={onError}
-        />
-      ) : pane === 'source' ? (
-        <Source key={doc.id} doc={doc} version={version} stream={props.stream} onError={onError} />
-      ) : (
-        <History
-          doc={doc}
-          viewing={version}
-          onView={(v) => {
-            setVersion(v);
-            setPane('preview');
-          }}
-          onRestore={restore}
           onError={onError}
         />
       )}
@@ -167,73 +220,68 @@ export function ArtifactViewer(props: {
   );
 }
 
-/** History: every kept version, latest first; view one, or restore it. */
-function History(props: { doc: Doc; viewing: number | null; onView(v: number | null): void; onRestore(v: number): void; onError(e: unknown): void }) {
+/** The version picker's menu: every kept version with its author and time; « Restore vN as vM+1 » on an old one. */
+function VersionMenu(props: { doc: Doc; shown: number; onView(v: number): void; onRestore(v: number): void; onError(e: unknown): void }) {
   const { doc, onError } = props;
   const [versions, setVersions] = useState<DocVersion[] | null>(null);
   useEffect(() => {
     api.docVersions(doc.id).then(setVersions, onError);
   }, [doc.id, doc.version, onError]);
-  if (!versions) return <div className="sd-body loading" />;
-  const shown = props.viewing ?? doc.version;
   return (
-    <div className="sd-body sd-hist" role="list">
-      {versions.map((v, i) => (
-        <div key={v.version} role="listitem" className={'sd-hrow' + (v.version === shown ? ' on' : '')}>
-          <b>v{v.version}</b>
-          <span className="sd-hwho">{v.updatedBy === 'user' ? 'you' : '@' + v.updatedBy}</span>
-          <span className="sd-hwhen" title={new Date(v.updatedAt).toLocaleString()}>
+    <>
+      <div className="pop-k">Versions</div>
+      {!versions && <p className="pop-note">Loading…</p>}
+      {versions?.map((v) => (
+        <button key={v.version} type="button" role="menuitemradio" aria-checked={v.version === props.shown} className="pop-row" onClick={() => props.onView(v.version)}>
+          <span className="pop-v">v{v.version}</span>
+          <span className="pop-t">{who(v.updatedBy)}</span>
+          <span className="pop-sub" title={new Date(v.updatedAt).toLocaleString()}>
+            {v.version === doc.version ? 'latest · ' : ''}
             {relAgo(v.updatedAt)}
           </span>
-          <span className="sd-sp" />
-          {i === 0 ? (
-            <>
-              <span className="sd-latest">latest</span>
-              {props.viewing !== null && (
-                <button type="button" className="head-btn" onClick={() => props.onView(null)}>
-                  View
-                </button>
-              )}
-            </>
-          ) : (
-            <>
-              {doc.kind !== 'whiteboard' && (
-                <button type="button" className="head-btn" onClick={() => props.onView(v.version)}>
-                  View
-                </button>
-              )}
-              <button type="button" className="head-btn" onClick={() => props.onRestore(v.version)}>
-                Restore
-              </button>
-            </>
-          )}
-        </div>
+          <span className="pop-check" style={v.version === props.shown ? undefined : { visibility: 'hidden' }}>
+            <Icon.check />
+          </span>
+        </button>
       ))}
-      <p className="sd-hnote">The last 50 versions are kept. Restoring adds a new version: nothing is lost.</p>
-    </div>
+      {props.shown < doc.version && (
+        <>
+          <div className="pop-sep" />
+          <PopItem icon={<Icon.restore />} onClick={() => props.onRestore(props.shown)}>
+            Restore v{props.shown} as v{doc.version + 1}
+          </PopItem>
+        </>
+      )}
+      <p className="pop-note">The last 50 versions are kept. Restoring adds a new version: nothing is lost.</p>
+    </>
   );
 }
 
-/** Source: the file's text at the version shown (whiteboards: the canvas nodes as JSON). */
-function Source({ doc, version, stream, onError }: { doc: Doc; version: number | null; stream: MessageStream; onError(e: unknown): void }) {
+/** « Open in the browser » for a link: its address at the version shown. */
+function OpenInBrowser({ doc, version, onDone, onError }: { doc: Doc; version: number | null; onDone(): void; onError(e: unknown): void }) {
+  const [url, setUrl] = useState<string | null>(null);
+  useEffect(() => {
+    api.document(doc.id, version ?? undefined).then((d) => setUrl(linkOf(d.content)), onError);
+  }, [doc.id, doc.version, version, onError]);
+  return (
+    <a className="pop-row" role="menuitem" href={url ?? undefined} target="_blank" rel="noreferrer" onClick={onDone} aria-disabled={!url}>
+      <Icon.ext />
+      <span className="pop-t">Open in the browser</span>
+    </a>
+  );
+}
+
+/** Source: the file's text at the version shown (a link: its address). */
+function Source({ doc, version, onError }: { doc: Doc; version: number | null; onError(e: unknown): void }) {
   const [text, setText] = useState<string | null>(null);
   const latestKey = version === null ? doc.version : -1;
   useEffect(() => {
     let live = true;
-    if (doc.kind === 'whiteboard') {
-      const show = (c: Canvas) => live && setText(JSON.stringify(c.nodes, null, 2));
-      api.canvas(doc.canvasId!).then(show, onError);
-      const off = stream.listen('canvas:' + doc.canvasId, (e) => e.type === 'canvas' && show(e.canvas));
-      return () => {
-        live = false;
-        off();
-      };
-    }
     api.document(doc.id, version ?? undefined).then((d) => live && setText(d.content), onError);
     return () => {
       live = false;
     };
-  }, [doc.id, doc.kind, doc.canvasId, version, latestKey, stream, onError]);
+  }, [doc.id, version, latestKey, onError]);
   if (text === null) return <div className="sd-body loading" />;
   return (
     <div className="sd-body sd-src">
@@ -243,25 +291,19 @@ function Source({ doc, version, stream, onError }: { doc: Doc; version: number |
 }
 
 /**
- * Preview: the document rendered by kind. Markdown at a readable width, sections with « Ask about this » and
+ * Preview: the artifact rendered by kind. Markdown at a readable width, sections with « Ask about this » and
  * « changed » marks; an html page at real size, sandboxed; an svg diagram fit to the width (text kept readable); a
- * whiteboard live (in the Library: its editor).
+ * link as the running app (an image link fit to the box).
  */
 function DocBody(props: {
   doc: Doc;
-  mode: ViewerMode;
   /** null: the latest version, live. */
   version: number | null;
-  onVersion(v: number | null): void;
-  onRestore(v: number): void;
   section?: string | null;
   scrollKey?: string;
   seenVersion?: number;
-  stream: MessageStream;
   onAsk?(section: DocSection | null, version: number): void;
   onSeen?(): void;
-  onOpenCard?(id: string): void;
-  onDeleted?(): void;
   onError(e: unknown): void;
 }) {
   const { doc, version, onError } = props;
@@ -269,7 +311,7 @@ function DocBody(props: {
   const [base, setBase] = useState<string | null>(null);
   const scrolled = useRef<string | null>(null);
 
-  // The latest version follows the document (doc.version changes on every edit); an old one is fixed.
+  // The latest version follows the artifact (doc.version changes on every edit); an old one is fixed.
   const latestKey = version === null ? doc.version : -1;
   useEffect(() => {
     let live = true;
@@ -309,17 +351,6 @@ function DocBody(props: {
   const shown = data.version;
   return (
     <div className={'sd-body ' + doc.kind}>
-      {version !== null && (
-        <div className="sd-old">
-          Viewing v{version} of {doc.version}.
-          <button className="sd-link" onClick={() => props.onRestore(version)}>
-            Restore this version
-          </button>
-          <button className="sd-link" onClick={() => props.onVersion(null)}>
-            Back to latest
-          </button>
-        </div>
-      )}
       {doc.kind === 'markdown' ? (
         <article className="doc-md md">
           {sections.map((s) => (
@@ -336,9 +367,7 @@ function DocBody(props: {
                   </button>
                 )}
               </div>
-              <Markdown remarkPlugins={[remarkGfm]} components={{ a: ({ node: _n, ...a }) => <a {...a} target="_blank" rel="noreferrer" /> }}>
-                {s.text}
-              </Markdown>
+              <MarkdownText text={s.text} />
             </section>
           ))}
           {!sections.length && <p className="muted">This document is empty.</p>}
@@ -350,22 +379,31 @@ function DocBody(props: {
             className="doc-frame"
             title={doc.title}
             sandbox={SANDBOX}
-            src={`/api/files/${encodeURIComponent(doc.agentId)}/${doc.path!.split('/').map(encodeURIComponent).join('/')}${props.section ? '#' + encodeURIComponent(props.section) : ''}`}
+            src={fileUrl(doc) + (props.section ? '#' + encodeURIComponent(props.section) : '')}
           />
         ) : (
           <iframe className="doc-frame" title={doc.title} sandbox={SANDBOX} srcDoc={data.content} />
         )
       ) : doc.kind === 'diagram' ? (
         <Diagram svg={data.content} title={doc.title} />
-      ) : props.mode === 'library' ? (
-        <Suspense fallback={<div className="canvas-board loading">Loading canvas…</div>}>
-          <CanvasBoard id={doc.canvasId!} stream={props.stream} onOpenCard={props.onOpenCard ?? (() => undefined)} onError={onError} onDeleted={props.onDeleted ?? (() => undefined)} />
-        </Suspense>
       ) : (
-        <Whiteboard canvasId={doc.canvasId!} stream={props.stream} onError={onError} />
+        <LinkView url={linkOf(data.content)} title={doc.title} />
       )}
     </div>
   );
+}
+
+const MarkdownText = ({ text }: { text: string }) => (
+  <Markdown remarkPlugins={[remarkGfm]} components={{ a: ({ node: _n, ...a }) => <a {...a} target="_blank" rel="noreferrer" /> }}>
+    {text}
+  </Markdown>
+);
+
+/** A link: the running app or page in a frame, an image fit to the box. */
+function LinkView({ url, title, preview }: { url: string; title: string; preview?: boolean }) {
+  if (!url) return <p className="muted doc-empty">This link has no address.</p>;
+  if (isImageUrl(url)) return <img className={preview ? 'lib-pv-img' : 'doc-link-img'} src={url} alt={preview ? '' : title} />;
+  return <iframe className={preview ? undefined : 'doc-frame'} title={title} sandbox={sandboxFor(url)} src={url} tabIndex={preview ? -1 : undefined} aria-hidden={preview || undefined} loading="lazy" />;
 }
 
 const secId = (docId: string, section: string) => `docsec-${docId}-${section}`;
@@ -390,14 +428,53 @@ function Diagram({ svg, title }: { svg: string; title: string }) {
   );
 }
 
-/** A canvas shown whole, live (panel, card): « Open in Library » in its header goes to the editor. */
-function Whiteboard({ canvasId, stream, onError }: { canvasId: string; stream: MessageStream; onError(e: unknown): void }) {
-  const [canvas, setCanvas] = useState<Canvas | null>(null);
+/**
+ * A Library tile's preview (#120): the real content, rendered live and scaled down to the tile (a page or link at
+ * 720 px wide, a document at 620 px), so artifacts are found by sight. Not interactive.
+ */
+export function ArtifactPreview({ doc, onError }: { doc: Doc; onError(e: unknown): void }) {
+  const box = useRef<HTMLSpanElement>(null);
+  const [fit, setFit] = useState<{ k: number; h: number } | null>(null);
+  const [content, setContent] = useState<string | null>(null);
+  const base = doc.kind === 'markdown' ? 620 : 720;
   useEffect(() => {
-    api.canvas(canvasId).then(setCanvas, onError);
-    return stream.listen('canvas:' + canvasId, (e) => e.type === 'canvas' && setCanvas(e.canvas));
-  }, [canvasId, stream, onError]);
-  if (!canvas) return null;
-  if (!canvas.nodes.length) return <p className="muted doc-empty">This canvas is empty.</p>;
-  return <InlineCanvas canvasId={canvasId} nodeIds={canvas.nodes.map((n) => n.id)} stream={stream} />;
+    if (doc.kind !== 'markdown' && doc.kind !== 'url') return;
+    let live = true;
+    api.document(doc.id).then((d) => live && setContent(d.content), onError);
+    return () => {
+      live = false;
+    };
+  }, [doc.id, doc.kind, doc.version, onError]);
+  useEffect(() => {
+    const el = box.current;
+    if (!el) return;
+    const on = () => el.clientWidth && setFit({ k: el.clientWidth / base, h: Math.ceil(el.clientHeight / (el.clientWidth / base)) });
+    const ro = new ResizeObserver(on);
+    ro.observe(el);
+    return () => ro.disconnect();
+  }, [base]);
+  // The inner box at its real width, scaled to the tile (style values are layout, not type).
+  const scaled = fit ? { width: base, height: fit.h, transform: `scale(${fit.k})` } : { visibility: 'hidden' as const };
+  const link = doc.kind === 'url' && content !== null ? linkOf(content) : null;
+  return (
+    <span ref={box} className={'lib-pv ' + doc.kind} aria-hidden="true">
+      {doc.kind === 'markdown' ? (
+        content !== null && (
+          <div className="lib-pv-doc" style={scaled}>
+            <article className="doc-md md">
+              <MarkdownText text={content} />
+            </article>
+          </div>
+        )
+      ) : doc.kind === 'diagram' ? (
+        <img className="lib-pv-img" src={fileUrl(doc) + `?v=${doc.version}`} alt="" />
+      ) : doc.kind === 'html' ? (
+        <iframe key={doc.version} tabIndex={-1} title="" sandbox={SANDBOX} src={fileUrl(doc)} style={scaled} loading="lazy" />
+      ) : link && isImageUrl(link) ? (
+        <img className="lib-pv-img" src={link} alt="" />
+      ) : (
+        link && <iframe tabIndex={-1} title="" sandbox={sandboxFor(link)} src={link} style={scaled} loading="lazy" />
+      )}
+    </span>
+  );
 }

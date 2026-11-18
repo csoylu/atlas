@@ -2,7 +2,7 @@ import { currentToolName, type ToolCallDetail } from '@atlas/shared';
 import { boardMeta, cardLine } from './cardRows.ts';
 import { diffCount, diffLines } from './fileRows.ts';
 import type { RowTone } from './chatRow.ts';
-import { whenText } from './canvasRows.ts';
+import { whenText } from './teamRows.ts';
 import { charsText, domainOf, fetchedPage, searchHits, shortUrl, webError } from './webRows.ts';
 
 /**
@@ -109,6 +109,7 @@ const FAILED: Record<string, string> = {
   task_list: 'Couldn’t list tasks', task_block: 'Couldn’t ask you', task_request_review: 'Couldn’t send for review',
   task_complete: 'Couldn’t finish the task', history_search: 'Couldn’t search its history', canvas_create: 'Couldn’t create canvas',
   canvas_write: 'Couldn’t update canvas', canvas_read: 'Couldn’t read canvas', canvas_list: 'Couldn’t list canvases',
+  artifact_create: 'Couldn’t create the artifact', artifact_update: 'Couldn’t update the artifact', artifact_list: 'Couldn’t list artifacts', artifact_read: 'Couldn’t read the artifact',
   panel_open: 'Couldn’t open', panel_close: 'Couldn’t close', memory_edit: 'Couldn’t save to memory', memory_add: 'Couldn’t save to memory', memory_update: 'Couldn’t update memory', memory_forget: 'Couldn’t forget', memory_search: 'Couldn’t search memory', todo_write: 'Couldn’t save the plan',
   schedule_create: 'Couldn’t schedule', schedule_list: 'Couldn’t list schedules', schedule_delete: 'Couldn’t delete schedule',
 };
@@ -282,7 +283,25 @@ function describe(name: string, o: Input, out: string, ok: boolean, detail?: Too
       const hits = ok ? (out.startsWith('no message') ? 0 : (out.match(/^#\d+ /gm) ?? []).length) : 0;
       return { icon: 'history', verb: 'Searched its history', running: 'Searching its history', object: q ? quoted(q) : num(o.seq) !== undefined ? `message #${o.seq}` : '', mono: !!q, meta: ok && q ? [{ text: plural(hits, 'hit') }] : [], detail: 'matches' };
     }
-    /* ── canvas & panel ── */
+    /* ── artifacts (#120) & panel; canvas_* rows stay for chats from before ── */
+    case 'artifact_create':
+    case 'artifact_update': {
+      const m = /^(created|updated|unchanged) (.*) \((doc_[\w-]+), ([^()]+), v(\d+)\)/.exec(out);
+      const created = name === 'artifact_create';
+      const title = m?.[2] ?? str(o.title) ?? str(o.artifact) ?? str(o.path) ?? '';
+      const verb = created ? 'Created' : m?.[1] === 'unchanged' ? 'Left unchanged' : 'Updated';
+      return { icon: created ? 'write' : 'edit', tone: 'acc', verb, running: created ? 'Creating' : 'Updating', object: title, meta: m ? [{ text: `v${m[5]}` }] : [], detail: 'doc', weight: 'write', short: { verb: verb.toLowerCase(), obj: title } };
+    }
+    case 'artifact_list': {
+      const n = ok && !out.startsWith('no artifacts') ? out.split('\n').filter((l) => /^doc_/.test(l)).length : 0;
+      const q = str(o.query);
+      return { icon: 'search', verb: 'Listed artifacts', running: 'Listing artifacts', object: q ? quoted(q) : str(o.folder), mono: !!q, meta: ok ? [{ text: plural(n, 'artifact') }] : [], detail: 'generic' };
+    }
+    case 'artifact_read': {
+      const m = /^(.*) \((doc_[\w-]+), \w+, v(\d+) of \d+/.exec(out);
+      return { icon: 'read', verb: 'Read', running: 'Reading', object: m?.[1] ?? str(o.artifact) ?? str(o.path) ?? '', meta: m ? [{ text: `v${m[3]}` }] : [], detail: 'generic' };
+    }
+    /* ── canvas (old chats) ── */
     case 'canvas_create': {
       const id = /created (cv_\w+)/.exec(out)?.[1];
       return { icon: 'canvas', verb: 'Created canvas', running: 'Creating canvas', object: str(o.name) ?? '', meta: id ? [{ text: id.slice(0, 7) }] : [], detail: 'canvas', weight: 'write' };
@@ -306,12 +325,13 @@ function describe(name: string, o: Input, out: string, ok: boolean, detail?: Too
       return { icon: 'canvas', verb: 'Listed canvases', running: 'Listing canvases', meta: ok ? [{ text: plural(n, 'canvas', 'canvases') }] : [], detail: 'board' };
     }
     case 'panel_open': {
-      const { name: file } = splitPath(str(o.path) ?? str(o.canvas) ?? '');
-      const v = /, v(\d+)\)/.exec(out)?.[1];
+      const m = /^opened (.*) \((doc_[\w-]+), [^()]+, v(\d+)\)/.exec(out);
+      const file = m?.[1] ?? splitPath(str(o.path) ?? str(o.artifact) ?? str(o.canvas) ?? '').name;
+      const v = m?.[3] ?? /, v(\d+)\)/.exec(out)?.[1];
       return { icon: 'panel', tone: 'acc', verb: 'Opened in the panel', running: 'Opening in the panel', object: file, meta: v ? [{ text: `v${v}` }] : [], detail: 'doc', short: { verb: 'opened', obj: file } };
     }
     case 'panel_close': {
-      const target = str(o.path) ?? str(o.canvas);
+      const target = str(o.path) ?? str(o.artifact) ?? str(o.canvas);
       return { icon: 'panel', verb: target ? 'Closed in the panel' : 'Closed the panel', running: 'Closing', object: target ? splitPath(target).name : undefined, detail: 'generic' };
     }
     /* ── memory, plan, schedules ── */

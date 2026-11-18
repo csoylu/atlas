@@ -315,7 +315,7 @@ Statuses: `triage → todo → ready → running → (blocked | review) → done
 | `web_search` | provider-native only: Anthropic's server tool `web_search_20250305` (API key and Claude plan, only against api.anthropic.com); `server_tool_use` / `web_search_tool_result` blocks are stored verbatim, replayed, shown in the UI; `pause_turn` continues the answer. ChatGPT plan and local models: none offered (ChatGPT's Responses web_search not verified on the plan route) |
 | `card_*` | create, comment, block, complete, request_review, list, show |
 | `message_agent` | posts into the other agent's chat; the reply arrives as a message later |
-| `canvas_read`, `canvas_write` | read the scene as JSON; add/update/delete elements |
+| `artifact_create`, `artifact_update`, `artifact_list`, `artifact_read` | artifacts (§11) |
 | `schedule_create`, `schedule_list`, `schedule_delete` | |
 | `memory_add`, `memory_update`, `memory_forget`, `memory_search` | Memory v2 (§8). add(kind, scope self/shared, text, update?/new?): refused with the similar ones listed unless `update: id` or `new: true`; over the always-on budget → refused, asking to merge. update(id, text, kind?) and forget(id) on own and shared memories only; forget archives. search(query): own + shared, stale included. Replaced `memory_edit` (old transcripts still render it) |
 | `ask_user` | in chat runs only; on cards use `card_block(needs_input)` |
@@ -329,19 +329,19 @@ without new code.
 Permissions per agent: allowed tools, allowed paths, shell on/off, network on/off. Dangerous shell patterns
 (`rm -rf` outside the workdir, `git push --force`, writing to `~/.ssh`) require the user's approval in the UI.
 
-## 11. Canvas
-- Our own board of nodes (§16); stored as JSON in `canvases`, versioned (each save bumps `version`; keep the last 50).
-  v3 (17 Nov 2026): Excalidraw and `drawing` nodes were removed (migration 0037). System design diagrams are svg
-  documents (`diagrams/*.svg`), shown in the side panel or on a canvas as a `url` node.
-- Live sync: the UI sends scene updates over the WebSocket; the engine broadcasts them; agents' `canvas_write`
-  goes through the same path, so the user sees agent edits appear.
-- A card can link a canvas; a canvas element can link a card.
-- A canvas is also one **document** type, the *whiteboard*: it opens in a chat's side panel like a markdown doc,
-  an html page or a diagram (§16 « Side panel »).
+## 11. Artifacts (replaced canvases, #120, 18 Nov 2026)
+- An artifact is a file in an agent's workspace: markdown (`docs/*.md`), html (`pages/*.html`), svg (`diagrams/*.svg`)
+  or url (`*.url`, one address). Each is a row in `documents`, versioned in `document_versions` (last 50 kept).
+- Tools: `artifact_create`, `artifact_update` (whole content or one replacement; one new version each), `artifact_list`,
+  `artifact_read`, `panel_open`. A created or updated artifact shows in the chat as a card that stays on its version.
+- Library folders are flat (`folders`, `documents.folder_id`; null = Unfiled). Pinned artifacts stay on top in their
+  folder. Deleting a folder moves its artifacts to Unfiled. Search covers titles and content across folders.
+- Migration 0041 deleted whiteboard documents; the `canvases` table stays as an archive. At startup each archived
+  canvas is converted once to `pages/canvases/<slug>.html` in the « Canvases » folder (`documents.from_canvas`).
 
 ## 12. UI and API
 - Screens: **Chat** (agent list + conversation, streaming, tool calls collapsible), **Board** (columns, card detail with
-  events, runs, transcript link, « why not running »), **Canvas**, **Schedules**, **Settings**, **Logs**.
+  events, runs, transcript link, « why not running »), **Library**, **Schedules**, **Settings**, **Logs**.
 - Settings (restructured 12 Nov 2026): one plain « Settings » item at the bottom of the sidebar opens `#/settings/<page>`
   (the last one visited). Inside the sheet a second navigation (200px, same nav-item style, small group titles,
   counts on the right) lists the pages; under 900px it collapses to a select at the top. Top bar: « Settings » + page.
@@ -398,7 +398,7 @@ Each step ends with something the user can use.
 6. **Multi-agent**: several agents, `message_agent`, memory, per-agent permissions.
 7. **Scheduler**: schedules, schedule tools, UI.
 8. **Context management** (§8) with the summary fallback.
-9. **Canvas** (§11).
+9. **Artifacts** (§11).
 10. **Server mode** (§12 auth) and move to the VPS.
 11. After v1 (§13).
 

@@ -108,7 +108,6 @@ for (const c of chats) {
 const modalCard = [...cards].filter((c) => c.board !== 'direct').sort((a, b) => b.body.length - a.body.length)[0] ?? chat;
 const docs = await get('/documents');
 const doc = docs.find((d) => d.kind === 'markdown') ?? docs[0];
-const whiteboard = docs.find((d) => d.kind === 'whiteboard');
 const now = new Date().toISOString();
 const fixture = (n, title, patch) => ({
   ...chat, id: `c_uicheck${n}`, title, body: '', board: 'main', originCard: chat.id, conversationId: `conv_c_uicheck${n}`,
@@ -150,20 +149,6 @@ const TOOL_CARDS = [
   fixture('t3', 'Voice: push-to-talk shortcut', { number: 9203, status: 'running', originCard: null }),
   fixture('t4', 'Voice bug: the orb stays on after Esc', { number: 9204, status: 'triage', originCard: null }),
 ];
-// Fixture canvases for #64's rows (thumbnails, names, the inline canvas): GET /api/canvases[/id] answer with them.
-const CV_ID = 'cv_uicheck1';
-const CV_EMPTY = 'cv_uicheck2';
-const CANVASES = [
-  {
-    id: CV_ID, name: '#56 Menu bar orb breathing, with a deliberately long canvas name for the phone', version: 4, updatedBy: 'atlas', updatedAt: now,
-    nodes: [
-      { id: 'n1', kind: 'markdown', x: 0, y: 0, w: 320, h: 160, title: 'Preview', text: '## Idle\nA slow breathing glow.' },
-      { id: 'n2', kind: 'markdown', x: 360, y: 0, w: 320, h: 160, title: 'CPU', text: '## CPU\n0.4 % while breathing.' },
-      { id: 'n3', kind: 'html', x: 0, y: 200, w: 680, h: 140, title: 'States', html: '<p>states</p>' },
-    ],
-  },
-  { id: CV_EMPTY, name: 'Empty sketch', version: 1, updatedBy: 'atlas', updatedAt: now, nodes: [] },
-];
 const TOOL_MSGS = [
   // Card & team tools (#62): one group with every card tool (the `chat-tools-cards` screen opens them all), the question
   // pinned after it, then a single card_create as its own row (its #N opens the ticket).
@@ -193,16 +178,13 @@ const TOOL_MSGS = [
   tmsg('user', 'user', [{ type: 'text', text: 'And one for the voice bug.' }]),
   tmsg('assistant', agent, [call('tc11', 'card_create', { title: 'x' })]),
   tmsg('user', 'tool', [res('tc11', `created #9204 [triage] unassigned P3 ${TOOL_CARDS[3].title}`)]),
-  // Canvas, memory, plan, schedules, thinking (#64): one group with each of them (the `chat-tools-canvas` screen opens
-  // them all: canvas thumbnails, lists, the memory quote, a schedule), then a canvas_write with `show` (the inline canvas
-  // under its row) and a panel_open (its row and the document chip).
+  // Artifacts, memory, plan, schedules, thinking (#64, #120): one group with each of them (the `chat-tools-memory` screen
+  // opens them all: lists, the memory quote, a schedule), then artifact cards (created, updated, an older one).
   tmsg('user', 'user', [{ type: 'text', text: 'Sketch the orb states and remember the voice rule.' }]),
   tmsg('assistant', agent, [
     { type: 'thinking', thinking: `The rewind restored the whole workspace, not just this chat’s files.\n${'A_very_long_unbroken_thought_token_'.repeat(4)}`, signature: 'x' },
-    call('tv1', 'canvas_create', { name: '#56 Menu bar orb breathing' }),
-    call('tv2', 'canvas_write', { id: CV_ID, upsert: [{ id: 'a', kind: 'markdown', text: 'x' }] }),
-    call('tv3', 'canvas_read', { id: CV_ID }),
-    call('tv4', 'canvas_list', {}),
+    call('tv1', 'artifact_list', { folder: 'Design' }),
+    call('tv3', 'artifact_read', { artifact: 'doc_uicheck' }),
     call('tv5', 'memory_edit', { text: `Voice chat with Master: keep spoken replies **VERY** short (1-3 sentences).\n\n${'A_very_long_unbroken_memory_token_'.repeat(4)}` }),
     call('tv6', 'todo_write', { todos: [{ content: 'Sketch the states', status: 'completed' }, { content: 'Pick the timing', status: 'completed' }, { content: 'Ask Master', status: 'pending' }] }),
     call('tv7', 'schedule_create', { title: 'Test: push notification', at: '2026-11-12T00:35:00+01:00', new_card_each_time: true, prompt: `Trigger a push notification to Master: call card_block with kind “needs_input”. ${'A_very_long_unbroken_prompt_token_'.repeat(4)}` }),
@@ -210,18 +192,16 @@ const TOOL_MSGS = [
     call('tv9', 'schedule_delete', { id: 'sch_0a1b2c3d' }),
   ]),
   tmsg('user', 'tool', [
-    res('tv1', `created ${CV_EMPTY}`),
-    res('tv2', `canvas ${CV_ID} is now v4 with 3 nodes`),
-    res('tv3', JSON.stringify({ id: CV_ID, name: CANVASES[0].name, version: 4, nodes: CANVASES[0].nodes })),
-    res('tv4', CANVASES.map((c) => `${c.id} "${c.name}" v${c.version} (by atlas)`).join('\n')),
+    res('tv1', 'doc_uicheck "Chat activity redesign (#59)" markdown v3 · docs/chat-activity.md · Design'),
+    res('tv3', 'Chat activity redesign (#59) (doc_uicheck, markdown, v3 of 3, docs/chat-activity.md)\n\n# Chat activity'),
     res('tv5', 'self memory saved (1513/4000 chars)'),
     res('tv6', 'todo list saved'),
     res('tv7', 'scheduled sch_07cbcde1 "Test: push notification" for @atlas: once at 2026-11-11T23:35:00.000Z, first run 2026-11-11T23:35:00.000Z'),
     res('tv8', 'sch_07cbcde1 @atlas "Test: push notification": once at 2026-11-11T23:35:00.000Z · next 2026-11-11T23:35:00.000Z · new card each time\nsch_1a2b3c4d @atlas "A deliberately long schedule title for the weekly funding-rate digest": cron "0 9 * * 1-5" (Europe/Paris) · next 2026-11-16T08:00:00.000Z · own card #9201 · LAST RUN FAILED: 429 rate limit after 3 retries'),
     res('tv9', 'schedule sch_0a1b2c3d deleted'),
   ]),
-  tmsg('assistant', agent, [{ type: 'text', text: 'Here are the states.' }, call('tv10', 'canvas_write', { id: CV_ID, show: ['n1', 'n2'] }), call('tv11', 'panel_open', { path: 'docs/chat-activity.md' })]),
-  tmsg('user', 'tool', [res('tv10', `canvas ${CV_ID} is now v4 with 3 nodes; shown inline: n1, n2`), res('tv11', 'opened Chat activity redesign (#59) (doc_uicheck, docs/chat-activity.md, v3) in the side panel')]),
+  tmsg('assistant', agent, [{ type: 'text', text: 'Here are the states.' }, call('tv10', 'artifact_create', { kind: 'html', title: 'Orb states, a deliberately long page title for the phone', content: '<p>x</p>' }), call('tv11', 'artifact_update', { artifact: 'doc_uicheck', content: '# x' }), call('tv12', 'panel_open', { path: 'docs/chat-activity.md' })]),
+  tmsg('user', 'tool', [res('tv10', 'created Orb states, a deliberately long page title for the phone (doc_uicheck2, pages/orb-states.html, v1) in Design; shown in the side panel'), res('tv11', 'updated Chat activity redesign (#59) (doc_uicheck, docs/chat-activity.md, v3); shown in the side panel'), res('tv12', doc ? `opened ${doc.title} (${doc.id}, ${doc.path}, v1) in the side panel` : 'opened Chat activity redesign (#59) (doc_uicheck, docs/chat-activity.md, v1) in the side panel')]),
   // Files & shell (#63): one group with every file and shell tool (the `chat-tools-files` screen opens them all): long
   // paths and lines, a rewrite diff, an edit with its landed line, grep with context, ANSI output, background tools.
   tmsg('user', 'user', [{ type: 'text', text: 'Tidy the chat row styles.' }]),
@@ -422,9 +402,9 @@ const SCREENS = [
   { name: 'chat-tools', hash: `#/chat/${chat.id}`, ready: '.chat-row.steps', tools: true, then: { js: `const grp = [...document.querySelectorAll('.chat-row.steps:not(.running)')].filter((g) => g.querySelector(':scope > .chat-row-line .chat-pill.bad')).at(-1); const g = grp.querySelector(':scope > .chat-row-line'); g.click(); await new Promise((r) => setTimeout(r, 100)); const f = grp.querySelector('.chat-row.nested.tone-bad > .chat-row-line'); f.click(); await new Promise((r) => setTimeout(r, 100)); g.scrollIntoView({ block: 'start' });`, ready: '.chat-row.nested.tone-bad .chat-row-body' }, keys: ['.chat-row.steps > .chat-row-line .chat-row-verb', '.chat-row.steps > .chat-row-line .chat-row-rest', '.chat-row.nested .chat-row-obj', '.chat-pill', '.artifact .art-title'] },
   { name: 'chat-tools-cards', hash: `#/chat/${chat.id}`, ready: '.chat-row.steps', tools: true, then: { js: `const grp = [...document.querySelectorAll('.chat-row.steps')].filter((g) => g.querySelector(':scope > .chat-row-line .row-ic.cardp')).at(-1); const g = grp.querySelector(':scope > .chat-row-line'); g.click(); await new Promise((r) => setTimeout(r, 100)); for (const l of grp.querySelectorAll('.chat-row.nested > .chat-row-line.expandable')) l.click(); await new Promise((r) => setTimeout(r, 150)); g.scrollIntoView({ block: 'start' });`, ready: '.step-chip' }, keys: ['.chat-row.nested .chat-row-ref', '.chat-row.nested .chat-row-obj', '.step-chip-title', '.step-chip small', '.step-board-st', '.step-hit-t'] },
   { name: 'chat-tools-files', hash: `#/chat/${chat.id}`, ready: '.chat-row.steps', tools: true, then: { js: `const grp = [...document.querySelectorAll('.chat-row.steps')].find((g) => g.querySelector(':scope > .chat-row-line').textContent.includes('11 steps')); const g = grp.querySelector(':scope > .chat-row-line'); g.click(); await new Promise((r) => setTimeout(r, 100)); for (const l of grp.querySelectorAll('.chat-row.nested > .chat-row-line.expandable')) l.click(); await new Promise((r) => setTimeout(r, 150)); g.scrollIntoView({ block: 'start' });`, ready: '.fv-term' }, keys: ['.fv-head .fv-name', '.fv-gpath .fv-name', '.fv-btn', '.fv-exit .chat-pill'] },
-  { name: 'chat-tools-canvas', hash: `#/chat/${chat.id}`, ready: '.chat-row.steps', tools: true, then: { js: `const grp = [...document.querySelectorAll('.chat-row.steps')].filter((g) => g.querySelector(':scope > .chat-row-line .row-ic.mem')).at(-1); const g = grp.querySelector(':scope > .chat-row-line'); g.click(); await new Promise((r) => setTimeout(r, 100)); for (const l of grp.querySelectorAll('.chat-row.nested > .chat-row-line.expandable')) l.click(); await new Promise((r) => setTimeout(r, 150)); g.scrollIntoView({ block: 'start' });`, ready: '.cv-thumb svg' }, keys: ['.chat-row.nested .chat-row-obj', '.cv-foot .chat-row-open', '.step-list-t', '.step-kv > span', '.step-foot'] },
+  { name: 'chat-tools-memory', hash: `#/chat/${chat.id}`, ready: '.chat-row.steps', tools: true, then: { js: `const grp = [...document.querySelectorAll('.chat-row.steps')].filter((g) => g.querySelector(':scope > .chat-row-line .row-ic.mem')).at(-1); const g = grp.querySelector(':scope > .chat-row-line'); g.click(); await new Promise((r) => setTimeout(r, 100)); for (const l of grp.querySelectorAll('.chat-row.nested > .chat-row-line.expandable')) l.click(); await new Promise((r) => setTimeout(r, 150)); g.scrollIntoView({ block: 'start' });`, ready: '.step-foot' }, keys: ['.chat-row.nested .chat-row-obj', '.step-list-t', '.step-kv > span', '.step-foot'] },
   { name: 'chat-tools-web', hash: `#/chat/${chat.id}`, ready: '.chat-row.steps', tools: true, then: { js: `const grp = [...document.querySelectorAll('.chat-row.steps')].filter((g) => g.querySelector(':scope > .chat-row-line .row-ic.globe, :scope > .chat-row-line .row-ic.link')).at(-1); const g = grp.querySelector(':scope > .chat-row-line'); g.click(); await new Promise((r) => setTimeout(r, 100)); for (const l of grp.querySelectorAll('.chat-row.nested > .chat-row-line.expandable')) l.click(); await new Promise((r) => setTimeout(r, 150)); grp.querySelector('.web-results + .chat-row-open')?.click(); await new Promise((r) => setTimeout(r, 100)); g.scrollIntoView({ block: 'start' });`, ready: '.web-excerpt' }, keys: ['.chat-row.nested .chat-row-obj', '.web-hit-t', '.web-open', '.chat-row.nested.tone-bad .chat-row-rest'] },
-  { name: 'chat-tools-pins', hash: `#/chat/${chat.id}`, tools: true, ready: '.inline-canvas', then: { js: `[...document.querySelectorAll('.inline-canvas')].at(-1).previousElementSibling.scrollIntoView({ block: 'start' });`, ready: '.inline-canvas .ic-board' }, keys: ['.ic-title', '.artifact .art-title', '.chat-row.step .chat-row-verb'] },
+  { name: 'chat-tools-pins', hash: `#/chat/${chat.id}`, tools: true, ready: '.artifact .art-upd', then: { js: `document.querySelector('.artifact .art-upd').closest('.artifact').scrollIntoView({ block: 'center' });`, ready: '.artifact' }, keys: ['.artifact .art-title', '.artifact .art-meta', '.chat-row.step .chat-row-verb'] },
   { name: 'chat-system', hash: `#/chat/${chat.id}`, ready: '.sys-row', system: true, then: { js: `for (const s of ['.sys-rewind', '.sys-msg']) document.querySelector(s + ' > .chat-row-line').click(); await new Promise((r) => setTimeout(r, 150)); document.querySelector('.sys-play').scrollIntoView({ block: 'start' });`, ready: '.sys-files' }, keys: ['.sys-row .chat-row-verb', '.sys-row .chat-row-obj', '.sys-foot .chat-row-open', '.sys-files .sys-file'] },
   { name: 'chat-system-end', hash: `#/chat/${chat.id}`, ready: '.sys-alert .sys-foot', system: true, keys: ['.sys-alert .chat-row-verb', '.sys-foot .chat-row-open'] },
   { name: 'chat-table', hash: `#/chat/${chat.id}`, ready: '.msg .md table .card-ref', table: true, then: { js: `[...document.querySelectorAll('.msg .md table')].at(-1).scrollIntoView({ block: 'center' });`, ready: '.msg .md table' }, keys: ['.msg .md td', '.msg .md th', '.msg .md td .card-ref'] },
@@ -433,20 +413,24 @@ const SCREENS = [
   // A task of this chat opened beside it (#107): the whole task, its description clamped, the conversation and composer in view.
   { name: 'thread', hash: `#/chat/${chat.id}`, ready: '.chat-pin', pins: true, then: { js: `const pin = [...document.querySelectorAll('.chat-pin')].find((p) => p.textContent.includes('Responsive pass')); if (!pin) throw new Error('no fixture pin'); pin.querySelector('.chat-pin-open').click();`, ready: '.thread-panel .cm-more' }, keys: ['.thread-panel .cm-title', '.thread-panel .cm-pill', '.thread-panel .cm-more', '.thread-panel .cm-h', '.thread-panel .cm-foot button'] },
   { name: 'modal-blocked', hash: `#/chat/${chat.id}?card=${modalCard.id}`, ready: '.card-modal', blocked: true, keys: ['.cm-title', '.ask-kind', '.cm-foot button'] },
-  { name: 'panel', hash: `#/chat/${chat.id}`, ready: '.side-doc', pins: true, panel: true, keys: ['.sd-tab', '.sd-ask', '.side-doc h1', '.side-doc h2', '.chat-pin-title'] },
+  { name: 'panel', hash: `#/chat/${chat.id}`, ready: '.side-doc', pins: true, panel: true, keys: ['.sd-tab', '.sd-ver-btn', '.side-doc h1', '.side-doc h2', '.chat-pin-title'] },
   { name: 'board', hash: '#/board', ready: '.board', keys: ['.board .name', '.card-title', '.nav-item'] },
   { name: 'inbox', hash: `#/inbox/${INBOX_CARDS[0].id}`, ready: '.ibx-q', inbox: true, keys: ['.ibx-det h2', '.ibx-opt b', '.ibx-k', '.ni-l2', '.nav-item'] },
   { name: 'inbox-list', hash: '#/inbox', ready: '.ni', inbox: true, keys: ['.ni-l2', '.ni-l3', '.ibx-group', '.tabbtn'] },
   { name: 'inbox-review', hash: `#/inbox/${INBOX_CARDS[1].id}`, ready: '.ibx-q.review', inbox: true, keys: ['.ibx-det h2', '.ibx-k', '.ibx-actions button'] },
-  { name: 'library', hash: '#/library', ready: '.lib-row', keys: ['.lg', '.lib-t', '.tabbtn', '.nav-item'] },
+  { name: 'library', hash: '#/library', ready: '.lib-row', then: { js: `await new Promise((r) => setTimeout(r, 1200));`, ready: '.lib-tile' }, keys: ['.lg', '.lib-t', '.tabbtn', '.lib-tile-t b', '.lib-tile-m'] },
+  // Search across folders: a content match shows its snippet; then the empty state.
+  { name: 'library-search', hash: '#/library', ready: '.lib-row', then: { js: `const i = [...document.querySelectorAll('.mem-search input')].find((x) => x.offsetParent); Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, 'value').set.call(i, 'the'); i.dispatchEvent(new Event('input', { bubbles: true }));`, ready: '.list-group[aria-label=Results] .lib-row' }, keys: ['.lib-t', '.lib-snip', '.lib-fold'] },
+  { name: 'library-search-empty', hash: '#/library', ready: '.lib-row', then: { js: `const i = [...document.querySelectorAll('.mem-search input')].find((x) => x.offsetParent); Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, 'value').set.call(i, 'zzqxnothing'); i.dispatchEvent(new Event('input', { bubbles: true }));`, ready: '.lib-empty' }, keys: ['.lib-empty p', '.lib-empty .head-btn'] },
   { name: 'settings-memory', hash: '#/settings/memory', ready: '.mem-row', memory: true, keys: ['.mem-chip', '.mem-t', '.mem-k', '.mem-intro h2', '.settings-group-title'] },
   { name: 'settings-memory-edit', hash: '#/settings/memory/agent:atlas', ready: '.mem-row', memory: true, then: { js: `document.querySelector('.mem-t').click();`, ready: '.mem-edit textarea' }, keys: ['.mem-edit-bar button', '.mem-note', '.mem-chip'] },
   // An old Library link (posted digests) lands on Settings → Memory, on that memory.
   { name: 'settings-memory-old-link', hash: '#/library/memory/m9302', ready: '.mem-row.focus', memory: true, keys: ['.mem-note', '.mem-t', '.mem-intro h2'] },
   { name: 'inbox-cleanup', hash: '#/inbox/n9007', ready: '.mem-digest', inbox: true, keys: ['.ibx-det h2', '.md-act', '.md-text', '.mem-digest .head-btn'] },
   { name: 'inbox-digest', hash: '#/inbox/n-1', ready: '.mem-digest', inbox: true, memory: true, keys: ['.ibx-det h2', '.md-act', '.md-text a', '.mem-digest .head-btn'] },
-  ...(doc ? [{ name: 'library-doc', hash: `#/library/${doc.id}`, ready: '.viewer .doc-md', keys: ['.sd-sub .tabbtn', '.sd-title b', '.viewer h2'] }] : []),
-  ...(whiteboard ? [{ name: 'library-whiteboard', hash: `#/library/${whiteboard.id}`, ready: '.viewer .canvas-main', keys: ['.sd-sub .tabbtn', '.sd-title b'] }] : []),
+  ...(doc ? [{ name: 'library-doc', hash: `#/library/${doc.id}`, ready: '.viewer .doc-md', keys: ['.sd-ver-btn', '.sd-title b', '.viewer h2'] }] : []),
+  // The version picker open over the viewer.
+  ...(doc ? [{ name: 'library-doc-versions', hash: `#/library/${doc.id}`, ready: '.viewer .doc-md', then: { js: `document.querySelector('.sd-ver-btn').click();`, ready: '.fixed-pop .pop-row' }, keys: ['.fixed-pop .pop-row', '.pop-note'] }] : []),
   // ⌘K palette over the chat (query « lib », as in the mockup) and the « ? » cheat sheet over the board.
   { name: 'palette', hash: `#/chat/${chat.id}`, ready: '.chat-pin', pins: true, then: { js: `window.dispatchEvent(new KeyboardEvent('keydown', { key: 'k', metaKey: true, bubbles: true })); await new Promise((r) => setTimeout(r, 300)); const i = document.querySelector('.pal-in input'); Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, 'value').set.call(i, 'lib'); i.dispatchEvent(new Event('input', { bubbles: true }));`, ready: '.pal-op.on' }, keys: ['.pal-t', '.pal-sec', '.pal-ctx'] },
   { name: 'shortcuts', hash: '#/board', ready: '.board', then: { js: `window.dispatchEvent(new KeyboardEvent('keydown', { key: '?', shiftKey: true, bubbles: true }));`, ready: '.keys-sheet' }, keys: ['.keys-head h2', '.keys-row > span:first-child', '.pal-sec'] },
@@ -532,9 +516,6 @@ handlers.set('Fetch.requestPaused', async ({ requestId, request }) => {
     if (request.method === 'GET' && url.pathname === `/api/cards/${chat.id}/messages` && screen?.tools) return await json([...(await get(`/cards/${chat.id}/messages`)), ...TOOL_MSGS]);
     if (request.method === 'GET' && url.pathname === `/api/cards/${chat.id}/tool-calls` && screen?.tools) return await json(TOOL_TIMINGS);
     if (request.method === 'GET' && url.pathname === `/api/cards/${chat.id}/runs` && screen?.tools) return await json([liveRun]);
-    if (request.method === 'GET' && url.pathname === '/api/canvases' && screen?.tools) return await json([...(await get('/canvases')), ...CANVASES.map(({ nodes, ...c }) => c)]);
-    const cv = request.method === 'GET' && screen?.tools && CANVASES.find((c) => url.pathname === `/api/canvases/${c.id}`);
-    if (cv) return await json(cv);
     // An engine older than the UI under test (--ui before a reinstall) has no tool timings: the rows show none.
     if (request.method === 'GET' && /^\/api\/cards\/[^/]+\/timeline$/.test(url.pathname)) {
       const r = await fetch(BASE + url.pathname + url.search);
@@ -644,7 +625,8 @@ const CHECK = (devW, devH) => `((minFont, W, H) => {${VISIBLE_RECT}
   }
   // 5. Markdown table cells with prose stay readable: never narrower than ~10 characters, never broken inside a word.
   for (const td of document.querySelectorAll('.md td, .md th')) {
-    if (!shown(td)) continue;
+    // A Library tile's preview is the page scaled down on purpose (#120): not text to read.
+    if (!shown(td) || td.closest('[aria-hidden=true]')) continue;
     const text = [...td.childNodes].filter((n) => n.nodeType === 3).map((n) => n.textContent).join('').trim();
     if (text.length < 20) continue;
     const fs = parseFloat(getComputedStyle(td).fontSize), w = td.getBoundingClientRect().width;

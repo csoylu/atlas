@@ -1,6 +1,6 @@
-import type { Inbox, FileChange, RewindPreview, RewindResult, Doc, DocContent, DocRef, DocVersion, PanelTab, About, CreatePlanAccount, Notification, PlanProvider, UpdatePlanAccount, ChatUsage, UsageSummary, ChatGptModel, ChatGptStatus, UpdateChatGpt, ClaudePlanModel, ClaudePlanStatus, UpdateClaudePlan, Account, CreateAccount, UpdateAccount, LocalModel, LocalPull, LocalStatus, UpdateLocal, Agent, Canvas, CanvasNode, Card, CardStatus, CreateAgent, CreateCard, CreateModel, CreateSchedule, Memory, MemoryChange, MemoryProposal, MemoryQuery, UpdateMemory, Message, Model, ModelTest, Run, Schedule, Timeline, ToolCallTiming, ServerEvent, Settings, UpdateVoice, VoiceName, VoiceStatus, UpdateAgent, UpdateModel, UpdateSchedule } from '@atlas/shared';
+import type { Inbox, FileChange, RewindPreview, RewindResult, Doc, DocContent, DocHit, Folder, DocRef, DocVersion, PanelTab, About, CreatePlanAccount, Notification, PlanProvider, UpdatePlanAccount, ChatUsage, UsageSummary, ChatGptModel, ChatGptStatus, UpdateChatGpt, ClaudePlanModel, ClaudePlanStatus, UpdateClaudePlan, Account, CreateAccount, UpdateAccount, LocalModel, LocalPull, LocalStatus, UpdateLocal, Agent, Card, CardStatus, CreateAgent, CreateCard, CreateModel, CreateSchedule, Memory, MemoryChange, MemoryProposal, MemoryQuery, UpdateMemory, Message, Model, ModelTest, Run, Schedule, Timeline, ToolCallTiming, ServerEvent, Settings, UpdateVoice, VoiceName, VoiceStatus, UpdateAgent, UpdateModel, UpdateSchedule } from '@atlas/shared';
 
-/** HTTP error with the parsed body (e.g. 409 carries the current canvas). */
+/** HTTP error with the parsed body (e.g. a 409's details). */
 export class ApiError extends Error {
   constructor(
     message: string,
@@ -49,8 +49,12 @@ export const api = {
   docVersions: (id: string) => call<DocVersion[]>('GET', `/documents/${id}/versions`),
   restoreDoc: (id: string, version: number) => call<Doc>('POST', `/documents/${id}/restore/${version}`),
   pinDoc: (id: string, pinned: boolean) => call<Doc>('POST', `/documents/${id}/pin`, { pinned }),
-  /** The whiteboard document of a canvas (created on first use). */
-  whiteboardDoc: (canvasId: string) => call<Doc>('POST', `/canvases/${canvasId}/document`, {}),
+  moveDoc: (id: string, folderId: string | null) => call<Doc>('POST', `/documents/${id}/move`, { folderId }),
+  searchDocs: (q: string) => call<DocHit[]>('GET', `/documents/search?q=${encodeURIComponent(q)}`),
+  folders: () => call<Folder[]>('GET', '/folders'),
+  createFolder: (name: string) => call<Folder>('POST', '/folders', { name }),
+  renameFolder: (id: string, name: string) => call<Folder>('PATCH', `/folders/${id}`, { name }),
+  deleteFolder: (id: string) => call<void>('DELETE', `/folders/${id}`),
   panel: (chatId: string) => call<PanelTab[]>('GET', `/chats/${chatId}/panel`),
   panelOpen: (chatId: string, docId: string, section: string | null = null) => call<PanelTab[]>('POST', `/chats/${chatId}/panel/open`, { docId, section }),
   panelClose: (chatId: string, docId: string | null) => call<PanelTab[]>('POST', `/chats/${chatId}/panel/close`, { docId }),
@@ -132,12 +136,6 @@ export const api = {
     if (!res.ok) throw new ApiError(((await res.json().catch(() => ({}))) as { error?: string }).error ?? `HTTP ${res.status}`, res.status, {});
     return res.blob();
   },
-  canvases: () => call<Omit<Canvas, 'nodes'>[]>('GET', '/canvases'),
-  canvas: (id: string) => call<Canvas>('GET', `/canvases/${id}`),
-  createCanvas: (name: string) => call<Canvas>('POST', '/canvases', { name }),
-  saveCanvas: (id: string, nodes: CanvasNode[], baseVersion: number) => call<Canvas>('PUT', `/canvases/${id}`, { nodes, baseVersion }),
-  renameCanvas: (id: string, name: string) => call<Canvas>('PATCH', `/canvases/${id}`, { name }),
-  deleteCanvas: (id: string) => call<void>('DELETE', `/canvases/${id}`),
   updateSettings: (patch: Partial<Settings>) => call<Settings>('PATCH', '/settings', patch),
   // ── Auth ──────────────────────────────────────────────────────────────
   authCheck: () => call<AuthState>('POST', '/auth/check'),

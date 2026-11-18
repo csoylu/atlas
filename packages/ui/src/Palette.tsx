@@ -74,10 +74,10 @@ export function Palette(props: {
         id: 'doc:' + d.id,
         section: 'Artifacts',
         title: d.title,
-        keywords: [d.path ?? 'whiteboard', '@' + d.agentId].join(' '),
+        keywords: [d.path, '@' + d.agentId].join(' '),
         boost: ctx.chatId && d.chatId === ctx.chatId ? 40 : d.pinned ? 10 : 0,
         icon: <KindIcon kind={d.kind} />,
-        note: d.path ?? 'whiteboard',
+        note: d.path,
         run: openDoc(d),
       });
     for (const c of props.chats)

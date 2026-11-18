@@ -26,11 +26,11 @@ describe('groupTurn', () => {
     expect(kinds(segs)).toEqual(['text', 'group(2)', 'text', 'step']);
   });
 
-  it('never folds the inline canvas, a doc chip, the question or the live plan', () => {
+  it('never folds an artifact card, the question or the live plan', () => {
     const ms = [
       msg([
         use('a', 'read_file', { path: 'x' }),
-        use('b', 'canvas_write', { id: 'cv_1', show: ['n'] }),
+        use('b', 'artifact_create', { kind: 'markdown', title: 'B', content: '# B' }),
         use('c', 'read_file', { path: 'y' }),
         use('d', 'panel_open', { path: 'docs/a.md' }),
         use('e', 'todo_write', { todos: [] }),
@@ -39,15 +39,15 @@ describe('groupTurn', () => {
     ];
     const res = new Map([
       ['a', ok('1|')],
-      ['b', ok('canvas cv_1 is now v2 with 1 node')],
+      ['b', ok('created B (doc_2, docs/b.md, v1) in Unfiled; shown in the side panel')],
       ['c', ok('1|')],
       ['d', ok('opened A (doc_1, docs/a.md, v1) in the side panel')],
       ['e', ok('saved')],
       ['f', ok('card blocked')],
     ]);
-    expect(kinds(groupTurn(ms, res, { live: true }))).toEqual(['step', 'pin:canvas', 'step', 'pin:doc', 'pin:plan', 'pin:ask']);
+    expect(kinds(groupTurn(ms, res, { live: true }))).toEqual(['step', 'pin:doc', 'step', 'pin:doc', 'pin:plan', 'pin:ask']);
     // Not live: the plan is history, it folds like any step.
-    expect(kinds(groupTurn(ms, res, { live: false }))).toEqual(['step', 'pin:canvas', 'step', 'pin:doc', 'step', 'pin:ask']);
+    expect(kinds(groupTurn(ms, res, { live: false }))).toEqual(['step', 'pin:doc', 'step', 'pin:doc', 'step', 'pin:ask']);
   });
 
   it('only the latest plan is pinned while live', () => {
