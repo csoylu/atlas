@@ -66,8 +66,9 @@ export function messageRow(m: Message, assignee: string | null): SysRow | null {
     if (text.startsWith(MEMORY_NOTE)) {
       // v3: memory changed since the chat started (another chat, the user, the background review).
       const lines = text.split('\n').slice(1).filter((l) => l.startsWith('- ['));
-      const refs = lines.map((l) => /^- \[(m\d+)/.exec(l)?.[1]).filter(Boolean);
-      return { ...base, icon: 'mem', tone: 'plain', verb: 'Memory changed', object: refs.join(', '), rest: lines.length === 1 ? cut(lines[0]!.replace(/^- \[[^\]]*\]\s*/, ''), 140) : `${lines.length} changes`, body: { kind: 'markdown', text: lines.join('\n') } };
+      // Distinct ids (#132): notes written before it could list one memory several times.
+      const refs = [...new Set(lines.map((l) => /^- \[(m\d+)/.exec(l)?.[1]).filter(Boolean))];
+      return { ...base, icon: 'mem', tone: 'plain', verb: 'Memory changed', object: refs.join(', '), rest: refs.length === 1 && lines.length === 1 ? cut(lines[0]!.replace(/^- \[[^\]]*\]\s*/, ''), 140) : `${plural(refs.length, 'memory', 'memories')} changed`, body: { kind: 'markdown', text: lines.join('\n') } };
     }
     return null;
   }

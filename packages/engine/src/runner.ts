@@ -936,10 +936,11 @@ export class Runner {
       | undefined;
     if (!row?.memory_snapshot || row.memory_seen == null) return;
     const changes = this.memories.changesAfter(row.memory_seen, agentId);
+    if (!changes.length) return;
     const note = memoryDeltaNote(changes, agentId);
-    if (!note) return;
     this.db.transaction(() => {
-      this.kanban.appendMessage(card.id, 'user', 'system', [{ type: 'text', text: note }]);
+      // Nothing left to say (e.g. added then forgotten): still move the watermark, so these changes are not read again.
+      if (note) this.kanban.appendMessage(card.id, 'user', 'system', [{ type: 'text', text: note }]);
       this.db.prepare('UPDATE conversations SET memory_seen = ? WHERE id = ?').run(changes.at(-1)!.change.id, card.conversationId);
     })();
   }
