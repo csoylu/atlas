@@ -457,6 +457,7 @@ main { flex: 1; display: flex; min-height: 0; min-width: 0; position: relative; 
 .nc-crumb { font-size: var(--fs-small); color: var(--muted); font-weight: var(--fw-medium); border: 1px solid var(--line-2); border-radius: 5px; padding: 1px 6px; line-height: var(--lh-tight); }
 .nc-head .icon-btn { margin-left: auto; }
 .nc-title { background: none; border: 0; outline: none; font-size: var(--fs-large); font-weight: var(--fw-bold); letter-spacing: -0.01em; padding: 10px 16px 4px; }
+.nc-images { padding: 0 16px 10px; }
 .nc-desc { background: none; border: 0; outline: none; resize: none; min-height: 72px; max-height: 40vh; field-sizing: content; padding: 4px 16px 10px; line-height: var(--lh-normal); color: var(--text); }
 .nc-props { display: flex; flex-wrap: wrap; gap: 6px; padding: 0 16px 12px; }
 .prop-pill {
@@ -586,10 +587,18 @@ button.artifact:hover .art-open { color: var(--accent); }
 .attach-thumb.busy img { opacity: 0.5; }
 .attach-thumb.bad { border-color: var(--bad, #d33); }
 .attach-thumb .attach-err { position: absolute; left: 4px; bottom: 3px; font-weight: var(--fw-bold); color: var(--bad, #d33); font-size: var(--fs-small); }
-.attach-thumb button {
+.attach-thumb > button:not(.attach-open) {
   position: absolute; top: 2px; right: 2px; width: 20px; height: 20px; padding: 0; border: 0; border-radius: 50%;
   background: rgba(0, 0, 0, 0.6); color: #fff; font-size: var(--fs-base); line-height: var(--lh-tight); display: grid; place-items: center;
 }
+.attach-thumb .attach-open { display: block; width: 100%; height: 100%; padding: 0; border: 0; background: none; cursor: zoom-in; }
+.attach-thumb .attach-open img { width: 100%; height: 100%; object-fit: cover; display: block; }
+/* a task's own images (#119): under its description, in the modal, the thread panel and the New task dialog */
+.task-images { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; min-height: 26px; }
+.task-images .attach-thumb { width: 64px; height: 64px; }
+.attach-btn.labelled { width: auto; gap: 6px; padding: 0 8px 0 6px; font-size: var(--fs-small); color: var(--muted); }
+.drop-zone { border-radius: 8px; outline: 1px dashed transparent; outline-offset: 2px; }
+.drop-zone.dropping { outline-color: var(--accent); background: var(--accent-soft); }
 .attach-note { font-size: var(--fs-small); color: var(--bad, #d33); min-width: 0; flex: 1 1 160px; }
 .msg-images { display: flex; flex-wrap: wrap; gap: 6px; margin: 2px 0 4px; }
 .msg-image { padding: 0; border: 1px solid var(--line-2); border-radius: 8px; overflow: hidden; background: var(--sheet); cursor: zoom-in; max-width: 100%; }
@@ -953,6 +962,12 @@ button.tool .icon { color: var(--muted); font-family: var(--mono); }
 .strip-ctx { display: inline-flex; align-items: center; gap: 6px; cursor: default; }
 .strip-dot { color: var(--rule); }
 .strip-ctx .num { font-variant-numeric: tabular-nums; }
+/* Phone: « 65% » without « context » (the ring says it), so the gauge is not cut by the model pill (#112, 13 px text). */
+@media (max-width: 640px) {
+  .strip-word, .strip-ctx .strip-dot, .strip-ctx .num { display: none; }
+  .strip-gauges { flex: 0 0 auto; } /* holds « ◔ 65% » and the plan gauge; the model pill shrinks (ellipsis) instead */
+  .composer-strip .pick-menu { flex: 1 1 auto; }
+}
 .ring { flex: none; }
 .ring-track { fill: none; stroke: var(--active); stroke-width: 2.2; }
 .ring-fill { fill: none; stroke: var(--accent); stroke-width: 2.2; stroke-linecap: round; }
@@ -1098,6 +1113,7 @@ button.tool .icon { color: var(--muted); font-family: var(--mono); }
   display: block; width: 100%; background: none; border: 0; outline: none; font: inherit; font-size: var(--fs-xl); font-weight: var(--fw-bold); letter-spacing: -0.018em;
   line-height: var(--lh-tight); padding: 12px 0 0; resize: none; field-sizing: content; min-height: 0; overflow: hidden; color: var(--text);
 }
+.cm-desc-area { display: flex; flex-direction: column; gap: 8px; flex: none; }
 .cm-body { flex: 1; overflow-y: auto; min-height: 0; padding: 14px 22px 10px; display: flex; flex-direction: column; }
 .cm-desc { background: none; border: 0; outline: none; resize: vertical; min-height: 72px; field-sizing: content; max-height: 40vh; color: var(--muted); line-height: var(--lh-long); font-size: var(--fs-base); padding: 0; flex: none; }
 div.cm-desc { resize: none; field-sizing: initial; max-height: none; cursor: text; color: var(--text); border-radius: 6px; margin: 0 -8px; padding: 4px 8px; }
@@ -1257,7 +1273,7 @@ span.chat-row-ref { cursor: inherit; }
 .row-stack { display: flex; flex: none; }
 .row-stack-ic { width: 16px; height: 16px; display: grid; place-items: center; margin-left: -4px; background: var(--panel); border-radius: 50%; box-shadow: 0 0 0 2px var(--panel); }
 .row-stack-ic:first-child { margin-left: 0; }
-.row-stack-ic.x { color: var(--neg-ink); }
+.row-stack-ic.rowic-x { color: var(--neg-ink); }
 .chat-row.steps > .chat-row-line .chat-row-icon { width: auto; }
 .chat-row.steps > .chat-row-line .chat-row-rest { color: var(--text); }
 .chat-row.steps > .chat-row-body { padding: 4px 4px 6px; }
@@ -1977,3 +1993,49 @@ a.pop-row[aria-disabled='true'] { opacity: 0.5; pointer-events: none; }
 .slash-hint { margin-left: auto; font-size: var(--fs-small); color: var(--faint); flex: none; }
 .slash-busy { display: flex; align-items: center; gap: 8px; font-size: var(--fs-small); color: var(--muted); }
 .sys-clear-note { margin: 0; font-size: var(--fs-small); color: var(--muted); }
+
+/* ── App updates (#123): sidebar badge, dialog, Settings → About ── */
+.update-badge {
+  display: flex; align-items: center; gap: 8px; margin: 8px 0 4px; padding: 0 10px; height: 32px; flex: none; width: 100%;
+  border: 1px solid var(--line); border-radius: 8px; background: var(--accent-soft); color: var(--text); cursor: pointer;
+  font: inherit; font-size: var(--fs-base); font-weight: var(--fw-medium); line-height: var(--lh-tight); text-align: left;
+}
+.update-badge:hover { border-color: var(--accent); }
+.update-badge.failed { background: var(--warn-bg); color: var(--warn-ink); }
+.update-dot { width: 7px; height: 7px; border-radius: 50%; background: var(--accent); flex: none; }
+.update-badge.failed .update-dot { background: var(--warning); }
+.update-badge-label { min-width: 0; flex: 1; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.update-badge-v { color: var(--muted); font-size: var(--fs-small); font-weight: var(--fw-regular); }
+.update-badge.failed .update-badge-v { color: inherit; }
+.modal.update-dialog { width: min(560px, 100%); max-height: calc(100vh - 32px); overflow-y: auto; }
+.update-notes { display: flex; flex-direction: column; border: 1px solid var(--line); border-radius: 10px; max-height: 320px; overflow-y: auto; flex: none; }
+.update-note { padding: 10px 14px; display: flex; flex-direction: column; gap: 4px; }
+.update-note + .update-note { border-top: 1px solid var(--line); }
+.update-note-head { display: flex; align-items: center; gap: 8px; font-size: var(--fs-small); line-height: var(--lh-tight); }
+.update-v { font-weight: var(--fw-bold); color: var(--text); }
+.update-kind { padding: 1px 7px; border-radius: 4px; background: var(--raised); color: var(--muted); font-weight: var(--fw-medium); }
+.update-kind.added, .update-kind.changed { background: var(--accent-soft); color: var(--text); }
+.update-kind.fixed { background: var(--pos-bg); color: var(--pos-ink); }
+.update-kind.breaking { background: var(--neg-bg); color: var(--neg-ink); }
+.update-task { color: var(--muted); }
+.update-note-title { font-size: var(--fs-base); line-height: var(--lh-normal); color: var(--text); }
+.update-note-body { font-size: var(--fs-small); line-height: var(--lh-normal); color: var(--muted); }
+.update-note-body > :first-child { margin-top: 0; }
+.update-note-body > :last-child { margin-bottom: 0; }
+.update-note-body ul { padding-left: 18px; }
+.update-working ul { list-style: none; margin: 8px 0 0; padding: 0; display: flex; flex-direction: column; gap: 4px; }
+.update-working li { display: flex; gap: 8px; align-items: baseline; font-size: var(--fs-small); line-height: var(--lh-tight); min-width: 0; }
+.update-agent { color: var(--text); font-weight: var(--fw-medium); flex: none; }
+.update-work-title { color: var(--muted); min-width: 0; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.modal p.update-error { color: var(--neg-ink); background: var(--neg-bg); padding: 8px 12px; border-radius: 8px; font-size: var(--fs-small); }
+.modal p.update-fine, .update-fine { font-size: var(--fs-small); color: var(--faint); line-height: var(--lh-normal); }
+.update-progress { display: flex; align-items: center; gap: 12px; font-size: var(--fs-small); color: var(--muted); }
+.update-bar { flex: 1; height: 6px; border-radius: 3px; background: var(--active); overflow: hidden; }
+.update-bar > div { height: 100%; background: var(--accent); transition: width 0.3s ease; }
+.update-actions { display: flex; justify-content: flex-end; gap: 8px; margin-top: 4px; }
+.modal .update-actions .primary { margin-top: 0; align-self: auto; }
+.update-about { display: flex; flex-wrap: wrap; align-items: center; gap: 6px 12px; }
+.update-about-line { min-width: 0; }
+.update-about-line.bad { color: var(--neg-ink); }
+.update-about-acts { display: flex; gap: 8px; }
+.update-about .update-fine { flex-basis: 100%; }

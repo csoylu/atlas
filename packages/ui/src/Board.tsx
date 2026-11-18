@@ -1,5 +1,6 @@
-import { useEffect, useState, type DragEvent } from 'react';
+import { useEffect, useRef, useState, type DragEvent } from 'react';
 import { AgentFace } from './AgentFace.tsx';
+import { pastedImages, TASK, TaskImages, useAttachments, useFileDrop } from './Images.tsx';
 import { cardRef, type Agent, type Card, type CardStatus, type CreateCard } from '@atlas/shared';
 import { HeaderActions, Icon } from './ScreenHeader.tsx';
 import { StatusIcon, STATUS_LABEL } from './StatusIcon.tsx';
@@ -275,7 +276,12 @@ export function Board(props: {
           agents={props.agents}
           filterAgent={view.filter.agent}
           onClose={() => setCreating(null)}
-          onCreate={(c) => props.onCreate(c).then(() => setCreating(null), props.onError)}
+          onCreate={(c) =>
+            props.onCreate(c).then(
+              () => (setCreating(null), true),
+              (e: unknown) => (props.onError(e), false),
+            )
+          }
         />
       )}
     </div>
@@ -345,13 +351,20 @@ export function Avatar({ id }: { id: string }) {
 }
 
 /** « New card »: title, description, agent, status, priority. ⌘↵ creates, Esc cancels. */
-function NewCard(props: { status: CardStatus; agents: Agent[]; filterAgent: string | null; onClose(): void; onCreate(c: CreateCard): Promise<unknown> }) {
+function NewCard(props: { status: CardStatus; agents: Agent[]; filterAgent: string | null; onClose(): void; onCreate(c: CreateCard): Promise<boolean> }) {
   const [title, setTitle] = useState('');
   const [body, setBody] = useState('');
   const [assignee, setAssignee] = useState<string>(props.filterAgent ?? '');
   const [status, setStatus] = useState<CardStatus>(props.status);
   const [priority, setPriority] = useState(0);
   const [busy, setBusy] = useState(false);
+  // Images (#119): staged with no task yet; Create attaches them, Cancel / Esc / × deletes the staged files.
+  const att = useAttachments(null, TASK);
+  const drop = useFileDrop(att.add);
+  const created = useRef(false);
+  const discard = useRef(att.discardAll);
+  discard.current = att.discardAll;
+  useEffect(() => () => void (created.current || discard.current()), []);
   const { onClose } = props;
   useEffect(() => {
     const key = (e: KeyboardEvent) => {
@@ -364,13 +377,24 @@ function NewCard(props: { status: CardStatus; agents: Agent[]; filterAgent: stri
   }, [onClose]);
   const submit = () => {
     if (!title.trim() || busy) return;
+    if (att.items.some((a) => a.error)) return void att.setNotice('Remove the images that failed (marked !) first');
     setBusy(true);
-    props.onCreate({ title: title.trim(), body, assignee: assignee || null, status, priority }).finally(() => setBusy(false));
+    void att
+      .take()
+      .then((uploads) => {
+        created.current = true; // set before the dialog closes: its images belong to the task now
+        return props.onCreate({ title: title.trim(), body, assignee: assignee || null, status, priority, uploads });
+      })
+      .then((ok) => {
+        if (ok === false) created.current = false; // not created: the dialog stays, Cancel still deletes them
+      })
+      .finally(() => setBusy(false));
   };
   return (
     <div className="card-scrim" onMouseDown={(e) => e.target === e.currentTarget && onClose()}>
       <form
-        className="new-card-modal"
+        className={'new-card-modal drop-zone' + (drop.dragging ? ' dropping' : '')}
+        {...drop.props}
         role="dialog"
         aria-modal="true"
         aria-label="New task"
@@ -387,7 +411,22 @@ function NewCard(props: { status: CardStatus; agents: Agent[]; filterAgent: stri
           </button>
         </div>
         <input className="nc-title" autoFocus value={title} onChange={(e) => setTitle(e.target.value)} placeholder="Task title" aria-label="Title" maxLength={200} />
-        <textarea className="nc-desc" value={body} onChange={(e) => setBody(e.target.value)} placeholder="Description, acceptance criteria…" aria-label="Description" />
+        <textarea
+          className="nc-desc"
+          value={body}
+          onChange={(e) => setBody(e.target.value)}
+          onPaste={(e) => {
+            const files = pastedImages(e.clipboardData);
+            if (!files.length) return;
+            e.preventDefault(); // an image, not its file name as text
+            att.add(files);
+          }}
+          placeholder="Description, acceptance criteria… (paste or drop images)"
+          aria-label="Description"
+        />
+        <div className="nc-images">
+          <TaskImages cardId={null} images={[]} att={att} onAdd={att.add} />
+        </div>
         <div className="nc-props">
           <label className="prop-pill" title="Status">
             <StatusIcon status={status} />

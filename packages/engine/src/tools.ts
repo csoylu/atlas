@@ -1,6 +1,8 @@
 import { spawn } from 'node:child_process';
 import { randomUUID } from 'node:crypto';
+import { realpathSync } from 'node:fs';
 import { mkdir, readFile, readdir, stat, writeFile } from 'node:fs/promises';
+import { tmpdir } from 'node:os';
 import { dirname, isAbsolute, join, relative, resolve, sep } from 'node:path';
 import { z } from 'zod';
 import type { ImageBlock, ToolCallDetail } from '@atlas/shared';
@@ -8,7 +10,7 @@ import { describeImage, extOf, imageLine, looksLikeImage, sniff } from './images
 import type { ToolSpec } from './providers/types.ts';
 import type { Background } from './background.ts';
 import { findSpans, replaceSpans, type Span } from './fuzzy.ts';
-import { globFiles, grep, isBinary, SKIP_DIRS } from './search.ts';
+import { globFiles, grep, isBinary, shownPath, SKIP_DIRS } from './search.ts';
 import { fetchPage, headTail } from './web.ts';
 
 export interface ToolContext {
@@ -57,13 +59,59 @@ export function inside(workdir: string, p: string): string {
   return full;
 }
 
-/** For reading: the workdir, or the outputs folder (absolute paths given in tool results). */
-function readable(ctx: ToolContext, p: string): string {
-  if (isAbsolute(p)) {
-    const rel = relative(ctx.outputsDir, resolve(p));
-    if (rel && rel !== '..' && !rel.startsWith('..' + sep) && !isAbsolute(rel)) return resolve(p);
+/** The rule, in the refusal of any path a file tool may not open. */
+export const PATH_RULE = 'read: workdir and temp folders; write: workdir only';
+
+const under = (root: string, full: string): boolean => {
+  const rel = relative(root, full);
+  return rel === '' || (rel !== '..' && !rel.startsWith('..' + sep) && !isAbsolute(rel));
+};
+
+/** The OS temp folders (/tmp, /private/tmp, os.tmpdir()), as given and with their links resolved. */
+export function tempRoots(): string[] {
+  const roots = new Set<string>();
+  for (const r of ['/tmp', '/private/tmp', tmpdir()]) {
+    if (!r || resolve(r) === resolve('/')) continue;
+    roots.add(resolve(r));
+    try {
+      roots.add(realpathSync(r));
+    } catch {
+      // not there on this OS
+    }
   }
-  return inside(ctx.workdir, p);
+  return [...roots];
+}
+
+/** For writing: the workdir only. */
+function writable(ctx: ToolContext, p: string): string {
+  try {
+    return inside(ctx.workdir, p);
+  } catch {
+    throw new Error(`path ${p} is outside your workdir ${ctx.workdir} (${PATH_RULE})`);
+  }
+}
+
+/**
+ * For reading: the workdir, the outputs folder (absolute paths given in tool results), or a temp folder (read-only).
+ * A temp path is checked with its links resolved: a link in /tmp to a file elsewhere is refused.
+ */
+export function readable(ctx: Pick<ToolContext, 'workdir' | 'outputsDir'>, p: string): string {
+  const full = resolve(ctx.workdir, p);
+  if (under(ctx.workdir, full)) return full;
+  if (isAbsolute(p) && under(ctx.outputsDir, full) && full !== resolve(ctx.outputsDir)) return full;
+  const roots = tempRoots();
+  if (roots.some((r) => under(r, full))) {
+    let real: string;
+    try {
+      real = realpathSync(full);
+    } catch (e) {
+      if ((e as NodeJS.ErrnoException).code === 'ENOENT') throw new Error(`no such file or folder: ${p}`);
+      throw e;
+    }
+    if (roots.some((r) => under(r, real))) return real;
+    throw new Error(`path ${p} links to ${real}, outside the folders you can open (${PATH_RULE})`);
+  }
+  throw new Error(`path ${p} is outside the folders you can open (${PATH_RULE})`);
 }
 
 /** Save a full output to the outputs folder; returns its path. */
@@ -159,10 +207,11 @@ export const TOOLS = {
   read_file: tool({
     description:
       'Read a UTF-8 text file, with line numbers (`N|text`; the `N|` prefix is not part of the file). Paths are relative ' +
-      `to your working directory (or an absolute path Atlas gave you for a saved output). Reads ${READ_LINES} lines from ` +
+      'to your working directory; absolute paths work there, in the temp folders (/tmp, $TMPDIR) and for a saved output ' +
+      `Atlas gave you (${PATH_RULE}). Reads ${READ_LINES} lines from ` +
       '`offset` (1-based) by default; a footer says how to continue. Read a file before editing or overwriting it. ' +
       'A png, jpeg, gif or webp file (up to 10 MB) comes back as the picture itself, so you can look at it (e.g. a ' +
-      'screenshot you took with headless Chrome).',
+      'screenshot in /tmp: no need to copy it into your workdir).',
     input: z.object({
       path: z.string(),
       offset: z.number().int().min(1).default(1).describe('first line to read (1-based)'),
@@ -187,11 +236,11 @@ export const TOOLS = {
   }),
   write_file: tool({
     description:
-      'Create or overwrite a text file (parent folders are created). Overwriting an existing file needs a read_file of it ' +
+      'Create or overwrite a text file in your working directory (parent folders are created; ' + PATH_RULE + '). Overwriting an existing file needs a read_file of it ' +
       'in this conversation first. Prefer edit_file for changes to an existing file.',
     input: z.object({ path: z.string(), content: z.string() }),
     run: ({ path, content }, ctx) => {
-      const full = inside(ctx.workdir, path);
+      const full = writable(ctx, path);
       return serial(full, async () => {
         await checkFresh(ctx, full, path);
         const created = (await stampOf(full)) == null;
@@ -206,7 +255,7 @@ export const TOOLS = {
   }),
   edit_file: tool({
     description:
-      'Replace old_text with new_text in a file. old_text must be found exactly once (add surrounding lines to make it ' +
+      'Replace old_text with new_text in a file of your working directory (' + PATH_RULE + '). old_text must be found exactly once (add surrounding lines to make it ' +
       'unique), or set replace_all to replace every occurrence. Refused if the file changed on disk since you last read ' +
       'or wrote it in this conversation. ' +
       'If old_text is not found exactly, a match ignoring indentation or runs of spaces is tried and reported.',
@@ -217,21 +266,22 @@ export const TOOLS = {
       replace_all: z.boolean().default(false),
     }),
     run: ({ path, old_text, new_text, replace_all }, ctx) => {
-      const full = inside(ctx.workdir, path);
+      const full = writable(ctx, path);
       return serial(full, () => editFile(ctx, full, path, old_text, new_text, replace_all));
     },
   }),
   list_files: tool({
-    description: 'List files and folders (recursive up to depth 3, skips node_modules and .git).',
+    description: `List files and folders (recursive up to depth 3, skips node_modules and .git). Your working directory or a temp folder such as /tmp (${PATH_RULE}).`,
     input: z.object({ path: z.string().default('.') }),
-    run: async ({ path }, { workdir }) => {
-      const root = inside(workdir, path);
+    run: async ({ path }, ctx) => {
+      const { workdir } = ctx;
+      const root = readable(ctx, path);
       const out: string[] = [];
       const walk = async (dir: string, depth: number) => {
         for (const e of (await readdir(dir, { withFileTypes: true })).sort((a, b) => a.name.localeCompare(b.name))) {
           if (SKIP_DIRS.has(e.name)) continue;
           const p = join(dir, e.name);
-          out.push(relative(workdir, p) + (e.isDirectory() ? '/' : ''));
+          out.push(shownPath(workdir, p) + (e.isDirectory() ? '/' : ''));
           if (out.length > 1000) return;
           if (e.isDirectory() && depth < 3) await walk(p, depth + 1);
         }
@@ -244,7 +294,8 @@ export const TOOLS = {
   grep: tool({
     description:
       'Search file contents with a regular expression (ripgrep syntax; use ignore_case instead of (?i)). Use this instead of grep/rg/find in shell. ' +
-      'mode: content (matching lines as path:line:text), files (paths only) or count (path:matches). Skips node_modules and .git.',
+      'mode: content (matching lines as path:line:text), files (paths only) or count (path:matches). Skips node_modules and .git. ' +
+      `Searches your working directory, a temp folder such as /tmp, or a saved output (${PATH_RULE}).`,
     input: z.object({
       pattern: z.string().min(1),
       path: z.string().default('.').describe('file or folder to search'),
@@ -257,22 +308,23 @@ export const TOOLS = {
     run: async ({ pattern, path, glob, mode, limit, context, ignore_case }, ctx) => {
       const root = readable(ctx, path);
       await stat(root); // a clear ENOENT before searching
-      return grep({ pattern, root, base: isAbsolute(path) ? ctx.outputsDir : ctx.workdir, glob, mode, limit, context, ignoreCase: ignore_case, signal: ctx.signal });
+      return grep({ pattern, root, base: ctx.workdir, glob, mode, limit, context, ignoreCase: ignore_case, signal: ctx.signal });
     },
   }),
   glob: tool({
     description:
       'Find files by name pattern, newest first: `**/*.ts`, `src/**/test*.{ts,tsx}`; a pattern without / matches the name ' +
-      'at any depth. Use this instead of find/ls in shell. Skips node_modules and .git.',
+      'at any depth. Use this instead of find/ls in shell. Skips node_modules and .git. ' +
+      `path: your working directory or a temp folder such as /tmp (${PATH_RULE}).`,
     input: z.object({
       pattern: z.string().min(1),
       path: z.string().default('.').describe('folder to search from'),
       limit: z.number().int().min(1).max(1000).default(100),
     }),
-    run: async ({ pattern, path, limit }, { workdir }) => {
-      const root = inside(workdir, path);
+    run: async ({ pattern, path, limit }, ctx) => {
+      const root = readable(ctx, path);
       if (!(await stat(root)).isDirectory()) throw new Error(`${path} is not a directory`);
-      return globFiles(pattern, root, workdir, limit);
+      return globFiles(pattern, root, ctx.workdir, limit);
     },
   }),
   shell: tool({

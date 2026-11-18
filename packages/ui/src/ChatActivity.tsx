@@ -123,7 +123,7 @@ export function StepsGroup({ steps, timings, now, at, failedEnd }: { steps: Step
   const icon = running ? null : (
     <span className="row-stack">
       {sum.icons.map((i) => (
-        <span key={i} className={'row-stack-ic ' + i}>
+        <span key={i} className={'row-stack-ic rowic-' + i}>
           <RowIconSvg name={i} />
         </span>
       ))}

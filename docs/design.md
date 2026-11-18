@@ -322,7 +322,7 @@ Statuses: `triage → todo → ready → running → (blocked | review) → done
 ## 10. Tools (v1)
 | Tool | Notes |
 |---|---|
-| `read_file`, `write_file`, `edit_file`, `list_files` | inside the agent's workdir. read_file: `N\|text` lines, `offset`/`limit` (2000 lines), ≤100k chars cut on a line boundary with a « use offset= » footer, binary refused, except png/jpeg/gif/webp (≤10 MB, by their bytes): returned as a picture (§10a). Edits (edit_file, write_file over an existing file) need a read_file of the file in this conversation and refuse if it changed on disk since (mtime+size per conversation, in memory). edit_file: `replace_all`; on 0 exact hits, line-trimmed then whitespace-normalized matching (reported). Writes to one file run one at a time |
+| `read_file`, `write_file`, `edit_file`, `list_files` | read: the agent's workdir and the OS temp folders (`/tmp`, `/private/tmp`, `os.tmpdir()`), read-only, checked after resolving links (a link in /tmp to a path elsewhere is refused); write: the workdir only. Refusals state the rule (« read: workdir and temp folders; write: workdir only »). grep and glob follow the read rule. read_file: `N\|text` lines, `offset`/`limit` (2000 lines), ≤100k chars cut on a line boundary with a « use offset= » footer, binary refused, except png/jpeg/gif/webp (≤10 MB, by their bytes): returned as a picture (§10a). Edits (edit_file, write_file over an existing file) need a read_file of the file in this conversation and refuse if it changed on disk since (mtime+size per conversation, in memory). edit_file: `replace_all`; on 0 exact hits, line-trimmed then whitespace-normalized matching (reported). Writes to one file run one at a time |
 | `grep`, `glob` | ripgrep when `rg` is installed (PATH, Homebrew), else JS; skip node_modules/.git. glob newest first |
 | `shell` | runs in the workdir, timeout; output over 30k chars: the tail + full output saved under `<data>/outputs/<agent>/` (pruned after 7 days, readable with read_file/grep by absolute path). `background: true` → id, log file, row in `background_processes` (migration 0024, leased like runs: a dead engine's processes are killed and marked `lost` at start); `shell_output(id, offset?)`, `shell_kill(id)`; when one ends by itself (or is lost) a system note with exit code + output tail is posted and the agent woken |
 | `web_fetch` | HTML → light markdown, 15k chars head+tail by default, full text saved to outputs. An image URL (png/jpeg/gif/webp) is saved to outputs and returned as a picture |
@@ -352,6 +352,22 @@ Statuses: `triage → todo → ready → running → (blocked | review) → done
   message row (image block + an `[attached: uploads/…]` line for the agent), then drops the staged file; a failed row
   write removes the copies, so sending again works and a restart in between loses nothing.
 - Transcript: thumbnails (`GET /api/cards/:id/image?path=`, only paths the conversation references), click = full size.
+- **A task's own images (#119).** The New task dialog and a task's description (CardView: modal and thread panel)
+  take paste, drop and the attach button; same types and 10 MB, ≤5 per task (`IMAGE_MAX_PER_TASK`). Pasting text
+  stays text (a paste is an image only when it carries no text). Shown as thumbnails under the description, click =
+  full size, × removes. Storage: `cards.images` (migration 0040, JSON image blocks), files in `<data>/task-images/`
+  (`<date>-<name>.<ext>`), never bytes in SQLite.
+  - New task: images are staged with no task yet (`POST /api/uploads`), `POST /api/cards` with `uploads: [ids]` copies
+    them and writes the row in its transaction (a failed write removes the copies). Cancel / Esc / × deletes the staged
+    files (`DELETE /api/uploads/:id`); anything missed is pruned after a day. No card exists before Create.
+  - Existing task: each staged image is added at once (`POST /api/cards/:id/images`, refused past 5 with the count),
+    removed by `DELETE /api/cards/:id/images?path=` (row first, then the file). Deleting the task deletes its files;
+    files no task lists (a crash between copy and row) are swept at engine start.
+  - Agent side: not stored in the transcript. At every turn of a run on the task, the view opens with « Images
+    attached to task #N (k): », each picture and its `[attached: uploads/task-N-<file>]` line; the file is copied
+    into the running agent's workspace on first use. So a later assignee (or a reassigned one, or triage) sees them,
+    and a removed image is gone from the next turn. They count in the 6 newest pictures and the token estimate; the
+    system prompt's « # Current task » lists their workspace paths. A model without vision fails loudly, as above.
 
 Project instructions: `AGENTS.md` and `CLAUDE.md` at the root of the agent's workdir go in the system prompt
 (« # Project instructions », each labelled with its path, capped at 20k chars with a note), before the card and the date.

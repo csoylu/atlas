@@ -1,16 +1,23 @@
 // Build the Mac app and install it in /Applications, replacing the previous version (npm -w @atlas/desktop run install:mac).
 // Quits a running Atlas first (its engine stops cleanly; runs resume on the next start), then copies the fresh .app.
+// For a manual build from source only: agents never run it (CLAUDE.md « Releases »); Master's app updates itself from
+// GitHub releases. The version comes from CHANGELOG.md, like CI's, so the updater compares it correctly.
 import { execFileSync } from 'node:child_process';
 import { existsSync, rmSync } from 'node:fs';
 import { arch } from 'node:os';
 import { join } from 'node:path';
+import { versionOf } from '../../scripts/release/changelog.mjs';
+import { readFileSync } from 'node:fs';
 
 const run = (cmd, args, opts = {}) => execFileSync(cmd, args, { stdio: 'inherit', ...opts });
 const here = import.meta.dirname;
 const root = join(here, '../..');
 
 if (process.platform !== 'darwin') throw new Error('install:mac runs on macOS only');
-run('npm', ['run', 'dist:mac'], { cwd: here });
+const version0 = versionOf(readFileSync(join(root, 'CHANGELOG.md'), 'utf8'));
+run('npm', ['-w', '@atlas/ui', 'run', 'build'], { cwd: root });
+run('npm', ['run', 'build'], { cwd: here });
+run('npx', ['electron-builder', '--mac', 'dir', `-c.extraMetadata.version=${version0}`], { cwd: here });
 
 const built = join(here, 'release', arch() === 'arm64' ? 'mac-arm64' : 'mac', 'Atlas.app');
 if (!existsSync(built)) throw new Error(`no build at ${built}`);

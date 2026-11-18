@@ -1,7 +1,7 @@
 import { app, BrowserWindow, dialog, globalShortcut, nativeTheme, safeStorage, shell, systemPreferences } from 'electron';
 import { existsSync, mkdirSync, readFileSync, renameSync, writeFileSync } from 'node:fs';
-import { join } from 'node:path';
-import { startEngine, type Engine, type SecretStore, type VoiceHost } from '@atlas/engine';
+import { dirname, join } from 'node:path';
+import { startEngine, type Engine, type SecretStore, type UpdateHost, type VoiceHost } from '@atlas/engine';
 import { OrbOverlay } from './orb/overlay.ts';
 import { DesktopVoice, voiceLog } from './voice.ts';
 import { nativeHoldKey } from './optionkey.ts';
@@ -55,6 +55,19 @@ const voiceHost = (): VoiceHost | undefined =>
         requestMicAccess: () => systemPreferences.askForMediaAccess('microphone'),
       };
 
+/**
+ * App updates (#123, docs/updater.md): the packaged Mac app in /Applications installs a release on Master's click
+ * (the engine downloads and verifies it; a detached helper swaps the bundle after this app quits). Elsewhere: why not.
+ */
+const INSTALLED = '/Applications/Atlas.app';
+function updateHost(): { host: UpdateHost | null; cannotInstall?: string } {
+  if (process.platform !== 'darwin') return { host: null, cannotInstall: 'Updates install by themselves on a Mac only: download the new installer from GitHub.' };
+  if (!app.isPackaged) return { host: null, cannotInstall: 'This is a development build: updates install in the packaged app only.' };
+  const bundle = dirname(dirname(dirname(app.getPath('exe'))));
+  if (bundle !== INSTALLED) return { host: null, cannotInstall: `Atlas runs from ${bundle}: updates install in ${INSTALLED} only.` };
+  return { host: { appPath: bundle, arch: process.arch === 'arm64' ? 'arm64' : 'x64', quit: () => app.quit() } };
+}
+
 let engine: Engine | undefined;
 let quitting = false;
 /** A quit is waiting for the main window to close; cleared if Master cancels at the unsaved-drawing prompt. */
@@ -98,7 +111,7 @@ async function start() {
   mkdirSync(dataDir, { recursive: true });
   // The built UI ships as an extra resource in the packaged app; in a local build it sits in packages/ui/dist.
   const uiDir = app.isPackaged ? join(process.resourcesPath, 'ui') : join(app.getAppPath(), '../../packages/ui/dist');
-  engine = await startEngine({ dbFile: join(dataDir, 'atlas.db'), dataDir, port: 0, uiDir, secrets: new KeychainStore(), version: app.getVersion(), voice: voiceHost() });
+  engine = await startEngine({ dbFile: join(dataDir, 'atlas.db'), dataDir, port: 0, uiDir, secrets: new KeychainStore(), version: app.getVersion(), voice: voiceHost(), updates: updateHost() });
   createWindow(engine.url);
   if (engine.voice) followVoice(engine, engine.voice);
   startTray(engine);

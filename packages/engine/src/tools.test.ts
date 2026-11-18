@@ -1,11 +1,11 @@
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, utimesSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, symlinkSync, utimesSync, writeFileSync } from 'node:fs';
 import { createServer, type Server } from 'node:http';
 import type { AddressInfo } from 'node:net';
-import { tmpdir } from 'node:os';
+import { homedir, tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { randomUUID } from 'node:crypto';
-import { inside, landedLines, numberedPage, runTool, toolSpecs, type ToolContext } from './tools.ts';
+import { inside, landedLines, numberedPage, PATH_RULE, readable, runTool, toolSpecs, type ToolContext } from './tools.ts';
 import { tailOf } from './runner.ts';
 import { findRg, globToRegex, grep } from './search.ts';
 import { lineTrimmedSpans, whitespaceNormalizedSpans } from './fuzzy.ts';
@@ -33,6 +33,54 @@ describe('tools', () => {
     expect(inside('/w', 'a/b.txt')).toBe('/w/a/b.txt');
     expect(() => inside('/w', '../etc/passwd')).toThrow(/outside/);
     expect(() => inside('/w', '/etc/passwd')).toThrow(/outside/);
+  });
+
+  it('reads temp folders (read-only), resolving links, and states the rule when refusing', async () => {
+    const c = ctx();
+    const tmp = mkdtempSync(join(tmpdir(), 'atlas-tmp-read-'));
+    writeFileSync(join(tmp, 'note.txt'), 'from tmp\n');
+    // A 1×1 png: read_file returns the picture.
+    const png = Buffer.from('iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8DwHwAFBQIAX8jx0gAAAABJRU5ErkJggg==', 'base64');
+    writeFileSync(join(tmp, 'shot.png'), png);
+    expect(await out('read_file', { path: join(tmp, 'note.txt') }, c)).toBe('1|from tmp');
+    const img = await runTool('read_file', { path: join(tmp, 'shot.png') }, c);
+    expect(img.isError).toBeFalsy();
+    expect(img.images?.length).toBe(1);
+    expect(await out('grep', { pattern: 'from', path: tmp }, c)).toBe(`${realpathSync(join(tmp, 'note.txt'))}:1:from tmp`);
+    expect((await out('glob', { pattern: '*.png', path: tmp }, c)).split('\n')).toEqual([realpathSync(join(tmp, 'shot.png'))]);
+    expect(await out('list_files', { path: tmp }, c)).toContain('note.txt');
+    if (existsSync('/tmp')) {
+      const d = mkdtempSync('/tmp/atlas-tmp-read-');
+      writeFileSync(join(d, 'a.txt'), 'via /tmp\n');
+      expect(await out('read_file', { path: join(d, 'a.txt') }, c)).toBe('1|via /tmp');
+    }
+    // Writes stay in the workdir.
+    const w = await err('write_file', { path: join(tmp, 'new.txt'), content: 'x' }, c);
+    expect(w).toContain('read: workdir and temp folders; write: workdir only');
+    expect(existsSync(join(tmp, 'new.txt'))).toBe(false);
+    await out('read_file', { path: join(tmp, 'note.txt') }, c);
+    expect(await err('edit_file', { path: join(tmp, 'note.txt'), old_text: 'tmp', new_text: 'x' }, c)).toContain(PATH_RULE);
+    expect(readFileSync(join(tmp, 'note.txt'), 'utf8')).toBe('from tmp\n');
+    // A link in a temp folder to a path elsewhere is refused (file and folder).
+    const outside = mkdtempSync(join(homedir(), '.atlas-test-outside-'));
+    try {
+      writeFileSync(join(outside, 'secret.txt'), 'secret');
+      symlinkSync(join(outside, 'secret.txt'), join(tmp, 'link.txt'));
+      symlinkSync(outside, join(tmp, 'linkdir'));
+      expect(await err('read_file', { path: join(tmp, 'link.txt') }, c)).toMatch(/links to .*outside the folders you can open \(read: workdir and temp folders; write: workdir only\)/);
+      expect(await err('grep', { pattern: 'secret', path: join(tmp, 'linkdir') }, c)).toContain(PATH_RULE);
+      expect(await err('list_files', { path: join(tmp, 'linkdir') }, c)).toContain(PATH_RULE);
+    } finally {
+      rmSync(outside, { recursive: true, force: true });
+    }
+    // Any other path: the rule in one line.
+    const r = await err('read_file', { path: '/etc/hosts' }, c);
+    expect(r).toContain('path /etc/hosts is outside the folders you can open (read: workdir and temp folders; write: workdir only)');
+    expect(r).not.toContain('\n');
+    expect(() => readable(c, join(homedir(), 'x'))).toThrow(PATH_RULE);
+    // The tool descriptions say the rule.
+    const names = ['read_file', 'write_file', 'edit_file', 'grep', 'glob', 'list_files'];
+    for (const t of toolSpecs().filter((s) => names.includes(s.name))) expect(t.description).toContain(PATH_RULE);
   });
 
   it('writes, edits, reads (with line numbers) and lists files', async () => {

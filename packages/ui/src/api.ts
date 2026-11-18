@@ -1,4 +1,4 @@
-import type { ClearEvent, CompactResult, Inbox, FileChange, RewindPreview, RewindResult, Doc, DocContent, DocHit, Folder, DocRef, DocVersion, PanelTab, About, CreatePlanAccount, Notification, PlanProvider, UpdatePlanAccount, ChatUsage, UsageSummary, ChatGptModel, ChatGptStatus, UpdateChatGpt, ClaudePlanModel, ClaudePlanStatus, UpdateClaudePlan, Account, CreateAccount, UpdateAccount, LocalModel, LocalPull, LocalStatus, UpdateLocal, Agent, Card, CardStatus, CreateAgent, CreateCard, CreateModelRequest, CreateSchedule, Memory, MemoryChange, MemoryProposal, MemoryQuery, UpdateMemory, Message, Model, ModelTest, Run, Schedule, Timeline, ToolCallTiming, ServerEvent, Settings, UpdateVoice, VoiceName, VoiceStatus, UpdateAgent, UpdateModelRequest, UpdateSchedule, Upload } from '@atlas/shared';
+import type { About, Account, Agent, Card, CardStatus, ChatGptModel, ChatGptStatus, ChatUsage, ClaudePlanModel, ClaudePlanStatus, ClearEvent, CompactResult, CreateAccount, CreateAgent, CreateCard, CreateModelRequest, CreatePlanAccount, CreateSchedule, Doc, DocContent, DocHit, DocRef, DocVersion, FileChange, Folder, Inbox, LocalModel, LocalPull, LocalStatus, Memory, MemoryChange, MemoryProposal, MemoryQuery, Message, Model, ModelTest, Notification, PanelTab, PlanProvider, RewindPreview, RewindResult, Run, Schedule, ServerEvent, Settings, Timeline, ToolCallTiming, UpdateAccount, UpdateAgent, UpdateChatGpt, UpdateClaudePlan, UpdateLocal, UpdateMemory, UpdateModelRequest, UpdatePlanAccount, UpdateSchedule, UpdateStatus, UpdateVoice, Upload, UsageSummary, VoiceName, VoiceStatus } from '@atlas/shared';
 
 /** HTTP error with the parsed body (e.g. a 409's details). */
 export class ApiError extends Error {
@@ -45,8 +45,9 @@ export const api = {
   postMessage: (id: string, text: string, ref?: DocRef, uploads?: string[]) =>
     call<Message>('POST', `/cards/${id}/messages`, { text, ...(ref ? { ref } : {}), ...(uploads?.length ? { uploads } : {}) }),
   /** Stage a pasted/dropped image; its id goes with the next message. */
-  uploadImage: async (id: string, file: File): Promise<Upload> => {
-    const res = await fetch(`/api/cards/${id}/uploads?name=${encodeURIComponent(file.name || 'image')}`, {
+  uploadImage: async (id: string | null, file: File): Promise<Upload> => {
+    // No task yet (the New task dialog): staged without one, attached by createCard({ uploads }).
+    const res = await fetch(`${id ? `/api/cards/${id}/uploads` : '/api/uploads'}?name=${encodeURIComponent(file.name || 'image')}`, {
       method: 'POST',
       headers: { 'content-type': 'application/octet-stream' },
       body: file,
@@ -56,6 +57,11 @@ export const api = {
     if (!res.ok) throw new ApiError(body.error || `upload failed: HTTP ${res.status}`, res.status, body as unknown as Record<string, unknown>);
     return body;
   },
+  /** A staged image removed before it was sent: its file goes now (else pruned after a day). */
+  discardUpload: (id: string) => call<void>('DELETE', `/uploads/${encodeURIComponent(id)}`),
+  /** The task's own images (#119). */
+  addCardImages: (id: string, uploads: string[]) => call<Card>('POST', `/cards/${id}/images`, { uploads }),
+  removeCardImage: (id: string, path: string) => call<Card>('DELETE', `/cards/${id}/images?path=${encodeURIComponent(path)}`),
   // ── Documents and the side panel ──
   documents: (cardId?: string) => call<Doc[]>('GET', '/documents' + (cardId ? `?card=${encodeURIComponent(cardId)}` : '')),
   document: (id: string, version?: number) => call<DocContent>('GET', `/documents/${id}` + (version === undefined ? '' : `?version=${version}`)),
@@ -143,6 +149,10 @@ export const api = {
   deleteSecret: (name: string) => call<void>('DELETE', `/secrets/${name}`),
   settings: () => call<Settings>('GET', '/settings'),
   about: () => call<About>('GET', '/about'),
+  // ── App updates (#123) ──
+  update: () => call<UpdateStatus>('GET', '/update'),
+  checkUpdate: () => call<UpdateStatus>('POST', '/update/check'),
+  installUpdate: () => call<UpdateStatus>('POST', '/update/install'),
   // ── Voice mode (desktop only) ──
   voice: () => call<VoiceStatus>('GET', '/voice'),
   updateVoice: (patch: UpdateVoice) => call<VoiceStatus>('PATCH', '/voice', patch),

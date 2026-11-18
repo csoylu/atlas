@@ -128,17 +128,19 @@ async function wireOrNote(b: ImageBlock): Promise<ImageBlock | string> {
 
 /**
  * The view as it goes to the provider: the newest `keep` pictures carry their bytes (`data`), older ones and missing
- * files become text. Returns copies; the view's blocks are never touched.
+ * files become text. `pinned` pictures always carry their bytes, on top of the `keep` (a task's own images, #119).
+ * Returns copies; the view's blocks are never touched.
  */
-export async function withPictures(view: ModelRequest['messages'], keep = IMAGE_KEEP): Promise<ModelRequest['messages']> {
-  // Which pictures are among the newest `keep` (walking back from the end).
-  const recent = new Set<ImageBlock>();
-  for (let i = view.length - 1; i >= 0 && recent.size < keep; i--) {
+export async function withPictures(view: ModelRequest['messages'], keep = IMAGE_KEEP, pinned: ReadonlySet<ImageBlock> = new Set()): Promise<ModelRequest['messages']> {
+  // Which pictures are among the newest `keep` (walking back from the end), plus the pinned ones.
+  const recent = new Set<ImageBlock>(pinned);
+  const max = keep + pinned.size;
+  for (let i = view.length - 1; i >= 0 && recent.size < max; i--) {
     const c = view[i]!.content;
-    for (let j = c.length - 1; j >= 0 && recent.size < keep; j--) {
+    for (let j = c.length - 1; j >= 0 && recent.size < max; j--) {
       const b = c[j]!;
       if (b.type === 'image') recent.add(b);
-      else if (b.type === 'tool_result' && b.images) for (let k = b.images.length - 1; k >= 0 && recent.size < keep; k--) recent.add(b.images[k]!);
+      else if (b.type === 'tool_result' && b.images) for (let k = b.images.length - 1; k >= 0 && recent.size < max; k--) recent.add(b.images[k]!);
     }
   }
   if (!recent.size && !view.some((t) => t.content.some(hasImage))) return view;

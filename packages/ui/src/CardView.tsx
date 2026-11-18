@@ -1,5 +1,6 @@
-import { forwardRef, useEffect, useLayoutEffect, useRef, useState, type ReactNode } from 'react';
+import { forwardRef, useEffect, useLayoutEffect, useRef, useState, type ClipboardEvent, type ReactNode } from 'react';
 import { AgentFace } from './AgentFace.tsx';
+import { pastedImages, TASK, TaskImages, useAttachments, useFileDrop } from './Images.tsx';
 import Markdown from 'react-markdown';
 import remarkGfm from 'remark-gfm';
 import { CARD_STATUSES, cardRef, type Doc, type Agent, type Card, type Model } from '@atlas/shared';
@@ -58,6 +59,36 @@ export const CardView = forwardRef<HTMLTextAreaElement, CardViewProps & { close:
     }, [card.body]);
 
     const save = (patch: Partial<Card>) => api.updateCard(card.id, patch).catch(onError);
+    // The task's own images (#119): each one is staged, then added to the task at once (no Save step).
+    // The answer of an add / remove shows at once; the live card (its event) takes over when it is as new.
+    const [answer, setAnswerRaw] = useState<Card | null>(null);
+    const setAnswer = (c: Card) => setAnswerRaw((prev) => (prev && prev.id === c.id && prev.updatedAt > c.updatedAt ? prev : c));
+    const images = answer && answer.id === card.id && answer.updatedAt >= card.updatedAt ? answer.images : (card.images ?? []); // ?? : an engine older than the UI
+    const att = useAttachments(card.id, { ...TASK, taken: images.length });
+    const adding = useRef(new Set<string>());
+    useEffect(() => {
+      for (const a of att.items) {
+        if (!a.upload || a.error || adding.current.has(a.key)) continue;
+        adding.current.add(a.key);
+        api.addCardImages(card.id, [a.upload.id]).then(
+          (c) => {
+            setAnswer(c);
+            att.drop([a.key], true);
+          },
+          (e: unknown) => {
+            att.drop([a.key]);
+            att.setNotice(e instanceof Error ? e.message : String(e));
+          },
+        );
+      }
+    }, [att, card.id]);
+    const drop = useFileDrop(att.add);
+    const onPaste = (e: ClipboardEvent) => {
+      const files = pastedImages(e.clipboardData);
+      if (!files.length) return;
+      e.preventDefault(); // an image, not its file name as text
+      att.add(files);
+    };
     const status = pillStatus(card, convo.run);
     const chip = statusChip(status);
     const running = card.status === 'running' || convo.run?.status === 'running';
@@ -150,13 +181,14 @@ export const CardView = forwardRef<HTMLTextAreaElement, CardViewProps & { close:
           />
         </header>
         <div className="cm-body">
+          <div className={'cm-desc-area drop-zone' + (drop.dragging ? ' dropping' : '')} {...drop.props} onPaste={onPaste}>
           {editing || !body.trim() ? (
             <textarea
               ref={bodyRef}
               className="cm-desc"
               value={body}
               autoFocus={editing}
-              placeholder="Description, acceptance criteria…"
+              placeholder="Description, acceptance criteria… (paste or drop images)"
               aria-label="Description"
               onChange={(e) => setBody(e.target.value)}
               onBlur={leaveEditing}
@@ -171,6 +203,14 @@ export const CardView = forwardRef<HTMLTextAreaElement, CardViewProps & { close:
           ) : (
             <Description body={body} clamp={!!props.clamp} onEdit={() => setEditing(true)} />
           )}
+            <TaskImages
+              cardId={card.id}
+              images={images}
+              att={att}
+              onAdd={att.add}
+              onRemove={(im) => void api.removeCardImage(card.id, im.path).then(setAnswer, onError)}
+            />
+          </div>
           <div className="relations">
             <span className="label">after</span>
             {card.parents.map((p) => (

@@ -78,3 +78,5 @@ the app restarts once, when Master clicks.
 1. munih: changelog, CI release job, updater module, UI. Done when a real release made from main updates the installed app with one click.
 2. zurich: test it: kill during download and during the swap, bad checksum, no network, update while agents run.
 3. atlas: change `CLAUDE.md` and the task briefs.
+
+**Integrity, not authenticity.** SHA256SUMS.txt is published in the same release as the zip, so the checksum catches a broken or truncated download, not a tampered release. Without code signing (Master chose the unsigned route) trust rests on the GitHub repository itself.

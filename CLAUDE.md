@@ -60,7 +60,7 @@ npm install
 npm run dev          # engine + UI with hot reload, opens http://localhost:5173
 npm run desktop      # Electron app in dev
 npm run typecheck && npm test   # fast suite; test:full adds slow suites, test:changed only what your diff affects
-npm -w @atlas/desktop run install:mac   # build the Mac app and install it in /Applications (quits the running one)
+npm -w @atlas/desktop run install:mac   # manual build from source into /Applications (agents: never, see Releases)
 npm run ui:check     # responsive check of the real UI (below)
 node scripts/orb-check/check.mjs   # voice orb overlay: screenshots of every state, frame times, CPU, Esc, click-through, drag (→ shots/orb)
 ```
@@ -79,6 +79,23 @@ messages or the composer, the modal or panel off-screen, uncaught page errors, a
 - `--widths 390`, `--only chat,modal` (screen-name prefixes) to narrow a run; a full run takes ~75 s.
 - Run it after any UI layout change; the acceptance bar is « no issues » at all widths.
 
-**After every change that ships** (pushed to main and touching the engine, UI or desktop app): run
-`npm -w @atlas/desktop run install:mac` so the maintainer's /Applications/Atlas.app is always the latest (asked
-10 Nov 2026). It quits a running Atlas; say so in the report.
+## Releases (#123, docs/updater.md)
+- **One push to main = one CHANGELOG.md entry = one release.** Whoever pushes to main adds exactly one entry at the
+  top: `## Fixed|Added|Changed|Breaking · #task · One plain sentence for Master`, then optional details. The version
+  is computed from the entries (`node scripts/release/changelog.mjs version`; Fixed → patch, Added/Changed → minor,
+  Breaking → major): never type a number. CI (`.github/workflows/ci.yml`) refuses a push to main without exactly one
+  new top entry, runs the tests, builds the Mac app (arm64 + x64 zip and dmg, SHA256SUMS.txt), tags `v<version>` and
+  publishes the GitHub release with that entry as its notes. No release when tests fail.
+- **Every change reaches main through a pull request** (Master, 18 Nov 2026): no direct push to main, for anyone, docs
+  included. Work goes to a branch (`<type>/<task number>-<slug>`), then a PR whose base is main (check a stacked PR's
+  base before merging). One merged PR = one push to main = one changelog entry = one release. main refuses
+  force-pushes and deletion (GitHub branch protection).
+- **Agents never install the app.** No `install:mac`: Master's Atlas shows "Update available" and installs on
+  Master's click (it restarts; running tasks resume). `install:mac` stays for a manual build from source.
+- **Testing without installing:**
+  - UI: `npm run build`, then `npm run ui:check -- --ui packages/ui/dist` (the local build against the running engine,
+    read-only), or screenshots of a second engine (below).
+  - Engine: a second engine on a copy of the database, never the live one: `sqlite3 <data>/atlas.db ".backup /tmp/x/atlas.db"`,
+    then `startEngine({ dbFile: '/tmp/x/atlas.db', dataDir: '/tmp/x', port: 4388, dispatch: false, env: {}, uiDir: 'packages/ui/dist' })`
+    (`dispatch: false` so it starts no runs and no schedules).
+  - E2E: `e2e/` (Playwright, scripted model) on a local build.

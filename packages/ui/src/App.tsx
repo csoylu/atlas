@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from 'react';
 import { AgentFace } from './AgentFace.tsx';
-import { cardRef, type Doc, type Agent, type Card, type ChatGptStatus, type Inbox as InboxData, type Model, type Schedule, type Settings } from '@atlas/shared';
+import { cardRef, type UpdateStatus, type Doc, type Agent, type Card, type ChatGptStatus, type Inbox as InboxData, type Model, type Schedule, type Settings } from '@atlas/shared';
 import { api, subscribe, type AuthState } from './api.ts';
 import { Board } from './Board.tsx';
 import { Inbox } from './Inbox.tsx';
@@ -18,6 +18,7 @@ import { PlanWelcome } from './ChatGptSection.tsx';
 import { ClaudeWelcome } from './ClaudePlanSection.tsx';
 import { useTheme } from './theme.ts';
 import { SettingsView } from './SettingsView.tsx';
+import { UpdateBadge, UpdateDialog } from './UpdateDialog.tsx';
 import { settingsLabel, settingsRoute, type SettingsPage } from './settingsPages.ts';
 import { registerAgents } from './agentTint.ts';
 import { ChatHistory } from './ChatHistory.tsx';
@@ -118,6 +119,9 @@ export function App() {
   const [menu, setMenu] = useState(false);
   const [headSlot, setHeadSlot] = useState<HTMLElement | null>(null);
   const [online, setOnline] = useState(false);
+  // App updates (#123): the sidebar badge and its dialog.
+  const [update, setUpdate] = useState<UpdateStatus | null>(null);
+  const [updateOpen, setUpdateOpen] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [agents, setAgents] = useState<Agent[]>([]);
   const [schedules, setSchedules] = useState<Schedule[]>([]);
@@ -189,6 +193,7 @@ export function App() {
         else if (e.type === 'local.updated') stream.push('local', { type: 'local', status: e.status });
         else if (e.type === 'local.pull') stream.push('local', { type: 'pull', pull: e.pull });
         else if (e.type === 'voice.updated') stream.push('voice', { type: 'voice', status: e.status });
+        else if (e.type === 'update.updated') setUpdate(e.status);
         else if (e.type === 'usage.recorded') {
           if (e.cardId) stream.push('usage:' + e.cardId, { type: 'usage' });
           stream.push('usage', { type: 'usage' });
@@ -214,6 +219,7 @@ export function App() {
           api.agents().then(setAgents, (e: Error) => setError(e.message));
           api.schedules().then(setSchedules, (e: Error) => setError(e.message));
           api.settings().then(setSettings, (e: Error) => setError(e.message));
+          api.update().then(setUpdate, (e: Error) => setError(e.message));
           api.chatgpt().then(setChatgpt, (e: Error) => setError(e.message));
           api.claude().then((c) => setClaudeWelcome(c.showWelcome), (e: Error) => setError(e.message));
           api.models().then(setModels, (e: Error) => setError(e.message));
@@ -493,6 +499,7 @@ export function App() {
               onDelete={deleteChat} />
           </section>
         )}
+        <UpdateBadge status={update} onOpen={() => (setMenu(false), setUpdateOpen(true))} />
         <div className="sidebar-foot">
           <span className="me" aria-hidden="true">{(settings?.userName ?? '?').slice(0, 1).toUpperCase()}</span>
           <span className="me-name">{settings?.userName ?? ''}</span>
@@ -594,6 +601,8 @@ export function App() {
               api.models().then(setModels, fail);
             }}
             onModelsChanged={() => api.models().then(setModels, fail)}
+            update={update}
+            onOpenUpdate={() => setUpdateOpen(true)}
             onError={fail}
           />
         ) : route.view === 'library' ? (
@@ -665,6 +674,7 @@ export function App() {
         />
       )}
       {help && <ShortcutsSheet onClose={closeHelp} />}
+      {updateOpen && update && <UpdateDialog status={update} onClose={() => setUpdateOpen(false)} onError={fail} />}
       {settings && (!settings.userName || !settings.userAbout) ? (
         <Welcome settings={settings} onSaved={setSettings} />
       ) : null}

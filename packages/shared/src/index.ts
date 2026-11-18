@@ -25,6 +25,39 @@ export const Block = z.object({
 });
 export type Block = z.infer<typeof Block>;
 
+/* ── Images (#103) ─────────────────────────────────────────────────────────── */
+
+export const IMAGE_TYPES = ['image/png', 'image/jpeg', 'image/gif', 'image/webp'] as const;
+export const ImageMediaType = z.enum(IMAGE_TYPES);
+export type ImageMediaType = z.infer<typeof ImageMediaType>;
+/** An image file over this size is refused (upload, read_file, web_fetch). */
+export const IMAGE_MAX_BYTES = 10 * 1024 * 1024;
+/** Images per user message. */
+export const IMAGE_MAX_PER_MESSAGE = 5;
+/** Images attached to a task (its description, #119). */
+export const IMAGE_MAX_PER_TASK = 5;
+/** An id from POST /api/uploads (a staged image). */
+export const UploadId = z.string().regex(/^up_[a-z0-9-]+$/);
+/** Only the newest this-many images of a conversation go to the model as pictures; older ones become a text line. */
+export const IMAGE_KEEP = 6;
+
+/**
+ * A picture in the transcript. The bytes stay in a file (absolute `path`, in an agent workspace or its outputs);
+ * the transcript keeps only this reference, so SQLite stays small. `data` (base64 of the possibly downscaled picture,
+ * with `media_type` describing it) is filled only in the view handed to a provider, never stored.
+ */
+export const ImageBlock = z.object({
+  type: z.literal('image'),
+  path: z.string(),
+  media_type: ImageMediaType,
+  width: z.number().int(),
+  height: z.number().int(),
+  bytes: z.number().int(),
+  sha256: z.string(),
+  data: z.string().optional(),
+});
+export type ImageBlock = z.infer<typeof ImageBlock>;
+
 export const Card = z.object({
   id: z.string(),
   /** Board cards: sequential number shown as #N (never reused). Direct chats: null. */
@@ -53,6 +86,8 @@ export const Card = z.object({
   working: z.boolean().default(false),
   /** The direct chat this card was created from (card_create in a chat): told when it finishes, closes, stops or needs the user. */
   originCard: z.string().nullable().default(null),
+  /** Pictures attached to the task itself (#119): files in <data>/task-images/, shown to its assignee at each run. */
+  images: z.array(ImageBlock).default([]),
 });
 export type Card = z.infer<typeof Card>;
 
@@ -63,8 +98,12 @@ export const CreateCard = z.object({
   assignee: z.string().nullable().default(null),
   priority: z.number().int().default(0),
   parents: z.array(z.string()).default([]),
+  /** Staged images (POST /api/uploads) to attach to the new task (#119): the API moves them, the row lists them. */
+  uploads: z.array(UploadId).max(IMAGE_MAX_PER_TASK).default([]),
 });
 export type CreateCard = z.input<typeof CreateCard>;
+/** POST /api/cards/:id/images: staged images added to an existing task. */
+export const AddCardImages = z.object({ uploads: z.array(UploadId).min(1).max(IMAGE_MAX_PER_TASK) });
 
 /** How hard the model thinks: Claude output_config.effort, OpenAI reasoning.effort; Ollama gets low/medium/high. */
 export const Effort = z.enum(['low', 'medium', 'high', 'xhigh', 'max']);
@@ -85,35 +124,6 @@ export const UpdateCard = z
   })
   .partial();
 export type UpdateCard = z.infer<typeof UpdateCard>;
-
-/* ── Images (#103) ─────────────────────────────────────────────────────────── */
-
-export const IMAGE_TYPES = ['image/png', 'image/jpeg', 'image/gif', 'image/webp'] as const;
-export const ImageMediaType = z.enum(IMAGE_TYPES);
-export type ImageMediaType = z.infer<typeof ImageMediaType>;
-/** An image file over this size is refused (upload, read_file, web_fetch). */
-export const IMAGE_MAX_BYTES = 10 * 1024 * 1024;
-/** Images per user message. */
-export const IMAGE_MAX_PER_MESSAGE = 5;
-/** Only the newest this-many images of a conversation go to the model as pictures; older ones become a text line. */
-export const IMAGE_KEEP = 6;
-
-/**
- * A picture in the transcript. The bytes stay in a file (absolute `path`, in an agent workspace or its outputs);
- * the transcript keeps only this reference, so SQLite stays small. `data` (base64 of the possibly downscaled picture,
- * with `media_type` describing it) is filled only in the view handed to a provider, never stored.
- */
-export const ImageBlock = z.object({
-  type: z.literal('image'),
-  path: z.string(),
-  media_type: ImageMediaType,
-  width: z.number().int(),
-  height: z.number().int(),
-  bytes: z.number().int(),
-  sha256: z.string(),
-  data: z.string().optional(),
-});
-export type ImageBlock = z.infer<typeof ImageBlock>;
 
 /** Content blocks, Anthropic-shaped so the transcript can be replayed to a model as-is. */
 export const ContentBlock = z.discriminatedUnion('type', [
@@ -196,7 +206,7 @@ export const PostMessage = z
   .object({
     text: z.string().trim().max(100_000).default(''),
     ref: DocRef.optional(),
-    uploads: z.array(z.string().regex(/^up_[a-z0-9-]+$/)).max(IMAGE_MAX_PER_MESSAGE).default([]),
+    uploads: z.array(UploadId).max(IMAGE_MAX_PER_MESSAGE).default([]),
   })
   .refine((m) => m.text.length > 0 || m.uploads.length > 0, { message: 'a message needs text or an image' });
 /** An image waiting to be sent (POST /api/cards/:id/uploads): the composer shows it, the message names its id. */
@@ -346,6 +356,36 @@ export interface About {
   server: boolean;
   /** Voice mode is available (the desktop app on a Mac): shows Settings → Voice. */
   voice: boolean;
+}
+/** A published release newer than the running app (GET /api/update). */
+export interface AppRelease {
+  version: string;
+  /** The release notes: its CHANGELOG.md entry (markdown). */
+  notes: string;
+  publishedAt: string;
+}
+export type UpdatePhase = 'idle' | 'downloading' | 'verifying' | 'installing' | 'failed';
+/** App updates from GitHub releases (#123, docs/updater.md): Settings → About, the sidebar badge and its dialog. */
+export interface UpdateStatus {
+  current: string;
+  /** Null when this app can install an update by itself (the packaged Mac app); else why not (dev, server, Windows). */
+  cannotInstall: string | null;
+  checking: boolean;
+  checkedAt: string | null;
+  /** The last check failed (no network, GitHub refused): shown as is. */
+  checkError: string | null;
+  /** Releases newer than the running version, newest first; empty = up to date. */
+  releases: AppRelease[];
+  phase: UpdatePhase;
+  /** The version being (or last tried to be) installed. */
+  target: string | null;
+  received: number;
+  total: number | null;
+  /** Why the last install failed (phase 'failed'). */
+  error: string | null;
+  lastUpdate: { from: string; to: string; at: string } | null;
+  /** Agents with a run going now: they are interrupted by the restart and resume after it. */
+  working: { agent: string; card: number | null; title: string }[];
 }
 export const UpdateSettings = z
   .object({
@@ -618,7 +658,8 @@ export type ServerEvent =
   | { type: 'notification.created'; notification: Notification }
   /** Notifications were read or archived: reload the Inbox. */
   | { type: 'inbox.changed' }
-  | { type: 'voice.updated'; status: VoiceStatus };
+  | { type: 'voice.updated'; status: VoiceStatus }
+  | { type: 'update.updated'; status: UpdateStatus };
 
 /* ── Voice mode (desktop only): « Hi Atlas », all local (docs/voice-research.md) ─────────────────────── */
 

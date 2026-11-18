@@ -59,10 +59,14 @@ export class Uploads {
    * Copy uploads into `workdir`/uploads/ and give their image blocks to `write` (which writes the message row), then
    * drop the staged files. If `write` throws, the copies are removed and the uploads stay staged, so sending again works.
    */
-  async send<T>(ids: string[], workdir: string, write: (images: ImageBlock[]) => T, now = new Date()): Promise<T> {
+  send<T>(ids: string[], workdir: string, write: (images: ImageBlock[]) => T, now = new Date()): Promise<T> {
+    return this.place(ids, join(workdir, 'uploads'), write, now);
+  }
+
+  /** The same steps into any folder (`dest`/<date>-<name>.<ext>): a message's workspace, or a task's images (#119). */
+  async place<T>(ids: string[], dest: string, write: (images: ImageBlock[]) => T, now = new Date()): Promise<T> {
     if (!ids.length) return write([]);
     const from = ids.map((id) => this.staged(id));
-    const dest = join(workdir, 'uploads');
     mkdirSync(dest, { recursive: true });
     const date = now.toISOString().slice(0, 10);
     const copied: string[] = [];
@@ -86,6 +90,15 @@ export class Uploads {
     }
     for (const f of from) rmSync(f, { force: true });
     return result;
+  }
+
+  /** A staged image the user removed before sending (×, or the New task dialog cancelled): its file goes now. */
+  discard(id: string): void {
+    try {
+      rmSync(this.staged(id), { force: true });
+    } catch (e) {
+      if (!(e instanceof NotFoundError)) throw e; // gone already: nothing to do
+    }
   }
 
   /** Staged files older than a day: nobody sent them. Called at start. */
