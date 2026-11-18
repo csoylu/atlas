@@ -1,4 +1,4 @@
-import type { ClearEvent, CompactResult, Inbox, FileChange, RewindPreview, RewindResult, Doc, DocContent, DocRef, DocVersion, PanelTab, About, CreatePlanAccount, Notification, PlanProvider, UpdatePlanAccount, ChatUsage, UsageSummary, ChatGptModel, ChatGptStatus, UpdateChatGpt, ClaudePlanModel, ClaudePlanStatus, UpdateClaudePlan, Account, CreateAccount, UpdateAccount, LocalModel, LocalPull, LocalStatus, UpdateLocal, Agent, Canvas, CanvasNode, Card, CardStatus, CreateAgent, CreateCard, CreateModel, CreateSchedule, Memory, MemoryChange, MemoryProposal, MemoryQuery, UpdateMemory, Message, Model, ModelTest, Run, Schedule, Timeline, ToolCallTiming, ServerEvent, Settings, UpdateVoice, VoiceName, VoiceStatus, UpdateAgent, UpdateModel, UpdateSchedule, Upload } from '@atlas/shared';
+import type { ClearEvent, CompactResult, Inbox, FileChange, RewindPreview, RewindResult, Doc, DocContent, DocRef, DocVersion, PanelTab, About, CreatePlanAccount, Notification, PlanProvider, UpdatePlanAccount, ChatUsage, UsageSummary, ChatGptModel, ChatGptStatus, UpdateChatGpt, ClaudePlanModel, ClaudePlanStatus, UpdateClaudePlan, Account, CreateAccount, UpdateAccount, LocalModel, LocalPull, LocalStatus, UpdateLocal, Agent, Canvas, CanvasNode, Card, CardStatus, CreateAgent, CreateCard, CreateModelRequest, CreateSchedule, Memory, MemoryChange, MemoryProposal, MemoryQuery, UpdateMemory, Message, Model, ModelTest, Run, Schedule, Timeline, ToolCallTiming, ServerEvent, Settings, UpdateVoice, VoiceName, VoiceStatus, UpdateAgent, UpdateModelRequest, UpdateSchedule, Upload } from '@atlas/shared';
 
 /** HTTP error with the parsed body (e.g. 409 carries the current canvas). */
 export class ApiError extends Error {
@@ -130,8 +130,8 @@ export const api = {
   rejectProposal: (id: number) => call<MemoryProposal>('POST', `/memory-proposals/${id}/reject`),
   memoryBudget: (agentId: string) => call<{ used: number; limit: number }>('GET', `/agents/${agentId}/memory-budget`),
   models: () => call<Model[]>('GET', '/models'),
-  createModel: (m: CreateModel) => call<Model>('POST', '/models', m),
-  updateModel: (id: string, patch: UpdateModel) => call<Model>('PATCH', `/models/${id}`, patch),
+  createModel: (m: CreateModelRequest) => call<Model>('POST', '/models', m),
+  updateModel: (id: string, patch: UpdateModelRequest) => call<Model>('PATCH', `/models/${id}`, patch),
   deleteModel: (id: string) => call<void>('DELETE', `/models/${id}`),
   testModel: (id: string) => call<ModelTest>('POST', `/models/${id}/test`),
   secrets: () => call<{ store: string | null; names: string[] }>('GET', '/secrets'),

@@ -4,7 +4,7 @@ import { existsSync } from 'node:fs';
 import { join, relative } from 'node:path';
 import { WebSocketServer } from 'ws';
 import { ZodError } from 'zod';
-import { IMAGE_MAX_BYTES, isTimeZone, PostMessage, RewindRequest, ScheduleWhen, SlashCommand, UpdateVoice } from '@atlas/shared';
+import { CreateModelRequest, IMAGE_MAX_BYTES, isTimeZone, PostMessage, RewindRequest, ScheduleWhen, SlashCommand, UpdateModelRequest, UpdateVoice } from '@atlas/shared';
 import type { Agents } from './agents.ts';
 import type { Models } from './models.ts';
 import type { Runner } from './runner.ts';
@@ -325,10 +325,10 @@ export function createApi(deps: {
     res.json(models.list());
   });
   app.post('/api/models', (req, res) => {
-    res.status(201).json(models.create(req.body));
+    res.status(201).json(models.create(CreateModelRequest.parse(req.body)));
   });
   app.patch('/api/models/:id', (req, res) => {
-    res.json(models.update(req.params.id, req.body));
+    res.json(models.update(req.params.id, UpdateModelRequest.parse(req.body)));
   });
   app.delete('/api/models/:id', (req, res) => {
     models.remove(req.params.id);

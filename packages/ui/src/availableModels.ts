@@ -1,4 +1,4 @@
-import type { ChatGptModel, ChatGptStatus, ClaudePlanModel, ClaudePlanStatus, CreateModel, LocalModel, LocalStatus, Model } from '@atlas/shared';
+import type { ChatGptModel, ChatGptStatus, ClaudePlanModel, ClaudePlanStatus, CreateModelRequest, LocalModel, LocalStatus, Model } from '@atlas/shared';
 
 /**
  * Settings → Model list, « Available to add » (#101): the models of each source (Claude plan, ChatGPT plan, Ollama on
@@ -17,7 +17,7 @@ export const modelId = (slug: string) => {
 export type SourceId = 'claude_plan' | 'chatgpt' | 'local';
 
 /** How « Give to agents » adds the row: a model record, or the engine's local helper (it picks the id and URL). */
-export type AddAction = { kind: 'create'; model: CreateModel } | { kind: 'local'; name: string };
+export type AddAction = { kind: 'create'; model: CreateModelRequest } | { kind: 'local'; name: string };
 
 export interface AvailableRow {
   key: string;

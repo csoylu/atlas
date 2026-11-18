@@ -504,7 +504,8 @@ export interface MemoryProposal {
   memories: Memory[];
 }
 
-// claude_code remains readable only for historical records; new/updated models cannot select it.
+// claude_code remains readable only for historical records (the store can still hold it); the API
+// rejects it on create/update through CreateModelRequest/UpdateModelRequest below.
 export const ModelProvider = z.enum(['anthropic', 'openai_compat', 'chatgpt', 'claude_plan', 'claude_code']);
 export const CreateModel = z.object({
   id: z.string().regex(/^[a-z][a-z0-9_-]{1,30}$/, 'lowercase letters, digits, - or _'),
@@ -530,6 +531,19 @@ export const UpdateModel = z
   })
   .partial();
 export type UpdateModel = z.input<typeof UpdateModel>;
+/** Providers a new or edited model may select through the API (claude_code was removed in 0018). */
+export const SelectableModelProvider = z.enum(['anthropic', 'openai_compat', 'chatgpt', 'claude_plan'], {
+  error: (iss) =>
+    iss.input === 'claude_code'
+      ? 'provider claude_code was removed (0018): existing rows stay readable, but new or edited models cannot select it'
+      : 'provider must be one of anthropic, openai_compat, chatgpt, claude_plan',
+});
+/** POST /api/models body: like CreateModel, without the removed claude_code provider. */
+export const CreateModelRequest = CreateModel.extend({ provider: SelectableModelProvider });
+export type CreateModelRequest = z.input<typeof CreateModelRequest>;
+/** PATCH /api/models/:id body: like UpdateModel, without the removed claude_code provider. */
+export const UpdateModelRequest = UpdateModel.extend({ provider: SelectableModelProvider.optional() });
+export type UpdateModelRequest = z.input<typeof UpdateModelRequest>;
 
 export interface ModelTest {
   ok: boolean;
