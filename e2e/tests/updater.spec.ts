@@ -331,8 +331,8 @@ test('an update clicked while two agents are working: they stop with Atlas, resu
       expect(c.text).toContain('sleep 4242');
       expect(c.text).toContain('interrupted by a restart');
     }
-    // no command left running from before the restart
-    expect(running()).toBe(0);
+    // no command left running from before the restart (the old engine's stop() kills them: ~1 s, not instant)
+    await expect.poll(running, { timeout: 20_000, message: 'commands from before the restart still running' }).toBe(0);
     // the new engine says it was updated
     await page.goto(r.atlas.url + '/#/settings/about');
     await expect(page.locator('.update-fine')).toContainText('Updated from 0.4.0 to 0.5.0');
