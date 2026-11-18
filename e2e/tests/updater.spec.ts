@@ -37,6 +37,9 @@ interface Rig {
   proc: ChildProcess;
 }
 
+/** A `sleep` duration no other test, worker or copy of the suite uses: a test counts or finds its own commands by it (pgrep) without matching anyone else's. */
+const uniqueSleep = () => 100_000 + Math.floor(Math.random() * 900_000);
+
 async function rig(version = '0.4.0', releases: string[] = Object.keys(NOTES), install = true): Promise<Rig> {
   const gh = new FakeGitHub();
   await gh.listen();
@@ -143,7 +146,8 @@ for (const theme of THEMES)
       try {
         const shot = (name: string) => page.screenshot({ path: join(SHOTS, `${name}-${v.w}-${theme}.png`) });
         // two agents working, so the dialog lists them
-        r.atlas.model.next(shell('sleep 4242', 't1'), shell('sleep 4242', 't2'));
+        const uniq = uniqueSleep();
+        r.atlas.model.next(shell(`sleep ${uniq}`, 't1'), shell(`sleep ${uniq}`, 't2'));
         r.atlas.engine.agents.create({ id: 'munih', modelId: 'sonnet' });
         await r.atlas.task('Fix the sidebar contrast on a deliberately long task title to see the ellipsis', 'atlas');
         await r.atlas.task('Build the thing', 'munih');
@@ -278,10 +282,11 @@ test('an update clicked while two agents are working: they stop with Atlas, resu
   await page.setViewportSize({ width: 1440, height: 900 });
   const r = await rig('0.4.0', ['0.5.0']);
   try {
-    const running = () => { try { return execFileSync('pgrep', ['-f', 'sleep 4242']).toString().trim().split('\n').length; } catch { return 0; } };
+    const uniq = uniqueSleep();
+    const running = () => { try { return execFileSync('pgrep', ['-f', `sleep ${uniq}$`]).toString().trim().split('\n').length; } catch { return 0; } };
     const sleeping = (req: { messages: unknown[] }) => JSON.stringify(req.messages).includes('"tool_use"');
     // first answer of each run: a long command; after the restart the run is asked again and finishes
-    const reply = (id: string) => (req: { messages: unknown[] }) => (sleeping(req) ? text('Finished after the update') : shell('sleep 4242', id));
+    const reply = (id: string) => (req: { messages: unknown[] }) => (sleeping(req) ? text('Finished after the update') : shell(`sleep ${uniq}`, id));
     r.atlas.model.next(reply('t1'), reply('t2'), reply('t3'), reply('t4'));
     r.atlas.engine.agents.create({ id: 'munih', modelId: 'sonnet' });
     const a = await r.atlas.task('Task for atlas', 'atlas');
@@ -328,7 +333,7 @@ test('an update clicked while two agents are working: they stop with Atlas, resu
     expect(resumed).toHaveLength(2);
     for (const c of resumed) {
       expect(c.text).toMatch(/Task for (atlas|munih)/);
-      expect(c.text).toContain('sleep 4242');
+      expect(c.text).toContain(`sleep ${uniq}`);
       expect(c.text).toContain('interrupted by a restart');
     }
     // no command left running from before the restart (the old engine's stop() kills them: ~1 s, not instant)
