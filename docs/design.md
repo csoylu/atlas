@@ -555,10 +555,11 @@ These override the sections above where they differ.
   `card_create` in a direct chat remembers it (`cards.origin_card`, migration 0022). When such a card becomes `done`,
   `review`, `closed`, is stopped, or blocks with `needs_input` / `capability`, a `system` message is posted in that chat
   (« ✓ Card “X” (c_x) finished: <summary> », « … closed by @atlas », « You stopped “X” », « … needs your OK: <question> »)
-  together with a `card_reports` outbox row, in the same transaction as the status change: exactly once per
-  transition, crash or not. The dispatcher starts a chat run for each pending report (the agent tells the user in its own
-  words) and marks it delivered once a run since the report has ended or the chat owes nothing; an interrupted chat run
-  resumes through §6 recovery, so there is never a second one. Waiting on tasks and retries are not reported.
+  together with a `card_reports` row, in the same transaction as the status change: exactly once per transition, crash
+  or not. Since #143 (18 Nov 2026) the note wakes nobody: it is information the agent reads on its next turn (a
+  transcript ending on task notes owes no turn), Master sees one compact row linking to the task's Inbox entry
+  (`#/inbox/task:<id>`; a closed task opens the task), and a long summary or question is shortened on a sentence with
+  « full summary: task_show #N ». Waiting on tasks and retries are not reported.
   **Stop** (`POST /api/cards/:id/stop`, no confirmation) aborts the run at once: the model call and every running
   command's process group are killed, open tool calls end `error`, and the next run gets the usual synthetic
   « interrupted » result. A stopped work card blocks (`needs_input`, « Stopped by you ») and writing on it resumes it.

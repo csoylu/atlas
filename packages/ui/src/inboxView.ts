@@ -9,6 +9,21 @@ export type InboxItem = { key: string; need: InboxNeed; update?: undefined } | {
 export const needKey = (n: InboxNeed) => n.card.id;
 export const updateKey = (u: Notification) => 'n' + u.id;
 
+/** A link from a task note in the chat (#143): #/inbox/task:<card id>, the task's entry whatever its kind. */
+export const TASK_KEY = 'task:';
+export const taskKey = (cardId: string) => TASK_KEY + cardId;
+
+/**
+ * The entry a task link names: the task in « Needs you », else its latest update (a finished task). `tab`: the tab that
+ * shows it ('all' for an update). Null when the task has no entry (archived update, never notified).
+ */
+export function taskEntry(inbox: Inbox, cardId: string): { key: string; tab: InboxTab | null } | null {
+  const need = inbox.needsYou.find((n) => n.card.id === cardId);
+  if (need) return { key: needKey(need), tab: null };
+  const update = inbox.updates.find((u) => u.cardId === cardId);
+  return update ? { key: updateKey(update), tab: 'all' } : null;
+}
+
 /** In list order: « Needs you » first, then the updates (none on the Needs you tab). */
 export function itemsOf(inbox: Inbox, tab: InboxTab): InboxItem[] {
   const needs = inbox.needsYou.map((need) => ({ key: needKey(need), need }));

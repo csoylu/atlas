@@ -27,6 +27,20 @@ export interface SysRow {
   body?: SysBody;
   /** Opens expanded (a failed last run, with its Retry). */
   open?: boolean;
+  /** A quiet row (#143): no border, small type. */
+  quiet?: boolean;
+}
+
+/** One memory in a « N memories changed » row (#143). */
+export interface MemItem {
+  /** "m12". */
+  id: string;
+  /** fact, rule, preference, project. */
+  kind: string;
+  /** "added by the background review", "changed by @paris, then by you". */
+  who: string;
+  /** Its latest text; '' when it is gone (forgotten). */
+  text: string;
 }
 
 export type SysBody =
@@ -36,7 +50,9 @@ export type SysBody =
   /** What a rewind put back, then Undo while it still works. */
   | { kind: 'files'; files: FileChange[]; effects: SideEffect[]; error: string | null; undoId: string | null }
   /** A /clear (#99): show or hide the messages before it, then Undo while it still works. */
-  | { kind: 'clear'; hidden: number; expanded: boolean; undoId: string | null };
+  | { kind: 'clear'; hidden: number; expanded: boolean; undoId: string | null }
+  /** Memory changes (#143): one line per memory. */
+  | { kind: 'memories'; items: MemItem[] };
 
 const firstLine = (s: string) => s.trim().split('\n')[0]!.trim();
 const plain = (s: string) => firstLine(s).replace(/\*\*|`/g, '');
@@ -63,13 +79,7 @@ export function messageRow(m: Message, assignee: string | null): SysRow | null {
     if (text === WORK_KICK) return { ...base, icon: 'play', tone: 'plain', verb: 'Started', object: assignee ? `task assigned to @${assignee}` : 'the task', rest: quoted(text) };
     if (text === TRIAGE_KICK) return { ...base, icon: 'play', tone: 'plain', verb: 'Started triage', object: 'new task', rest: quoted(text) };
     if (text === RESUME_KICK) return { ...base, icon: 'play', tone: 'plain', verb: 'Resumed', object: 'after a restart', rest: quoted(text) };
-    if (text.startsWith(MEMORY_NOTE)) {
-      // v3: memory changed since the chat started (another chat, the user, the background review).
-      const lines = text.split('\n').slice(1).filter((l) => l.startsWith('- ['));
-      // Distinct ids (#132): notes written before it could list one memory several times.
-      const refs = [...new Set(lines.map((l) => /^- \[(m\d+)/.exec(l)?.[1]).filter(Boolean))];
-      return { ...base, icon: 'mem', tone: 'plain', verb: 'Memory changed', object: refs.join(', '), rest: refs.length === 1 && lines.length === 1 ? cut(lines[0]!.replace(/^- \[[^\]]*\]\s*/, ''), 140) : `${plural(refs.length, 'memory', 'memories')} changed`, body: { kind: 'markdown', text: lines.join('\n') } };
-    }
+    if (text.startsWith(MEMORY_NOTE)) return memoryRow([m], assignee);
     return null;
   }
   if (m.author === 'schedule') {
@@ -82,6 +92,42 @@ export function messageRow(m: Message, assignee: string | null): SysRow | null {
   if (!f) return null;
   const [, from, card, said] = f as unknown as [string, string, string, string];
   return { ...base, icon: 'msg', tone: 'acc', verb: 'Message from', ref: card, object: `@${from}`, rest: cut(plain(said), 160), body: { kind: 'markdown', text: said } };
+}
+
+/** The engine's [memory] note (memory.ts memoryDeltaNote). */
+export const isMemoryNote = (m: Message) => m.role === 'user' && m.author === 'system' && textOf(m).trimStart().startsWith(MEMORY_NOTE);
+
+const MEM_LINE = /^- \[(m\d+) · (\w+)[^\]]*\] (.+?) by (the user|you|the background review|the memory cleanup|@[\w.-]+)(?:: ([\s\S]*))?$/;
+
+/** The memories in [memory] notes, each once (#132): first place, latest text, every author in order. */
+export function memoryItems(notes: Message[], assignee: string | null): MemItem[] {
+  // In the note « you » is the agent and « the user » is Master; on Master's screen they read the other way round.
+  const name = (by: string) => (by === 'the user' ? 'you' : by === 'you' ? (assignee ? '@' + assignee : 'the agent') : by);
+  const items = new Map<string, MemItem & { verb: string; bys: string[] }>();
+  for (const m of notes) {
+    let cur: (MemItem & { verb: string; bys: string[] }) | null = null;
+    for (const line of textOf(m).split('\n').slice(1)) {
+      const p = MEM_LINE.exec(line);
+      if (!p) {
+        // A memory text on several lines: the rest belongs to the line above.
+        if (cur && line.trim()) cur.text += ' ' + line.trim();
+        continue;
+      }
+      const [, id, kind, verb, by, text] = p as unknown as [string, string, string, string, string, string | undefined];
+      const was = items.get(id);
+      const bys = was ? (was.bys.includes(name(by)) ? was.bys : [...was.bys, name(by)]) : [name(by)];
+      cur = { id, kind, verb: was?.verb ?? verb, bys, who: '', text: (text ?? '').trim() };
+      items.set(id, cur);
+    }
+  }
+  return [...items.values()].map(({ id, kind, verb, bys, text }) => ({ id, kind, text, who: `${verb} by ${bys.join(', then by ')}` }));
+}
+
+/** One quiet « N memories changed » row for consecutive [memory] notes (#143). */
+export function memoryRow(notes: Message[], assignee: string | null): SysRow {
+  const items = memoryItems(notes, assignee);
+  const last = notes.at(-1)!;
+  return { key: notes[0]!.id, at: last.at, icon: 'mem', tone: 'plain', quiet: true, verb: `${plural(items.length, 'memory', 'memories')} changed`, body: { kind: 'memories', items } };
 }
 
 /** "engine shutting down" → "engine shut down". */

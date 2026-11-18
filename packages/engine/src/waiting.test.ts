@@ -48,7 +48,6 @@ describe('waiting on other tasks (task_block dependency)', () => {
     const fake = new FakeProvider([
       () => [use('task_block', { kind: 'dependency', question: 'Needs the API from the other task.', waits_on: [parentRef] })],
       [use('task_complete', { summary: 'built on the API' })],
-      [{ type: 'text', text: 'UI is done.' }], // the origin chat is told it finished
     ]);
     const e = await setup(fake);
     const parent = e.kanban.create({ title: 'API', status: 'todo' }, 'user'); // no assignee: nothing runs it
@@ -67,7 +66,9 @@ describe('waiting on other tasks (task_block dependency)', () => {
     e.kanban.update(parent.id, { status: 'done' }, 'user');
     await until(() => e.kanban.get(card.id).status === 'done', 'done after the parent');
     expect(systemTexts(e, card.id)).toEqual([WORK_KICK, `The tasks this one waited on are done (${parentRef}). Continue where you left off.`]);
-    await until(() => e.runner.current(chat.id) === null && e.runner.runs(chat.id).length === 1, 'chat told');
+    // The origin chat gets the note, no run (#143).
+    expect(systemTexts(e, chat.id)).toEqual([`✓ Task “UI” (${cardRef(card)}) finished: built on the API`]);
+    expect(e.runner.runs(chat.id)).toHaveLength(0);
   });
 
   it('keeps waiting across a restart and starts once the task is done', async () => {

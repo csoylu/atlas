@@ -6,6 +6,10 @@ computed by `scripts/release/changelog.mjs` from the oldest entry to the newest,
 `Fixed` → patch, `Added` or `Changed` → minor, `Breaking` (data or settings stop working without action) → major.
 Never type a version number.
 
+## Changed · #143 · A task's news in a chat is now one compact row that opens its Inbox entry, and the agent no longer wakes up to repeat it
+
+When a task created from a chat finishes, is blocked, needs your OK, is closed or stopped, the chat gets one row (icon, #N, status, title, time, « Inbox › »); a finished one shows the first line of its summary under it. The row is a link to the task's Inbox entry (a closed task opens the task) and no longer expands. The agent does not start a run for it: it reads the note on its next turn, and its instructions tell it not to restate it. Long summaries in the note are shortened on a sentence, never mid-word, with where to read the rest. Memory changes between two messages are one quiet « N memories changed » row, each memory once, one line each when opened.
+
 ## Fixed · #173 · A chat with a web search no longer dies after Atlas switches to another Claude subscription
 
 Anthropic encrypts web search results for the account that ran the search and refuses them from any other one (400 « Invalid `encrypted_content` in `search_result` block », on every retry). paris's main chat broke this way when the first Claude plan hit its limit and calls moved to the second one. Each new search result now records the account that ran it; it is sent exactly as stored through that account, and as one line of text together with its request through any other (results stored before this fix go as text). The pre-send check also stops with the message and block named when a stored result is cut or malformed.

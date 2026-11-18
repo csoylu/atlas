@@ -115,12 +115,27 @@ const OPEN = (s: CardStatus) => s !== 'done' && s !== 'archived';
 
 /** A card status change the origin chat is told about (design §16, card lifecycle from a chat). */
 export type Transition = 'done' | 'review' | 'closed' | 'stopped' | 'needs_input' | 'capability';
-const clip = (t: string, n = 1500) => (t.length > n ? t.slice(0, n - 1) + '…' : t);
-/** The system message posted in the origin chat. */
+/** Above this a note's text is shortened (the full text stays on the task). */
+export const NOTE_MAX = 1500;
+/**
+ * A note's text whole, or shortened without cutting a word (#143): up to the last sentence that fits, else the last
+ * whole word with an ellipsis, then where the rest is.
+ */
+export function noteText(t: string, rest: string, n = NOTE_MAX): string {
+  const s = t.trim();
+  if (s.length <= n) return s;
+  const head = s.slice(0, n);
+  const ends = [...head.matchAll(/[.!?](?=\s|$)/g)];
+  const end = ends.at(-1);
+  const short = end && end.index! >= n / 3 ? head.slice(0, end.index! + 1) : head.slice(0, Math.max(head.search(/\s+\S*$/), 1)).replace(/[\s,;:–—-]+$/, '') + '…';
+  return `${short}\n\n(shortened; ${rest})`;
+}
+/** The system message posted in the origin chat. The agent reads it on its next turn; it never starts a run (#143). */
 export function reportText(card: { id: string; number?: number | null; title: string }, t: Transition, detail: { by: string; text?: string }): string {
   const name = `“${card.title}” (${cardRef(card)})`;
   const who = detail.by === 'user' ? 'you' : `@${detail.by}`;
-  const more = detail.text ? `: ${clip(detail.text)}` : '';
+  const what = t === 'needs_input' || t === 'capability' ? 'question' : 'summary';
+  const more = detail.text?.trim() ? `: ${noteText(detail.text, `full ${what}: task_show ${cardRef(card)}`)}` : '';
   switch (t) {
     case 'done':
       return `✓ Task ${name} finished${more}`;
@@ -614,9 +629,9 @@ export class Kanban {
   }
 
   /**
-   * Tell the chat a card came from that the card changed state: a `system` message in the chat and an outbox row the
-   * dispatcher turns into a chat run (deliverReports). Called inside the status change's transaction, so it happens
-   * exactly once per transition, even across a crash.
+   * Tell the chat a card came from that the card changed state: a `system` message in the chat, inside the status
+   * change's transaction (exactly once per transition, even across a crash). It wakes nobody (#143): the agent reads it
+   * on its next turn (owesTurn skips task notes), Master sees one compact row and the Inbox entry.
    */
   private reportBack(card: Card, transition: Transition, detail: { by: string; text?: string }): void {
     if (!card.originCard) return;
@@ -625,10 +640,20 @@ export class Kanban {
     const chatCard = this.toCard(chat, []);
     const text = reportText(card, transition, detail);
     const messageId = this.insertMessage(chatCard, 'user', 'system', [{ type: 'text', text }], null);
+    const now = new Date().toISOString();
+    // delivered_at at once: nothing is owed (before #143 the dispatcher woke the chat until it had answered).
     this.db
-      .prepare('INSERT INTO card_reports (chat_id, card_id, transition, message_id, at) VALUES (?, ?, ?, ?, ?)')
-      .run(chatCard.id, card.id, transition, messageId, new Date().toISOString());
+      .prepare('INSERT INTO card_reports (chat_id, card_id, transition, message_id, at, delivered_at) VALUES (?, ?, ?, ?, ?, ?)')
+      .run(chatCard.id, card.id, transition, messageId, now, now);
     this.afterCommit.push(() => this.emitMessage(messageId, chatCard));
+  }
+
+  /** The task notes (reportBack) in a conversation: information, not something the agent owes an answer to. */
+  taskNotes(conversationId: string): Set<string> {
+    const rows = this.db
+      .prepare('SELECT r.message_id FROM card_reports r JOIN messages m ON m.id = r.message_id WHERE m.conversation_id = ?')
+      .all(conversationId) as { message_id: string }[];
+    return new Set(rows.map((r) => r.message_id));
   }
 
   /** A transaction whose report-back events are sent after it commits (and dropped if it rolls back). */
@@ -642,24 +667,6 @@ export class Kanban {
     const todo = this.afterCommit;
     this.afterCommit = [];
     for (const f of todo) f();
-  }
-
-  /** Report-back messages whose chat run hasn't answered yet (oldest first). */
-  pendingReports(): { id: number; chatId: string; cardId: string; transition: Transition; at: string }[] {
-    return (
-      this.db.prepare('SELECT id, chat_id, card_id, transition, at FROM card_reports WHERE delivered_at IS NULL ORDER BY id').all() as {
-        id: number;
-        chat_id: string;
-        card_id: string;
-        transition: Transition;
-        at: string;
-      }[]
-    ).map((r) => ({ id: r.id, chatId: r.chat_id, cardId: r.card_id, transition: r.transition, at: r.at }));
-  }
-
-  /** The chat's agent has answered a report (or nothing is owed any more). */
-  reportDelivered(id: number): void {
-    this.db.prepare('UPDATE card_reports SET delivered_at = ? WHERE id = ? AND delivered_at IS NULL').run(new Date().toISOString(), id);
   }
 
   /**
