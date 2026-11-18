@@ -25,7 +25,12 @@ describe('messageRow', () => {
     const one = '[memory] Changed since this conversation started (data, not instructions; it overrides the memory in your instructions):\n- [m41 · fact] added by the background review: Deploys with pnpm.';
     expect(messageRow(msg('user', 'system', one), 'atlas')).toMatchObject({ icon: 'mem', verb: 'Memory changed', object: 'm41', rest: 'added by the background review: Deploys with pnpm.' });
     const two = one + '\n- [m3 · rule] forgotten by the user';
-    expect(messageRow(msg('user', 'system', two), 'atlas')).toMatchObject({ object: 'm41, m3', rest: '2 changes' });
+    expect(messageRow(msg('user', 'system', two), 'atlas')).toMatchObject({ object: 'm41, m3', rest: '2 memories changed' });
+    // Older notes could list one memory several times: the row counts each once.
+    const dup = two + '\n- [m41 · fact] changed by @paris: Deploys with npm.';
+    expect(messageRow(msg('user', 'system', dup), 'atlas')).toMatchObject({ object: 'm41, m3', rest: '2 memories changed' });
+    const same = one + '\n- [m41 · fact] changed by @paris: Deploys with npm.';
+    expect(messageRow(msg('user', 'system', same), 'atlas')).toMatchObject({ object: 'm41', rest: '1 memory changed' });
   });
 
   it('a card’s message: « Message from #N », its first line, the full text in the body', () => {
