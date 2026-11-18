@@ -87,7 +87,7 @@ export function UpdateDialog({ status, onClose, onError }: { status: UpdateStatu
                   <li key={i}>
                     <span className="update-agent">@{w.agent}</span>
                     {w.card != null && <span className="num update-task">#{w.card}</span>}
-                    <span className="update-work-title">{w.title}</span>
+                    <span className="update-work-title">{w.card == null ? 'chat' : w.title}</span>
                   </li>
                 ))}
               </ul>
