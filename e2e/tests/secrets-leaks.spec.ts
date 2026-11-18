@@ -142,19 +142,21 @@ test.describe('known limits (docs/qa/210-secrets-leak-audit.md)', () => {
     expect(out).toContain(OLD);
   });
 
-  test('a file the agent writes keeps the value: on disk, in the files API, in a Library artifact (SQLite) and in the rewind snapshot', async ({ w }) => {
+  test('a file the agent writes keeps the value on disk and in the rewind snapshot; the files API and the Library (SQLite) show [secret NAME] (#226)', async ({ w }) => {
     const [out] = await print(w, 'mkdir -p docs; echo "$LIMIT_KEY" > saved.txt; echo "k: $LIMIT_KEY" > docs/note.md; cat saved.txt');
     expect(out).toContain('[secret LIMIT_KEY]'); // the output is hidden…
     const hits = files(w.atlas.dataDir).filter((f) => f.data.includes(Buffer.from(LIMIT)));
     expect(hits.map((f) => f.rel).some((p) => p.endsWith('saved.txt'))).toBe(true); // …the file the agent made is not
-    // The workspace is served by the files API, as it is on disk: the value comes back in a response…
-    const served = await fetch(`${w.atlas.url}/api/files/atlas/saved.txt`);
-    expect(await served.text()).toContain(LIMIT);
-    // …and a markdown file in docs/ is a Library artifact the next time a file tool writes: its versions are in SQLite.
+    // The files API serves the workspace with known values hidden (#226)…
+    const served = await (await fetch(`${w.atlas.url}/api/files/atlas/saved.txt`)).text();
+    expect(served).toContain('[secret LIMIT_KEY]');
+    expect(served).not.toContain(LIMIT);
+    // …and docs/note.md becomes a Library artifact the next time a file tool writes: its versions are stored redacted.
     await runTask(w.atlas, 'Write a page', 'atlas', tu('write_file', { path: 'docs/other.md', content: 'hello' }));
     const inDb = JSON.stringify(w.atlas.db('SELECT * FROM document_versions'));
-    expect(inDb).toContain(LIMIT);
-    // The same file is in the snapshot taken for rewinds (a git store: compressed, so read its objects).
+    expect(inDb).toContain('k: [secret LIMIT_KEY]');
+    expect(inDb).not.toContain(LIMIT);
+    // The snapshot taken for rewinds (a git store on disk: compressed, so read its objects) keeps the file as it is.
     w.leaks.snapshots(w.atlas);
     expect(w.leaks.sink('checkpoint snapshots')).toContain(LIMIT);
   });

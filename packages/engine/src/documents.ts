@@ -80,7 +80,49 @@ export class Documents {
     private bus: Bus,
     private kanban: Kanban,
     private dataDir: string,
+    /**
+     * Secret values out of everything stored (#226, rule 5): a file's text goes to SQLite as `[secret NAME]`. The
+     * engine passes Secrets; absent (tests), nothing is replaced.
+     */
+    private secrets?: { redact(text: string): { text: string }; redactor(): { values: string[]; redact: (text: string) => string } },
   ) {}
+
+  private redact(text: string): string {
+    return this.secrets ? this.secrets.redact(text).text : text;
+  }
+
+  /**
+   * Versions, titles and names stored before a value was known (an older engine, a secret added or rotated later):
+   * rewritten with the value as `[secret NAME]`. Runs at engine start and after every secret value change; finding the
+   * rows is one SQL search per value. With secure_delete on, the old bytes are zeroed in the database file, and the
+   * WAL is checkpointed and truncated after. Returns how many rows changed.
+   */
+  redactStored(): number {
+    if (!this.secrets) return 0;
+    const r = this.secrets.redactor();
+    if (!r.values.length) return 0;
+    const any = (col: string) => r.values.map(() => `instr(${col}, ?) > 0`).join(' OR ');
+    const versions = this.db.prepare(`SELECT doc_id, version, content FROM document_versions WHERE ${any('content')}`).all(...r.values) as { doc_id: string; version: number; content: string }[];
+    const docs = this.db.prepare(`SELECT id, title, name FROM documents WHERE ${any('title')} OR ${any("COALESCE(name, '')")}`).all(...r.values, ...r.values) as { id: string; title: string; name: string | null }[];
+    if (!versions.length && !docs.length) return 0;
+    const was = this.db.pragma('secure_delete', { simple: true }) as number;
+    this.db.pragma('secure_delete = ON');
+    try {
+      this.db
+        .transaction(() => {
+          const setV = this.db.prepare('UPDATE document_versions SET content = ? WHERE doc_id = ? AND version = ?');
+          for (const v of versions) setV.run(r.redact(v.content), v.doc_id, v.version);
+          const setD = this.db.prepare('UPDATE documents SET title = ?, name = ? WHERE id = ?');
+          for (const d of docs) setD.run(r.redact(d.title), d.name === null ? null : r.redact(d.name), d.id);
+        })
+        .immediate();
+    } finally {
+      this.db.pragma(`secure_delete = ${was ? 'ON' : 'OFF'}`);
+    }
+    this.db.pragma('wal_checkpoint(TRUNCATE)');
+    for (const id of new Set([...versions.map((v) => v.doc_id), ...docs.map((d) => d.id)])) this.emitDoc(id);
+    return versions.length + docs.length;
+  }
 
   /** The agent's workspace in a project (#214): throws when it has none there or it is not ready (never another one). */
   private root(agentId: string, projectId: string): string {
@@ -269,13 +311,13 @@ export class Documents {
     } else if (change.title === undefined) throw new InvalidError('give content, old_text/new_text or title');
     else next = current;
     if (Buffer.byteLength(next) > MAX_DOC_BYTES) throw new InvalidError(`artifacts are at most ${MAX_DOC_BYTES} bytes`);
-    if (change.title !== undefined) this.db.prepare('UPDATE documents SET name = ? WHERE id = ?').run(change.title.trim() || null, id);
+    if (change.title !== undefined) this.db.prepare('UPDATE documents SET name = ? WHERE id = ?').run(this.redact(change.title.trim()) || null, id);
     const full = inside(this.root(doc.agentId, doc.projectId), doc.path);
     writeFileSync(full, next);
     const res = this.record(doc.agentId, doc.projectId, doc.path, next, stampOf(full).stamp, by, cardId);
     // A rename alone: the title changes without a new version.
     if (!res.changed && change.title !== undefined) {
-      this.db.prepare('UPDATE documents SET title = ? WHERE id = ?').run(docTitle(doc.path, next, change.title.trim() || null), id);
+      this.db.prepare('UPDATE documents SET title = ? WHERE id = ?').run(this.redact(docTitle(doc.path, next, change.title.trim() || null)), id);
       return this.emitDoc(id);
     }
     return res.doc;
@@ -557,7 +599,11 @@ export class Documents {
     return out;
   }
 
-  private record(agentId: string, projectId: string, rel: string, content: string, stamp: string, by: string, cardId: string | null, name: string | null = null): { doc: Doc; changed: boolean } {
+  private record(agentId: string, projectId: string, rel: string, raw: string, stamp: string, by: string, cardId: string | null, rawName: string | null = null): { doc: Doc; changed: boolean } {
+    // Every road that stores a file's text comes here (sync, indexFile, artifact_create/update, restore): no known
+    // secret value reaches SQLite (#226). The file on disk stays as the agent wrote it.
+    const content = this.redact(raw);
+    const name = rawName === null ? null : this.redact(rawName);
     const kind = docKindOf(rel)!;
     const now = new Date().toISOString();
     let changed = false;

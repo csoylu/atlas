@@ -1030,6 +1030,7 @@ export class Runner {
       '# Secrets',
       `Your shell commands get these as environment variables. Use them as $NAME in commands (e.g. curl "…?apikey=$${mine[0]!.name}");`,
       'never print, echo, log, write to a file or paste a value: tool output shows a value as [secret NAME].',
+      'Never write a value into a file (a config, .env, a page): a file keeps it in the clear. Pass it to programs by env ($NAME).',
       'A new one: secret_set (prefer command). One only the user can give: task_block with secret: "NAME".',
       ...mine.map((s) => `- $${s.name}${s.description ? `: ${s.description}` : ''}${s.hasValue ? '' : ` (no value yet: ${this.user().name} must add it in Settings → Secrets)`}`),
     ];

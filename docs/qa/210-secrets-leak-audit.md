@@ -46,10 +46,10 @@ The redactor replaces the exact stored value (8 characters or more) in a tool's 
 4. **A value the user types** in a chat (or in a task body, a comment): it is stored and sent to the model as typed;
    the redactor reads tool outputs only. Same for a `secret_set` with `value`: the provider saw the call (the
    transcript stores `[secret NAME]`), which is why `command` is the form to use.
-5. **What the agent writes** from a command: `echo "$KEY" > file` leaves the value in the file (hidden only when the file
-   is read through a tool). That file is then in: the files API (`/api/files/<agent>/…`), the rewind snapshot, and, for
-   a markdown/html/svg file in `docs/`, `pages/`, `diagrams/`, **a Library artifact: its versions are rows of SQLite
-   `document_versions`**, shown in the Library. → #226.
+5. **What the agent writes** from a command: `echo "$KEY" > file` leaves the value in the file on disk and in the
+   rewind snapshot (a git store on disk). Fixed by #226 for everything else: the files API (`/api/files/<agent>/…`)
+   serves text files with `[secret NAME]`, and a Library artifact's versions, title and name are stored redacted in
+   SQLite (older rows are rewritten at start and after each value change). Design §10b.
 6. **Background process logs** (`outputs/<agent>/bg_*.log`) keep the raw value on disk. Reads and the exit note are
    redacted (tested), the file is not rewritten. Already in design §10b.
 7. **A value split by the 30000-character cut** of a shell output: the tool keeps the last 30000 characters, then the

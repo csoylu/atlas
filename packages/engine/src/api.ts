@@ -1,7 +1,7 @@
 import express, { type ErrorRequestHandler, type Request } from 'express';
 import { createServer, type IncomingMessage, type Server } from 'node:http';
-import { existsSync } from 'node:fs';
-import { join, relative } from 'node:path';
+import { existsSync, readFileSync } from 'node:fs';
+import { extname, join, relative } from 'node:path';
 import { WebSocketServer } from 'ws';
 import { ZodError } from 'zod';
 import { AddCardImages, CreateCard, CreateModelRequest, CreateSecret, SecretsPassword, UnlockSecrets, UpdateSecret, IMAGE_MAX_BYTES, IMAGE_MAX_PER_TASK, isTimeZone, PostMessage, RewindRequest, SlashCommand, TriggerPreview, UpdateModelRequest, UpdateVoice } from '@atlas/shared';
@@ -38,6 +38,8 @@ import { DEFAULT_CONTEXT_WINDOW, MEMORY_BUDGET, MEMORY_BUDGET_GLOBAL, type About
 
 /** Who the UI acts as. One user (design §1). */
 const USER = 'user';
+/** Served files up to this size are checked for secret values (#226); bigger ones are sent as they are. */
+export const MAX_SERVED_REDACT = 10 * 1024 * 1024;
 
 import { Auth, SESSION_COOKIE } from './auth.ts';
 import { Uploads } from './uploads.ts';
@@ -501,12 +503,27 @@ export function createApi(deps: {
     const root = where.dir;
     const rel = ((req.params as { path?: string[] }).path ?? []).join('/');
     let file = inside(root, rel || '.');
+    let size: number;
     try {
       if (statSync(file).isDirectory()) file = inside(root, (rel ? rel + '/' : '') + 'index.html');
+      size = statSync(file).size;
     } catch {
       return void res.status(404).json({ error: `no file ${rel} in ${agent.id}'s workspace` });
     }
     res.setHeader('Content-Security-Policy', 'sandbox allow-scripts allow-forms allow-popups allow-modals');
+    // Secret values never leave in a served file (#226): a text file (anything but images, audio, video and fonts; svg
+    // is text) is read and its known values sent as [secret NAME]. The file on disk is not rewritten. Dotfiles stay denied.
+    res.type(extname(file) || 'application/octet-stream');
+    const type = String(res.get('Content-Type') ?? '');
+    const media = /^(image|audio|video|font)\//.test(type) && !type.startsWith('image/svg');
+    const dotfile = relative(root, file).split(/[\\/]/).some((p) => p.startsWith('.'));
+    if (!media && !dotfile && size <= MAX_SERVED_REDACT) {
+      const red = deps.secrets.redactBytes(readFileSync(file));
+      if (red.hidden) {
+        res.setHeader('Cache-Control', 'no-store');
+        return void res.send(red.buf);
+      }
+    }
     res.sendFile(file, { dotfiles: 'deny' }, (err) => {
       if (err && !res.headersSent) next(err);
     });
