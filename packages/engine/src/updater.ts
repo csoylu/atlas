@@ -412,6 +412,16 @@ while kill -0 "$pid" 2>/dev/null; do
   sleep 0.5
 done
 rm -rf "$prev"
+# One atomic swap (renamex_np RENAME_SWAP, through JXA: osascript is on every Mac): /Applications/Atlas.app is the old
+# app or the new one at every instant, so the helper can die anywhere (SIGKILL, logout, power loss) and Atlas still opens.
+if [ -e "$app" ] && [ -e "$new" ] && osascript -l JavaScript -e 'function run(a) { ObjC.bindFunction("renamex_np", ["int", ["char *", "char *", "unsigned int"]]); if ($.renamex_np(a[0], a[1], 2) !== 0) throw new Error("renamex_np failed") }' "$new" "$app"; then
+  # the old app is now at $new: keep it as the previous one
+  mv "$new" "$prev" || echo "could not keep the previous app at $prev"
+  echo "installed $(plutil -extract CFBundleShortVersionString raw -o - "$app/Contents/Info.plist" 2>/dev/null) at $app (previous app kept at $prev)"
+  \${ATLAS_UPDATE_OPEN:-open} "$app"
+  exit 0
+fi
+# No atomic swap (another volume, the new app missing): two renames, with a short window where $app does not exist.
 if [ -e "$app" ] && ! mv "$app" "$prev"; then echo "could not move $app aside: update not installed"; \${ATLAS_UPDATE_OPEN:-open} "$app"; exit 1; fi
 if mv "$new" "$app"; then
   echo "installed $(plutil -extract CFBundleShortVersionString raw -o - "$app/Contents/Info.plist" 2>/dev/null) at $app (previous app kept at $prev)"

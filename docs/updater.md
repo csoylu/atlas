@@ -34,7 +34,9 @@ the app restarts once, when Master clicks.
    If agents are working, it says which ones and that they resume afterwards.
 6. **Swap.** The app downloads the zip for this Mac's chip, checks its SHA-256 against the release's checksum file,
    backs up the database, then starts a small helper that waits for Atlas to quit, replaces `/Applications/Atlas.app`
-   and reopens it. The previous app is kept once (`Atlas.previous.app` in the data folder).
+   and reopens it. The replacement is one atomic swap (`renamex_np` with `RENAME_SWAP`, #161), so the helper can be
+   killed at any point and an app still opens (old or new); on another volume it falls back to two renames, with a
+   short window where no Atlas.app exists. The previous app is kept once (`Atlas.previous.app` in the data folder).
 
 ## Decisions
 

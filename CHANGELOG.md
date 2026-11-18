@@ -6,6 +6,12 @@ computed by `scripts/release/changelog.mjs` from the oldest entry to the newest,
 `Fixed` → patch, `Added` or `Changed` → minor, `Breaking` (data or settings stop working without action) → major.
 Never type a version number.
 
+## Fixed · #161 · An update interrupted at the worst moment can no longer leave you without Atlas.app
+
+The helper now swaps the old and new app in one atomic step (renamex_np RENAME_SWAP), so killing it anywhere during
+the swap leaves an app that opens. Covers the normal case (data folder and /Applications on the same volume); on
+another volume it falls back to two renames as before.
+
 ## Fixed · #163 · A long path or URL in the update dialog's release notes now wraps instead of being clipped and scrolling sideways
 
 `overflow-wrap: anywhere` on the note title and body (code blocks wrap too). The e2e test `updater.spec.ts` › "long unbroken word" is no longer `test.fail`: it checks 1440 and 390 px in both themes.

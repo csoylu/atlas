@@ -436,10 +436,20 @@ describe.skipIf(!mac)('the swap helper on its own (#124)', () => {
     expect(existsSync(join(r.prev, 'Contents', 'stale-file'))).toBe(false);
   });
 
-  // KNOWN BUG, reported on #123 (QA #124): the swap is two renames (old → previous, new → installed). Between them
-  // /Applications/Atlas.app does not exist. If the helper dies there (SIGKILL, logout, power loss) Atlas cannot be
-  // opened until someone moves Atlas.previous.app back by hand. `it.fails`: goes red when this is fixed, then remove it.
-  it.fails('helper killed between the two renames: an Atlas.app must still exist at the installed path (old or new, never none)', async () => {
+  it('no atomic swap available (osascript failing): falls back to the two renames and still installs', async () => {
+    const r = rig();
+    r.shim('osascript', 'exit 1');
+    r.atlas.kill();
+    const h = r.run();
+    expect(await h.exited).toBe(0);
+    expect(versionOf(r.app)).toBe('0.5.0');
+    expect(versionOf(r.prev)).toBe('0.4.0');
+    expect(readFileSync(r.opened, 'utf8').trim()).toBe(r.app);
+  });
+
+  // Was a known bug (#124 → #161): the swap was two renames (old → previous, new → installed) with no Atlas.app in
+  // between. It is now one atomic swap (renamex_np RENAME_SWAP); the only mv left moves the old app to Atlas.previous.app.
+  it('helper killed between the two renames: an Atlas.app must still exist at the installed path (old or new, never none)', async () => {
     const r = rig();
     // the shim lets the first mv through, then freezes the helper in the gap
     r.shim('mv', `/bin/mv "$@"; rc=$?\nif [ ! -e "${r.root}/paused" ]; then touch "${r.root}/paused"; sleep 30; fi\nexit $rc`);
@@ -449,5 +459,6 @@ describe.skipIf(!mac)('the swap helper on its own (#124)', () => {
     process.kill(-h.p.pid!, 'SIGKILL');
     await h.exited;
     expect(existsSync(r.app)).toBe(true);
+    expect(versionOf(r.app)).toBe('0.5.0'); // swapped in one step: already the new one
   });
 });
