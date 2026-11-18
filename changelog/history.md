@@ -5,10 +5,6 @@ it). New entries are one file per pull request in `changelog/` (`<task>-<slug>.m
 computed by `scripts/release/changelog.mjs` from 0.3.0 (v3, cad983f) through these entries, oldest first, then the
 files in the order they reached main. Read the whole changelog with `node scripts/release/changelog.mjs full`.
 
-## Changed · #222 · Tasks always open in the side panel on the right, never in a modal: from the board (kanban and list), the inbox, the sidebar, search or a link
-
-The screen stays visible and usable on the left (the board scrolls sideways in the room left, the list keeps its rows), the open card or row is marked, and another task replaces the panel's content. Same panel as beside a chat: same width, draggable separator and saved width (#211). Esc or × closes it; `?card=` in the URL still names the open task, so reloads and links keep working. In a chat, every task (not only the chat's own) opens beside it. When the screen can't keep its minimum width beside the panel (board 380 px, inbox / Library / settings 640 px; always at 960 px and below), the panel slides over it from the right (no backdrop); on phones it takes the full screen with « ‹ Board », « ‹ Inbox »… The ticket modal (`CardModal`) is gone; delete and rewind confirmations stay dialogs. ui-check's « modal » screens become « task-board », « task-list », « task-inbox », « task-chat », « task-images » and « task-blocked ».
-
 ## Fixed · #224 · On a phone the Tasks header no longer draws the « All tasks » tab over the « Tasks » title
 
 Under 640 px the tabs (All · Needs you · Running) take the title's place in the one-row header and scroll sideways if counts make them too wide; wider screens are unchanged.
