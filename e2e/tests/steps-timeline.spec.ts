@@ -94,8 +94,11 @@ test.describe('steps timeline', () => {
           await expect.poll(() => atlas.db("SELECT COUNT(*) AS n FROM tool_calls WHERE status = 'running'"), { timeout: 15_000 }).toEqual([{ n: 1 }]);
           await page.goto(`${atlas.url}/?theme=${theme}#/chat/${chat.id}`);
           const group = page.locator('.chat-row.steps').first();
-          if (!(await group.evaluate((e) => e.classList.contains('open')))) await group.locator('> .chat-row-line').click();
-          await expect(page.locator('.steps-tl .chat-row.nested')).toHaveCount(6);
+          // the group may open by itself while the run streams in (under load after our check): open it, then recheck
+          await expect(async () => {
+            if (!(await group.evaluate((e) => e.classList.contains('open')))) await group.locator('> .chat-row-line').click();
+            await expect(page.locator('.steps-tl .chat-row.nested')).toHaveCount(6, { timeout: 2000 });
+          }).toPass({ timeout: 15_000 });
           await expect(page.locator('.steps-tl .chat-row-icon > .chat-row-spin').first()).toBeVisible();
           await page.waitForTimeout(300); // rows settle (expand transitions)
           check(await measure(page), `${theme} ${width} running`);
