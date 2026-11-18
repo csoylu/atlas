@@ -1029,6 +1029,10 @@ button.tool .icon { color: var(--muted); font-family: var(--mono); }
 .about-list dt { color: var(--muted); }
 .about-list dd { margin: 0; overflow-wrap: anywhere; }
 .about-list code { font-size: var(--fs-small); background: var(--code); padding: 1px 6px; border-radius: 4px; }
+.about-list .about-note { margin: 0 0 4px; }
+.about-list .error-text { margin: 0 0 4px; }
+.about-list .about-path summary { cursor: pointer; color: var(--muted); }
+.about-list .about-path code { display: block; white-space: pre-wrap; margin-top: 4px; padding: 6px 8px; }
 /* Subscriptions: drag the grip to set the failover order. */
 .plan-card .grip {
   flex: none; align-self: flex-start; margin: 1px -4px 0 -8px; padding: 0 4px; height: 24px; border: 0; border-radius: 6px;

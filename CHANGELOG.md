@@ -6,6 +6,10 @@ computed by `scripts/release/changelog.mjs` from the oldest entry to the newest,
 `Fixed` → patch, `Added` or `Changed` → minor, `Breaking` (data or settings stop working without action) → major.
 Never type a version number.
 
+## Changed · #136 · Agent commands see your login shell's PATH, and their commits carry the agent's name
+
+At start the engine asks your login shell (`$SHELL -ilc`) for its PATH once and gives it to every agent command, foreground, `background: true` and what they start with nohup: gh, node/npx from nvm and the rest of your terminal's tools work with no `export PATH=…`. The app opened from Finder used to give them only /usr/bin:/bin:/usr/sbin:/sbin. If the login shell can't be read (no $SHELL, error, more than 15 s), the engine logs why and Settings → About & data → Agent shells shows it in red; commands then use the engine's PATH. Server mode (ATLAS_PASSWORD) and Windows keep the engine's own PATH. Agent commands also get `GIT_AUTHOR_NAME` and `GIT_COMMITTER_NAME` set to the agent id (e.g. munih): a commit made by an agent says which one, with your email unchanged so GitHub still links it to your account. Commits from your own terminal and merges done by GitHub are unchanged. No migration.
+
 ## Changed · #142 · Project how-tos moved from agent memory into CLAUDE.md
 
 Master's rule (18 Nov 2026): working how-tos about one project belong in its CLAUDE.md, not in memory. CLAUDE.md gets a How-tos section (setup and shells, live data, tests, UI, files, CI and merging) with the notes agents had saved as shared memories; those memories are archived. No code change, no migration.

@@ -383,6 +383,18 @@ export interface About {
   server: boolean;
   /** Voice mode is available (the desktop app on a Mac): shows Settings → Voice. */
   voice: boolean;
+  /** The PATH agent commands get (#136); null while the login shell is still being read. */
+  shellPath: ShellPathInfo | null;
+}
+/** Where agent shells get their PATH from (#136). */
+export interface ShellPathInfo {
+  path: string;
+  /** 'login': the user's login shell; 'engine': the engine's own environment (server mode, Windows, or a failure). */
+  source: 'login' | 'engine';
+  /** The login shell asked, if any. */
+  shell: string | null;
+  /** Why the login shell's PATH could not be read (then source is 'engine'). */
+  error: string | null;
 }
 /** A published release newer than the running app (GET /api/update). */
 export interface AppRelease {

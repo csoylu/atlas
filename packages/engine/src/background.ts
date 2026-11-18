@@ -74,7 +74,7 @@ export class Background {
     private leaseMs = 60_000,
   ) {}
 
-  start(o: { command: string; cwd: string; logDir: string; agentId: string; cardId: string }): BgProcess {
+  start(o: { command: string; cwd: string; logDir: string; agentId: string; cardId: string; env?: NodeJS.ProcessEnv }): BgProcess {
     const id = 'bg_' + randomUUID().slice(0, 8);
     mkdirSync(o.logDir, { recursive: true });
     const logPath = join(o.logDir, `${id}.log`);
@@ -82,7 +82,7 @@ export class Background {
     let child;
     try {
       // Own process group (Unix) so the whole tree can be killed; output straight to the file (no pipe to keep open).
-      child = spawn(o.command, { cwd: o.cwd, shell: true, env: process.env, detached: process.platform !== 'win32', stdio: ['ignore', fd, fd] });
+      child = spawn(o.command, { cwd: o.cwd, shell: true, env: o.env ?? process.env, detached: process.platform !== 'win32', stdio: ['ignore', fd, fd] });
     } finally {
       closeSync(fd);
     }

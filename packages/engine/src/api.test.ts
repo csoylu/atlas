@@ -43,7 +43,7 @@ describe('api', () => {
   it('reports the version and data folder for Settings → About', async () => {
     const dataDir = mkdtempSync(join(tmpdir(), 'atlas-'));
     engine = await startEngine({ dbFile: ':memory:', dataDir, port: 0, version: '1.2.3' });
-    expect(await (await fetch(engine.url + '/api/about')).json()).toEqual({ version: '1.2.3', dataDir, server: false, voice: false });
+    expect(await (await fetch(engine.url + '/api/about')).json()).toEqual({ version: '1.2.3', dataDir, server: false, voice: false, shellPath: { path: process.env.PATH ?? '', source: 'engine', shell: null, error: null } });
   });
 
   it('serves cards over REST and pushes events over the WebSocket', async () => {

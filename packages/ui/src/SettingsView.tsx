@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useState } from 'react';
-import type { About, UpdateStatus, Agent, Card, ChatGptStatus, Model, Settings } from '@atlas/shared';
+import type { About, ShellPathInfo, UpdateStatus, Agent, Card, ChatGptStatus, Model, Settings } from '@atlas/shared';
 import { api } from './api.ts';
 import { AgentsView } from './AgentsView.tsx';
 import { MemoryPage } from './MemoryPage.tsx';
@@ -214,6 +214,25 @@ function Appearance(props: { theme: ThemeChoice; onTheme(t: ThemeChoice): void }
   );
 }
 
+/** Where agent commands get their PATH (#136). A failure to read the login shell is shown, never hidden. */
+function ShellPath({ info }: { info: ShellPathInfo | null }) {
+  if (!info) return <>Reading your login shell's PATH…</>;
+  const what = info.error
+    ? `Could not read the PATH of your login shell${info.shell ? ` (${info.shell})` : ''}: ${info.error}. Commands use the engine's PATH:`
+    : info.source === 'login'
+      ? `PATH of your login shell (${info.shell}). Commits are made under the agent's name.`
+      : "The engine's own PATH. Commits are made under the agent's name.";
+  return (
+    <>
+      <p className={info.error ? 'error-text' : 'about-note'}>{what}</p>
+      <details className="about-path">
+        <summary>{info.path.split(':').filter(Boolean).length} folders</summary>
+        <code>{info.path.split(':').filter(Boolean).join('\n')}</code>
+      </details>
+    </>
+  );
+}
+
 function AboutData({ update, onOpenUpdate, onError }: { update: UpdateStatus | null; onOpenUpdate(): void; onError(e: unknown): void }) {
   const [about, setAbout] = useState<About | null>(null);
   useEffect(() => {
@@ -238,6 +257,10 @@ function AboutData({ update, onOpenUpdate, onError }: { update: UpdateStatus | n
           <dt>Data folder</dt>
           <dd>
             <code>{about.dataDir}</code>
+          </dd>
+          <dt>Agent shells</dt>
+          <dd>
+            <ShellPath info={about.shellPath} />
           </dd>
         </dl>
       ) : (

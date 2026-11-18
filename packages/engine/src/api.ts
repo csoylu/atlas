@@ -32,6 +32,7 @@ import type { Notifications } from './notifications.ts';
 import type { Usage } from './usage.ts';
 import type { Voice } from './voice.ts';
 import type { Updater } from './updater.ts';
+import type { ShellEnv } from './shellEnv.ts';
 import { DEFAULT_CONTEXT_WINDOW, MEMORY_BUDGET, type About, type Timeline } from '@atlas/shared';
 
 /** Who the UI acts as. One user (design §1). */
@@ -64,6 +65,8 @@ export function createApi(deps: {
   /** Desktop only; null elsewhere (the /api/voice routes answer 404). */
   voice: Voice | null;
   updater: Updater;
+  /** Agent shells' PATH (#136), shown in Settings → About; omitted = not reported. */
+  shellEnv?: ShellEnv;
   bus: Bus;
   dataDir: string;
   version: string;
@@ -129,7 +132,7 @@ export function createApi(deps: {
 
   // ── About (Settings → About & data) ──────────────────────────────────
   app.get('/api/about', (_req, res) => {
-    const about: About = { version: deps.version, dataDir: deps.dataDir, server: auth.enabled, voice: !!deps.voice };
+    const about: About = { version: deps.version, dataDir: deps.dataDir, server: auth.enabled, voice: !!deps.voice, shellPath: deps.shellEnv?.status() ?? null };
     res.json(about);
   });
 
