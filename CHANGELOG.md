@@ -6,6 +6,10 @@ computed by `scripts/release/changelog.mjs` from the oldest entry to the newest,
 `Fixed` → patch, `Added` or `Changed` → minor, `Breaking` (data or settings stop working without action) → major.
 Never type a version number.
 
+## Fixed · #146 · The "Add images" button of a task without images shows its icon and label on one line, aligned with the description.
+
+In the New task dialog and on an existing task, the empty-state button was a grid: the icon sat above the label, indented, and the label touched the selects row.
+
 ## Changed · #136 · Agent commands see your login shell's PATH, and their commits carry the agent's name
 
 At start the engine asks your login shell (`$SHELL -ilc`) for its PATH once and gives it to every agent command, foreground, `background: true` and what they start with nohup: gh, node/npx from nvm and the rest of your terminal's tools work with no `export PATH=…`. The app opened from Finder used to give them only /usr/bin:/bin:/usr/sbin:/sbin. If the login shell can't be read (no $SHELL, error, more than 15 s), the engine logs why and Settings → About & data → Agent shells shows it in red; commands then use the engine's PATH. Server mode (ATLAS_PASSWORD) and Windows keep the engine's own PATH. Agent commands also get `GIT_AUTHOR_NAME` and `GIT_COMMITTER_NAME` set to the agent id (e.g. munih): a commit made by an agent says which one, with your email unchanged so GitHub still links it to your account. Commits from your own terminal and merges done by GitHub are unchanged. No migration.
