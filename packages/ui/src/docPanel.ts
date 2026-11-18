@@ -4,6 +4,42 @@ import { USER, type PanelTab } from '@atlas/shared';
 export type PanelMode = 'side' | 'overlay' | 'full';
 export const panelMode = (viewport: number): PanelMode => (viewport > 960 ? 'side' : viewport > 760 ? 'overlay' : 'full');
 
+/** localStorage key of the panel width the user dragged to (#211): one width wherever the panel opens. */
+export const PANEL_WIDTH_KEY = 'atlas.panel.width';
+/** Narrowest panel (tabs, version, tools in one head row) and narrowest chat beside it (composer, pins). */
+export const PANEL_MIN = 360;
+export const CHAT_MIN = 380;
+
+/**
+ * Width range of the panel in a chat view `view` px wide: side by side, the chat keeps CHAT_MIN; over the chat
+ * (overlay), a sliver of the chat stays visible. `def` is the width before any drag (the old CSS default).
+ */
+export function panelBounds(view: number, mode: 'side' | 'overlay'): { min: number; max: number; def: number } {
+  const max = Math.min(view, Math.max(PANEL_MIN, mode === 'side' ? view - CHAT_MIN : Math.floor(view * 0.94)));
+  const def = mode === 'side' ? Math.min(760, Math.max(380, Math.round(view * 0.48))) : Math.min(560, Math.floor(view * 0.94));
+  const min = Math.min(PANEL_MIN, max);
+  return { min, max, def: Math.min(max, Math.max(min, def)) };
+}
+
+/** The width to draw: the stored one (or the default) kept inside the bounds, so a smaller window never pushes it off-screen. */
+export function panelWidth(stored: number | null, view: number, mode: 'side' | 'overlay'): number {
+  const b = panelBounds(view, mode);
+  return Math.round(Math.min(b.max, Math.max(b.min, stored ?? b.def)));
+}
+
+/** A stored width: a positive number of px, else none (the default). */
+export function parsePanelWidth(raw: string | null): number | null {
+  const n = raw === null ? NaN : Number(raw);
+  return Number.isFinite(n) && n > 0 ? Math.round(n) : null;
+}
+
+/** Arrow keys on the separator: ← widens the panel, → narrows it (Shift: bigger steps), Home / End = max / min. */
+export function panelKey(key: string, shift: boolean, width: number, b: { min: number; max: number }): number | null {
+  const step = shift ? 64 : 16;
+  const w = key === 'ArrowLeft' ? width + step : key === 'ArrowRight' ? width - step : key === 'Home' ? b.max : key === 'End' ? b.min : null;
+  return w === null ? null : Math.min(b.max, Math.max(b.min, w));
+}
+
 /** Smallest text a diagram may be shrunk to; below that it keeps its width and scrolls sideways. */
 export const MIN_DIAGRAM_TEXT = 11;
 

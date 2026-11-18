@@ -6,6 +6,10 @@ computed by `scripts/release/changelog.mjs` from the oldest entry to the newest,
 `Fixed` → patch, `Added` or `Changed` → minor, `Breaking` (data or settings stop working without action) → major.
 Never type a version number.
 
+## Added · #211 · Drag the border between the chat and the side panel to resize the panel; the width is kept
+
+The separator is an 8 px grab area with an accent line on hover, drag or focus. The panel stays between 360 px and the width that leaves the chat 380 px (over the chat at 960 px and below: up to 94 % of it), and is clamped again when the window shrinks, so it never goes off-screen. The width is saved (`atlas.panel.width`) for every chat and the task thread beside it; double-click resets it, and the keyboard moves it (← wider, → narrower, Shift for bigger steps, Home / End). Dragging over an html page in the panel keeps working. Phones keep the full-screen panel with no handle. In a chat narrower than 460 px the composer strip drops « context » and the token counts, as on a phone. ui-check gains a « panel-max » screen (panel at its widest, chat at its narrowest).
+
 ## Fixed · #221 · A reviewer no longer mistakes the builder's work for its own, and a review that ends without a verdict is retried once, then shown
 
 Pull requests sat In review for hours with CI green: the reviewer's run started in the builder's thread without its « You review this pull request » note (the builder's last tool result already left a turn owed), and the builder's messages were replayed to it as its own, so zurich answered as munih (« I built it… I won't validate my own work »). Now the note is always added, and another agent's turns reach the model as named context (« [@munih, another agent, wrote this in the thread (not you):] », its tool calls and results as lines), never as the running agent's own; the same holds for the builder reading the reviewer's turns later. A review run that ends with no `qa/validated` success or failure on the head starts once more, told why; after the second the task says « review by @zurich ended without a verdict » with an Inbox item, and Retry starts it again.
