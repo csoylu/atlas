@@ -154,7 +154,7 @@ const PATHS: Record<RowIcon, string> = {
 /** The 16 px line icon of a row (docs/chat-activity.md, mockup pages/chat-activity.js). */
 export function RowIconSvg({ name }: { name: RowIcon }) {
   return (
-    <svg className={'row-ic ' + name} viewBox="0 0 16 16" aria-hidden="true">
+    <svg className={'row-ic rowic-' + name} viewBox="0 0 16 16" aria-hidden="true">
       <path d={PATHS[name]} />
     </svg>
   );
