@@ -164,7 +164,7 @@ export const DOC_TOOLS = {
         ctx.documents.close(ctx.chatId, null);
         return 'closed the panel';
       }
-      const doc = /^doc_[\w-]+$/.test(ref) ? ctx.documents.get(ref) : ctx.documents.byPath(ctx.agentId, ref);
+      const doc = /^doc_[\w-]+$/.test(ref) ? ctx.documents.get(ref) : ctx.documents.byPath(ctx.agentId, ref, ctx.cardId);
       if (!doc) throw new Error(`${ref} is not open`);
       const left = ctx.documents.close(ctx.chatId, doc.id);
       return `closed ${doc.title}; ${left.length} tab${left.length === 1 ? '' : 's'} left`;

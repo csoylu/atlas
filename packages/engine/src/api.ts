@@ -20,7 +20,6 @@ import { SecretsPasswordError } from './secretFile.ts';
 import type { Documents } from './documents.ts';
 import type { Projects } from './projects.ts';
 import { findSection, formatDocRef, splitSections } from '@atlas/shared';
-import { workdirOf } from './agents.ts';
 import { inside } from './tools.ts';
 import { statSync } from 'node:fs';
 import { ConflictError, InvalidError, NotFoundError, type Kanban } from './kanban.ts';
@@ -228,7 +227,8 @@ export function createApi(deps: {
       quote = formatDocRef(doc, ref.version, section);
     }
     // Pasted/dropped images: copied into the agent's workspace, then the message row written with their blocks (uploads.ts).
-    const workdir = ids.length ? workdirOf(agents.get(card.assignee!), deps.dataDir) : '';
+    // The agent's workspace in the chat's project (#214).
+    const workdir = ids.length ? projects.workspace(card.assignee!, card.projectId) : '';
     const message = await uploads.send(ids, workdir, (images) =>
       kanban.appendMessage(req.params.id, 'user', USER, [
         ...(quote ? [{ type: 'text' as const, text: quote }] : []),
@@ -330,13 +330,13 @@ export function createApi(deps: {
     if (!agents.list().some((a) => a.id === req.params.id)) throw new NotFoundError(`agent ${req.params.id} not found`);
     res.status(201).json(kanban.newChat(req.params.id));
   });
-  /** The agent's main chat (v3), created on first use. */
+  /** The agent's main chat (v3) in a project (`?project=`, #214; default project without), created on first use. */
   app.post('/api/agents/:id/main-chat', (req, res) => {
-    res.json(kanban.mainChat(req.params.id));
+    res.json(kanban.mainChat(req.params.id, typeof req.query.project === 'string' ? req.query.project : undefined));
   });
   /** A fresh main chat; the previous one stays in History (the composer's /clear clears the context instead, #99). */
   app.post('/api/agents/:id/main-chat/new', (req, res) => {
-    res.status(201).json(kanban.newMainChat(req.params.id));
+    res.status(201).json(kanban.newMainChat(req.params.id, typeof req.query.project === 'string' ? req.query.project : undefined));
   });
   app.get('/api/agents', (_req, res) => {
     res.json(agents.list());
@@ -482,10 +482,12 @@ export function createApi(deps: {
   });
 
   // Files in an agent's workspace, for url nodes (built apps, pages, images). Served with a CSP sandbox so a page
-  // never runs with the app's origin, even if opened directly in a tab.
+  // never runs with the app's origin, even if opened directly in a tab. `:agent` is the agent's id for its home
+  // workspace (links made before projects), `<agent>@<project>` for its workspace in another project (#214).
   app.get('/api/files/:agent/{*path}', (req, res, next) => {
-    const agent = agents.get(req.params.agent);
-    const root = workdirOf(agent, deps.dataDir);
+    const where = projects.filesDir(req.params.agent);
+    const agent = agents.get(where.agentId);
+    const root = where.dir;
     const rel = ((req.params as { path?: string[] }).path ?? []).join('/');
     let file = inside(root, rel || '.');
     try {
@@ -550,6 +552,7 @@ export function createApi(deps: {
   });
   app.patch('/api/settings', (req, res) => {
     res.json(settings.update(req.body));
+    projects.resume(); // a new lead joins the project: its workspace there, if it needs a clone
     dispatcher.tick();
   });
 
@@ -788,6 +791,14 @@ export function createApi(deps: {
     for (const w of on) bus.emit({ type: 'workflow.updated', workflow: workflows.get(w.id) });
     for (const c of [...kanban.list({ project: p.id, includeArchived: true }), ...kanban.directs({ project: p.id })]) runner.stop(c.id, `project ${p.name} archived`);
     res.json(archived);
+  });
+  /** « Try again » on a member's failed clone (#214). */
+  app.post('/api/projects/:id/members/:agent/retry', (req, res) => {
+    res.json(projects.retry(req.params.id, req.params.agent));
+  });
+  /** Delete a removed member's kept workspace from disk: only on Master's explicit action (#214). */
+  app.delete('/api/projects/:id/kept/:agent', (req, res) => {
+    res.json(projects.deleteKept(req.params.id, req.params.agent));
   });
   app.post('/api/projects/:id/restore', (req, res) => {
     res.json(projects.restore(req.params.id));

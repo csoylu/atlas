@@ -39,14 +39,13 @@ import { isTeamTool, runTeamTool, teamToolSpecs } from './teamTools.ts';
 import { cleanupToolSpecs, isCleanupCard, isCleanupTool, runCleanupTool, type MemoryCleanup } from './cleanup.ts';
 import { memoryDeltaNote, renderMemory, SHARED, type Memories } from './memory.ts';
 import type { Workflows } from './workflows.ts';
-import { workdirOf } from './agents.ts';
 import type { FileLog } from './fileLog.ts';
 import { Background, exitNote, type BgProcess } from './background.ts';
 import type { ShellEnv } from './shellEnv.ts';
 import type { Secrets } from './secrets.ts';
 import { isSecretTool, redactSecretCalls, runSecretTool, secretToolSpecs } from './secretTools.ts';
 import { isPrTool, prToolSpecs, runPrTool, type PrToolContext } from './prTools.ts';
-import { projectRow } from './projects.ts';
+import { filesRoot, projectRow, workspaceOf } from './projects.ts';
 
 interface RunRow {
   id: string;
@@ -486,7 +485,8 @@ export class Runner {
       const first = this.kanban.get(cardId);
       // The card's own model (chosen above the composer) wins over the agent's.
       const { model, provider } = this.models.provider(first.modelId ?? agent.modelId);
-      const workdir = workdirOf(agent, this.opts.dataDir);
+      // The workspace of the agent in the card's project (#214): never another project's folder; not ready = the run fails.
+      const workdir = workspaceOf(this.db, this.opts.dataDir, agent.id, first.projectId);
       mkdirSync(workdir, { recursive: true });
       const cleanup = this.opts.cleanup && isCleanupCard(first) ? this.opts.cleanup : null;
       const tools = [
@@ -620,7 +620,7 @@ export class Runner {
                   onSpawn: (pid) => this.db.prepare('UPDATE tool_calls SET pid = ? WHERE id = ?').run(pid, lastInsertRowid),
                   onDetail: (d) => (detail = d),
                   onOutput: live.push,
-                  ...(this.opts.engine ? { engine: { ...this.opts.engine(), agentId: agent.id } } : {}),
+                  ...(this.opts.engine ? { engine: { ...this.opts.engine(), agentId: agent.id, filesRoot: filesRoot(this.db, agent.id, first.projectId) } } : {}),
                   ...(this.opts.shellEnv || this.opts.secrets ? { env: (command: string) => this.shellEnvFor(agent.id, command) } : {}),
                   ...(this.opts.secrets ? { redact: (t: string) => this.redact(t).text } : {}),
                 });
@@ -1062,7 +1062,7 @@ export class Runner {
                 `back in this chat: a system note when one finishes, is closed, stopped or needs ${name}. ${name} sees it as a row`,
                 'with the task in the Inbox, so do not restate it: it is information for your next turn, and no run starts for it.',
                 `If ${name} changes their mind about a task, close it (task_update status=closed).`,
-                ...(agent.mainChat === card.id
+                ...(this.db.prepare('SELECT 1 FROM project_members WHERE agent_id = ? AND main_chat = ?').get(agent.id, card.id)
                   ? [
                       `This is your main chat with ${name}: it lives for months. Tasks you create here are its threads (each with`,
                       'its own context); history_search finds earlier messages here and in those threads.',
@@ -1108,7 +1108,7 @@ export class Runner {
       '',
       '# Workspace',
       `Working directory: ${workdir}. File tools and shell run there. File tools read the workdir and the temp folders (/tmp, $TMPDIR) and write only in the workdir.`,
-      `Files there are served at /api/files/${agent.id}/<path> (built apps in dist/, images).`,
+      `Files there are served at /api/files/${filesRoot(this.db, agent.id, project.id)}/<path> (built apps in dist/, images).`,
       ...(this.opts.documents
         ? [
             `Artifacts: what you make for ${name} (markdown docs, html pages and mockups, svg diagrams, url links to running`,
@@ -1200,7 +1200,10 @@ function pruneOutputs(dir: string, maxAgeMs: number): void {
     }
 }
 
-/** Project instructions included in the system prompt: these files at the root of the agent's workdir. */
+/**
+ * Project instructions included in the system prompt: these files at the root of the run's workspace (#214: the
+ * agent's workspace in the card's project, never another project's).
+ */
 export const PROJECT_FILES = ['AGENTS.md', 'CLAUDE.md'];
 export const PROJECT_FILE_CAP = 20_000;
 

@@ -3,7 +3,8 @@ import { USER, parseDocRef, type Block, type CardStatus, type FileChange, type M
 import type { Db } from './store/db.ts';
 import type { Bus } from './events.ts';
 import { ConflictError, InvalidError, NotFoundError, type Kanban } from './kanban.ts';
-import { workdirOf, type Agents } from './agents.ts';
+import type { Agents } from './agents.ts';
+import { workspaceOf } from './projects.ts';
 import type { Runner } from './runner.ts';
 import type { FileState, Snapshots } from './snapshots.ts';
 import { same, type FileLog } from './fileLog.ts';
@@ -139,7 +140,7 @@ export class Rewinds {
   /** The card's state before a user message is stored (a rewind to it goes back there). Files are tracked per tool call. */
   beforeUserMessage(cardId: string): Pending {
     const card = this.kanban.get(cardId);
-    return { workdir: this.workdir(card.assignee), state: this.state(cardId) };
+    return { workdir: this.workdir(card.assignee, card.projectId), state: this.state(cardId) };
   }
 
   /** The user message is stored as `seq`: keep its snapshot. */
@@ -570,10 +571,14 @@ export class Rewinds {
     return { status: card.status, block, todos: t?.todos ?? null };
   }
 
-  private workdir(agentId: string | null): string | null {
-    if (!agentId) return null;
-    const agent = this.agents.list().find((a) => a.id === agentId);
-    return agent ? workdirOf(agent, this.dataDir) : null;
+  /** The agent's workspace in the card's project (#214); null when it has none ready there (nothing to snapshot). */
+  private workdir(agentId: string | null, projectId: string): string | null {
+    if (!agentId || !this.agents.list().some((a) => a.id === agentId)) return null;
+    try {
+      return workspaceOf(this.db, this.dataDir, agentId, projectId);
+    } catch {
+      return null; // not a member there, or its clone isn't ready: the run would fail before touching files
+    }
   }
 }
 

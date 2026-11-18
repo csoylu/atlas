@@ -854,7 +854,7 @@ These override the sections above where they differ.
   so the microphone closes and the orb hides; a timer ends a timed pause (re-armed at engine start); turning voice
   mode on/off clears it. No CPU indicator (Master, 14 Nov 2026).
 
-## 17. Projects (#213, 18 Nov 2026, `engine/src/projects.ts`, migration 0048)
+## 17. Projects (#213, #214, 18 Nov 2026, `engine/src/projects.ts`, migrations 0048, 0051)
 
 A project is a repo the team works on: a name, a GitHub repo `owner/name` (fixed once set), a lead, members, a colour
 (a hue Atlas picks from `PROJECT_HUES`, editable), active or archived. Model: diagram « Projects in Atlas: model »
@@ -886,8 +886,30 @@ A project is a repo the team works on: a name, a GitHub repo `owner/name` (fixed
 - **Archive**: nothing is deleted. Its workflows turn off (in the same transaction), its runs stop, every write
   (card edits, messages, retries, new tasks/chats/folders/artifacts, turning a workflow on) is refused with « project X
   is archived: … read-only », and it is hidden unless asked. Restore brings it back; workflows stay off.
-- **Next**: per-project workspaces and main chats (#214), memory and secrets levels (#215), the PR/QA gate for any
-  repo (#216), the UI (Projects page, switcher).
+- **Workspaces (#214, migration 0051)**: one per agent per project. `project_members.home` = 1 for the agent's
+  first project (the members 0048 made): its own `agents.workdir`, untouched. In any other project a member gets a
+  clone in `data/workspaces/<agent>/<project>/` (`gh repo clone` with the login-shell env, i.e. Master's gh login;
+  a project without a repo gets an empty folder). `clone_state`: pending → cloning → ready | failed (`clone_error`
+  in words for Master). git writes into `<dir>.cloning`, renamed when done, so a folder is never half-ready: a stopped
+  or killed engine leaves the row `cloning`, the next start throws the partial folder away and clones again (or marks
+  it ready if the rename had happened). Progress (git's « Receiving objects » %) goes out in `project.updated`
+  events (`cloneProgress`, not stored). `POST /api/projects/:id/members/:agent/retry` = « Try again »; PATCH `repo`
+  is allowed while no member has a workspace of it (« Fix the repo name »), and retries the failed ones.
+- **A run's workdir** is the member workspace of (agent, card's project), `workspaceOf()`: file tools, shell,
+  background processes, screenshots, uploads, artifacts and the project instructions (CLAUDE.md / AGENTS.md at its
+  root only). Not a member, not ready or failed: the run fails with that reason on the card. Never another project's.
+- **Served files**: `/api/files/<agent>/…` stays the home workspace (every link made before stays valid);
+  `/api/files/<agent>@<project>/…` is the agent's workspace in another project (agent ids have no `@`). Documents
+  carry `filesRoot`; the system prompt gives the run's own root.
+- **Main chats**: `project_members.main_chat` (moved from `agents.main_chat`: the home project keeps the same chat,
+  same id and history). `POST /api/agents/:id/main-chat?project=` (and `/new`); without `project`, the default
+  project. Another project's main chat is « @agent · Project ». agent_message lands in the target's main chat of the
+  sender's project when it is a member there. The cached system-prompt prefix depends only on (agent, project).
+- **Removing a member**: in one transaction its open tasks there go to triage for the lead (unassigned), its chats
+  there are archived (read-only, searchable); then its runs there stop. Its workspace stays on disk, listed in
+  `Project.kept` and still served; re-adding the agent takes it back as is. `DELETE /api/projects/:id/kept/:agent`
+  deletes a kept clone (Master's explicit action, never automatic; an agent's own workdir is never deleted).
+- **Next**: memory and secrets levels (#215), the UI (Projects page, switcher).
 
 ## 18. Open questions
 - Import Hermes data (agents' prompts, memory, open cards) at step 6, or start clean?

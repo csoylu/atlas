@@ -12,7 +12,7 @@ const START_TIMEOUT_MS = 15_000;
 /**
  * Voice in the voice agent's main chat: what Master says by voice is posted there as their message (through the engine
  * API, like the chat box does: rewind snapshot, dispatcher wake), and the agent's reply is streamed back from the bus.
- * The chat and its messages are in SQLite like any chat (CLAUDE.md rule 2); the chat is agents.main_chat.
+ * The chat and its messages are in SQLite like any chat (CLAUDE.md rule 2); the chat is the agent's main chat in the default project (project_members.main_chat, #214).
  */
 export class VoiceChat {
   /** ask() calls in flight: while one is, every reply text in the chat goes to it (spoken by the voice turn). */

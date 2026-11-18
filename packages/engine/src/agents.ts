@@ -10,6 +10,7 @@ interface AgentRow {
   workdir: string | null;
   enabled: number;
   max_runs: number;
+  /** From project_members (the default project's row), see Agents.SELECT. */
   main_chat: string | null;
 }
 const toAgent = (r: AgentRow): Agent => ({
@@ -22,20 +23,27 @@ const toAgent = (r: AgentRow): Agent => ({
   mainChat: r.main_chat,
 });
 
-/** An agent's working directory: its configured path, or data/workspaces/<id>. */
+/**
+ * An agent's own working directory: its configured path, or data/workspaces/<id>. It is the workspace of its home
+ * project (the first one); a run takes its project's workspace (projects.ts workspaceOf).
+ */
 export function workdirOf(agent: Pick<Agent, 'id' | 'workdir'>, dataDir: string): string {
   return resolve(agent.workdir ?? join(dataDir, 'workspaces', agent.id));
 }
+
+/** An agent with its main chat in the default project (#214: one main chat per project, on project_members). */
+const SELECT = `SELECT a.*, (SELECT m.main_chat FROM project_members m WHERE m.agent_id = a.id AND m.project_id =
+  (SELECT id FROM projects WHERE status = 'active' ORDER BY created_at, rowid LIMIT 1)) AS main_chat FROM agents a`;
 
 export class Agents {
   constructor(private db: Db) {}
 
   list(): Agent[] {
-    return (this.db.prepare('SELECT * FROM agents ORDER BY id').all() as AgentRow[]).map(toAgent);
+    return (this.db.prepare(`${SELECT} ORDER BY a.id`).all() as AgentRow[]).map(toAgent);
   }
 
   get(id: string): Agent {
-    const row = this.db.prepare('SELECT * FROM agents WHERE id = ?').get(id) as AgentRow | undefined;
+    const row = this.db.prepare(`${SELECT} WHERE a.id = ?`).get(id) as AgentRow | undefined;
     if (!row) throw new NotFoundError(`agent ${id} does not exist`);
     return toAgent(row);
   }
@@ -51,8 +59,8 @@ export class Agents {
       // A new agent joins the default project, in its own workdir (#213): with one project, everyone is in it.
       this.db
         .prepare(
-          `INSERT INTO project_members (project_id, agent_id, clone_state, joined_at)
-           SELECT id, ?, 'ready', ? FROM projects WHERE status = 'active' ORDER BY created_at, rowid LIMIT 1`,
+          `INSERT INTO project_members (project_id, agent_id, clone_state, home, joined_at)
+           SELECT id, ?, 'ready', 1, ? FROM projects WHERE status = 'active' ORDER BY created_at, rowid LIMIT 1`,
         )
         .run(c.id, new Date().toISOString());
     })();

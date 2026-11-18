@@ -74,6 +74,11 @@ export interface Doc {
   fromCanvas: string | null;
   /** Its project (#213): the project of the workspace the file is in. */
   projectId: string;
+  /**
+   * Where the workspace is served (#214): `/api/files/<filesRoot>/<path>`. The agent's id for its own workdir (the
+   * first project, links unchanged), `<agent>@<project>` for its workspace in another project.
+   */
+  filesRoot: string;
 }
 
 export interface DocVersion {

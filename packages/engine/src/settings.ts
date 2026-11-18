@@ -56,8 +56,12 @@ export class Settings {
         // The lead is always a member.
         if (p.triageAgent)
           this.db
-            .prepare("INSERT OR IGNORE INTO project_members (project_id, agent_id, clone_state, joined_at) VALUES (?, ?, 'ready', ?)")
-            .run(project, p.triageAgent, new Date().toISOString());
+            // In its own workdir unless it already works in another project from there (then a clone: Projects.resume).
+            .prepare(
+              `INSERT OR IGNORE INTO project_members (project_id, agent_id, clone_state, home, joined_at)
+               SELECT ?, ?, CASE WHEN h.n THEN 'pending' ELSE 'ready' END, NOT h.n, ? FROM (SELECT COUNT(*) > 0 AS n FROM project_members WHERE agent_id = ? AND home = 1) h`,
+            )
+            .run(project, p.triageAgent, new Date().toISOString(), p.triageAgent);
       })();
     }
     if (p.reviewAgent !== undefined) {
