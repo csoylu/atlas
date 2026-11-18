@@ -110,7 +110,7 @@ describe('secret values in workspace files (#226)', () => {
   it('artifact_create / artifact_update / restore: content and title are stored redacted', async () => {
     const store = new MemoryStore();
     const l = await launch({ secrets: store, dispatch: false, env: {} });
-    l.engine.secrets.create({ name: 'CANARY_KEY', value: CANARY, description: '', grant: 'all', agents: [] }, { by: 'user' });
+    l.engine.secrets.create({ name: 'CANARY_KEY', value: CANARY, description: '', grant: 'all', agents: [], project: null }, { by: 'user' });
     const doc = l.engine.documents.create('atlas', { kind: 'markdown', title: `Notes ${CANARY}`, content: `key=${CANARY}\n` }, 'atlas');
     expect(doc.title).toBe('Notes [secret CANARY_KEY]');
     l.engine.documents.update(doc.id, { content: `v2 ${CANARY}`, title: `T ${CANARY}` }, 'atlas');
@@ -158,7 +158,7 @@ describe('secret values in workspace files (#226)', () => {
   it('redactBytes replaces every occurrence and leaves other bytes alone', async () => {
     const store = new MemoryStore();
     const l = await launch({ secrets: store, dispatch: false, env: {} });
-    l.engine.secrets.create({ name: 'CANARY_KEY', value: CANARY, description: '', grant: 'none', agents: [] }, { by: 'user' });
+    l.engine.secrets.create({ name: 'CANARY_KEY', value: CANARY, description: '', grant: 'none', agents: [], project: null }, { by: 'user' });
     const bin = Buffer.from([0, 255, 1]);
     const r = l.engine.secrets.redactBytes(Buffer.concat([bin, Buffer.from(`${CANARY}é${CANARY}`), bin]));
     expect(r.hidden).toBe(2);
