@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from 'react';
+import { AgentFace } from './AgentFace.tsx';
 import { cardRef, type Doc, type Agent, type Card, type ChatGptStatus, type Inbox as InboxData, type Model, type Schedule, type Settings } from '@atlas/shared';
 import { api, subscribe, type AuthState } from './api.ts';
 import { Board } from './Board.tsx';
@@ -21,7 +22,6 @@ import { settingsLabel, settingsRoute, type SettingsPage } from './settingsPages
 import { registerAgents } from './agentTint.ts';
 import { ChatHistory } from './ChatHistory.tsx';
 import { deletedChatRoute } from './chatHistoryMenu.ts';
-import { tint } from './agentTint.ts';
 import { HeaderSlot, Icon } from './ScreenHeader.tsx';
 import { Palette, ShortcutsSheet, type PaletteContext } from './Palette.tsx';
 import { GO_HASH, globalKey, nextRow } from './keys.ts';
@@ -390,7 +390,7 @@ export function App() {
   /** The header's breadcrumb (parts before the title), its title and a faint note after it. */
   const openIsMain = !!openChat && mainChats.has(openChat.id);
   const agentDot = (id: string) => (
-    <span className="dot-avatar" aria-hidden="true" style={tint(id)}>{(id || '?').slice(0, 1).toUpperCase()}</span>
+    <AgentFace id={id} />
   );
   const crumb: { parts: ReactNode[]; title: string; titleIcon?: ReactNode; sub?: string } =
     route.view === 'chat'
@@ -400,7 +400,7 @@ export function App() {
         ? {
             parts: [
               <span key="a" className="crumb-part crumb-agent">
-                <span className="dot-avatar" aria-hidden="true" style={tint(openChat.assignee ?? '')}>{(openChat.assignee ?? '?').slice(0, 1).toUpperCase()}</span>
+                <AgentFace id={openChat.assignee} />
                 {openChat.assignee}
               </span>,
             ],
@@ -480,7 +480,7 @@ export function App() {
                 title={`Chat with @${a.id}${busy(a.id) ? ' · working…' : ''}`}
                 onClick={() => nav0('#/chat/' + (a.mainChat ?? a.id))}
               >
-                <span className="dot-avatar" aria-hidden="true" style={tint(a.id)}>{a.id.slice(0, 1).toUpperCase()}</span>
+                <AgentFace id={a.id} />
                 <span>{a.id}</span>
                 {busy(a.id) && <span className="spin" aria-label="working" />}
               </button>
