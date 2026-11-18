@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import type { Card } from '@atlas/shared';
-import { columnsFor, filterCount, matches, parseView, showAfterLabel, whyLine } from './boardView.ts';
+import { columnsFor, filterCount, matches, parseView, phoneColumn, showAfterLabel, whyLine } from './boardView.ts';
 
 const card = (p: Partial<Card>): Card =>
   ({ id: 'c', number: 1, title: 't', body: '', status: 'ready', assignee: 'atlas', priority: 0, board: 'main', parents: [], block: null, waiting: null, ...p }) as Card;
@@ -44,5 +44,13 @@ describe('board view', () => {
     expect(parseView('{oops')).toEqual({ tab: 'all', filter: any, layout: 'board', showEmpty: false });
     expect(parseView(JSON.stringify({ tab: 'needs', layout: 'list', showEmpty: true, filter: { agent: 'atlas', priority: 3 } }))).toEqual({ tab: 'needs', filter: { agent: 'atlas', priority: 3 }, layout: 'list', showEmpty: true });
     expect(parseView(JSON.stringify({ tab: 'weird', layout: 7 })).tab).toBe('all');
+  });
+  it('phone (#229): one column, the saved one if the tab shows it, else the first with tasks, else the first', () => {
+    const all = columnsFor('all');
+    const n = (m: Partial<Record<string, number>>) => (s: string) => m[s] ?? 0;
+    expect(phoneColumn(all, 'ready', n({}))).toBe('ready');
+    expect(phoneColumn(all, null, n({ running: 3, done: 9 }))).toBe('running');
+    expect(phoneColumn(all, 'nonsense', n({}))).toBe(all[0]);
+    expect(phoneColumn(columnsFor('needs'), 'ready', n({}))).toBe('blocked');
   });
 });

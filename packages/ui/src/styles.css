@@ -2388,3 +2388,17 @@ a.pop-row[aria-disabled='true'] { opacity: 0.5; pointer-events: none; }
   .sec-inline .confirm-text { flex-basis: 100%; }
   .sec-form .field-row .field { min-width: 100%; }
 }
+/* Phone board (#229): one column at a time, chosen from a row of status chips (name + count) that scrolls sideways. */
+.board-chips { display: flex; gap: 6px; overflow-x: auto; scrollbar-width: none; padding: 10px 12px 0; flex: none; }
+.board-chip {
+  height: 32px; padding: 0 10px; border-radius: 999px; border: 1px solid var(--line-2); background: none; flex: none;
+  display: inline-flex; align-items: center; gap: 6px; color: var(--muted); font-size: var(--fs-small); font-weight: var(--fw-medium); white-space: nowrap;
+}
+.board-chip.on { background: var(--active); color: var(--text); border-color: var(--line-2); }
+.board-chip.on .tab-n { color: inherit; }
+@media (max-width: 640px) {
+  .board.one { clip-path: none; scroll-snap-type: none; overflow-x: hidden; padding: 10px 12px 12px; }
+  .board.one .column { flex: 1 1 auto; min-width: 0; }
+  .board.one .column .fold { cursor: default; }
+  .board.one .column .fold:hover { background: none; }
+}
