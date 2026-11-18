@@ -6,6 +6,10 @@ computed by `scripts/release/changelog.mjs` from the oldest entry to the newest,
 `Fixed` → patch, `Added` or `Changed` → minor, `Breaking` (data or settings stop working without action) → major.
 Never type a version number.
 
+## Added · #114 · 80 more end-to-end tests cover the API and every screen, with a written QA audit
+
+The audit of 18 Nov 2026 (`docs/audit-2026-11-18.md`) lists what was checked per feature and the bugs found. `e2e/tests/audit/` adds 80 Playwright tests (agents, cards, content API and the UI screens) on the real engine and the built UI with the scripted model. Tests only: no change in the app, no migration.
+
 ## Added · #138 · A rewind says what it undoes and what it keeps, and takes back the tasks, messages, memories and schedules nobody acted on
 
 The « Rewind to this message? » dialog, the note above the composer and the « Rewound by you » row now list two groups: Undone (files, plus tasks the rewound part created that nobody started, closed; messages to agents or tasks not read yet, withdrawn; new memories, archived; new schedules that never ran, turned off) and Kept (a task someone already worked on, a message already read, changed memories, canvases, `git push`), with why. « No files changed » never stands alone when something else happened. Undo brings back everything undone (unless it changed since; the note says so). Two rewinds in a row show as one row, whose Undo undoes both. Tool calls now record what they did in a new `side_effects` table (migration 0043, which also adds `rewinds.effects`); rewinds made before this list nothing.
