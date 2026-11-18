@@ -116,11 +116,18 @@ export const CardView = forwardRef<HTMLTextAreaElement, CardViewProps & { close:
             <label className="prop-pill" title="Move to">
               <StatusIcon status={card.status} />
               <select value={card.status} onChange={(e) => save({ status: e.target.value as Card['status'] })} aria-label="Status">
-                {CARD_STATUSES.map((s) => (
-                  <option key={s} value={s}>
-                    {STATUS_LABEL[s]}
-                  </option>
-                ))}
+                {CARD_STATUSES.map((s) =>
+                  // Running is set when a run starts; the engine refuses it by hand (#121), so say so here.
+                  s === 'running' && card.status !== 'running' ? (
+                    <option key={s} value={s} disabled>
+                      {STATUS_LABEL[s]} (starts with a run)
+                    </option>
+                  ) : (
+                    <option key={s} value={s}>
+                      {STATUS_LABEL[s]}
+                    </option>
+                  ),
+                )}
               </select>
             </label>
             {props.close}

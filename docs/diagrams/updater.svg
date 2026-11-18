@@ -1,0 +1,80 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1120 520" font-family="Inter, -apple-system, system-ui, sans-serif" font-size="14">
+  <defs>
+    <marker id="a" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto"><path d="M0 0L10 5L0 10z" fill="#6b6f76"/></marker>
+    <style>
+      .box{fill:#fff;stroke:#c9ccd1;stroke-width:1.5;rx:10}
+      .t{font-weight:600;fill:#1b1c1f;font-size:15px}
+      .s{fill:#4d5158;font-size:13px}
+      .lane{fill:#55595f;font-size:13px;font-weight:600;letter-spacing:.04em}
+      .ar{stroke:#6b6f76;stroke-width:1.5;fill:none;marker-end:url(#a)}
+      .n{fill:#1b6c80;font-weight:600;font-size:13px}
+      .you{fill:#fff6e5;stroke:#d9a441}
+    </style>
+  </defs>
+  <rect width="1120" height="520" fill="#f6f7f8"/>
+
+  <text x="24" y="34" class="lane">AGENTS</text>
+  <text x="24" y="194" class="lane">GITHUB</text>
+  <text x="24" y="354" class="lane">YOUR MAC</text>
+  <line x1="24" y1="160" x2="1096" y2="160" stroke="#dcdfe3"/>
+  <line x1="24" y1="320" x2="1096" y2="320" stroke="#dcdfe3"/>
+
+  <!-- agents -->
+  <rect class="box" x="120" y="50" width="250" height="84" rx="10"/>
+  <text x="136" y="78" class="t">Finish a task</text>
+  <text x="136" y="100" class="s">code pushed to main,</text>
+  <text x="136" y="118" class="s">tests pass locally</text>
+
+  <rect class="box" x="450" y="50" width="250" height="84" rx="10"/>
+  <text x="466" y="78" class="t">One push = one entry = one release</text>
+  <text x="466" y="100" class="s">the agent adds an entry on top of</text>
+  <text x="466" y="118" class="s">CHANGELOG.md; CI gives the number</text>
+
+  <text x="790" y="84" class="s">No agent builds or installs the app.</text>
+  <text x="790" y="104" class="s">No restart while they work.</text>
+
+  <path class="ar" d="M370 92H448"/>
+  <text x="396" y="84" class="n">1</text>
+
+  <!-- github -->
+  <rect class="box" x="450" y="210" width="250" height="84" rx="10"/>
+  <text x="466" y="238" class="t">CI on main</text>
+  <text x="466" y="260" class="s">every push: one entry? number, tag,</text>
+  <text x="466" y="278" class="s">tests, build Mac + Windows apps</text>
+
+  <rect class="box" x="790" y="210" width="290" height="84" rx="10"/>
+  <text x="806" y="238" class="t">GitHub release v0.3.12</text>
+  <text x="806" y="260" class="s">app zip (arm64, x64), checksums,</text>
+  <text x="806" y="278" class="s">release notes = the new entries</text>
+
+  <path class="ar" d="M575 134V208"/>
+  <text x="585" y="176" class="n">2</text>
+  <path class="ar" d="M700 252H788"/>
+  <text x="736" y="244" class="n">3</text>
+
+  <!-- mac -->
+  <rect class="box" x="790" y="370" width="290" height="100" rx="10"/>
+  <text x="806" y="398" class="t">Atlas checks for a release</text>
+  <text x="806" y="420" class="s">at start, then every hour, and on</text>
+  <text x="806" y="438" class="s">"Check now". Newer version → badge</text>
+  <text x="806" y="456" class="s">"Update available" + the notes</text>
+
+  <rect class="box you" x="450" y="370" width="250" height="100" rx="10"/>
+  <text x="466" y="398" class="t">You click "Update"</text>
+  <text x="466" y="420" class="s">it says which agents are working;</text>
+  <text x="466" y="438" class="s">download, checksum verified,</text>
+  <text x="466" y="456" class="s">database backed up</text>
+
+  <rect class="box" x="120" y="370" width="250" height="100" rx="10"/>
+  <text x="136" y="398" class="t">Swap and reopen</text>
+  <text x="136" y="420" class="s">a small helper waits for Atlas to</text>
+  <text x="136" y="438" class="s">quit, replaces Atlas.app, reopens it;</text>
+  <text x="136" y="456" class="s">runs resume; old app kept once</text>
+
+  <path class="ar" d="M935 294V368"/>
+  <text x="945" y="336" class="n">4</text>
+  <path class="ar" d="M790 420H702"/>
+  <text x="740" y="412" class="n">5</text>
+  <path class="ar" d="M450 420H372"/>
+  <text x="406" y="412" class="n">6</text>
+</svg>

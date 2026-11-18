@@ -299,6 +299,20 @@ Statuses: `triage → todo → ready → running → (blocked | review) → done
       per browser (localStorage `atlas.memory.digest`); a newer change brings it back. It counts in the badge while unread.
     - Each agent card in Settings → Agents (count + budget) links to its scope (`…/memory/agent:<id>`); the old editors are gone.
 
+### Slash commands: /clear and /compact (card #99, built 17 Nov 2026, `engine/src/slash.ts`, `ui/src/slashCommands.ts`)
+- The composer opens a popup when `/` is the first character (↑/↓, Enter/Tab runs, Esc closes); an exact command is
+  never sent as a message. `POST /api/cards/:id/command {command, arg?}`. A running agent is stopped first (as Stop,
+  not a rewind), then the command acts.
+- `/compact [focus]`: `Runner.compactNow` folds every message the model sees into `conversations.summary` now (several
+  calls if it doesn't fit), the focus as an extra instruction; a `compacted` card event with `by: user` makes the
+  timeline say « Compacted by you ».
+- `/clear`: a `context_clears` row (migration 0039) at the last seq. The model's view (`Runner.transcript`) starts after
+  the latest clear in effect; summary, prune point and todos are reset in the same transaction, their old values kept
+  in `before` for Undo (`POST /api/clears/:id/undo`, only while no message came after it). Nothing is deleted: the chat
+  folds the earlier messages behind « Context cleared by you · N earlier messages » (expandable); history_search
+  still finds them. A rewind to a message before a clear sets its `rewind_id` (it no longer counts); undoing the rewind
+  brings it back. The old « /clear = new main chat » is gone (the API route stays).
+
 ## 9. Scheduler
 - `schedules` rows with a cron expression or a one-shot time, in the user's timezone. Missed runs while the engine was
   down: run once at start (not once per missed slot), noted in the run.
@@ -308,10 +322,10 @@ Statuses: `triage → todo → ready → running → (blocked | review) → done
 ## 10. Tools (v1)
 | Tool | Notes |
 |---|---|
-| `read_file`, `write_file`, `edit_file`, `list_files` | inside the agent's workdir. read_file: `N\|text` lines, `offset`/`limit` (2000 lines), ≤100k chars cut on a line boundary with a « use offset= » footer, binary refused. Edits (edit_file, write_file over an existing file) need a read_file of the file in this conversation and refuse if it changed on disk since (mtime+size per conversation, in memory). edit_file: `replace_all`; on 0 exact hits, line-trimmed then whitespace-normalized matching (reported). Writes to one file run one at a time |
+| `read_file`, `write_file`, `edit_file`, `list_files` | inside the agent's workdir. read_file: `N\|text` lines, `offset`/`limit` (2000 lines), ≤100k chars cut on a line boundary with a « use offset= » footer, binary refused, except png/jpeg/gif/webp (≤10 MB, by their bytes): returned as a picture (§10a). Edits (edit_file, write_file over an existing file) need a read_file of the file in this conversation and refuse if it changed on disk since (mtime+size per conversation, in memory). edit_file: `replace_all`; on 0 exact hits, line-trimmed then whitespace-normalized matching (reported). Writes to one file run one at a time |
 | `grep`, `glob` | ripgrep when `rg` is installed (PATH, Homebrew), else JS; skip node_modules/.git. glob newest first |
 | `shell` | runs in the workdir, timeout; output over 30k chars: the tail + full output saved under `<data>/outputs/<agent>/` (pruned after 7 days, readable with read_file/grep by absolute path). `background: true` → id, log file, row in `background_processes` (migration 0024, leased like runs: a dead engine's processes are killed and marked `lost` at start); `shell_output(id, offset?)`, `shell_kill(id)`; when one ends by itself (or is lost) a system note with exit code + output tail is posted and the agent woken |
-| `web_fetch` | HTML → light markdown, 15k chars head+tail by default, full text saved to outputs |
+| `web_fetch` | HTML → light markdown, 15k chars head+tail by default, full text saved to outputs. An image URL (png/jpeg/gif/webp) is saved to outputs and returned as a picture |
 | `web_search` | provider-native only: Anthropic's server tool `web_search_20250305` (API key and Claude plan, only against api.anthropic.com); `server_tool_use` / `web_search_tool_result` blocks are stored verbatim, replayed, shown in the UI; `pause_turn` continues the answer. ChatGPT plan and local models: none offered (ChatGPT's Responses web_search not verified on the plan route) |
 | `card_*` | create, comment, block, complete, request_review, list, show |
 | `message_agent` | posts into the other agent's chat; the reply arrives as a message later |
@@ -319,6 +333,25 @@ Statuses: `triage → todo → ready → running → (blocked | review) → done
 | `schedule_create`, `schedule_list`, `schedule_delete` | |
 | `memory_add`, `memory_update`, `memory_forget`, `memory_search` | Memory v2 (§8). add(kind, scope self/shared, text, update?/new?): refused with the similar ones listed unless `update: id` or `new: true`; over the always-on budget → refused, asking to merge. update(id, text, kind?) and forget(id) on own and shared memories only; forget archives. search(query): own + shared, stale included. Replaced `memory_edit` (old transcripts still render it) |
 | `ask_user` | in chat runs only; on cards use `card_block(needs_input)` |
+
+### 10a. Images (#103)
+- Block `image` (packages/shared): `path` (absolute), `media_type`, `width`, `height`, `bytes`, `sha256`; a tool
+  result may carry `images: ImageBlock[]`. The bytes stay in the file, never in SQLite: `data` (base64) is only filled
+  in the view sent to a provider (`withPictures`, images.ts) and stripped by `appendMessage`.
+- Sending: only the newest 6 pictures of the view go as pictures; older ones, a missing file, or a file whose hash
+  changed become a text line `[image: path …]` (read_file it again). Long side downscaled to ≤1568 px (and re-encoded
+  under ~3.6 MB). The token estimate counts ~1600 per picture; summaries and history_search show the text line.
+- Providers: Anthropic / Claude plan: `image` blocks with a base64 source, inside `tool_result` content too. ChatGPT
+  plan: `input_image` data URLs, in the user item and in `function_call_output` (an array output). OpenAI-compatible:
+  `image_url` parts; a tool's pictures follow in a user message (tool messages are text). A local model without
+  vision (Ollama `capabilities`) or a 4xx on a request with pictures → « this model can't see images », no silent drop.
+- Composer (every chat: main, direct, thread, modal): paste, drop, attach button; ≤5 per message, png/jpeg/gif/webp,
+  10 MB, a refused file says why. Each one is staged at once (`POST /api/cards/:id/uploads`, raw body, checked on its
+  bytes, kept in `<data>/uploads/up_<uuid>--<name>.<ext>`; unsent ones pruned after a day). `POST …/messages` with
+  `uploads: [ids]` (text may be empty) copies each into the agent's workspace `uploads/<date>-<name>.<ext>`, writes the
+  message row (image block + an `[attached: uploads/…]` line for the agent), then drops the staged file; a failed row
+  write removes the copies, so sending again works and a restart in between loses nothing.
+- Transcript: thumbnails (`GET /api/cards/:id/image?path=`, only paths the conversation references), click = full size.
 
 Project instructions: `AGENTS.md` and `CLAUDE.md` at the root of the agent's workdir go in the system prompt
 (« # Project instructions », each labelled with its path, capped at 20k chars with a note), before the card and the date.

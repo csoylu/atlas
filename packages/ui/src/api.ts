@@ -1,4 +1,4 @@
-import type { Inbox, FileChange, RewindPreview, RewindResult, Doc, DocContent, DocHit, Folder, DocRef, DocVersion, PanelTab, About, CreatePlanAccount, Notification, PlanProvider, UpdatePlanAccount, ChatUsage, UsageSummary, ChatGptModel, ChatGptStatus, UpdateChatGpt, ClaudePlanModel, ClaudePlanStatus, UpdateClaudePlan, Account, CreateAccount, UpdateAccount, LocalModel, LocalPull, LocalStatus, UpdateLocal, Agent, Card, CardStatus, CreateAgent, CreateCard, CreateModel, CreateSchedule, Memory, MemoryChange, MemoryProposal, MemoryQuery, UpdateMemory, Message, Model, ModelTest, Run, Schedule, Timeline, ToolCallTiming, ServerEvent, Settings, UpdateVoice, VoiceName, VoiceStatus, UpdateAgent, UpdateModel, UpdateSchedule } from '@atlas/shared';
+import type { ClearEvent, CompactResult, Inbox, FileChange, RewindPreview, RewindResult, Doc, DocContent, DocHit, Folder, DocRef, DocVersion, PanelTab, About, CreatePlanAccount, Notification, PlanProvider, UpdatePlanAccount, ChatUsage, UsageSummary, ChatGptModel, ChatGptStatus, UpdateChatGpt, ClaudePlanModel, ClaudePlanStatus, UpdateClaudePlan, Account, CreateAccount, UpdateAccount, LocalModel, LocalPull, LocalStatus, UpdateLocal, Agent, Card, CardStatus, CreateAgent, CreateCard, CreateModelRequest, CreateSchedule, Memory, MemoryChange, MemoryProposal, MemoryQuery, UpdateMemory, Message, Model, ModelTest, Run, Schedule, Timeline, ToolCallTiming, ServerEvent, Settings, UpdateVoice, VoiceName, VoiceStatus, UpdateAgent, UpdateModelRequest, UpdateSchedule, Upload } from '@atlas/shared';
 
 /** HTTP error with the parsed body (e.g. a 409's details). */
 export class ApiError extends Error {
@@ -42,7 +42,20 @@ export const api = {
   moveCard: (id: string, status: CardStatus) => call<Card>('PATCH', `/cards/${id}`, { status }),
   deleteCard: (id: string) => call<void>('DELETE', `/cards/${id}`),
   messages: (id: string) => call<Message[]>('GET', `/cards/${id}/messages`),
-  postMessage: (id: string, text: string, ref?: DocRef) => call<Message>('POST', `/cards/${id}/messages`, ref ? { text, ref } : { text }),
+  postMessage: (id: string, text: string, ref?: DocRef, uploads?: string[]) =>
+    call<Message>('POST', `/cards/${id}/messages`, { text, ...(ref ? { ref } : {}), ...(uploads?.length ? { uploads } : {}) }),
+  /** Stage a pasted/dropped image; its id goes with the next message. */
+  uploadImage: async (id: string, file: File): Promise<Upload> => {
+    const res = await fetch(`/api/cards/${id}/uploads?name=${encodeURIComponent(file.name || 'image')}`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/octet-stream' },
+      body: file,
+      credentials: 'include',
+    });
+    const body = (await res.json().catch(() => ({}))) as Upload & { error?: string };
+    if (!res.ok) throw new ApiError(body.error || `upload failed: HTTP ${res.status}`, res.status, body as unknown as Record<string, unknown>);
+    return body;
+  },
   // ── Documents and the side panel ──
   documents: (cardId?: string) => call<Doc[]>('GET', '/documents' + (cardId ? `?card=${encodeURIComponent(cardId)}` : '')),
   document: (id: string, version?: number) => call<DocContent>('GET', `/documents/${id}` + (version === undefined ? '' : `?version=${version}`)),
@@ -68,13 +81,17 @@ export const api = {
   /** Rewind to your message `seq`, or (no seq) the turn the running run answers; null = the run was just stopped. */
   rewind: (id: string, seq?: number) => call<RewindResult | null>('POST', `/cards/${id}/rewind`, seq ? { seq } : {}),
   rewindPreview: (id: string, seq: number) => call<RewindPreview>('GET', `/cards/${id}/rewind?seq=${seq}`),
+  /** Composer slash commands (#99): /clear, /compact [focus]. A running agent is stopped first. */
+  command: (id: string, command: 'clear' | 'compact', arg?: string) =>
+    call<{ clear?: ClearEvent; compact?: CompactResult }>('POST', `/cards/${id}/command`, arg ? { command, arg } : { command }),
+  undoClear: (clearId: string) => call<{ cardId: string }>('POST', `/clears/${clearId}/undo`),
   undoRewind: (rewindId: string) => call<{ files: FileChange[]; filesError: string | null }>('POST', `/rewinds/${rewindId}/undo`),
   retry: (id: string) => call<Card>('POST', `/cards/${id}/retry`),
   agents: () => call<Agent[]>('GET', '/agents'),
   chats: () => call<Card[]>('GET', '/chats'),
   newChat: (agentId: string) => call<Card>('POST', `/agents/${agentId}/chats`),
   mainChat: (agentId: string) => call<Card>('POST', `/agents/${agentId}/main-chat`),
-  /** `/clear`: a fresh main chat; the previous one stays in History. */
+  /** A fresh main chat; the previous one stays in History (the composer's /clear clears the context instead, #99). */
   newMainChat: (agentId: string) => call<Card>('POST', `/agents/${agentId}/main-chat/new`),
   usage: (days = 30) => call<UsageSummary>('GET', `/usage?days=${days}`),
   cardUsage: (id: string) => call<ChatUsage>('GET', `/cards/${id}/usage`),
@@ -117,8 +134,8 @@ export const api = {
   rejectProposal: (id: number) => call<MemoryProposal>('POST', `/memory-proposals/${id}/reject`),
   memoryBudget: (agentId: string) => call<{ used: number; limit: number }>('GET', `/agents/${agentId}/memory-budget`),
   models: () => call<Model[]>('GET', '/models'),
-  createModel: (m: CreateModel) => call<Model>('POST', '/models', m),
-  updateModel: (id: string, patch: UpdateModel) => call<Model>('PATCH', `/models/${id}`, patch),
+  createModel: (m: CreateModelRequest) => call<Model>('POST', '/models', m),
+  updateModel: (id: string, patch: UpdateModelRequest) => call<Model>('PATCH', `/models/${id}`, patch),
   deleteModel: (id: string) => call<void>('DELETE', `/models/${id}`),
   testModel: (id: string) => call<ModelTest>('POST', `/models/${id}/test`),
   secrets: () => call<{ store: string | null; names: string[] }>('GET', '/secrets'),

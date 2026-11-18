@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import { RESUME_KICK, TRIAGE_KICK, WORK_KICK, type EndedRun, type Message, type RewindEvent } from '@atlas/shared';
-import { distribute, messageRow, rewindRow, runRow, summaryRow, timelineRows } from './sysRows.ts';
+import { clearPoint, clearRow, distribute, messageRow, rewindRow, runRow, summaryRow, timelineRows } from './sysRows.ts';
 import { REWOUND } from './rewindText.ts';
 import { badInput, toolRow } from './toolRows.ts';
 
@@ -109,6 +109,42 @@ describe('timelineRows + distribute', () => {
     expect(d.before).toEqual([]);
     expect(d.after.map((rs) => rs.map((r) => r.key))).toEqual([[], ['summary', 'r1', 'rw'], [], ['r2']]);
     expect(distribute([3], [{ row: placed[0]!.row, after: 1 }]).before).toHaveLength(1);
+  });
+});
+
+describe('/clear and /compact rows (#99)', () => {
+  const clear = (o: Partial<import('@atlas/shared').ClearEvent> = {}) => ({ id: 'cl', uptoSeq: 3, at: '2026-11-14T10:05:00.000Z', hidden: 3, undoable: true, ...o });
+  it('« Compacted by you » for /compact, the automatic one stays as it was', () => {
+    expect(summaryRow({ uptoSeq: 9, text: 'S', byUser: true }, 42)).toMatchObject({ verb: 'Compacted by you', object: '42 messages → 1 summary', body: { kind: 'markdown', text: 'S' } });
+    expect(summaryRow({ uptoSeq: 9, text: 'S', byUser: false }, 42).verb).toBe('Earlier messages summarized');
+  });
+  it('the clear row: N earlier messages, open with Undo while undoable', () => {
+    expect(clearRow(clear(), false)).toMatchObject({ verb: 'Context cleared by you', object: '3 earlier messages', open: true, body: { kind: 'clear', hidden: 3, expanded: false, undoId: 'cl' } });
+    expect(clearRow(clear({ undoable: false, hidden: 1 }), true)).toMatchObject({ object: '1 earlier message', open: false, body: { expanded: true, undoId: null } });
+  });
+  it('folds every row before the latest clear unless expanded; the summary counts from the clear before it', () => {
+    seq = 0;
+    const ms = [
+      msg('user', 'user', 'a', '2026-11-14T10:00:00.000Z'), // 1
+      msg('assistant', 'atlas', 'b', '2026-11-14T10:01:00.000Z'), // 2
+      msg('user', 'user', 'c', '2026-11-14T10:02:00.000Z'), // 3
+      msg('user', 'user', 'd', '2026-11-14T10:10:00.000Z'), // 4
+      msg('assistant', 'atlas', 'e', '2026-11-14T10:11:00.000Z'), // 5
+    ];
+    const t = {
+      runs: [run({ id: 'r1', status: 'stopped', error: 'stopped by you', endedAt: '2026-11-14T10:04:00.000Z' })],
+      // A rewind to the first message after the clear sits at the same place, later: it stays.
+      rewinds: [{ id: 'rw', fromSeq: 4, at: '2026-11-14T10:20:00.000Z', hidden: 2, files: [], filesError: null, undoable: false }],
+      summary: { uptoSeq: 5, text: 'S', byUser: true },
+      clears: [clear()],
+    };
+    expect(clearPoint(t)).toBe(3);
+    expect(clearPoint({ ...t, clears: undefined })).toBe(0);
+    const o = { latestRunId: 'r1', running: false, hhmm: hm };
+    const folded = timelineRows(t, ms, o);
+    expect(folded.map((p) => p.row.key)).toEqual(['cl', 'rw', 'summary']);
+    expect(folded.find((p) => p.row.key === 'summary')!.row.object).toBe('2 messages → 1 summary');
+    expect(timelineRows(t, ms, { ...o, expanded: true }).map((p) => p.row.key)).toEqual(['r1', 'cl', 'rw', 'summary']);
   });
 });
 

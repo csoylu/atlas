@@ -86,8 +86,38 @@ export const UpdateCard = z
   .partial();
 export type UpdateCard = z.infer<typeof UpdateCard>;
 
+/* ── Images (#103) ─────────────────────────────────────────────────────────── */
+
+export const IMAGE_TYPES = ['image/png', 'image/jpeg', 'image/gif', 'image/webp'] as const;
+export const ImageMediaType = z.enum(IMAGE_TYPES);
+export type ImageMediaType = z.infer<typeof ImageMediaType>;
+/** An image file over this size is refused (upload, read_file, web_fetch). */
+export const IMAGE_MAX_BYTES = 10 * 1024 * 1024;
+/** Images per user message. */
+export const IMAGE_MAX_PER_MESSAGE = 5;
+/** Only the newest this-many images of a conversation go to the model as pictures; older ones become a text line. */
+export const IMAGE_KEEP = 6;
+
+/**
+ * A picture in the transcript. The bytes stay in a file (absolute `path`, in an agent workspace or its outputs);
+ * the transcript keeps only this reference, so SQLite stays small. `data` (base64 of the possibly downscaled picture,
+ * with `media_type` describing it) is filled only in the view handed to a provider, never stored.
+ */
+export const ImageBlock = z.object({
+  type: z.literal('image'),
+  path: z.string(),
+  media_type: ImageMediaType,
+  width: z.number().int(),
+  height: z.number().int(),
+  bytes: z.number().int(),
+  sha256: z.string(),
+  data: z.string().optional(),
+});
+export type ImageBlock = z.infer<typeof ImageBlock>;
+
 /** Content blocks, Anthropic-shaped so the transcript can be replayed to a model as-is. */
 export const ContentBlock = z.discriminatedUnion('type', [
+  ImageBlock,
   z.object({ type: z.literal('text'), text: z.string() }),
   z.object({ type: z.literal('thinking'), thinking: z.string(), signature: z.string() }),
   z.object({ type: z.literal('redacted_thinking'), data: z.string() }),
@@ -97,6 +127,8 @@ export const ContentBlock = z.discriminatedUnion('type', [
     tool_use_id: z.string(),
     content: z.string(),
     is_error: z.boolean().optional(),
+    /** Pictures the tool returned (read_file / web_fetch of an image). */
+    images: z.array(ImageBlock).optional(),
   }),
   // A tool the provider runs itself (Anthropic's web search). Replayed to the API as-is; never run by Atlas.
   z.object({ type: z.literal('server_tool_use'), id: z.string(), name: z.string(), input: z.unknown() }),
@@ -140,6 +172,15 @@ export interface RewindResult extends RewindPreview {
   text: string;
 }
 export const RewindRequest = z.object({ seq: z.number().int().positive().optional() });
+/** A composer slash command (#99): /clear, or /compact with an optional focus for the summary. */
+export const SlashCommand = z.object({ command: z.enum(['clear', 'compact']), arg: z.string().trim().max(2000).optional() });
+export type SlashCommand = z.infer<typeof SlashCommand>;
+/** What /compact did: `messages` folded into the summary (tool results not counted). */
+export interface CompactResult {
+  uptoSeq: number;
+  messages: number;
+  summaryChars: number;
+}
 
 /** One item of an agent's todo list (todo_write: the full list each call, stored per conversation). */
 export const TodoItem = z.object({
@@ -150,7 +191,23 @@ export type TodoItem = z.infer<typeof TodoItem>;
 export const TODO_LIMIT = 50;
 
 /** A user message; `ref` = the document part it is about (« Ask about this » in the side panel). */
-export const PostMessage = z.object({ text: z.string().trim().min(1).max(100_000), ref: DocRef.optional() });
+/** `uploads`: ids from POST /api/cards/:id/uploads; a message may be images only (then `text` is empty). */
+export const PostMessage = z
+  .object({
+    text: z.string().trim().max(100_000).default(''),
+    ref: DocRef.optional(),
+    uploads: z.array(z.string().regex(/^up_[a-z0-9-]+$/)).max(IMAGE_MAX_PER_MESSAGE).default([]),
+  })
+  .refine((m) => m.text.length > 0 || m.uploads.length > 0, { message: 'a message needs text or an image' });
+/** An image waiting to be sent (POST /api/cards/:id/uploads): the composer shows it, the message names its id. */
+export interface Upload {
+  id: string;
+  name: string;
+  media_type: ImageMediaType;
+  width: number;
+  height: number;
+  bytes: number;
+}
 
 export const RUN_STATUSES = ['running', 'done', 'failed', 'stopped', 'interrupted'] as const;
 export type RunStatus = (typeof RUN_STATUSES)[number];
@@ -195,8 +252,20 @@ export interface RewindEvent {
 export interface Timeline {
   runs: EndedRun[];
   rewinds: RewindEvent[];
-  /** The model sees `text` instead of every message with seq ≤ uptoSeq. */
-  summary: { uptoSeq: number; text: string } | null;
+  /** The model sees `text` instead of every message with seq ≤ uptoSeq. `byUser`: made by /compact (else automatic). */
+  summary: { uptoSeq: number; text: string; byUser?: boolean } | null;
+  /** /clear points in effect, oldest first. Absent from engines before #99. */
+  clears?: ClearEvent[];
+}
+/** A /clear in effect (#99): the agent forgets every message with seq ≤ uptoSeq; the chat folds them behind the row. */
+export interface ClearEvent {
+  id: string;
+  uptoSeq: number;
+  at: string;
+  /** Messages before it (tool results not counted). */
+  hidden: number;
+  /** Undo would work now: the latest clear, nothing written since. */
+  undoable: boolean;
 }
 
 /** When one tool call of a run ran (the tool_calls table): the chat shows its duration, or a live timer. */
@@ -394,7 +463,8 @@ export interface MemoryProposal {
   memories: Memory[];
 }
 
-// claude_code remains readable only for historical records; new/updated models cannot select it.
+// claude_code remains readable only for historical records (the store can still hold it); the API
+// rejects it on create/update through CreateModelRequest/UpdateModelRequest below.
 export const ModelProvider = z.enum(['anthropic', 'openai_compat', 'chatgpt', 'claude_plan', 'claude_code']);
 export const CreateModel = z.object({
   id: z.string().regex(/^[a-z][a-z0-9_-]{1,30}$/, 'lowercase letters, digits, - or _'),
@@ -420,6 +490,19 @@ export const UpdateModel = z
   })
   .partial();
 export type UpdateModel = z.input<typeof UpdateModel>;
+/** Providers a new or edited model may select through the API (claude_code was removed in 0018). */
+export const SelectableModelProvider = z.enum(['anthropic', 'openai_compat', 'chatgpt', 'claude_plan'], {
+  error: (iss) =>
+    iss.input === 'claude_code'
+      ? 'provider claude_code was removed (0018): existing rows stay readable, but new or edited models cannot select it'
+      : 'provider must be one of anthropic, openai_compat, chatgpt, claude_plan',
+});
+/** POST /api/models body: like CreateModel, without the removed claude_code provider. */
+export const CreateModelRequest = CreateModel.extend({ provider: SelectableModelProvider });
+export type CreateModelRequest = z.input<typeof CreateModelRequest>;
+/** PATCH /api/models/:id body: like UpdateModel, without the removed claude_code provider. */
+export const UpdateModelRequest = UpdateModel.extend({ provider: SelectableModelProvider.optional() });
+export type UpdateModelRequest = z.input<typeof UpdateModelRequest>;
 
 export interface ModelTest {
   ok: boolean;

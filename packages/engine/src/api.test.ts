@@ -81,6 +81,60 @@ describe('api', () => {
     ws.close();
   });
 
+  it('refuses Running by hand on create and on update (only the dispatcher sets it)', async () => {
+    engine = await startEngine({ dbFile: ':memory:', dataDir: mkdtempSync(join(tmpdir(), 'atlas-')), port: 0, dispatch: false });
+    const send = (method: string, path: string, body: unknown) =>
+      fetch(engine!.url + path, { method, headers: { 'content-type': 'application/json' }, body: JSON.stringify(body) });
+    const created = await send('POST', '/api/cards', { title: 'x', status: 'running' });
+    expect(created.status).toBe(400);
+    expect(((await created.json()) as { error: string }).error).toMatch(/dispatcher when a run starts/);
+    expect(engine.kanban.list()).toEqual([]);
+
+    const card = (await (await send('POST', '/api/cards', { title: 'y', status: 'todo' })).json()) as Card;
+    const events = () => engine!.db.prepare("SELECT COUNT(*) AS n FROM card_events WHERE card_id = ? AND kind = 'status'").get(card.id);
+    const before = events();
+    const moved = await send('PATCH', `/api/cards/${card.id}`, { status: 'running' });
+    expect(moved.status).toBe(400);
+    expect(((await moved.json()) as { error: string }).error).toMatch(/dispatcher when a run starts/);
+    expect(engine.kanban.get(card.id).status).toBe('todo');
+    expect(events()).toEqual(before);
+    // The dispatcher path is untouched.
+    expect(engine.kanban.update(card.id, { status: 'running' }, 'dispatcher').status).toBe('running');
+  });
+
+  it('refuses the removed claude_code provider on model create and update; legacy rows stay readable (#122)', async () => {
+    engine = await startEngine({ dbFile: ':memory:', dataDir: mkdtempSync(join(tmpdir(), 'atlas-')), port: 0, dispatch: false, env: {} });
+    const send = (method: string, path: string, body: unknown) =>
+      fetch(engine!.url + path, { method, headers: { 'content-type': 'application/json' }, body: JSON.stringify(body) });
+    type Issues = { error: string; issues: { path: string[]; message: string }[] };
+    const ids = () => engine!.models.list().map((m) => m.id);
+    const before = ids();
+
+    // 1. Create is refused with a clear reason; no row is written.
+    const created = await send('POST', '/api/models', { id: 'cc', provider: 'claude_code', name: 'x' });
+    expect(created.status).toBe(400);
+    const cBody = (await created.json()) as Issues;
+    expect(cBody.issues[0]).toMatchObject({ path: ['provider'], message: expect.stringMatching(/claude_code was removed/) });
+    expect(ids()).toEqual(before);
+
+    // 2. Update to claude_code is refused; the row is unchanged. Other edits still work.
+    expect((await send('POST', '/api/models', { id: 'own', provider: 'anthropic', name: 'claude-sonnet-5-5' })).status).toBe(201);
+    const own = engine.models.get('own');
+    const moved = await send('PATCH', '/api/models/own', { provider: 'claude_code' });
+    expect(moved.status).toBe(400);
+    expect(((await moved.json()) as Issues).issues[0]!.message).toMatch(/claude_code was removed/);
+    expect(engine.models.get('own')).toEqual(own);
+    expect((await send('PATCH', '/api/models/own', { name: 'claude-opus-5-5' })).status).toBe(200);
+
+    // 3. A legacy row (seeded below the API) still lists, and still fails loudly when run.
+    engine.models.create({ id: 'legacy', provider: 'claude_code', name: 'claude-opus-5-5' });
+    const listed = (await (await fetch(engine.url + '/api/models')).json()) as { id: string; provider: string }[];
+    expect(listed.find((m) => m.id === 'legacy')).toMatchObject({ provider: 'claude_code' });
+    expect(() => engine!.models.provider('legacy')).toThrow(/needs CLAUDE_CODE_OAUTH_TOKEN or ANTHROPIC_API_KEY/);
+    // Editing the legacy row without changing its provider is still possible (e.g. renaming it).
+    expect((await send('PATCH', '/api/models/legacy', { name: 'old' })).status).toBe(200);
+  });
+
   it('shuts down promptly with a WebSocket still open', async () => {
     const e = await startEngine({ dbFile: ':memory:', dataDir: mkdtempSync(join(tmpdir(), 'atlas-')), port: 0 });
     const ws = new WebSocket(e.url.replace('http', 'ws') + '/api/events');

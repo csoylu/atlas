@@ -573,6 +573,33 @@ button.artifact:hover .art-open { color: var(--accent); }
 .send-btn:hover { background: var(--accent-hi); }
 .send-btn:disabled { opacity: 0.4; cursor: default; background: var(--accent); }
 
+/* images (#103): composer attachments, thumbnails in messages, the full-size view */
+.composer.dropping { border-color: var(--accent); border-style: dashed; background: var(--accent-soft); }
+.attach-btn {
+  flex: none; width: 26px; height: 26px; border-radius: 6px; border: 0; padding: 0; display: grid; place-items: center;
+  background: none; color: var(--muted); transition: background 0.12s, color 0.12s;
+}
+.attach-btn:hover { background: var(--sheet); color: var(--text); }
+.attach-strip { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; }
+.attach-thumb { position: relative; width: 56px; height: 56px; border-radius: 6px; overflow: hidden; border: 1px solid var(--line-2); background: var(--sheet); flex: none; }
+.attach-thumb img { width: 100%; height: 100%; object-fit: cover; display: block; }
+.attach-thumb.busy img { opacity: 0.5; }
+.attach-thumb.bad { border-color: var(--bad, #d33); }
+.attach-thumb .attach-err { position: absolute; left: 4px; bottom: 3px; font-weight: var(--fw-bold); color: var(--bad, #d33); font-size: var(--fs-small); }
+.attach-thumb button {
+  position: absolute; top: 2px; right: 2px; width: 20px; height: 20px; padding: 0; border: 0; border-radius: 50%;
+  background: rgba(0, 0, 0, 0.6); color: #fff; font-size: var(--fs-base); line-height: var(--lh-tight); display: grid; place-items: center;
+}
+.attach-note { font-size: var(--fs-small); color: var(--bad, #d33); min-width: 0; flex: 1 1 160px; }
+.msg-images { display: flex; flex-wrap: wrap; gap: 6px; margin: 2px 0 4px; }
+.msg-image { padding: 0; border: 1px solid var(--line-2); border-radius: 8px; overflow: hidden; background: var(--sheet); cursor: zoom-in; max-width: 100%; }
+.msg-image img { display: block; max-width: min(240px, 100%); max-height: 180px; width: auto; height: auto; object-fit: contain; }
+.lightbox { position: fixed; inset: 0; z-index: 1000; background: rgba(0, 0, 0, 0.82); display: flex; flex-direction: column; align-items: center; justify-content: center; padding: 16px; gap: 10px; cursor: zoom-out; }
+.lightbox img { max-width: 100%; max-height: calc(100% - 48px); object-fit: contain; border-radius: 4px; cursor: default; }
+.lightbox-bar { display: flex; align-items: center; gap: 14px; color: #eee; font-size: var(--fs-small); cursor: default; flex-wrap: wrap; justify-content: center; }
+.lightbox-bar a { color: #9cf; }
+.lightbox-bar .icon-btn { color: #eee; font-size: var(--fs-xl); }
+
 /* markdown in messages and notes */
 .msg .text.md { white-space: normal; }
 .md > :first-child { margin-top: 0; }
@@ -812,6 +839,8 @@ button.tool .icon { color: var(--muted); font-family: var(--mono); }
   .menu-open .scrim { display: block; position: fixed; inset: 0; z-index: 20; background: var(--scrim); }
   .workspace { padding: 0; }
   .screen-head { padding: 0 6px 0 0; gap: 4px; }
+  /* Mac app: the sidebar is a drawer here, so the header starts at the window's left edge, under the traffic lights (x 14–66). */
+  .electron-mac .screen-head { padding-left: 72px; }
   .menu-btn { display: inline-grid; place-items: center; width: 44px; height: 44px; color: var(--muted); }
   .crumb-sub { display: none; }
   .sheet { border-radius: 0; border-width: 0; }
@@ -1934,3 +1963,17 @@ a.pop-row[aria-disabled='true'] { opacity: 0.5; pointer-events: none; }
   .lib-tile-m { flex-wrap: wrap; row-gap: 6px; }
   .lib-tile-m .lib-fold { margin-left: 0; max-width: 100%; }
 }
+/* ── Slash commands in the composer (card #99): the popup above the box, the busy line ─────────────────────── */
+.composer { position: relative; }
+.slash-pop {
+  position: absolute; left: 0; right: 0; bottom: calc(100% + 6px); z-index: 20; padding: 5px;
+  background: var(--raised); border: 1px solid var(--line-2); border-radius: 10px; box-shadow: var(--composer-shadow);
+}
+.slash-op { display: flex; align-items: baseline; gap: 10px; padding: 7px 10px; border-radius: 7px; cursor: pointer; }
+.slash-op.on { background: var(--accent-soft); }
+.slash-cmd { font-family: var(--mono); font-size: var(--fs-small); color: var(--text); min-width: 76px; flex: none; }
+.slash-desc { font-size: var(--fs-small); color: var(--muted); min-width: 0; }
+.slash-desc em { font-style: normal; color: var(--muted); }
+.slash-hint { margin-left: auto; font-size: var(--fs-small); color: var(--faint); flex: none; }
+.slash-busy { display: flex; align-items: center; gap: 8px; font-size: var(--fs-small); color: var(--muted); }
+.sys-clear-note { margin: 0; font-size: var(--fs-small); color: var(--muted); }

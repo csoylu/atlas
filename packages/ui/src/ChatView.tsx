@@ -30,8 +30,6 @@ export function ChatView(props: {
   onOpenChat(cardId: string | null): void;
   /** Open an agent's main chat (App: creates it if needed, refreshes the agents, navigates). */
   onOpenMain(agentId: string): void;
-  /** `/clear` typed in the composer: start a fresh main chat with the agent. */
-  onClear(agentId: string): void;
   onOpenCard(id: string): void;
   onError(e: unknown): void;
 }) {
@@ -98,7 +96,6 @@ function ChatWithPanel(props: Parameters<typeof ChatView>[0] & { chat: Card }) {
         cards={props.cards}
         quote={quote}
         onQuoteClear={() => setQuote(null)}
-        onClear={props.onClear}
         hiddenDocs={hidden ? tabs.length : 0}
         onShowDocs={() => setHidden(false)}
         onHideDocs={show ? () => setHidden(true) : undefined}

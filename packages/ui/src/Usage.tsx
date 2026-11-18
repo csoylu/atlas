@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from 'react';
+import { useEffect, useRef, useState, type ReactNode } from 'react';
 import { CHATGPT_USAGE_URL, type ChatUsage, type Effort, type Model, type UsageSummary } from '@atlas/shared';
 import { api } from './api.ts';
 import { ago, QUOTA_WARN, resetLabel } from './PlanAccounts.tsx';
@@ -26,7 +26,7 @@ export function useChatUsage(cardId: string, stream: MessageStream, onError: (e:
  * the picker.
  */
 /** `send`: the composer's teal send button (a submit button of the form around it), after the model pill. */
-export function ComposerMeta(props: { usage: ChatUsage | null; plan: boolean; pick?: PickProps; send?: { disabled: boolean } }) {
+export function ComposerMeta(props: { usage: ChatUsage | null; plan: boolean; pick?: PickProps; send?: { disabled: boolean }; attach?: ReactNode }) {
   const u = props.usage;
   const pct = contextPct(u);
   const level = pct === null ? '' : pct >= 70 ? ' full' : pct >= 50 ? ' warm' : '';
@@ -66,6 +66,7 @@ export function ComposerMeta(props: { usage: ChatUsage | null; plan: boolean; pi
         )}
       </span>
       {props.pick && <PickMenu {...props.pick} />}
+      {props.attach}
       {props.send && (
         <button type="submit" className="send-btn" aria-label="Send" title="Send (Enter)" disabled={props.send.disabled}>
           <svg viewBox="0 0 16 16" width="14" height="14" fill="none" stroke="currentColor" strokeWidth="1.7" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">

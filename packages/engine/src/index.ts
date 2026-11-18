@@ -7,6 +7,7 @@ import { Agents } from './agents.ts';
 import { Models, realProviders, type ProviderFactory } from './models.ts';
 import { Runner } from './runner.ts';
 import { Rewinds } from './rewind.ts';
+import { Slash } from './slash.ts';
 import { FileLog } from './fileLog.ts';
 import { Snapshots } from './snapshots.ts';
 import { Dispatcher } from './dispatcher.ts';
@@ -76,6 +77,7 @@ export interface Engine {
   agents: Agents;
   runner: Runner;
   rewinds: Rewinds;
+  slash: Slash;
   dispatcher: Dispatcher;
   settings: Settings;
   documents: Documents;
@@ -134,12 +136,14 @@ export async function startEngine(opts: EngineOptions): Promise<Engine> {
   const runner = new Runner(db, bus, kanban, agents, models, memories, schedules, { fileLog, dataDir: opts.dataDir, leaseMs: opts.leaseMs, maxTurns: opts.maxTurns, usage, user: () => settings.user(), documents, cleanup, review, isVoiceChat: voiceChat ? (id) => voiceChat.isVoiceChat(id) : undefined });
   const rewinds = new Rewinds(db, bus, kanban, agents, runner, opts.dataDir, fileLog);
   const dispatcher = new Dispatcher(bus, kanban, agents, models, settings, runner);
+  const slash = new Slash(db, bus, kanban, runner);
   const server = createApi({
     kanban,
     agents,
     models,
     runner,
     rewinds,
+    slash,
     dispatcher,
     settings,
     documents,
@@ -194,6 +198,7 @@ export async function startEngine(opts: EngineOptions): Promise<Engine> {
     agents,
     runner,
     rewinds,
+    slash,
     dispatcher,
     settings,
     documents,
