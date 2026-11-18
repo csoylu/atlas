@@ -21,6 +21,7 @@ import { envWithSecrets, type SecretStore } from './secrets.ts';
 import { createApi } from './api.ts';
 import { Schedules } from './schedules.ts';
 import { Auth, isLoopbackHost } from './auth.ts';
+import { screenshotAnswer } from './screenshot.ts';
 import { Local } from './local.ts';
 import { Accounts } from './accounts.ts';
 import { ChatGpt, type ChatGptOptions } from './chatgpt.ts';
@@ -140,7 +141,7 @@ export async function startEngine(opts: EngineOptions): Promise<Engine> {
   const fileLog = new FileLog(db, new Snapshots(join(opts.dataDir, 'checkpoints')));
   const review = new MemoryReview(db, kanban, memories, models, agents, settings, usage);
   if (opts.memoryReview === false) review.after = () => {};
-  const runner = new Runner(db, bus, kanban, agents, models, memories, schedules, { fileLog, dataDir: opts.dataDir, leaseMs: opts.leaseMs, maxTurns: opts.maxTurns, usage, user: () => settings.user(), documents, cleanup, review, isVoiceChat: voiceChat ? (id) => voiceChat.isVoiceChat(id) : undefined });
+  const runner = new Runner(db, bus, kanban, agents, models, memories, schedules, { fileLog, dataDir: opts.dataDir, leaseMs: opts.leaseMs, maxTurns: opts.maxTurns, usage, user: () => settings.user(), documents, cleanup, review, isVoiceChat: voiceChat ? (id) => voiceChat.isVoiceChat(id) : undefined, engine: () => ({ url, cookie: () => (auth.enabled ? auth.issue().token : null), answer: (method, path) => screenshotAnswer(kanban, method, path) }) });
   const rewinds = new Rewinds(db, bus, kanban, agents, runner, opts.dataDir, fileLog);
   const dispatcher = new Dispatcher(bus, kanban, agents, models, settings, runner);
   const slash = new Slash(db, bus, kanban, runner);

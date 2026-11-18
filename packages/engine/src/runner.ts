@@ -28,6 +28,7 @@ import {
   type Reading,
 } from './context.ts';
 import { runTool, toolSpecs } from './tools.ts';
+import type { EngineAccess } from './screenshot.ts';
 import { withPictures } from './images.ts';
 import { taskImageBlocks, withTaskImages, workspaceName } from './taskImages.ts';
 import { cardToolSpecs, describeCard, isCardTool, runCardTool, type Terminal } from './cardTools.ts';
@@ -78,6 +79,8 @@ export interface RunnerOptions {
   user?: () => { name: string; about: string | null };
   /** The direct chat Master talks to by voice (desktop voice mode): its replies are read aloud. */
   isVoiceChat?: (cardId: string) => boolean;
+  /** This engine's own address and a session cookie (server mode), for the screenshot tool (#133). */
+  engine?: () => Omit<EngineAccess, 'agentId'>;
   /** Documents and side panels (panel_open / panel_close; file tools re-index the workspace). */
   documents?: Documents;
   /** The weekly memory cleanup (#83): its cards get memory_review and memory_propose. */
@@ -567,6 +570,7 @@ export class Runner {
                   onSpawn: (pid) => this.db.prepare('UPDATE tool_calls SET pid = ? WHERE id = ?').run(pid, lastInsertRowid),
                   onDetail: (d) => (detail = d),
                   onOutput: live.push,
+                  ...(this.opts.engine ? { engine: { ...this.opts.engine(), agentId: agent.id } } : {}),
                 });
               const log = this.opts.fileLog;
               r = await (log ? log.track(cardId, workdir, u.name, u.input, exec) : exec()).finally(live.stop);

@@ -106,7 +106,7 @@ type Spec = Omit<RowModel, 'tone' | 'meta' | 'short' | 'detail' | 'weight'> & Pa
 const FAILED: Record<string, string> = {
   read_file: 'Couldn’t read', write_file: 'Couldn’t write', edit_file: 'Couldn’t edit', list_files: 'Couldn’t list',
   grep: 'Couldn’t search', glob: 'Couldn’t find files', shell: 'Couldn’t run', shell_output: 'Couldn’t check',
-  shell_kill: 'Couldn’t stop', web_fetch: 'Couldn’t fetch', web_search: 'Couldn’t search the web',
+  shell_kill: 'Couldn’t stop', web_fetch: 'Couldn’t fetch', screenshot: 'Couldn’t take a screenshot', web_search: 'Couldn’t search the web',
   task_create: 'Couldn’t create', task_update: 'Couldn’t update', task_message: 'Couldn’t message', task_show: 'Couldn’t open',
   task_list: 'Couldn’t list tasks', task_block: 'Couldn’t ask you', task_request_review: 'Couldn’t send for review',
   task_complete: 'Couldn’t finish the task', history_search: 'Couldn’t search its history', canvas_create: 'Couldn’t create canvas',
@@ -247,6 +247,15 @@ function describe(name: string, o: Input, out: string, ok: boolean, detail?: Too
       const page = ok ? fetchedPage(out, str(o.url)) : undefined;
       const url = shortUrl(str(o.url) ?? '');
       return { icon: 'link', verb: 'Fetched', running: 'Fetching', object: url, rest: page?.title, meta: page ? [{ text: charsText(page.chars) }] : [], detail: 'excerpt', short: { verb: 'fetched', obj: cut(domainOf(str(o.url) ?? ''), 30) } };
+    }
+    case 'screenshot': {
+      // #133: a picture of the app or a mockup; the picture itself shows as a thumbnail under the row.
+      const target = str(o.target) ?? '';
+      const size = `${num(o.width) ? o.width : 1440} px${o.theme === 'dark' || o.theme === 'light' ? ` · ${o.theme}` : ''}`;
+      const refused = ok ? /Writes refused/.test(out) : false;
+      const errors = ok ? /Page errors \((\d+)\)/.exec(out)?.[1] : undefined;
+      const meta = [{ text: size }, ...(errors ? [{ text: plural(Number(errors), 'page error') }] : []), ...(refused ? [{ text: 'writes refused' }] : [])];
+      return { icon: 'canvas', verb: 'Screenshot', running: 'Taking a screenshot of', object: target, mono: true, meta, detail: 'generic', short: { verb: 'took a screenshot of', obj: cut(target, 30) } };
     }
     case 'web_search': {
       const q = str(o.query) ?? '';

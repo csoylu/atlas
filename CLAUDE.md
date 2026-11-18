@@ -79,6 +79,13 @@ messages or the composer, the modal or panel off-screen, uncaught page errors, a
 - `--widths 390`, `--only chat,modal` (screen-name prefixes) to narrow a run; a full run takes ~75 s.
 - Run it after any UI layout change; the acceptance bar is « no issues » at all widths.
 
+**Screenshot tool** (#133, `packages/engine/src/screenshot.ts`): agents have a built-in `screenshot` tool, one picture
+of a route (`#/board`) or a workspace page (`pages/x.html`, `/api/files/<agent>/…`) at a width/height and theme, with
+optional `clip`, `full_page`, `wait_for` and `actions` (click, type, press). It runs a fresh headless Chrome against the
+engine it runs in (no port lookup), refuses every write from the page (the main-chat lookup gets a read-only answer),
+fails after 15 s naming what never appeared, and returns page errors + refused writes with the picture (saved under
+`screenshots/`). Unit tests: `screenshot.test.ts` (fast); real Chrome: `test/screenshot.chrome.test.ts` (slow project).
+
 ## Releases (#123, docs/updater.md)
 - **One push to main = one CHANGELOG.md entry = one release.** Whoever pushes to main adds exactly one entry at the
   top: `## Fixed|Added|Changed|Breaking · #task · One plain sentence for Master`, then optional details. The version

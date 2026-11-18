@@ -8,6 +8,7 @@ import { defineConfig } from 'vitest/config';
 const include = ['packages/*/src/**/*.test.ts', 'packages/*/test/**/*.test.ts', 'apps/*/src/**/*.test.ts', 'scripts/**/*.test.ts'];
 const slow = [
   'packages/engine/test/crash.test.ts',
+  'packages/engine/test/screenshot.chrome.test.ts',
   'packages/voice/**/*.test.ts',
   'apps/desktop/src/voice.test.ts',
   'packages/engine/src/voiceLoop.test.ts',

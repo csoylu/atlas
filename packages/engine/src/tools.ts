@@ -12,6 +12,7 @@ import type { Background } from './background.ts';
 import { findSpans, replaceSpans, type Span } from './fuzzy.ts';
 import { globFiles, grep, isBinary, shownPath, SKIP_DIRS } from './search.ts';
 import { fetchPage, headTail } from './web.ts';
+import { FULL_PAGE_MAX, PHONE_BELOW, TIMEOUT_MS, takeScreenshot, type EngineAccess } from './screenshot.ts';
 
 export interface ToolContext {
   workdir: string;
@@ -29,6 +30,8 @@ export interface ToolContext {
   onDetail?: (d: ToolCallDetail) => void;
   /** Output of a running foreground shell command, as it comes (the chat's live tail). */
   onOutput?: (chunk: string) => void;
+  /** The engine this agent runs in, for screenshot (#133); omitted = screenshot is refused. */
+  engine?: EngineAccess;
 }
 
 interface Tool<S extends z.ZodType> {
@@ -389,6 +392,45 @@ export const TOOLS = {
       if (page.text.length <= max_chars) return head + page.text;
       const path = await saveOutput(ctx, 'web', head + page.text, 'md');
       return head + headTail(page.text, max_chars, `full text (${page.text.length} chars) in ${path}: read_file it with offset, or grep it`);
+    },
+  }),
+  screenshot: tool({
+    description:
+      'Take a screenshot of the running Atlas UI or of a page in a workspace, and get it back as a picture (also saved to ' +
+      'screenshots/ in your workspace). target: an app route (`#/chat/paris`, `#/board`, `/` = home), a file in your ' +
+      'workspace (`pages/x.html`), or another agent\'s `/api/files/<agent>/pages/x.html`; other sites are refused (use ' +
+      'web_fetch). Read-only: the page sees your live data, but every write it tries (POST, PUT, DELETE…) is refused and ' +
+      `listed. Waits for the page to load, fonts and a quiet network (then wait_for), ${TIMEOUT_MS / 1000} s at most, else it ` +
+      `fails and says what was missing. Under ${PHONE_BELOW} px wide: phone mode (mobile, touch). actions run before the ` +
+      'shot: {click: selector}, {type: selector, text}, {press: "Escape" | "Meta+k"}. Page errors and console.error lines ' +
+      'come back with the picture. Needs Google Chrome.',
+    input: z.object({
+      target: z.string().min(1).describe('#/route, a workspace file path, or /api/files/<agent>/<path>'),
+      width: z.number().int().min(320).max(2560).default(1440),
+      height: z.number().int().min(320).max(2000).default(900),
+      theme: z.enum(['dark', 'light']).optional().describe("omitted: the page's own choice"),
+      full_page: z.boolean().default(false).describe(`the whole page height (up to ${FULL_PAGE_MAX} px), not just the viewport`),
+      clip: z.string().optional().describe('CSS selector: shoot only this element'),
+      wait_for: z.string().optional().describe('CSS selector that must be visible before the shot (after actions)'),
+      actions: z
+        .array(z.union([z.object({ click: z.string() }), z.object({ type: z.string(), text: z.string() }), z.object({ press: z.string() })]))
+        .max(20)
+        .optional()
+        .describe('steps before the shot, in order'),
+    }),
+    run: async (o, ctx) => {
+      if (!ctx.engine) throw new Error('screenshot is not available here (no engine address)');
+      const shot = await takeScreenshot(o, { engine: ctx.engine, workdir: ctx.workdir, signal: ctx.signal, onSpawn: ctx.onSpawn });
+      const image = await describeImage(inside(ctx.workdir, shot.file), shot.bytes);
+      const lines = [
+        `Screenshot of ${shot.url} (${ctx.engine.url}, this Atlas engine: live data, writes refused)`,
+        `Viewport: ${shot.viewport}, ${shot.mode === 'phone' ? 'phone mode (mobile, touch)' : 'desktop mode'}, scale 2, theme ${o.theme ?? 'page default'}`,
+        `Saved: ${shot.file}`,
+        imageLine(image),
+        shot.errors.length ? `Page errors (${shot.errors.length}):\n  ${shot.errors.join('\n  ')}` : 'Page errors: none',
+        ...(shot.refused.length ? [`Writes refused (read-only):\n  ${shot.refused.join('\n  ')}`] : []),
+      ];
+      return { output: lines.join('\n'), images: [image] };
     },
   }),
 } satisfies Record<string, Tool<z.ZodType>>;
