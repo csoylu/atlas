@@ -1913,7 +1913,7 @@ button.msg-quote:hover { color: var(--text); }
 
 /* v3: a task's thread beside the main chat (ThreadPanel). */
 /* Sidebar: running tasks. */
-.side-running { margin-top: 12px; }
+.side-running { margin-top: 12px; display: flex; flex-direction: column; gap: 1px; min-width: 0; } /* buttons shrink to fit: as a column they take the sidebar width, so long titles end in an ellipsis */
 .running-item { gap: 10px; }
 .running-item .running-ref { color: var(--muted); font-size: var(--fs-small); flex: none; }
 .running-item .running-title { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
