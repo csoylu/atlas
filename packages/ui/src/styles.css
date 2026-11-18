@@ -246,7 +246,7 @@ select { padding: 4px 8px; }
 .chat-hist-item .dot-avatar { width: 18px; height: 18px; }
 .dot-avatar { --hue: 210; flex: none; width: 16px; height: 16px; border-radius: 50%; display: grid; place-items: center; font-size: 9px; font-weight: 600; line-height: 1; }
 .dot-avatar[style] { background: hsl(var(--hue) var(--tb-s) var(--tb-l)); color: hsl(var(--hue) var(--ti-s) var(--ti-l)); }
-.dot-avatar.face { background: none; border-radius: 30%; overflow: hidden; }
+.dot-avatar.face { background: none; color: transparent; font-size: 12px; border-radius: 30%; overflow: hidden; }
 .face svg { display: block; width: 100%; height: 100%; }
 .face .tile { fill: hsl(var(--hue) var(--fb-s) var(--fb-l)); }
 .face .fig, .face .initial { fill: hsl(var(--hue) var(--fi-s) var(--fi-l)); }
@@ -503,7 +503,8 @@ main { flex: 1; display: flex; min-height: 0; min-width: 0; position: relative; 
 .msg .who { display: flex; align-items: center; gap: 8px; font-size: 13.5px; color: var(--text); margin-bottom: 6px; font-weight: 600; }
 .msg .who .dot-avatar { width: 20px; height: 20px; }
 .msg.user .who { justify-content: flex-end; color: var(--muted); font-weight: 500; }
-.chat-pane .msg.assistant .msg-body { padding-left: 28px; }
+/* The agent's text lines up with its name, past the face (#104). */
+.msg.assistant .msg-body { padding-left: 28px; }
 .msg.cont { margin-top: -12px; }
 /* Reading typography for prose (chat + docs); the rest of the UI stays Linear-dense. */
 .msg .text { white-space: pre-wrap; line-height: 1.6; font-size: 15.5px; overflow-wrap: anywhere; letter-spacing: -0.003em; }
@@ -867,7 +868,8 @@ button.tool .icon { color: var(--muted); font-family: var(--mono); }
   .sheet { border-radius: 0; border-width: 0; }
   .nav-item, .chat-hist-item { height: 40px; }
   .nav-item.agent-item { height: 44px; }
-  .chat-pane .msg.assistant .msg-body { padding-left: 0; }
+  .msg.assistant .msg-body { padding-left: 0; }
+  .msg.asking .msg-body { padding-left: 14px; }
   .board { padding: 12px; scroll-snap-type: x mandatory; scroll-padding-left: 12px; }
   .column { flex: 0 0 min(calc(100vw - 48px), 310px); max-width: none; scroll-snap-align: start; scroll-margin-left: 12px; }
   .column.folded { flex: 0 0 40px; min-width: 40px; }
@@ -1127,7 +1129,7 @@ button.tool .icon { color: var(--muted); font-family: var(--mono); }
   display: inline-flex; align-items: center; gap: 6px; height: 28px; font-size: 13px; font-weight: 500; padding: 0 9px; border-radius: 6px;
   border: 1px solid var(--line-2); color: var(--text); white-space: nowrap;
 }
-.cm-pill.st-chip { height: 26px; border: 0; }
+.cm-pill.st-chip { height: 26px; border: 0; padding: 0 8px; font-weight: 550; }
 .cm-pill.stopped { color: var(--negative); }
 .cm-origin { background: none; border: 0; padding: 0 4px; color: var(--accent); font-size: 13px; }
 .cm-origin:hover { text-decoration: underline; }
@@ -1926,7 +1928,7 @@ button.msg-quote:hover { color: var(--text); }
 /* v3: a task's thread beside the main chat (ThreadPanel). */
 /* Sidebar: running tasks. */
 .side-running { margin-top: 12px; }
-.running-item { gap: 8px; }
+.running-item { gap: 10px; }
 .running-item .running-ref { color: var(--muted); font-size: 12.5px; flex: none; }
 .running-item .running-title { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 @media (min-width: 901px) and (max-width: 1280px) { .app:has(.side-doc.side) .side-running { display: none; } }
