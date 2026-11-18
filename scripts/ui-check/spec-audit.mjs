@@ -69,7 +69,7 @@ export const SPEC_AUDIT = (W, scale, exceptions, minContrast) => `((W, SCALE, EX
     if (!fg || !bg) continue;
     // Separators (·, —) carry no information. Dimmed text (opacity < 1: .dim, disabled-looking, fading in) is measured
     // too and reported as « dimmed »; opacity under 0.5 is a transition frame or a hidden control, skipped.
-    if (!/[\p{L}\p{N}]/u.test(txt(e))) continue;
+    if (!/[\\p{L}\\p{N}]/u.test(txt(e))) continue;
     const op = opacityOf(e);
     if (op < 0.5) continue;
     const eff = over([fg[0], fg[1], fg[2], fg[3] * op], bg);
@@ -94,7 +94,8 @@ export const SPEC_AUDIT = (W, scale, exceptions, minContrast) => `((W, SCALE, EX
       if (Math.abs(got - val) > tol) { issues.push(label + ': ' + got.toFixed(1) + 'px, spec ' + val + 'px (' + tag(e) + ')'); break; }
     }
   };
-  if (!phone) want('.sidebar', 'w', 244, 'sidebar width');
+  // The sidebar narrows to an icon rail beside a side panel (styles.css @media 901–1280 + .app:has(.side-doc.side)).
+  if (!phone && !document.querySelector('.side-doc.side')) want('.sidebar', 'w', 244, 'sidebar width');
   want('.nav-item:not(.agent-item)', 'h', phone ? 40 : 32, 'nav row height');
   want('.nav-item.agent-item', 'h', phone ? 44 : 36, 'agent row height');
   want('.nav-item.agent-item .dot-avatar', 'w', 22, 'sidebar avatar');
@@ -105,7 +106,7 @@ export const SPEC_AUDIT = (W, scale, exceptions, minContrast) => `((W, SCALE, EX
   want('.card-top .dot-avatar', 'w', 20, 'card avatar');
   want('.chat-row.steps > .chat-row-line, .chat-row.nested > .chat-row-line', 'h', matchMedia('(pointer: coarse)').matches ? 44 : 36, 'step row height', 1.5);
   want('.chat-pin', 'h', matchMedia('(pointer: coarse)').matches ? 44 : 40, 'pinned task height');
-  if (!phone) want('.column', 'w', 300, 'board lane width');
+  if (!phone) want('.column:not(.folded)', 'w', 300, 'board lane width'); // empty lanes fold to a 40 px rail
   if (W > 760) want('.card-modal', 'w', 720, 'task view width');
   if (!phone) for (const e of document.querySelectorAll('.chat-pane .composer')) { if (shown(e) && e.getBoundingClientRect().width > 781) { issues.push('composer wider than the 780 px column: ' + Math.round(e.getBoundingClientRect().width)); break; } }
 
