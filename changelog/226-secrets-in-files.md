@@ -1,0 +1,3 @@
+## Fixed · #226 · A secret value an agent writes into a file no longer reaches the database, the Library or the files API: it shows as [secret NAME]
+
+Artifact versions, titles and names are stored with every known secret value replaced, whatever road wrote them (an agent's shell, file tools, artifact_create / artifact_update, restore); `/api/files/…` serves text files the same way. Versions stored before a value was known are rewritten at each start and whenever a secret's value is added or changed. The file in the agent's workspace and the rewind snapshot on disk keep what the agent wrote (design §10b). Agents are told never to write a value into a file and to pass it by env.
