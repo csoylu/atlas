@@ -23,7 +23,7 @@ const NOTES = {
   '0.5.0': '## Fixed · #101 · Chats no longer lose the last message when the window is closed during a reply\n\nThe reply is saved before the window closes. No migration.',
   '0.5.1': '## Added · #102 · Agents can take a screenshot of Atlas or of a mockup in one step and see it\n\nNew `screenshot` tool.\n\n| option | meaning |\n|---|---|\n| `width` | page width in px |\n| `theme` | `dark` or `light` |\n\nUnder 500 px it shoots as a phone.',
   '0.6.0': '## Changed · #103 · Settings → About says when Atlas last looked for an update and why a check failed, with a deliberately long sentence to test wrapping on a phone screen',
-  '0.6.1': '## Fixed · #104 · A very_long_unbroken_token_that_could_overflow_the_dialog_on_a_phone_AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA\n\nBody.',
+  '0.6.1': '## Fixed · #104 · A very_long_unbroken_token_that_could_overflow_the_dialog_on_a_phone_AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA\n\nSee packages/ui/src/components/very/deeply/nested/folder/with/a/long_file_name_that_never_breaks.tsx and `https://github.com/csoylu/atlas/blob/main/packages/engine/src/updater/apply_update_and_restart.ts`.',
   '0.7.0': '## Breaking · #105 · Settings are stored in a new place\n\nOpen Atlas once, nothing to do.',
 };
 
@@ -349,22 +349,33 @@ test('an update clicked while two agents are working: they stop with Atlas, resu
   }
 });
 
-// BUG (found by the screenshots of #124, reported on #123): a release title or note with a long unbroken token (a path, a URL)
-// is clipped and the notes box scrolls sideways, at 1440 and at 390 px. Goes red when fixed: then remove test.fail().
-test('UI · a long unbroken word in the release notes wraps instead of scrolling sideways', async ({ page }) => {
-  test.fail();
-  await page.setViewportSize({ width: 390, height: 844 });
-  const r = await rig('0.4.0', ['0.6.1']);
-  try {
-    await r.atlas.engine.updater.check();
-    await page.goto(r.atlas.url + '/#/inbox');
-    await page.getByRole('button', { name: 'Menu' }).click();
-    await page.locator('.update-badge').click();
-    const over = await page.locator('.update-notes').evaluate((e) => e.scrollWidth - e.clientWidth);
-    expect(over, 'px of sideways scroll in the notes box').toBeLessThanOrEqual(0);
-  } finally {
-    r.proc.kill();
-    await r.atlas.stop();
-    await r.gh.close();
+// Found by the screenshots of #124 (#163): a release title or note with a long unbroken token (a path, a URL) was clipped
+// and the notes box scrolled sideways, at 1440 and at 390 px. Title and notes now wrap anywhere.
+for (const width of [1440, 390]) {
+  for (const theme of ['light', 'dark'] as const) {
+    test(`UI · a long unbroken word in the release notes wraps instead of scrolling sideways (${width} px, ${theme})`, async ({ page }) => {
+      await page.emulateMedia({ colorScheme: theme });
+      await page.setViewportSize({ width, height: width < 500 ? 844 : 900 });
+      const r = await rig('0.4.0', ['0.6.1']);
+      try {
+        await r.atlas.engine.updater.check();
+        await page.goto(r.atlas.url + '/#/inbox');
+        if (width < 500) await page.getByRole('button', { name: 'Menu' }).click();
+        await page.locator('.update-badge').click();
+        const notes = page.locator('.update-notes');
+        await expect(notes).toContainText('long_file_name_that_never_breaks');
+        const over = await notes.evaluate((e) => e.scrollWidth - e.clientWidth);
+        expect(over, 'px of sideways scroll in the notes box').toBeLessThanOrEqual(0);
+        for (const sel of ['.update-note-title', '.update-note-body p']) {
+          const clipped = await page.locator(sel).first().evaluate((e) => e.scrollWidth - e.clientWidth);
+          expect(clipped, `px clipped in ${sel}`).toBeLessThanOrEqual(0);
+        }
+        await page.screenshot({ path: join(SHOTS, `long-word-${width}-${theme}.png`) });
+      } finally {
+        r.proc.kill();
+        await r.atlas.stop();
+        await r.gh.close();
+      }
+    });
   }
-});
+}

@@ -6,6 +6,10 @@ computed by `scripts/release/changelog.mjs` from the oldest entry to the newest,
 `Fixed` → patch, `Added` or `Changed` → minor, `Breaking` (data or settings stop working without action) → major.
 Never type a version number.
 
+## Fixed · #163 · A long path or URL in the update dialog's release notes now wraps instead of being clipped and scrolling sideways
+
+`overflow-wrap: anywhere` on the note title and body (code blocks wrap too). The e2e test `updater.spec.ts` › "long unbroken word" is no longer `test.fail`: it checks 1440 and 390 px in both themes.
+
 ## Fixed · #162 · When GitHub answers the update check with a web page (wifi login page, proxy), Settings → About now says so in a sentence instead of a JSON parser message
 
 The check still fails loudly: the error reads « GitHub did not answer with a release list (a wifi login page or a proxy may be in the way) », and the engine log keeps the real cause (content type, start of the page, parser error).
