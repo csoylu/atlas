@@ -4,9 +4,9 @@ import { api } from './api.ts';
 import { ago, QUOTA_WARN, resetLabel } from './PlanAccounts.tsx';
 import type { MessageStream } from './useMessages.ts';
 
-/** 1234 → "1.2k", 3_400_000 → "3.4M". */
-export const tok = (n: number) =>
-  n < 1000 ? String(n) : n < 1e6 ? `${+(n / 1000).toFixed(n < 1e4 ? 1 : 0)}k` : `${+(n / 1e6).toFixed(n < 1e7 ? 1 : 0)}M`;
+import { axisTicks, dayTotal, tok, usageHeadline } from './usageStats.ts';
+
+export { tok };
 
 /** This chat's usage, live: re-read whenever the engine records a call for this card. */
 export function useChatUsage(cardId: string, stream: MessageStream, onError: (e: unknown) => void): ChatUsage | null {
@@ -292,11 +292,7 @@ export function UsageSection(props: { stream: MessageStream; onError(e: unknown)
       </section>
     );
 
-  const today = s.perDay.at(-1)!;
-  const todayTokens = today.claude_code + today.anthropic + today.chatgpt + today.openai_compat;
-  const max = Math.max(1, ...s.perDay.map((d) => d.claude_code + d.anthropic + d.chatgpt + d.openai_compat));
-  const active = s.perDay.filter((d) => d.claude_code + d.anthropic + d.chatgpt + d.openai_compat > 0).length;
-  const peak = s.perDay.reduce((a, d) => Math.max(a, d.claude_code + d.anthropic + d.chatgpt + d.openai_compat), 0);
+  const { today: todayTokens, todayCalls, max, active, peak } = usageHeadline(s);
   const usedPlan = s.models.some((m) => m.provider === 'chatgpt');
   const sources = SOURCES.filter((src) => s.perDay.some((d) => d[src.key] > 0));
   const month = (d: string) =>
@@ -319,7 +315,7 @@ export function UsageSection(props: { stream: MessageStream; onError(e: unknown)
         <div className="usage-card">
           <div className="usage-stats">
             <Stat label="Tokens, 30 days" value={tok(s.total.input + s.total.output)} sub={`${tok(s.total.input)} in · ${tok(s.total.output)} out`} />
-            <Stat label="Today" value={tok(todayTokens)} sub={`${s.models.reduce((a, m) => a + m.today.calls, 0)} calls`} />
+            <Stat label="Today" value={tok(todayTokens)} sub={`${todayCalls} call${todayCalls === 1 ? '' : 's'}`} />
             <Stat label="Peak day" value={tok(peak)} sub={`${active} active day${active === 1 ? '' : 's'}`} />
             <Stat
               label="From cache"
@@ -329,7 +325,7 @@ export function UsageSection(props: { stream: MessageStream; onError(e: unknown)
           </div>
           <div className="usage-chart" role="img" aria-label={`Tokens per day over ${s.days} days`}>
             {s.perDay.map((d) => {
-              const total = d.claude_code + d.anthropic + d.chatgpt + d.openai_compat;
+              const total = dayTotal(d);
               return (
                 <div key={d.day} className="usage-col" title={`${month(d.day)}: ${total.toLocaleString()} tokens`}>
                   <div className="usage-stack" style={{ height: `${(total / max) * 100}%` }}>
@@ -339,17 +335,20 @@ export function UsageSection(props: { stream: MessageStream; onError(e: unknown)
               );
             })}
           </div>
-          <div className="usage-axis">
-            <span>{month(s.perDay[0]!.day)}</span>
-            <span className="usage-legend">
-              {sources.map((src) => (
-                <span key={src.key}>
-                  <i className={'src-' + src.key} />
-                  {src.label}
-                </span>
-              ))}
-            </span>
-            <span>Today</span>
+          <div className="usage-axis" aria-hidden="true">
+            {axisTicks(s.perDay.map((d) => d.day), month).map((t) => (
+              <span key={t.day} className={t.at < 8 ? 'usage-tick start' : t.at > 92 ? 'usage-tick end' : 'usage-tick'} style={{ left: `${t.at}%` }}>
+                {t.label}
+              </span>
+            ))}
+          </div>
+          <div className="usage-legend">
+            {sources.map((src) => (
+              <span key={src.key}>
+                <i className={'src-' + src.key} />
+                {src.label}
+              </span>
+            ))}
           </div>
           {usedPlan && (
             <div className="usage-plan">
