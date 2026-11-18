@@ -1,4 +1,5 @@
 import { defineConfig } from 'vitest/config';
+import RetryReporter from './scripts/test/retryReporter.ts';
 
 // Two projects (QA, 17 Nov 2026):
 //  - fast: everything except the slow suites. This is `npm test`; it runs in seconds and is what tasks should run.
@@ -17,10 +18,12 @@ const slow = [
 
 // A failed test runs again once (twice in CI) and vitest marks it as retried, so a flaky test is visible, not hidden. A test
 // that needs its retry is a bug in the test: fix it (see packages/engine/test/kit). TEST_RETRY=0 turns it off.
+// scripts/test/retryReporter.ts lists every retried test by name (console, GitHub annotation, job summary) (#178).
 const retry = Number(process.env.TEST_RETRY ?? (process.env.CI ? 2 : 1));
 
 export default defineConfig({
   test: {
+    reporters: ['default', new RetryReporter()],
     projects: [
       { test: { name: 'fast', include, exclude: [...slow, '**/node_modules/**'], retry } },
       { test: { name: 'slow', include: slow, fileParallelism: false, testTimeout: 120_000 } },
