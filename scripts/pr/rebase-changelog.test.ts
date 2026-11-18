@@ -93,6 +93,28 @@ describe('rebaseChangelogOnly on real git repos', { timeout: 60_000 }, () => {
     expect(w.state()).toEqual(before);
   });
 
+  it('fetches and pushes by URL, never by remote name (so no git version moves the clone’s origin/* refs)', () => {
+    const w = world();
+    w.g('checkout', '-q', '-b', 'fix/2-mine');
+    const pr = w.commit('#2 the fix', { 'CHANGELOG.md': log(e('Fixed', 2, 'Mine'), e('Added', 1, 'First')) });
+    w.g('push', '-q', 'origin', 'fix/2-mine');
+    w.g('checkout', '-q', 'main');
+    w.commit('#3 main moves', { 'CHANGELOG.md': log(e('Fixed', 3, 'From main'), e('Added', 1, 'First')) });
+    w.g('push', '-q', 'origin', 'main');
+    const remotes = () => execFileSync('git', ['-C', w.validator, 'for-each-ref', 'refs/remotes/'], { encoding: 'utf8' });
+    const remotesBefore = remotes();
+    const trace = join(w.dev, '..', 'trace.txt');
+    rebaseChangelogOnly({ repo: w.validator, branch: 'fix/2-mine', sha: pr, env: { ...ENV, GIT_TRACE: trace } });
+    const cmds = readFileSync(trace, 'utf8').split('\n').filter((l) => /built-in: git (-C \S+ )?(fetch|push) /.test(l));
+    expect(cmds.filter((c) => / fetch /.test(c))).toHaveLength(1);
+    expect(cmds.filter((c) => / push /.test(c))).toHaveLength(1);
+    for (const c of cmds) {
+      expect(c).toContain(w.origin);
+      expect(c).not.toMatch(/ 'origin' | origin /);
+    }
+    expect(remotes()).toBe(remotesBefore);
+  });
+
   it('several commits, an entry with details written then edited: every commit replayed, the final entry on top', () => {
     const w = world();
     w.g('checkout', '-q', '-b', 'feat/4-big');

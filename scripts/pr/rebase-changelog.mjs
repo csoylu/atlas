@@ -73,7 +73,10 @@ export function rebaseChangelogOnly({ repo, branch, sha, base = 'main', remote =
   const ns = `refs/pr-rebase/${process.pid}-${Date.now()}`;
   let worktree = null;
   try {
-    git(['fetch', '-q', '--no-tags', '--refmap=', remote, `+refs/heads/${base}:${ns}/base`, `+refs/heads/${branch}:${ns}/head`]);
+    // From the remote's URL, not its name: a fetch by name also updates the clone's origin/<branch> refs on some git
+    // versions (2.56 does even with --refmap=), and the validator's clone must stay as it was.
+    const fetchUrl = git(['remote', 'get-url', remote]);
+    git(['fetch', '-q', '--no-tags', fetchUrl, `+refs/heads/${base}:${ns}/base`, `+refs/heads/${branch}:${ns}/head`]);
     const onto = git(['rev-parse', `${ns}/base`]);
     const oldHead = git(['rev-parse', `${ns}/head`]);
     if (!oldHead.startsWith(sha.toLowerCase()))
