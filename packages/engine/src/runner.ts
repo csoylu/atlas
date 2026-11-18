@@ -42,7 +42,7 @@ import type { Workflows } from './workflows.ts';
 import type { FileLog } from './fileLog.ts';
 import { Background, exitNote, type BgProcess } from './background.ts';
 import type { ShellEnv } from './shellEnv.ts';
-import type { Secrets } from './secrets.ts';
+import { REDACT_OVERLAP, type Secrets } from './secrets.ts';
 import { isSecretTool, redactSecretCalls, runSecretTool, secretToolSpecs } from './secretTools.ts';
 import { isPrTool, prToolSpecs, runPrTool, type PrToolContext } from './prTools.ts';
 import { filesRoot, projectRow, workspaceOf } from './projects.ts';
@@ -191,7 +191,7 @@ export class Runner {
     try {
       let text: string;
       try {
-        text = this.redact(exitNote(p)).text;
+        text = this.redact(exitNote(p, this.opts.secrets)).text;
       } catch (e) {
         text = `Background process ${p.id} ended. Its output is withheld: the secret store could not be read to hide secret values in it (${e instanceof Error ? e.message : String(e)}).`;
       }
@@ -580,6 +580,21 @@ export class Runner {
             let r: { output: string; isError: boolean; images?: ImageBlock[] };
             let detail: ToolCallDetail | null = null;
             const live = this.liveTail(Number(lastInsertRowid), cardId);
+            // Values a tool hid itself before cutting its output (#227), counted with those the runner hides below.
+            let preHidden = 0;
+            const s = this.opts.secrets;
+            const redactor = s && {
+              redact: (t: string) => {
+                const x = s.redact(t);
+                preHidden += x.hidden;
+                return x;
+              },
+              redactWindow: (...a: Parameters<Secrets['redactWindow']>) => {
+                const x = s.redactWindow(...a);
+                preHidden += x.hidden;
+                return x;
+              },
+            };
             const invalid = invalidToolInput(u.input);
             // Card, canvas and team tools run synchronously: what the tables gained in between is theirs (#138).
             const mark = this.opts.effects && !invalid && !isSecretTool(u.name) ? this.opts.effects.mark() : null;
@@ -633,7 +648,7 @@ export class Runner {
                   onOutput: live.push,
                   ...(this.opts.engine ? { engine: { ...this.opts.engine(), agentId: agent.id, filesRoot: filesRoot(this.db, agent.id, first.projectId) } } : {}),
                   ...(this.opts.shellEnv || this.opts.secrets ? { env: (command: string) => this.shellEnvFor(agent.id, card.projectId, command) } : {}),
-                  ...(this.opts.secrets ? { redact: (t: string) => this.redact(t).text } : {}),
+                  ...(redactor ? { redact: redactor } : {}),
                 });
               const log = this.opts.fileLog;
               r = await (log ? log.track(cardId, workdir, u.name, u.input, exec) : exec()).finally(live.stop);
@@ -642,7 +657,7 @@ export class Runner {
             let hidden = 0;
             try {
               const red = this.redact(r.output);
-              hidden = red.hidden;
+              hidden = preHidden + red.hidden;
               r = { ...r, output: red.text };
             } catch (e) {
               r = { output: `output withheld: the secret store could not be read to hide secret values in it (${e instanceof Error ? e.message : String(e)})`, isError: true };
@@ -913,7 +928,10 @@ export class Runner {
    * Display only, never stored: the result replaces it when the call ends.
    */
   private liveTail(id: number, cardId: string): { push(chunk: string): void; stop(): void } {
+    // The last TAIL_KEEP characters are shown (their last lines), with REDACT_OVERLAP more kept before them so a value
+    // crossing that cut is whole when it is hidden; the end may be a value still being written (#227).
     let out = '';
+    let cut = false;
     let timer: NodeJS.Timeout | null = null;
     let stopped = false;
     const send = () => {
@@ -923,7 +941,8 @@ export class Runner {
       if (row?.status !== 'running') return;
       let tail: string;
       try {
-        tail = this.redact(tailOf(out)).text;
+        const s = this.opts.secrets;
+        tail = tailOf(s ? s.redactWindow(out, out.length - TAIL_KEEP, out.length, { cutStart: cut, open: true }).text : out);
       } catch (e) {
         tail = `(output hidden: the secret store could not be read: ${e instanceof Error ? e.message : String(e)})`;
       }
@@ -931,7 +950,11 @@ export class Runner {
     };
     return {
       push: (chunk) => {
-        out = (out + chunk).slice(-8000);
+        out += chunk;
+        if (out.length > TAIL_KEEP + REDACT_OVERLAP) {
+          out = out.slice(-(TAIL_KEEP + REDACT_OVERLAP));
+          cut = true;
+        }
         timer ??= setTimeout(send, TAIL_MS);
       },
       stop: () => {
@@ -1282,6 +1305,8 @@ const toTiming = (r: ToolCallRow): ToolCallTiming => ({
 /** Lines of a running shell command's output sent to the chat, and how often. */
 export const TAIL_LINES = 12;
 const TAIL_MS = 300;
+/** Characters of a running command's output the live tail is cut from. */
+const TAIL_KEEP = 8000;
 
 /** The last `n` lines of a growing output (a trailing partial line counts). */
 export function tailOf(out: string, n = TAIL_LINES): string {

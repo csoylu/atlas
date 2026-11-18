@@ -3,6 +3,10 @@ import { randomUUID } from 'node:crypto';
 import { closeSync, mkdirSync, openSync, readSync, fstatSync } from 'node:fs';
 import { join } from 'node:path';
 import type { Db } from './store/db.ts';
+import { REDACT_OVERLAP, type Secrets } from './secrets.ts';
+
+/** Hides secret values in a cut part of a log (#227): Secrets.redactWindow. */
+type Redactor = Pick<Secrets, 'redactWindow'>;
 
 /**
  * Background shell processes (shell with background: true). Each one runs in its own process group, writes stdout and
@@ -112,11 +116,16 @@ export class Background {
     return p;
   }
 
-  /** New output since the last read (or from `offset`, in bytes), at most PAGE_BYTES; moves the read cursor. */
-  read(id: string, agentId: string, offset?: number): string {
+  /**
+   * New output since the last read (or from `offset`, in bytes), at most PAGE_BYTES; moves the read cursor. With a
+   * redactor, secret values are hidden before the page is cut out of the log (#227): a value crossing the page's edge is
+   * hidden whole, and one still being written at the end is left for the next read.
+   */
+  read(id: string, agentId: string, offset?: number, redact?: Redactor): string {
     const p = this.own(id, agentId);
     const from = offset ?? p.readOffset;
-    const { text, end, size } = readSlice(p.logPath, from, PAGE_BYTES);
+    let { text, start, end, size } = readSlice(p.logPath, from, PAGE_BYTES);
+    if (redact && end > start) ({ text, end } = redactPage(p.logPath, start, end, size, redact, p.status === 'running'));
     this.db.prepare('UPDATE background_processes SET read_offset = ? WHERE id = ?').run(end, id);
     const head = `${id}: ${describe(p)}`;
     if (end === from) return `${head}\n(no new output; ${size} bytes in total)`;
@@ -193,9 +202,9 @@ export function describe(p: BgProcess): string {
   return 'lost: the engine stopped while it ran, so it was killed at restart';
 }
 
-/** The system note posted when a background process ends: status and the tail of its output. */
-export function exitNote(p: BgProcess): string {
-  const { text, size } = readTail(p.logPath, NOTE_TAIL);
+/** The system note posted when a background process ends: status and the tail of its output (redacted before the cut, #227). */
+export function exitNote(p: BgProcess, redact?: Redactor): string {
+  const { text, size } = readTail(p.logPath, NOTE_TAIL, redact);
   return [
     `Background process ${p.id} (\`${p.command.length > 200 ? p.command.slice(0, 200) + '…' : p.command}\`) ${describe(p)}.`,
     size ? `Last output (${size} bytes in total, full log: ${p.logPath}):\n\`\`\`\n${text}\n\`\`\`` : 'It wrote no output.',
@@ -213,12 +222,12 @@ function signalGroup(pid: number | null, sig: NodeJS.Signals): void {
 }
 
 /** Bytes [from, from+max) of a file as text, cut back to the last newline when there is more. */
-function readSlice(path: string, from: number, max: number): { text: string; end: number; size: number } {
+function readSlice(path: string, from: number, max: number): { text: string; start: number; end: number; size: number } {
   let fd: number;
   try {
     fd = openSync(path, 'r');
   } catch {
-    return { text: '', end: from, size: 0 };
+    return { text: '', start: from, end: from, size: 0 };
   }
   try {
     const size = fstatSync(fd).size;
@@ -231,13 +240,13 @@ function readSlice(path: string, from: number, max: number): { text: string; end
       const nl = buf.lastIndexOf(10);
       if (nl > 0) take = nl + 1;
     }
-    return { text: buf.subarray(0, take).toString('utf8'), end: start + take, size };
+    return { text: buf.subarray(0, take).toString('utf8'), start, end: start + take, size };
   } finally {
     closeSync(fd);
   }
 }
 
-function readTail(path: string, max: number): { text: string; size: number } {
+function readTail(path: string, max: number, redact?: Redactor): { text: string; size: number } {
   let fd: number;
   try {
     fd = openSync(path, 'r');
@@ -247,11 +256,39 @@ function readTail(path: string, max: number): { text: string; size: number } {
   try {
     const size = fstatSync(fd).size;
     const len = Math.min(max, size);
-    const buf = Buffer.alloc(len);
-    readSync(fd, buf, 0, len, size - len);
-    const text = buf.toString('utf8').replace(/\s+$/, '');
+    const raw = redact ? redactPage(path, size - len, size, size, redact, false).text : readBytes(fd, size - len, size).toString('utf8');
+    const text = raw.replace(/\s+$/, '');
     return { text: (len < size ? '…' : '') + text, size };
   } finally {
     closeSync(fd);
   }
+}
+
+/** Bytes [a, b) of an open file. */
+function readBytes(fd: number, a: number, b: number): Buffer {
+  const buf = Buffer.alloc(Math.max(0, b - a));
+  const n = readSync(fd, buf, 0, buf.length, a);
+  return buf.subarray(0, n);
+}
+
+/**
+ * Bytes [start, end) of a log as text with secret values hidden (#227): read with REDACT_OVERLAP bytes on each side so a
+ * value crossing an edge is whole, hidden, and the window cut out of the redacted text. `open` (still running, nothing
+ * after the window): an end that could be the start of a value is left out, and `end` moves back before it.
+ */
+function redactPage(path: string, start: number, end: number, size: number, redact: Redactor, open: boolean): { text: string; end: number } {
+  const a = Math.max(0, start - REDACT_OVERLAP);
+  const b = Math.min(size, end + REDACT_OVERLAP);
+  const fd = openSync(path, 'r');
+  let buf: Buffer;
+  try {
+    buf = readBytes(fd, a, b);
+  } finally {
+    closeSync(fd);
+  }
+  const pre = buf.subarray(0, start - a).toString('utf8');
+  const win = buf.subarray(start - a, end - a).toString('utf8');
+  const post = buf.subarray(end - a).toString('utf8');
+  const w = redact.redactWindow(pre + win + post, pre.length, pre.length + win.length, { cutStart: a > 0, open: open && b === size });
+  return { text: w.text, end: w.dropped ? end - Buffer.byteLength(win.slice(win.length - w.dropped)) : end };
 }

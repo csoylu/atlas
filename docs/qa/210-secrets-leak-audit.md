@@ -52,9 +52,11 @@ The redactor replaces the exact stored value (8 characters or more) in a tool's 
    SQLite (older rows are rewritten at start and after each value change). Design §10b.
 6. **Background process logs** (`outputs/<agent>/bg_*.log`) keep the raw value on disk. Reads and the exit note are
    redacted (tested), the file is not rewritten. Already in design §10b.
-7. **A value split by the 30000-character cut** of a shell output: the tool keeps the last 30000 characters, then the
-   runner hides values, so a value that straddles the cut is half there: its tail shows, unhidden. → #227.
-   (The same shape exists in the live tail, which keeps the last 8000 characters before hiding: read in the code, not tested.)
+7. ~~**A value split by the 30000-character cut** of a shell output~~: **fixed by #227.** Every output that is cut is now
+   redacted first and cut second: the shell's last 30000 characters, the live tail's last 8000 (a value still being
+   written, or split across two chunks, is held back until whole), shell_output pages and the exit note of background
+   logs, long lines of read_file and grep, web_fetch pages, secret_set's stderr. A value crossing a cut shows as its
+   whole marker. Tested in `packages/engine/src/redactCut.test.ts` and the flipped e2e test in `secrets-leaks.spec.ts`.
 8. **A command already running when Lock now is pressed** keeps its env, and its later output is no longer redacted
    for store values (design §10b).
 9. **What the program does with the value**: a command can send it anywhere (a request to a server, a file outside the

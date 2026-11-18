@@ -636,6 +636,17 @@ export class Secrets {
       }
     }
   }
+
+  /**
+   * Hide the secret values in the part [start, end) of `text`, for output that is shown cut (#227): redact first, cut
+   * second. A value crossing the window's edges is hidden whole (its marker is shown). `cutStart`: `text` was itself cut
+   * before index 0, so a value whose tail opens it is hidden too. `open`: more text may follow, so an end of the window
+   * that could be the start of a value is left out; `dropped` = how many characters of the window that is (the caller
+   * shows them later, with what follows). Throws when the store can't be read, like redact.
+   */
+  redactWindow(text: string, start = 0, end = text.length, o: { cutStart?: boolean; open?: boolean } = {}): { text: string; hidden: number; dropped: number } {
+    return redactWindow(this.values(), text, start, end, o);
+  }
 }
 
 function redactWith(values: { name: string; value: string }[], text: string): { text: string; hidden: number } {
@@ -647,6 +658,58 @@ function redactWith(values: { name: string; value: string }[], text: string): { 
     text = parts.join(`[secret ${name}]`);
   }
   return { text, hidden };
+}
+
+/** Raw characters kept around a window of cut output, so a value crossing the window's edge is whole there (#227). */
+export const REDACT_OVERLAP = 4096;
+
+/** Secrets.redactWindow on a list of values (longest first). Exported for tests. */
+export function redactWindow(
+  values: { name: string; value: string }[],
+  text: string,
+  start: number,
+  end: number,
+  o: { cutStart?: boolean; open?: boolean } = {},
+): { text: string; hidden: number; dropped: number } {
+  start = Math.max(0, Math.min(start, text.length));
+  end = Math.max(start, Math.min(end, text.length));
+  // Ranges of `text` to hide, longest values first (as redact: a shorter value inside a longer one is not counted twice).
+  const ranges: { s: number; e: number; name: string }[] = [];
+  const free = (s: number, e: number) => ranges.every((r) => e <= r.s || s >= r.e);
+  let drop = Infinity;
+  for (const { name, value } of values) {
+    const L = value.length;
+    for (let i = text.indexOf(value); i >= 0; i = text.indexOf(value, i + L)) if (free(i, i + L)) ranges.push({ s: i, e: i + L, name });
+    if (o.cutStart)
+      for (let k = Math.min(L - 1, text.length); k >= 1; k--)
+        if (text.charCodeAt(0) === value.charCodeAt(L - k) && text.startsWith(value.slice(L - k))) {
+          if (free(0, k)) ranges.push({ s: 0, e: k, name });
+          break;
+        }
+  }
+  // The end may be the start of a value still being written: left out (not when it is part of a value already hidden).
+  if (o.open)
+    for (const { value } of values) {
+      const L = value.length;
+      for (let k = Math.min(L - 1, text.length); k >= 1; k--) {
+        const d = text.length - k;
+        if (text.charCodeAt(d) === value.charCodeAt(0) && text.endsWith(value.slice(0, k)) && free(d, d + 1)) {
+          drop = Math.min(drop, d);
+          break;
+        }
+      }
+    }
+  const stop = drop < end ? Math.max(start, drop) : end;
+  let out = '';
+  let hidden = 0;
+  let at = start;
+  for (const r of ranges.filter((r) => r.e > start && r.s < stop).sort((a, b) => a.s - b.s)) {
+    out += text.slice(at, Math.max(at, r.s)) + `[secret ${r.name}]`;
+    hidden++;
+    at = Math.max(at, r.e);
+  }
+  if (at < stop) out += text.slice(at, stop);
+  return { text: out, hidden, dropped: end - stop };
 }
 
 /** An agent secret this agent may use in a run of `projectId`: global or that project's, and granted to it. */

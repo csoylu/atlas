@@ -94,6 +94,8 @@ export interface GrepOptions {
   context?: number;
   ignoreCase?: boolean;
   signal?: AbortSignal;
+  /** Hides secret values in a line before it is cut (#227); whole lines are redacted with the tool result. */
+  redact?: (line: string) => string;
 }
 
 /** A path as shown in results: relative to base when under it, else absolute. */
@@ -106,7 +108,8 @@ export function shownPath(base: string, full: string): string {
 export async function grep(o: GrepOptions, rg: string | null = findRg()): Promise<string> {
   const lines = rg ? await grepRg(o, rg) : await grepJs(o);
   if (!lines.length) return 'no matches';
-  const shown = lines.slice(0, o.limit).map((l) => (l.length > LINE_CAP ? `${l.slice(0, LINE_CAP)}… (+${l.length - LINE_CAP} chars)` : l));
+  const cut = (l: string) => (l.length > LINE_CAP ? `${l.slice(0, LINE_CAP)}… (+${l.length - LINE_CAP} chars)` : l);
+  const shown = lines.slice(0, o.limit).map((l) => (l.length > LINE_CAP && o.redact ? cut(o.redact(l)) : cut(l)));
   const more = lines.length - shown.length;
   return shown.join('\n') + (more > 0 ? `\n[${more}${lines.length >= HARD_CAP ? '+' : ''} more not shown; narrow the search or raise limit]` : '');
 }

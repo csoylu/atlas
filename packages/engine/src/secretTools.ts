@@ -2,7 +2,7 @@ import { spawn } from 'node:child_process';
 import { z } from 'zod';
 import type { ContentBlock } from '@atlas/shared';
 import type { ToolSpec } from './providers/types.ts';
-import type { Secrets } from './secrets.ts';
+import { REDACT_OVERLAP, type Secrets } from './secrets.ts';
 
 /**
  * secret_set and secret_delete (#207). No tool ever reads a value: an agent stores one (from a command's output it
@@ -121,8 +121,15 @@ function valueOf(command: string, ctx: SecretToolContext): Promise<string> {
         ctx.signal.addEventListener('abort', onAbort, { once: true });
         const out: Buffer[] = [];
         let err = '';
+        let errCut = false;
         child.stdout.on('data', (d: Buffer) => out.push(d));
-        child.stderr.on('data', (d: Buffer) => (err = (err + d.toString()).slice(-4 * STDERR_TAIL)));
+        child.stderr.on('data', (d: Buffer) => {
+          err += d.toString();
+          if (err.length > STDERR_TAIL + REDACT_OVERLAP) {
+            err = err.slice(-(STDERR_TAIL + REDACT_OVERLAP));
+            errCut = true;
+          }
+        });
         const timer = setTimeout(kill, COMMAND_TIMEOUT_S * 1000);
         const done = () => {
           clearTimeout(timer);
@@ -136,9 +143,11 @@ function valueOf(command: string, ctx: SecretToolContext): Promise<string> {
           done();
           if (code === 0) return resolve(Buffer.concat(out).toString());
           // stdout may hold part of the value: never shown. stderr is shown redacted (known values), its end only.
-          let tail = err.trim().slice(-STDERR_TAIL);
+          // Redacted before it is cut (#227): a value crossing the cut is hidden whole.
+          let tail: string;
           try {
-            tail = ctx.secrets.redact(tail).text;
+            const e = err.trimEnd();
+            tail = ctx.secrets.redactWindow(e, e.length - STDERR_TAIL, e.length, { cutStart: errCut }).text.trimStart();
           } catch {
             tail = '(stderr withheld: the secret store could not be read to hide values in it)';
           }
