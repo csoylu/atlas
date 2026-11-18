@@ -423,7 +423,7 @@ export function App() {
           : route.view === 'workflows'
             ? route.target
               ? { parts: [<a key="w" className="crumb-link" href="#/workflows">Workflows</a>], title: openWorkflow?.name ?? 'Workflow' }
-              : { parts: [], title: 'Workflows', sub: `${activeWorkflows} on of ${workflows.length}` }
+              : { parts: [], title: 'Workflows', sub: `${activeWorkflows} on · ${workflows.length} total` }
             : route.view === 'settings'
               ? { parts: [<span key="s" className="crumb-part">Settings</span>], title: settingsLabel(route.target as SettingsPage) }
               : { parts: [], title: 'Document' };
