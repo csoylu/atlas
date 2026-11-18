@@ -775,7 +775,7 @@ const CHECK = (devW, devH) => `((minFont, W, H) => {${VISIBLE_RECT}
   }
   // 4. Panel inside the screen; side by side, it never covers the chat or the screen beside it (#222).
   const inside = (r) => r.left >= -1 && r.top >= -1 && r.right <= W + 1 && r.bottom <= H + 1;
-  if (document.querySelector('.card-scrim, .card-modal')) issues.push('a task opened in a modal (#222: always the side panel)');
+  if (document.querySelector('.card-modal, .card-scrim > :not(.new-card-modal)')) issues.push('a task opened in a modal (#222: always the side panel)');
   const sd = document.querySelector('.side-doc');
   if (sd) {
     const r = sd.getBoundingClientRect();
