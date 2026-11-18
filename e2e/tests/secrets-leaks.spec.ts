@@ -181,13 +181,14 @@ test.describe('known limits (docs/qa/210-secrets-leak-audit.md)', () => {
     expect(JSON.stringify(w.atlas.db('SELECT * FROM tool_calls'))).not.toContain(V);
   });
 
-  test('a value that straddles the 30000-character cut of a long output is cut before it is hidden', async ({ w }) => {
-    // The shell tool keeps the last 30000 characters, then the runner hides values: half a value at the cut survives.
-    const tail = 30000 - LIMIT.length + 7; // the value starts 7 characters before the kept part
+  test('a value that straddles the 30000-character cut of a long output is hidden whole (fixed by #227)', async ({ w }) => {
+    // The shell tool hides values in the whole output first, then keeps the last 30000 characters: no half value survives.
+    const tail = 30000 - LIMIT.length + 7; // the raw value starts 7 characters before the kept part
     const [out] = await print(w, `head -c 100 /dev/zero | tr "\\0" x; printf %s "$LIMIT_KEY"; head -c ${tail} /dev/zero | tr "\\0" z`);
     expect(out).toMatch(/output is \d+ chars: showing the last 30000/);
-    expect(out).toContain(LIMIT.slice(7));
-    expect(out).not.toContain('[secret LIMIT_KEY]');
+    expect(out).not.toContain(LIMIT.slice(7));
+    expect(out).not.toContain(LIMIT.slice(0, 7));
+    expect(out).toMatch(/^x\[secret LIMIT_KEY\]z/m); // hidden first (the marker is 8 characters shorter), then cut: one x before it
   });
 
   test('a background process writes its log to disk with the value in it', async ({ w }) => {

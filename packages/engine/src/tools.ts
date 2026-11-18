@@ -9,6 +9,7 @@ import type { ImageBlock, ToolCallDetail } from '@atlas/shared';
 import { describeImage, extOf, imageLine, looksLikeImage, sniff } from './images.ts';
 import type { ToolSpec } from './providers/types.ts';
 import type { Background } from './background.ts';
+import type { Secrets } from './secrets.ts';
 import { findSpans, replaceSpans, type Span } from './fuzzy.ts';
 import { globFiles, grep, isBinary, shownPath, SKIP_DIRS } from './search.ts';
 import { fetchPage, headTail } from './web.ts';
@@ -37,8 +38,11 @@ export interface ToolContext {
    * each command); omitted = the engine's own. Throws when a secret can't be given: the command does not run.
    */
   env?: (command: string) => Promise<NodeJS.ProcessEnv>;
-  /** Hides secret values (#206) in full outputs saved to the outputs folder; the tool result itself is redacted by the runner. */
-  redact?: (text: string) => string;
+  /**
+   * Hides secret values (#206). The runner redacts every tool result, but a tool that cuts its output (long shell output,
+   * a page of a background log, a long line) redacts first and cuts second (#227), or half a value at the cut would stay.
+   */
+  redact?: Redactor;
 }
 
 interface Tool<S extends z.ZodType> {
@@ -52,6 +56,11 @@ export interface ToolOutput {
   images?: ImageBlock[];
 }
 const tool = <S extends z.ZodType>(t: Tool<S>) => t;
+
+/** What a tool needs to hide secret values in output it cuts (#227). */
+export type Redactor = Pick<Secrets, 'redact' | 'redactWindow'>;
+/** `text` with secret values hidden (as is without a redactor). */
+const hide = (ctx: Pick<ToolContext, 'redact'>, text: string): string => (ctx.redact ? ctx.redact.redact(text).text : text);
 
 const OUTPUT_CAP = 30_000;
 /** A rewritten file's previous text is kept for the chat's diff up to this size. */
@@ -124,11 +133,11 @@ export function readable(ctx: Pick<ToolContext, 'workdir' | 'outputsDir'>, p: st
   throw new Error(`path ${p} is outside the folders you can open (${PATH_RULE})`);
 }
 
-/** Save a full output to the outputs folder; returns its path. */
+/** Save a full output to the outputs folder (text: already redacted by the caller); returns its path. */
 async function saveOutput(ctx: ToolContext, kind: string, text: string | Buffer, ext = 'txt'): Promise<string> {
   await mkdir(ctx.outputsDir, { recursive: true });
   const path = join(ctx.outputsDir, `${kind}-${Date.now().toString(36)}-${randomUUID().slice(0, 6)}.${ext}`);
-  await writeFile(path, typeof text === 'string' && ctx.redact ? ctx.redact(text) : text);
+  await writeFile(path, text);
   return path;
 }
 
@@ -189,7 +198,7 @@ function serial<T>(full: string, fn: () => Promise<T>): Promise<T> {
 }
 
 /** A page of a text file with line numbers (`N|text`), cut on a line boundary, with a footer when there is more. */
-export function numberedPage(text: string, offset: number, limit: number, budget = READ_CHARS): string {
+export function numberedPage(text: string, offset: number, limit: number, budget = READ_CHARS, redact: (line: string) => string = (l) => l): string {
   const lines = text.split('\n');
   if (lines.at(-1) === '') lines.pop();
   const total = lines.length;
@@ -202,6 +211,7 @@ export function numberedPage(text: string, offset: number, limit: number, budget
   let b = offset - 1;
   for (let i = offset - 1; i < last; i++) {
     let line = lines[i]!;
+    if (line.length > LINE_CHARS) line = redact(line); // before the cut (#227); whole lines are redacted by the runner
     if (line.length > LINE_CHARS) line = `${line.slice(0, LINE_CHARS)}… [line cut: ${line.length - LINE_CHARS} more chars]`;
     const row = `${String(i + 1).padStart(width)}|${line}`;
     if (out.length && used + row.length + 1 > budget) break;
@@ -241,7 +251,7 @@ export const TOOLS = {
         return { output: imageLine(image), images: [image] };
       }
       if (isBinary(buf)) throw new Error(`${path} is a binary file (${buf.length} bytes); read_file reads text and png/jpeg/gif/webp images only`);
-      return numberedPage(buf.toString('utf8'), offset, limit);
+      return numberedPage(buf.toString('utf8'), offset, limit, READ_CHARS, (l) => hide(ctx, l));
     },
   }),
   write_file: tool({
@@ -318,7 +328,7 @@ export const TOOLS = {
     run: async ({ pattern, path, glob, mode, limit, context, ignore_case }, ctx) => {
       const root = readable(ctx, path);
       await stat(root); // a clear ENOENT before searching
-      return grep({ pattern, root, base: ctx.workdir, glob, mode, limit, context, ignoreCase: ignore_case, signal: ctx.signal });
+      return grep({ pattern, root, base: ctx.workdir, glob, mode, limit, context, ignoreCase: ignore_case, signal: ctx.signal, redact: (l) => hide(ctx, l) });
     },
   }),
   glob: tool({
@@ -356,8 +366,10 @@ export const TOOLS = {
         return `started ${p.id} in the background (pid ${p.pid}); its output goes to ${p.logPath}. shell_output("${p.id}") reads new output, shell_kill("${p.id}") stops it; a message comes here when it ends.`;
       }
       const env = ctx.env ? await ctx.env(command) : process.env;
-      const { code, sig, out } = await runForeground(command, timeout_s, env, ctx);
+      const run = await runForeground(command, timeout_s, env, ctx);
+      const { code, sig } = run;
       const head = `exit ${code ?? sig}${sig === 'SIGKILL' ? ` (killed after ${timeout_s}s)` : ''}\n`;
+      const out = hide(ctx, run.out); // the whole output, before it is cut (#227)
       if (out.length <= OUTPUT_CAP) return head + out;
       const path = await saveOutput(ctx, 'shell', out);
       return `${head}[output is ${out.length} chars: showing the last ${OUTPUT_CAP}; the full output is in ${path} (read_file with offset, or grep it)]\n${out.slice(out.length - OUTPUT_CAP)}`;
@@ -368,7 +380,7 @@ export const TOOLS = {
     input: z.object({ id: z.string(), offset: z.number().int().min(0).optional() }),
     run: async ({ id, offset }, ctx) => {
       if (!ctx.background) throw new Error('background processes are not available here');
-      return ctx.background.registry.read(id, ctx.background.agentId, offset);
+      return ctx.background.registry.read(id, ctx.background.agentId, offset, ctx.redact);
     },
   }),
   shell_kill: tool({
@@ -398,9 +410,10 @@ export const TOOLS = {
         return { output: `URL: ${page.url}\n${imageLine(image)}`, images: [image] };
       }
       const head = `URL: ${page.url}${page.title ? `\nTitle: ${page.title}` : ''}\n\n`;
-      if (page.text.length <= max_chars) return head + page.text;
-      const path = await saveOutput(ctx, 'web', head + page.text, 'md');
-      return head + headTail(page.text, max_chars, `full text (${page.text.length} chars) in ${path}: read_file it with offset, or grep it`);
+      const text = hide(ctx, page.text); // before headTail cuts it (#227)
+      if (text.length <= max_chars) return head + text;
+      const path = await saveOutput(ctx, 'web', head + text, 'md');
+      return head + headTail(text, max_chars, `full text (${text.length} chars) in ${path}: read_file it with offset, or grep it`);
     },
   }),
   screenshot: tool({
