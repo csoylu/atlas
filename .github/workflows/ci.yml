@@ -136,6 +136,7 @@ jobs:
       - run: npm -w @atlas/desktop run build
       - name: Package (unsigned)
         working-directory: apps/desktop
+        shell: bash # PowerShell splits -c.extraMetadata.version=… into a file name
         env:
           CSC_IDENTITY_AUTO_DISCOVERY: 'false'
         run: npx electron-builder --win nsis --x64 --publish never -c.extraMetadata.version=${{ needs.changelog.outputs.version }}
