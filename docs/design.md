@@ -50,6 +50,7 @@ Non-goals for v1: multi-user, plugin marketplace, mobile app, voice, a skill sto
 | `conversations` | id, agent_id, kind (`chat`/`card`/`schedule`), summary, summary_upto_seq |
 | `tool_calls` | id, run_id, tool_use_id, name, input, status, output_ref, started_at, ended_at |
 | `workflows`, `workflow_nodes`, `workflow_edges`, `workflow_runs`, `workflow_run_steps` | §9 (migration 0044; replaced `schedules`) |
+| `card_prs` | card_id, repo, number, url, branch, base, head_sha, state, merge_sha, mergeable, ci, qa, qa_description, checked_at, error, error_since, reviewed_sha, failed_sha — §7.1 (migration 0045); `cards.reviewer` |
 | `memories` | id, kind (`rule`/`preference`/`fact`/`project`), scope (`shared`/`agent:<id>`), text (≤ 500), source_conversation_id + source_seq, card_id, status (`active`/`stale`/`archived`), pinned, created_at, confirmed_at, updated_at, updated_by — Memory v2 (§8, migration 0033); `memories_fts` (FTS5, porter) kept in sync by triggers |
 | `memory_changes` | id, memory_id, at, by, action, before_text/kind/status/pinned, undone_by — every change, for the daily digest and undo |
 | `canvases` | id, name, scene (json), version, updated_by, updated_at |
