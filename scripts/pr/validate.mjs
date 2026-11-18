@@ -14,7 +14,8 @@
 // CHANGELOG.md only (every merge moves the changelog top), --merge first rebases it by itself (rebase-changelog.mjs,
 // #188): the PR's entry goes back on top, main's entries stay byte-identical, the other files are checked unchanged,
 // the branch is pushed with --force-with-lease, then CI `test` must pass on the new head, which gets the validation and
-// is merged. Any other conflicting file: refused, the author rebases.
+// is merged. GitHub runs no CI on a conflicting head, so in that case CI that has not run on the old head is not
+// required (#195); CI still running or red there is refused. Any other conflicting file: refused, the author rebases.
 // Needs the GitHub CLI `gh`, logged in (it is not on the agents' PATH: /opt/homebrew/bin is tried).
 import { execFileSync } from 'node:child_process';
 import { existsSync } from 'node:fs';
@@ -104,8 +105,12 @@ export function refusal(o, pr, gh, { conflictOk = false } = {}) {
     return `PR #${o.pr} head is ${pr.head.sha.slice(0, 7)}, not ${o.sha.slice(0, 7)}: a commit was pushed after your review. Review it, then validate its sha`;
   if (/^qa\//.test(pr.head.ref) && o.as === QA_AUTHOR)
     return `${pr.head.ref} is a QA PR (zurich's): someone else validates it (atlas), not its author`;
+  // GitHub runs no CI on the head of a PR that conflicts with its base (#195): when --merge is going to rebase it,
+  // "has not run yet" is no refusal, the rebase waits for CI on the new head. A run that did happen still counts:
+  // still running or red on the old head is refused as usual.
   const ciWhy = ciState(gh, pr.head.sha);
-  if (ciWhy) return ciWhy;
+  const ciSkipped = conflictOk && pr.mergeable === false && ciWhy === ciNotRun(pr.head.sha);
+  if (ciWhy && !ciSkipped) return ciWhy;
   // The release rule: exactly one new CHANGELOG.md entry against where the branch left main.
   const mergeBase = json(gh, `repos/${REPO}/compare/${pr.base.ref}...${pr.head.sha}`).merge_base_commit.sha;
   let before = null;
@@ -125,11 +130,13 @@ export function refusal(o, pr, gh, { conflictOk = false } = {}) {
   return null;
 }
 
+const ciNotRun = (sha) => `CI job "${CI_JOB}" has not run on ${sha.slice(0, 7)} yet: wait for it`;
+
 /** null when the latest run of the CI job on `sha` passed, else why not (a sentence). */
 export function ciState(gh, sha) {
   const runs = json(gh, `repos/${REPO}/commits/${sha}/check-runs?per_page=100`).check_runs ?? [];
   const ci = runs.filter((r) => r.name === CI_JOB).sort((a, b) => (b.id ?? 0) - (a.id ?? 0))[0];
-  if (!ci) return `CI job "${CI_JOB}" has not run on ${sha.slice(0, 7)} yet: wait for it`;
+  if (!ci) return ciNotRun(sha);
   if (ci.status !== 'completed') return `CI job "${CI_JOB}" is still running on ${sha.slice(0, 7)}: wait for it`;
   if (ci.conclusion !== 'success') return `CI job "${CI_JOB}" is ${ci.conclusion} on ${sha.slice(0, 7)}: fix it first`;
   return null;

@@ -1,10 +1,12 @@
-import { execFileSync } from 'node:child_process';
+import { execFileSync, spawnSync } from 'node:child_process';
 import { chmodSync, mkdtempSync, readFileSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { describe, expect, it } from 'vitest';
 // @ts-expect-error plain JS module (a script run with node)
 import { moveEntry, rebaseChangelogOnly } from './rebase-changelog.mjs';
+// @ts-expect-error plain JS module (a script run with node)
+import { validate } from './validate.mjs';
 
 const intro = '# Changelog\n\nNewest on top.\n\n';
 const e = (kind: string, n: number, title: string, body = '') => `## ${kind} · #${n} · ${title}\n${body ? `\n${body}\n` : ''}`;
@@ -222,5 +224,118 @@ describe('rebaseChangelogOnly on real git repos', { timeout: 60_000 }, () => {
     w.g('push', '-q', 'origin', 'main');
     expect(() => w.rebase('fix/14-x', pr)).toThrow(/without conflict/);
     expect(readFileSync(join(w.dev, 'c.txt'), 'utf8')).toBe('x\n');
+  });
+});
+
+/**
+ * A fake `gh` backed by the world's bare « GitHub » (#195): the PR is read from the real refs, GitHub runs no CI on a
+ * conflicting head (no check run on the old head), and CI on any other head is green after `pollsBeforeGreen` polls.
+ * Merge = a real merge commit pushed to main from the dev clone, pinned to the sha like GitHub's.
+ */
+function fakeGitHub(w: ReturnType<typeof world>, branch: string, opts: { oldHeadCi?: unknown[]; pollsBeforeGreen?: number } = {}) {
+  const calls: string[][] = [];
+  const git = (...a: string[]) => execFileSync('git', ['-C', w.origin, ...a], { encoding: 'utf8', env: { ...process.env, ...ENV } }).trim();
+  const oldHead = w.remote(branch);
+  const polls = new Map<string, number>();
+  // git merge-tree exits 1 when the merge conflicts: GitHub's `mergeable: false`.
+  const mergeable = (head: string) => spawnSync('git', ['-C', w.origin, 'merge-tree', '--write-tree', 'main', head], { stdio: 'ignore' }).status === 0;
+  const gh = (args: string[]) => {
+    calls.push(args);
+    const path = args[1]!;
+    const head = w.remote(branch);
+    if (/\/pulls\/2$/.test(path))
+      return JSON.stringify({ state: 'open', draft: false, merged: false, mergeable: mergeable(head), base: { ref: 'main' }, head: { sha: head, ref: branch, repo: { full_name: 'csoylu/atlas' } }, number: 2 });
+    const runs = path.match(/commits\/([0-9a-f]{40})\/check-runs/);
+    if (runs) {
+      const sha = runs[1]!;
+      if (sha === oldHead) return JSON.stringify({ check_runs: opts.oldHeadCi ?? [] });
+      const n = (polls.get(sha) ?? 0) + 1;
+      polls.set(sha, n);
+      return JSON.stringify({ check_runs: n > (opts.pollsBeforeGreen ?? 1) ? [{ id: 1, name: 'test', status: 'completed', conclusion: 'success' }] : [] });
+    }
+    const cmp = path.match(/compare\/main\.\.\.([0-9a-f]{40})$/);
+    if (cmp) return JSON.stringify({ merge_base_commit: { sha: git('merge-base', 'main', cmp[1]!) } });
+    const file = path.match(/contents\/CHANGELOG\.md\?ref=([0-9a-f]{40})$/);
+    if (file) return w.show(file[1]!);
+    if (/\/statuses\//.test(path)) return '{}';
+    if (/\/pulls\/2\/merge$/.test(path)) {
+      const sha = args.find((a) => a.startsWith('sha='))!.slice(4);
+      if (sha !== head) throw new Error('409 head changed');
+      w.g('fetch', '-q', 'origin');
+      w.g('checkout', '-q', 'main');
+      w.g('reset', '-q', '--hard', 'origin/main');
+      w.g('merge', '-q', '--no-ff', '-m', `Merge pull request #2`, sha);
+      w.g('push', '-q', 'origin', 'main');
+      return JSON.stringify({ sha: w.g('rev-parse', 'HEAD'), merged: true });
+    }
+    throw new Error(`unexpected gh call: ${args.join(' ')}`);
+  };
+  return { gh, calls, oldHead, statuses: () => calls.filter((c) => /\/statuses\//.test(c[1]!)) };
+}
+
+describe('validate.mjs --ok --merge on real git repos: no CI on a conflicting head (#195)', { timeout: 60_000 }, () => {
+  const conflicting = () => {
+    const w = world();
+    w.g('checkout', '-q', '-b', 'fix/2-mine');
+    w.commit('#2 the fix', { 'CHANGELOG.md': log(e('Fixed', 2, 'Mine'), e('Added', 1, 'First')), 'a.txt': 'a1\nPR\na3\na4\na5\na6\na7\na8\n' });
+    w.g('push', '-q', 'origin', 'fix/2-mine');
+    w.g('checkout', '-q', 'main');
+    w.commit('#3 main moves', { 'CHANGELOG.md': log(e('Fixed', 3, 'From main'), e('Added', 1, 'First')) });
+    w.g('push', '-q', 'origin', 'main');
+    return w;
+  };
+  const opts = (sha: string, merge = true) => ({ pr: 2, verdict: 'success', sha, as: 'zurich', reason: 'read it', merge, base: 'main' });
+  const deps = (w: ReturnType<typeof world>) => ({
+    rebase: (a: Record<string, string>) => rebaseChangelogOnly({ repo: w.validator, env: ENV, ...a }),
+    wait: { sleep: () => {}, everyMs: 0 },
+    log: () => {},
+  });
+
+  it('changelog-only conflict, CI never ran on the head: rebases, waits for CI on the new head, validates and merges it', () => {
+    const w = conflicting();
+    const f = fakeGitHub(w, 'fix/2-mine', { pollsBeforeGreen: 2 });
+    const out = validate(opts(f.oldHead), f.gh, deps(w)).join('\n');
+    const newHead = w.remote('fix/2-mine');
+    expect(newHead).not.toBe(f.oldHead);
+    expect(f.calls.filter((c) => c[1]!.includes(`commits/${newHead}/check-runs`))).toHaveLength(3); // not run, not run, green
+    expect(f.statuses()).toHaveLength(1);
+    expect(f.statuses()[0]![1]).toBe(`repos/csoylu/atlas/statuses/${newHead}`);
+    expect(f.statuses()[0]).toContain('state=success');
+    expect(out).toMatch(/merged PR #2/);
+    const main = w.remote('main');
+    expect(execFileSync('git', ['-C', w.origin, 'rev-parse', `${main}^2`], { encoding: 'utf8' }).trim()).toBe(newHead);
+    expect(w.show(main)).toBe(log(e('Fixed', 2, 'Mine'), e('Fixed', 3, 'From main'), e('Added', 1, 'First')));
+  });
+
+  it('CI that did run on the old head still counts: red or running there is refused, nothing rebased', () => {
+    for (const ci of [
+      [{ id: 1, name: 'test', status: 'completed', conclusion: 'failure' }],
+      [{ id: 1, name: 'test', status: 'in_progress', conclusion: null }],
+    ]) {
+      const w = conflicting();
+      const f = fakeGitHub(w, 'fix/2-mine', { oldHeadCi: ci });
+      expect(() => validate(opts(f.oldHead), f.gh, deps(w))).toThrow(/refused: CI job "test" is (failure|still running)/);
+      expect(w.remote('fix/2-mine')).toBe(f.oldHead);
+      expect(f.statuses()).toHaveLength(0);
+    }
+  });
+
+  it('without --merge a conflicting PR is refused as before', () => {
+    const w = conflicting();
+    const f = fakeGitHub(w, 'fix/2-mine');
+    expect(() => validate(opts(f.oldHead, false), f.gh, deps(w))).toThrow(/conflicts with main: rebase it/);
+    expect(w.remote('fix/2-mine')).toBe(f.oldHead);
+    expect(f.statuses()).toHaveLength(0);
+  });
+
+  it('a PR without conflict and without CI is refused as before, with or without --merge', () => {
+    const w = world();
+    w.g('checkout', '-q', '-b', 'fix/2-mine');
+    w.commit('#2 the fix', { 'CHANGELOG.md': log(e('Fixed', 2, 'Mine'), e('Added', 1, 'First')) });
+    w.g('push', '-q', 'origin', 'fix/2-mine');
+    const f = fakeGitHub(w, 'fix/2-mine', { oldHeadCi: [] });
+    for (const merge of [true, false]) expect(() => validate(opts(f.oldHead, merge), f.gh, deps(w))).toThrow(/has not run on .* yet/);
+    expect(f.statuses()).toHaveLength(0);
+    expect(f.calls.some((c) => /\/merge$/.test(c[1]!))).toBe(false);
   });
 });
