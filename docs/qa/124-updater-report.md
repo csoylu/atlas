@@ -9,7 +9,7 @@ one-click update of the installed app stays #123's own acceptance test (not done
 | # | Bug | Severity | Test (stays green while the bug exists, goes red when fixed) |
 |---|---|---|---|
 | 1 | The swap is two renames (old → `Atlas.previous.app`, new → `Atlas.app`). If the helper dies between them (SIGKILL, logout, power loss) there is **no Atlas.app** until someone moves `Atlas.previous.app` back. Design says "the installed app must still open, old or new, never a broken one". | Medium (tiny window, but it is the one case that bricks the install) | `updater.qa.test.ts` › helper killed between the two renames (`it.fails`) |
-| 2 | GitHub answers 200 with HTML (captive portal, proxy): Settings → About shows the JSON parser's message instead of a readable one. | Low | `updater.qa.test.ts` › not JSON (`it.fails`) |
+| 2 | GitHub answers 200 with HTML (captive portal, proxy): Settings → About shows the JSON parser's message instead of a readable one. | Low | `updater.qa.test.ts` › not JSON (fixed in #162: a normal `it` now) |
 | 3 | A release title or note with a long unbroken word (a path, a URL) is clipped in the update dialog and the notes box scrolls sideways, at 1440 and 390 px. Notes come from changelog sentences, so it will happen. Fix: `overflow-wrap: anywhere` on `.update-note-title` / `.update-note-body`. | Low | `e2e/tests/updater.spec.ts` › long unbroken word (`test.fail`) |
 
 ## Cases of the card

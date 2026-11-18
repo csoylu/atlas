@@ -100,13 +100,13 @@ describe.skipIf(!mac)('update check: the failure modes (#124)', () => {
     expect(s.releases).toHaveLength(1);
   });
 
-  // KNOWN (low): the check error shows the JSON parser message. `it.fails`: goes red when fixed, then remove it.
-  it.fails('GitHub answering something that is not JSON (a captive portal page) gives a readable error, not a parser message', async () => {
+  it('GitHub answering something that is not JSON (a captive portal page) gives a readable error, not a parser message', async () => {
     await start();
     gh.rawList = '<html><body>Please log in to the café wifi</body></html>';
     const s = await setup('0.4.0').u.check();
     expect(s.checkError).toBeTruthy();
     expect(s.checkError).not.toMatch(/Unexpected token|JSON/i);
+    expect(s.checkError).toMatch(/^GitHub did not answer with a release list/);
     expect(s.releases).toEqual([]);
   });
 
