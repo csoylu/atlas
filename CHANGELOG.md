@@ -6,6 +6,10 @@ computed by `scripts/release/changelog.mjs` from the oldest entry to the newest,
 `Fixed` → patch, `Added` or `Changed` → minor, `Breaking` (data or settings stop working without action) → major.
 Never type a version number.
 
+## Added · #127 · QA check of artifacts: 11 end-to-end tests and a written verification report
+
+`e2e/tests/artifacts.spec.ts` covers the chat card (kind, version, "Updated to vN", "vM is the latest"), the one-row viewer with version picker and restore, the ⋯ menus, the phone layout, the Library (folders, tabs, live tiles, pin, move, rename, delete, search, empty state) and text contrast in both themes. `docs/qa/127-artifacts-report.md` records what was checked on the real data copy. Tests and docs only: no change in the app, no migration.
+
 ## Changed · #124 · The app updater is tested end to end: release pipeline, bad and cut downloads, killed swaps, updates while agents work, and the update screens in both themes
 
 About 60 new tests, no app code changed: `scripts/release/pipeline.test.ts` (CI workflow and the one-entry rule on real git histories), `packages/engine/test/updater.qa.test.ts` (fake GitHub: rate limit, bad checksum, cut and stalled downloads, SIGKILL during the download and the swap, several versions skipped) and `e2e/tests/updater.spec.ts` (badge, notes dialog and Settings → About at 1440 and 390 px in both themes, an update clicked while two agents work). Three known bugs are kept as `it.fails` / `test.fail` tests until fixed. Report: docs/qa/124-updater-report.md.
