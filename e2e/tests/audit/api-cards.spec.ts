@@ -23,7 +23,6 @@ test.describe('K · cards, kanban, dispatcher (API)', () => {
   });
 
   test('[K02b] a card cannot be created or moved to "running" by hand (no run exists) - BUG B1: the API accepts it and the card stays "running"', async ({ atlas }) => {
-    test.fail(); // known bug: remove this line when fixed
     expect((await call(atlas, 'POST', '/cards', { title: 'x', status: 'running' })).status).toBe(400);
     const c = await idleCard(atlas);
     expect((await call(atlas, 'PATCH', `/cards/${c.id}`, { status: 'running' })).status).toBe(400);
