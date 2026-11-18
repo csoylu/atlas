@@ -990,6 +990,12 @@ button.tool .icon { color: var(--muted); font-family: var(--mono); }
 .strip-ctx { display: inline-flex; align-items: center; gap: 6px; cursor: default; }
 .strip-dot { color: var(--rule); }
 .strip-ctx .num { font-variant-numeric: tabular-nums; }
+/* Phone: « 65% » without « context » (the ring says it), so the gauge is not cut by the model pill (#112, 13 px text). */
+@media (max-width: 640px) {
+  .strip-word, .strip-ctx .strip-dot, .strip-ctx .num { display: none; }
+  .strip-gauges { flex: 0 0 auto; } /* holds « ◔ 65% » and the plan gauge; the model pill shrinks (ellipsis) instead */
+  .composer-strip .pick-menu { flex: 1 1 auto; }
+}
 .ring { flex: none; }
 .ring-track { fill: none; stroke: var(--active); stroke-width: 2.2; }
 .ring-fill { fill: none; stroke: var(--accent); stroke-width: 2.2; stroke-linecap: round; }
