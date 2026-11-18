@@ -10,12 +10,18 @@
 // a commit pushed since is not validated); the CI job `test` is green on that head; the PR adds exactly one
 // CHANGELOG.md entry (the release rule, checked here because CI only checks it after the push to main); and a
 // `qa/*` branch is not validated by its author (zurich). A new commit on the PR has no status: validate again.
-// --merge merges right after (merge commit, only if the head is still --sha).
+// --merge merges right after (merge commit, only if the head is still --sha). When the PR conflicts with main in
+// CHANGELOG.md only (every merge moves the changelog top), --merge first rebases it by itself (rebase-changelog.mjs,
+// #188): the PR's entry goes back on top, main's entries stay byte-identical, the other files are checked unchanged,
+// the branch is pushed with --force-with-lease, then CI `test` must pass on the new head, which gets the validation and
+// is merged. Any other conflicting file: refused, the author rebases.
 // Needs the GitHub CLI `gh`, logged in (it is not on the agents' PATH: /opt/homebrew/bin is tried).
 import { execFileSync } from 'node:child_process';
 import { existsSync } from 'node:fs';
+import { join } from 'node:path';
 import { pathToFileURL } from 'node:url';
 import { checkPush } from '../release/changelog.mjs';
+import { rebaseChangelogOnly } from './rebase-changelog.mjs';
 
 export const REPO = 'csoylu/atlas';
 export const CONTEXT = 'qa/validated';
@@ -85,23 +91,21 @@ const json = (gh, path, ...extra) => JSON.parse(gh(['api', path, ...extra]));
 const raw = (gh, path) => gh(['api', path, '-H', 'Accept: application/vnd.github.raw+json']);
 
 /** Why this PR may not be validated as OK (null = it may). `gh` is injected so tests can fake GitHub. */
-export function refusal(o, pr, gh) {
+// conflictOk: a conflict with the base is not a refusal (--merge then tries the changelog-only rebase).
+export function refusal(o, pr, gh, { conflictOk = false } = {}) {
   if (pr.state !== 'open') return `PR #${o.pr} is ${pr.merged ? 'already merged' : pr.state}`;
   if (pr.draft) return `PR #${o.pr} is a draft`;
   if (pr.base.ref !== o.base)
     return `PR #${o.pr} is based on "${pr.base.ref}", not ${o.base}: a stacked PR merges into its parent branch, not main. Rebase it onto main (or retarget it) first`;
-  if (pr.mergeable === false)
-    return `PR #${o.pr} conflicts with ${pr.base.ref}: rebase it (the changelog top is the usual conflict), push, then validate the new head`;
+  if (pr.mergeable === false && !conflictOk)
+    return `PR #${o.pr} conflicts with ${pr.base.ref}: rebase it, push, then validate the new head (if CHANGELOG.md is the only conflict, --merge rebases it by itself)`;
   if (pr.mergeable == null) return `GitHub is still working out if PR #${o.pr} merges cleanly: try again in a few seconds`;
   if (!pr.head.sha.startsWith(o.sha.toLowerCase()))
     return `PR #${o.pr} head is ${pr.head.sha.slice(0, 7)}, not ${o.sha.slice(0, 7)}: a commit was pushed after your review. Review it, then validate its sha`;
   if (/^qa\//.test(pr.head.ref) && o.as === QA_AUTHOR)
     return `${pr.head.ref} is a QA PR (zurich's): someone else validates it (atlas), not its author`;
-  const runs = json(gh, `repos/${REPO}/commits/${pr.head.sha}/check-runs?per_page=100`).check_runs ?? [];
-  const ci = runs.filter((r) => r.name === CI_JOB).sort((a, b) => (b.id ?? 0) - (a.id ?? 0))[0];
-  if (!ci) return `CI job "${CI_JOB}" has not run on ${pr.head.sha.slice(0, 7)} yet: wait for it`;
-  if (ci.status !== 'completed') return `CI job "${CI_JOB}" is still running on ${pr.head.sha.slice(0, 7)}: wait for it`;
-  if (ci.conclusion !== 'success') return `CI job "${CI_JOB}" is ${ci.conclusion} on ${pr.head.sha.slice(0, 7)}: fix it first`;
+  const ciWhy = ciState(gh, pr.head.sha);
+  if (ciWhy) return ciWhy;
   // The release rule: exactly one new CHANGELOG.md entry against where the branch left main.
   const mergeBase = json(gh, `repos/${REPO}/compare/${pr.base.ref}...${pr.head.sha}`).merge_base_commit.sha;
   let before = null;
@@ -121,24 +125,68 @@ export function refusal(o, pr, gh) {
   return null;
 }
 
+/** null when the latest run of the CI job on `sha` passed, else why not (a sentence). */
+export function ciState(gh, sha) {
+  const runs = json(gh, `repos/${REPO}/commits/${sha}/check-runs?per_page=100`).check_runs ?? [];
+  const ci = runs.filter((r) => r.name === CI_JOB).sort((a, b) => (b.id ?? 0) - (a.id ?? 0))[0];
+  if (!ci) return `CI job "${CI_JOB}" has not run on ${sha.slice(0, 7)} yet: wait for it`;
+  if (ci.status !== 'completed') return `CI job "${CI_JOB}" is still running on ${sha.slice(0, 7)}: wait for it`;
+  if (ci.conclusion !== 'success') return `CI job "${CI_JOB}" is ${ci.conclusion} on ${sha.slice(0, 7)}: fix it first`;
+  return null;
+}
+
+/** Wait for the CI job on `sha` to finish (it starts after a push); returns ciState's answer once it is final. */
+export function waitForCi(gh, sha, { sleep = sleepSync, timeoutMs = 45 * 60e3, everyMs = 20e3, now = Date.now, log = () => {} } = {}) {
+  const until = now() + timeoutMs;
+  for (;;) {
+    const why = ciState(gh, sha);
+    if (!why || !/wait for it$/.test(why)) return why;
+    if (now() >= until) return `CI job "${CI_JOB}" did not finish on ${sha.slice(0, 7)} within ${Math.round(timeoutMs / 60e3)} min`;
+    log(`${why.replace(/: wait for it$/, '')}: waiting…`);
+    sleep(everyMs);
+  }
+}
+
+/** A blocking sleep: this script is synchronous from start to end. */
+export function sleepSync(ms) {
+  Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, ms);
+}
+
 const clip = (s, n = 140) => (s.length > n ? s.slice(0, n - 1) + '…' : s); // GitHub's status description limit
 
-/** Run the validation; returns the lines to print. Throws an Error with the reason when refused. */
-export function validate(o, gh = realGh) {
+/**
+ * Run the validation; returns the lines to print. Throws an Error with the reason when refused.
+ * deps (tests): rebase (the changelog-only rebase, rebaseChangelogOnly's signature), wait (waitForCi's options), log.
+ */
+export function validate(o, gh = realGh, deps = {}) {
   const pr = json(gh, `repos/${REPO}/pulls/${o.pr}`);
   const out = [];
+  const log = deps.log ?? ((line) => console.error(line));
+  const setStatus = (sha, state, text) =>
+    gh(['api', `repos/${REPO}/statuses/${sha}`, '-f', `state=${state}`, '-f', `context=${CONTEXT}`, '-f', `description=${clip(`${o.as}: ${text}`)}`]);
+  const autoRebase = o.verdict === 'success' && o.merge && pr.mergeable === false;
   if (o.verdict === 'success') {
-    const why = refusal(o, pr, gh);
+    const why = refusal(o, pr, gh, { conflictOk: o.merge });
     if (why) throw new Error(`refused: ${why}`);
   } else if (pr.state !== 'open') throw new Error(`refused: PR #${o.pr} is ${pr.merged ? 'already merged' : pr.state}`);
-  const sha = pr.head.sha;
-  gh([
-    'api', `repos/${REPO}/statuses/${sha}`,
-    '-f', `state=${o.verdict}`,
-    '-f', `context=${CONTEXT}`,
-    '-f', `description=${clip(`${o.as}: ${o.reason}`)}`,
-  ]);
-  out.push(`${CONTEXT} = ${o.verdict} on PR #${o.pr} @ ${sha.slice(0, 7)} (${o.as}: ${o.reason})`);
+  let sha = pr.head.sha;
+  let reason = o.reason;
+  if (autoRebase) {
+    if (pr.head.repo?.full_name && pr.head.repo.full_name !== REPO) throw new Error(`refused: PR #${o.pr} comes from a fork: rebase it by hand`);
+    const rebase = deps.rebase ?? ((a) => rebaseChangelogOnly({ repo: join(import.meta.dirname, '..', '..'), ...a }));
+    const r = rebase({ branch: pr.head.ref, sha, base: pr.base.ref });
+    for (const line of r.lines) out.push(line), log(line);
+    log(`waiting for CI "${CI_JOB}" on the new head ${r.newHead.slice(0, 7)}…`);
+    const ciWhy = waitForCi(gh, r.newHead, { log, ...deps.wait });
+    if (ciWhy) {
+      setStatus(r.newHead, 'failure', `auto-rebased onto ${pr.base.ref}, ${ciWhy.replace(/: (fix it first|wait for it)$/, '')}`);
+      throw new Error(`not merged: PR #${o.pr} was rebased onto ${pr.base.ref} (head ${r.oldHead.slice(0, 7)} → ${r.newHead.slice(0, 7)}), and ${ciWhy.replace(/: (fix it first|wait for it)$/, '')}; ${CONTEXT} = failure on the new head`);
+    }
+    sha = r.newHead;
+    reason = `${o.reason} (auto-rebased from ${r.oldHead.slice(0, 7)}: changelog-only conflict)`;
+  }
+  setStatus(sha, o.verdict, reason);
+  out.push(`${CONTEXT} = ${o.verdict} on PR #${o.pr} @ ${sha.slice(0, 7)} (${o.as}: ${reason})`);
   if (o.merge) {
     // sha pins the merge to the validated head: a commit pushed in between makes GitHub refuse (409).
     const merged = json(gh, `repos/${REPO}/pulls/${o.pr}/merge`, '-X', 'PUT', '-f', `sha=${sha}`, '-f', 'merge_method=merge');
