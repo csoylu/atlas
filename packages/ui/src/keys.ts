@@ -80,5 +80,6 @@ export const SHORTCUTS: { group: string; keys: string[]; label: string }[] = [
   { group: 'Inbox', keys: ['E'], label: 'Archive' },
   { group: 'Inbox', keys: ['R'], label: 'Reply' },
   { group: 'Inbox', keys: ['1–4'], label: 'Pick an option' },
-  { group: 'Chat', keys: ['/clear', '↵'], label: 'New main chat (this one goes to History)' },
+  { group: 'Chat', keys: ['/clear', '↵'], label: 'Clear the context: the agent starts fresh (Undo until you write)' },
+  { group: 'Chat', keys: ['/compact', '↵'], label: 'Summarize the chat now to free context (/compact <focus>)' },
 ];

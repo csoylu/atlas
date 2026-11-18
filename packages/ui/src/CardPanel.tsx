@@ -22,7 +22,8 @@ import type { Quote } from './DocPanel.tsx';
 import { draftKey, readDraft, useDraft, writeDraft } from './drafts.ts';
 import { useAutoGrow } from './useAutoGrow.ts';
 import { RewindConfirm, RewindIcon, RewindNote, useRewind, type Rewind } from './Rewind.tsx';
-import { distribute, messageRow, timelineRows, type SysRow } from './sysRows.ts';
+import { clearPoint, distribute, messageRow, timelineRows, type SysRow } from './sysRows.ts';
+import { parseSlash, slashKey, slashMatches, type SlashName } from './slashCommands.ts';
 import { SystemRow } from './SystemRow.tsx';
 import { focusSeqFor, groupForSeq } from './memoryView.ts';
 import { NO_DRAFT, addDelta, draftMarkdown, rehypeCaret, useThrottledDraft, type Draft } from './streamDraft.ts';
@@ -122,8 +123,6 @@ export function CardPanel(props: {
   /** « Ask about this » from the side panel: shown as a chip in the composer, sent with the message. */
   quote?: Quote | null;
   onQuoteClear?(): void;
-  /** `/clear` typed in a direct chat's composer: start a fresh main chat with the agent. */
-  onClear?(agentId: string): void;
   /** Tabs open in a hidden side panel (overlay mode): a button brings it back. */
   hiddenDocs?: number;
   onShowDocs?(): void;
@@ -179,7 +178,7 @@ export function CardPanel(props: {
       </div>
       <RewindNote rw={rw} />
       {!rw.hideRun && <RunLine run={convo.run} onStop={() => void rw.stopTurn()} />}
-      <CardComposer card={card} agents={props.agents} models={props.models} plan={!!props.plan} stream={stream} onError={onError} quote={props.quote} onQuoteClear={props.onQuoteClear} onClear={props.onClear} rewind={rw} />
+      <CardComposer card={card} agents={props.agents} models={props.models} plan={!!props.plan} stream={stream} onError={onError} quote={props.quote} onQuoteClear={props.onQuoteClear} rewind={rw} />
       <RewindConfirm rw={rw} />
     </aside>
   );
@@ -276,7 +275,11 @@ export function Activity(props: {
   const end = useRef<HTMLDivElement>(null);
   const askRef = useRef<HTMLDivElement>(null);
   const { card } = props;
-  const shown = messages.filter((m) => m.author !== 'tool');
+  // A /clear folds the messages before it (#99) until « Show earlier messages »; a new clear folds again.
+  const fold = clearPoint(timeline);
+  const [expanded, setExpanded] = useState(false);
+  useEffect(() => setExpanded(false), [fold, card.id]);
+  const shown = messages.filter((m) => m.author !== 'tool' && (expanded || m.seq > fold));
   const asking = !!card.block || card.status === 'review';
   // The question is the agent's last message: highlight that one instead of repeating it.
   const last = shown.at(-1);
@@ -316,7 +319,7 @@ export function Activity(props: {
   // System events between turns (#66): ended runs, rewinds, the summary point, each after the group it follows.
   const placed = distribute(
     groups.map((g) => g[0]!.seq),
-    timelineRows(timeline, messages, { latestRunId: run?.id ?? null, running, hhmm: (iso) => rowTime(iso) }),
+    timelineRows(timeline, messages, { latestRunId: run?.id ?? null, running, hhmm: (iso) => rowTime(iso), expanded }),
   );
   // Where the streaming reply shows: inside the last group when it's this agent's turn (see draftHere), else as its own message.
   const lastGroup = groups.at(-1)?.[0];
@@ -330,12 +333,15 @@ export function Activity(props: {
       renderText={(t) => text(t)}
       onRetry={() => api.retry(card.id).catch(props.onError)}
       onUndo={(id) => (props.onUndo ? props.onUndo(id) : api.undoRewind(id)).catch(props.onError)}
+      onToggleEarlier={() => setExpanded((x) => !x)}
+      onUndoClear={(id) => api.undoClear(id).catch(props.onError)}
     />
   );
   return (
     <>
       <span ref={listBox} hidden />
       {messages.length === 0 && !asking && <p className="empty">{props.empty}</p>}
+      {fold > 0 && shown.length === 0 && !draft && !asking && <p className="empty">Context cleared. The agent starts fresh from your next message.</p>}
       {placed.before.map(sysRow)}
       {groups.map((ms, i) => {
         const m = ms[0]!;
@@ -528,9 +534,9 @@ export function RunLine({ run, onStop, stop = true }: { run: Run | null; onStop(
 /** Message box for the card's agent, with usage and the model/effort chooser. */
 export const CardComposer = forwardRef<
   HTMLTextAreaElement,
-  { card: Card; agents: Agent[]; models: Model[]; plan: boolean; stream: MessageStream; onError(e: unknown): void; quote?: Quote | null; onQuoteClear?(): void; onClear?(agentId: string): void; rewind?: Rewind }
+  { card: Card; agents: Agent[]; models: Model[]; plan: boolean; stream: MessageStream; onError(e: unknown): void; quote?: Quote | null; onQuoteClear?(): void; rewind?: Rewind }
 >(
-  function CardComposer({ card, agents, models, plan, stream, onError, quote, onQuoteClear, onClear, rewind }, ref) {
+  function CardComposer({ card, agents, models, plan, stream, onError, quote, onQuoteClear, rewind }, ref) {
     const draftId = draftKey('card', card.id);
     const [text, setText] = useDraft(draftId);
     const box = useRef<HTMLTextAreaElement | null>(null);
@@ -550,6 +556,25 @@ export const CardComposer = forwardRef<
     }, [fill]);
     const usage = useChatUsage(card.id, stream, onError);
     const agent = agents.find((a) => a.id === card.assignee);
+    // Slash commands (#99): the popup while `/` starts the box; Esc hides it until the text changes.
+    const [slashIndex, setSlashIndex] = useState(0);
+    const [slashClosed, setSlashClosed] = useState<string | null>(null);
+    const [slashBusy, setSlashBusy] = useState<string | null>(null);
+    const matches = slashClosed === text || slashBusy ? [] : slashMatches(text);
+    useEffect(() => setSlashIndex(0), [text]);
+    const runSlash = (name: SlashName, arg: string) => {
+      if (slashBusy) return;
+      const typed = text;
+      setText('');
+      setSlashBusy(name === 'compact' ? 'Compacting the conversation…' : 'Clearing the context…');
+      api
+        .command(card.id, name, arg || undefined)
+        .catch((err: unknown) => {
+          setText((cur) => (cur.trim() ? cur : typed));
+          onError(err);
+        })
+        .finally(() => setSlashBusy(null));
+    };
     const att = useAttachments(card.id);
     const [dragging, setDragging] = useState(false);
     const canAttach = !!card.assignee;
@@ -580,13 +605,10 @@ export const CardComposer = forwardRef<
           const t = text.trim();
           const images = att.items.filter((a) => !a.error);
           if (!t && !images.length) return;
+          // An exact command (« /clear », « /compact keep X ») runs; it is never sent as a message.
+          const cmd = images.length ? null : parseSlash(t);
+          if (cmd) return runSlash(cmd.name, cmd.arg);
           if (att.items.some((a) => a.error)) return void att.setNotice('Remove the images that failed (marked !) before sending');
-          // `/clear` (typed, never voice) in a direct chat: a fresh main chat; this one stays in History.
-          if (t === '/clear' && onClear && card.board === 'direct' && card.assignee) {
-            setText('');
-            onClear(card.assignee);
-            return;
-          }
           setText('');
           onQuoteClear?.();
           rewind?.sent();
@@ -613,6 +635,35 @@ export const CardComposer = forwardRef<
             </button>
           </div>
         )}
+        {matches.length > 0 && (
+          <div className="slash-pop" role="listbox" aria-label="Commands">
+            {matches.map((c, i) => (
+              <div
+                key={c.name}
+                role="option"
+                aria-selected={i === slashIndex}
+                className={'slash-op' + (i === slashIndex ? ' on' : '')}
+                onMouseEnter={() => setSlashIndex(i)}
+                onMouseDown={(e) => {
+                  e.preventDefault(); // keep the focus in the box
+                  runSlash(c.name, '');
+                }}
+              >
+                <span className="slash-cmd">/{c.name}</span>
+                <span className="slash-desc">
+                  {c.desc}
+                  {c.arg && <em> · /{c.name} {c.arg}</em>}
+                </span>
+                {i === slashIndex && <span className="slash-hint">↵</span>}
+              </div>
+            ))}
+          </div>
+        )}
+        {slashBusy && (
+          <div className="slash-busy" role="status">
+            <span className="pulse" /> {slashBusy}
+          </div>
+        )}
         <AttachmentStrip a={att} />
         <textarea
           ref={(el) => {
@@ -630,6 +681,15 @@ export const CardComposer = forwardRef<
             addFiles(files);
           }}
           onKeyDown={(e) => {
+            const k = slashKey(e.nativeEvent, { matches, index: slashIndex });
+            if (k) {
+              e.preventDefault();
+              e.stopPropagation();
+              if (k.kind === 'move') setSlashIndex(k.index);
+              else if (k.kind === 'close') setSlashClosed(text);
+              else if (!e.repeat) runSlash(k.name, '');
+              return;
+            }
             if (rewind?.composerKey(e.nativeEvent, text)) return;
             submitOnEnter(e);
           }}

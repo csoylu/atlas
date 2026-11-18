@@ -1,11 +1,11 @@
 import { randomUUID } from 'node:crypto';
 import { mkdirSync, readdirSync, readFileSync, rmSync, statSync } from 'node:fs';
 import { join } from 'node:path';
-import { RESUME_KICK, VOICE_MARK } from '@atlas/shared';
-import type { Agent, Card, ContentBlock, EndedRun, ImageBlock, Model, Run, RunKind, RunStatus, TodoItem, ToolCallDetail, ToolCallTiming } from '@atlas/shared';
+import { RESUME_KICK, USER, VOICE_MARK } from '@atlas/shared';
+import type { Agent, Card, CompactResult, ContentBlock, EndedRun, ImageBlock, Model, Run, RunKind, RunStatus, TodoItem, ToolCallDetail, ToolCallTiming } from '@atlas/shared';
 import type { Db } from './store/db.ts';
 import type { Bus } from './events.ts';
-import { chatTitle, RENAME_AT, type Kanban } from './kanban.ts';
+import { chatTitle, ConflictError, InvalidError, RENAME_AT, type Kanban } from './kanban.ts';
 import type { Agents } from './agents.ts';
 import type { Models } from './models.ts';
 import type { Usage } from './usage.ts';
@@ -117,6 +117,8 @@ export const MAX_TURNS = 150;
 /** Runs an agent on a card's conversation until the agent owes no reply (design §4). One run per card at a time. */
 export class Runner {
   private active = new Map<string, { runId: string; agentId: string; kind: RunKind; ctrl: AbortController; done: Promise<void> }>();
+  /** Cards whose /compact is writing the summary (compactNow). */
+  private compactingCards = new Set<string>();
   private maxTurns: number;
   private leaseMs: number;
   /** This engine instance; owns the leases of the runs it executes. */
@@ -187,12 +189,89 @@ export class Runner {
     ).map((r) => ({ ...toRun(r), next: r.next }));
   }
 
-  /** Where the card's context summary ends (the model reads it instead of the messages up to that seq), if it has one. */
-  summaryOf(cardId: string): { uptoSeq: number; text: string } | null {
-    const row = this.db.prepare('SELECT summary, summary_upto_seq FROM conversations WHERE id = ?').get(this.kanban.get(cardId).conversationId) as
-      | { summary: string | null; summary_upto_seq: number | null }
+  /**
+   * Where the card's context summary ends (the model reads it instead of the messages up to that seq), if it has one.
+   * `byUser`: the latest compaction was /compact and the summary is still the one it wrote.
+   */
+  summaryOf(cardId: string): { uptoSeq: number; text: string; byUser?: true } | null {
+    const conv = this.conversation(this.kanban.get(cardId));
+    if (!conv.summary || conv.uptoSeq == null) return null;
+    const ev = this.db.prepare("SELECT payload FROM card_events WHERE card_id = ? AND kind = 'compacted' ORDER BY id DESC LIMIT 1").get(cardId) as
+      | { payload: string }
       | undefined;
-    return row?.summary && row.summary_upto_seq != null ? { uptoSeq: row.summary_upto_seq, text: row.summary } : null;
+    const last = ev ? (JSON.parse(ev.payload) as { by?: string; upto?: number }) : null;
+    const byUser = last?.by === USER && last.upto === conv.uptoSeq;
+    return { uptoSeq: conv.uptoSeq, text: conv.summary, ...(byUser ? { byUser } : {}) };
+  }
+
+  /**
+   * The /clear point in effect (#99): the agent forgets every message with seq ≤ it. A clear undone, or taken away by a
+   * rewind to a message before it, no longer counts. 0 = none.
+   */
+  contextStart(cardId: string): number {
+    const r = this.db
+      .prepare("SELECT MAX(upto_seq) AS s FROM context_clears WHERE card_id = ? AND state = 'done' AND rewind_id IS NULL")
+      .get(cardId) as { s: number | null };
+    return r.s ?? 0;
+  }
+
+  /** True while /compact is writing the card's summary: runs wait for it (wake refuses, it wakes the card after). */
+  compacting(cardId: string): boolean {
+    return this.compactingCards.has(cardId);
+  }
+
+  /**
+   * /compact (#99): fold every message the model sees into the summary now, with the card's model; `focus` is an extra
+   * instruction to the summarizer. Big backlogs take several calls (each at most half the window of text). Refused
+   * while a run is active: the caller stops it first. Afterwards a reply still owed (a message sent meanwhile) starts.
+   */
+  async compactNow(cardId: string, focus?: string): Promise<CompactResult> {
+    if (this.active.has(cardId) || this.current(cardId)) throw new ConflictError('the agent is working: stop it first');
+    if (this.compactingCards.has(cardId)) throw new ConflictError('already compacting this chat');
+    const card = this.kanban.get(cardId);
+    if (!card.assignee) throw new InvalidError('assign an agent first: /compact uses its model');
+    const { model, provider } = this.models.provider(card.modelId ?? this.agents.get(card.assignee).modelId);
+    // Only a message sent while the summary is written gets an answer afterwards: a reply the stop left owed (the
+    // caller stopped that run on purpose) does not restart the agent (#99, zurich #100).
+    const seqAtStart = this.lastSeq(card.conversationId);
+    this.compactingCards.add(cardId);
+    try {
+      const transcript = this.transcript(card);
+      let conv = this.conversation(card);
+      const restOf = () => (conv.uptoSeq == null ? transcript : transcript.filter((m) => m.seq > conv.uptoSeq!));
+      const folded = restOf();
+      if (!folded.length) throw new ConflictError(transcript.length ? 'nothing new to compact since the last summary' : 'nothing to compact yet');
+      const last = upto(transcript);
+      const signal = AbortSignal.timeout(COMPACT_TIMEOUT_MS);
+      let summary = conv.summary ?? '';
+      for (let round = 0; restOf().length; round++) {
+        if (round >= 8) throw new ModelError('compaction needed more than 8 summary calls: the conversation is too big for this model');
+        const rest = restOf();
+        const room = Math.floor(model.contextWindow * 0.5) - estimateTokens(conv.summary ?? '') - 1000;
+        // Everything left fits in one call: fold it all; else the biggest chunk that does (a cut never splits a tool call).
+        const cut = estimateTokens(renderForSummary(rest)) <= room ? last : (pickCut(rest, 0, room) ?? last);
+        summary = await this.summarize(model, provider, conv.summary, rest.filter((m) => m.seq <= cut), signal, card, focus);
+        this.db.transaction(() => {
+          this.db
+            .prepare('UPDATE conversations SET summary = ?, summary_upto_seq = ?, last_input_tokens = NULL, last_input_upto = NULL, memory_snapshot = NULL WHERE id = ?')
+            .run(summary, cut, card.conversationId);
+          if (cut === last) this.kanban.event(card.id, 'compacted', { by: USER, upto: cut, summaryChars: summary.length, ...(focus ? { focus } : {}) });
+        })();
+        conv = this.conversation(card);
+      }
+      return { uptoSeq: last, messages: folded.filter((m) => m.author !== 'tool').length, summaryChars: summary.length };
+    } finally {
+      this.compactingCards.delete(cardId);
+      const c = this.kanban.get(cardId);
+      // A message sent while the summary was being written: answer it now.
+      if (this.lastSeq(c.conversationId) > seqAtStart) this.wake(cardId, { kind: c.board !== 'direct' && c.status === 'running' ? 'work' : 'chat' });
+    }
+  }
+
+  /** The seq of the conversation's last visible message (0 if none). */
+  private lastSeq(conversationId: string): number {
+    const r = this.db.prepare('SELECT MAX(seq) AS m FROM messages WHERE conversation_id = ? AND rewind_id IS NULL').get(conversationId) as { m: number | null };
+    return r.m ?? 0;
   }
 
   /** Every tool call made on the card, oldest first: when each ran (the chat shows durations and live timers). */
@@ -227,7 +306,7 @@ export class Runner {
   wake(cardId: string, o: WakeOptions = {}): string | null {
     const card = this.kanban.get(cardId);
     const agentId = o.agentId ?? card.assignee;
-    if (!agentId || this.active.has(card.id)) return null;
+    if (!agentId || this.active.has(card.id) || this.compactingCards.has(card.id)) return null;
     const owed = needsTurn(buildMessages(this.transcript(card)));
     if (!owed && !o.kick) return null;
     const runId = 'r_' + randomUUID().slice(0, 8);
@@ -328,10 +407,11 @@ export class Runner {
     this.db.transaction(() => ids.forEach((id) => stmt.run(until, id, this.instance)))();
   }
 
+  /** What the model may see: the messages not hidden by a rewind, after the /clear point (contextStart). */
   private transcript(card: Card) {
     return this.db
-      .prepare('SELECT * FROM messages WHERE conversation_id = ? AND rewind_id IS NULL ORDER BY seq')
-      .all(card.conversationId)
+      .prepare('SELECT * FROM messages WHERE conversation_id = ? AND rewind_id IS NULL AND seq > ? ORDER BY seq')
+      .all(card.conversationId, this.contextStart(card.id))
       .map((r) => {
         const row = r as {
           id: string;
@@ -572,7 +652,7 @@ export class Runner {
     const window = model.contextWindow;
     const overhead = estimateTokens(system) + estimateTokens(tools);
     const budget = Math.floor(window * COMPACT_AT);
-    let conv = this.conversation(card.conversationId);
+    let conv = this.conversation(card);
     const viewOf = (pruneUpto = conv.pruneUpto) => compactedView(transcript, conv.summary, conv.uptoSeq, pruneUpto, conv.todos);
     let view = viewOf();
     // The provider's count of the last turn + the messages since; chars/4 only without a reading.
@@ -591,7 +671,7 @@ export class Runner {
           .prepare('UPDATE conversations SET prune_upto_seq = ?, last_input_tokens = NULL, last_input_upto = NULL, memory_snapshot = NULL WHERE id = ?')
           .run(pruneUpto, card.conversationId);
         this.kanban.event(card.id, 'pruned', { upto: pruneUpto, savedTokens: saved });
-        conv = this.conversation(card.conversationId);
+        conv = this.conversation(card);
         view = pruned;
         size -= saved;
         if (size <= window * COMPACT_TO) return { view, exact: true };
@@ -617,23 +697,29 @@ export class Runner {
         this.kanban.event(card.id, 'compaction_failed', { error });
         break;
       }
-      conv = this.conversation(card.conversationId);
+      conv = this.conversation(card);
       view = viewOf();
       size = overhead + estimateTokens(view);
     }
     return size > budget ? { view: degrade(view, budget, overhead), exact: false } : { view, exact: true };
   }
 
-  private conversation(id: string): { summary: string | null; uptoSeq: number | null; pruneUpto: number | null; reading: Reading | null; todos: TodoItem[] | null } {
+  /**
+   * The conversation's compaction state. A summary or prune point from before the /clear point is ignored (a rewind
+   * undone can bring back a clear that is later than the summary).
+   */
+  private conversation(card: Card): { summary: string | null; uptoSeq: number | null; pruneUpto: number | null; reading: Reading | null; todos: TodoItem[] | null } {
+    const id = card.conversationId;
+    const start = this.contextStart(card.id);
     const r = this.db
       .prepare('SELECT summary, summary_upto_seq, prune_upto_seq, last_input_tokens, last_input_upto, todos FROM conversations WHERE id = ?')
       .get(id) as
       | { summary: string | null; summary_upto_seq: number | null; prune_upto_seq: number | null; last_input_tokens: number | null; last_input_upto: number | null; todos: string | null }
       | undefined;
     return {
-      summary: r?.summary ?? null,
-      uptoSeq: r?.summary_upto_seq ?? null,
-      pruneUpto: r?.prune_upto_seq ?? null,
+      summary: r?.summary_upto_seq != null && r.summary_upto_seq > start ? (r.summary ?? null) : null,
+      uptoSeq: r?.summary_upto_seq != null && r.summary_upto_seq > start ? r.summary_upto_seq : null,
+      pruneUpto: r?.prune_upto_seq != null && r.prune_upto_seq > start ? r.prune_upto_seq : null,
       reading: r?.last_input_tokens != null && r.last_input_upto != null ? { tokens: r.last_input_tokens, upto: r.last_input_upto } : null,
       todos: r?.todos ? (JSON.parse(r.todos) as TodoItem[]) : null,
     };
@@ -689,10 +775,12 @@ export class Runner {
     messages: ReturnType<Runner['transcript']>,
     signal: AbortSignal,
     card: Card,
+    focus?: string,
   ): Promise<string> {
     const body =
       (previous ? `Summary so far:\n${previous}\n\nNext part of the conversation, to fold into it:\n\n` : 'Conversation:\n\n') +
       renderForSummary(messages) +
+      (focus ? `\n\nThe user asked for this summary (/compact) with this focus: ${focus}` : '') +
       '\n\nWrite the updated summary.';
     const res = await provider.complete(
       {
@@ -953,6 +1041,9 @@ export function cleanTitle(raw: string): string {
   const line = raw.trim().split('\n')[0]!.replace(/^(title|titre)\s*:\s*/i, '').replace(/^["'“«*`]+|["'”»*`.]+$/g, '').trim();
   return line ? chatTitle(line) : '';
 }
+
+/** /compact gives up after this long (all its summary calls together). */
+const COMPACT_TIMEOUT_MS = 5 * 60_000;
 
 const SUMMARY_SYSTEM = [
   "You compress an agent's working conversation so the agent can continue it with less context.",

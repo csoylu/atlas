@@ -15,6 +15,9 @@ export function SystemRow(props: {
   renderText(text: string): ReactNode;
   onRetry?(): Promise<unknown>;
   onUndo?(rewindId: string): Promise<unknown>;
+  /** A /clear row (#99): show or hide the messages before it, and undo it. */
+  onToggleEarlier?(): void;
+  onUndoClear?(clearId: string): Promise<unknown>;
 }) {
   const { row: r, cards } = props;
   // A message from a card: its title when it's on the board, else who sent it.
@@ -45,7 +48,7 @@ export function SystemRow(props: {
   );
 }
 
-function SysBodyView({ row, renderText, onRetry, onUndo }: Parameters<typeof SystemRow>[0]) {
+function SysBodyView({ row, renderText, onRetry, onUndo, onToggleEarlier, onUndoClear }: Parameters<typeof SystemRow>[0]) {
   const b = row.body!;
   const [busy, setBusy] = useState(false);
   const act = (fn: () => Promise<unknown>) => {
@@ -54,6 +57,24 @@ function SysBodyView({ row, renderText, onRetry, onUndo }: Parameters<typeof Sys
     void fn().finally(() => setBusy(false));
   };
   if (b.kind === 'markdown') return <>{renderText(b.text)}</>;
+  if (b.kind === 'clear')
+    return (
+      <>
+        <p className="sys-clear-note">Nothing was deleted: the messages stay here and history_search still finds them. The agent doesn't see them any more.</p>
+        <div className="sys-foot">
+          {onToggleEarlier && b.hidden > 0 && (
+            <button type="button" className="chat-row-open" onClick={onToggleEarlier}>
+              {b.expanded ? 'Hide earlier messages' : `Show ${b.hidden} earlier message${b.hidden === 1 ? '' : 's'}`}
+            </button>
+          )}
+          {b.undoId && onUndoClear && (
+            <button type="button" className="chat-row-open" disabled={busy} onClick={() => act(() => onUndoClear(b.undoId!))}>
+              Undo clear
+            </button>
+          )}
+        </div>
+      </>
+    );
   if (b.kind === 'error')
     return (
       <>

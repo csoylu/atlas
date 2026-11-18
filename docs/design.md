@@ -299,6 +299,20 @@ Statuses: `triage → todo → ready → running → (blocked | review) → done
       per browser (localStorage `atlas.memory.digest`); a newer change brings it back. It counts in the badge while unread.
     - Each agent card in Settings → Agents (count + budget) links to its scope (`…/memory/agent:<id>`); the old editors are gone.
 
+### Slash commands: /clear and /compact (card #99, built 17 Nov 2026, `engine/src/slash.ts`, `ui/src/slashCommands.ts`)
+- The composer opens a popup when `/` is the first character (↑/↓, Enter/Tab runs, Esc closes); an exact command is
+  never sent as a message. `POST /api/cards/:id/command {command, arg?}`. A running agent is stopped first (as Stop,
+  not a rewind), then the command acts.
+- `/compact [focus]`: `Runner.compactNow` folds every message the model sees into `conversations.summary` now (several
+  calls if it doesn't fit), the focus as an extra instruction; a `compacted` card event with `by: user` makes the
+  timeline say « Compacted by you ».
+- `/clear`: a `context_clears` row (migration 0039) at the last seq. The model's view (`Runner.transcript`) starts after
+  the latest clear in effect; summary, prune point and todos are reset in the same transaction, their old values kept
+  in `before` for Undo (`POST /api/clears/:id/undo`, only while no message came after it). Nothing is deleted: the chat
+  folds the earlier messages behind « Context cleared by you · N earlier messages » (expandable); history_search
+  still finds them. A rewind to a message before a clear sets its `rewind_id` (it no longer counts); undoing the rewind
+  brings it back. The old « /clear = new main chat » is gone (the API route stays).
+
 ## 9. Scheduler
 - `schedules` rows with a cron expression or a one-shot time, in the user's timezone. Missed runs while the engine was
   down: run once at start (not once per missed slot), noted in the run.

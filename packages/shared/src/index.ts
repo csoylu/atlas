@@ -172,6 +172,15 @@ export interface RewindResult extends RewindPreview {
   text: string;
 }
 export const RewindRequest = z.object({ seq: z.number().int().positive().optional() });
+/** A composer slash command (#99): /clear, or /compact with an optional focus for the summary. */
+export const SlashCommand = z.object({ command: z.enum(['clear', 'compact']), arg: z.string().trim().max(2000).optional() });
+export type SlashCommand = z.infer<typeof SlashCommand>;
+/** What /compact did: `messages` folded into the summary (tool results not counted). */
+export interface CompactResult {
+  uptoSeq: number;
+  messages: number;
+  summaryChars: number;
+}
 
 /** One item of an agent's todo list (todo_write: the full list each call, stored per conversation). */
 export const TodoItem = z.object({
@@ -284,8 +293,20 @@ export interface RewindEvent {
 export interface Timeline {
   runs: EndedRun[];
   rewinds: RewindEvent[];
-  /** The model sees `text` instead of every message with seq ≤ uptoSeq. */
-  summary: { uptoSeq: number; text: string } | null;
+  /** The model sees `text` instead of every message with seq ≤ uptoSeq. `byUser`: made by /compact (else automatic). */
+  summary: { uptoSeq: number; text: string; byUser?: boolean } | null;
+  /** /clear points in effect, oldest first. Absent from engines before #99. */
+  clears?: ClearEvent[];
+}
+/** A /clear in effect (#99): the agent forgets every message with seq ≤ uptoSeq; the chat folds them behind the row. */
+export interface ClearEvent {
+  id: string;
+  uptoSeq: number;
+  at: string;
+  /** Messages before it (tool results not counted). */
+  hidden: number;
+  /** Undo would work now: the latest clear, nothing written since. */
+  undoable: boolean;
 }
 
 /** When one tool call of a run ran (the tool_calls table): the chat shows its duration, or a live timer. */

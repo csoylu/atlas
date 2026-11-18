@@ -4,11 +4,12 @@ import { existsSync } from 'node:fs';
 import { join, relative } from 'node:path';
 import { WebSocketServer } from 'ws';
 import { ZodError } from 'zod';
-import { IMAGE_MAX_BYTES, isTimeZone, PostMessage, RewindRequest, ScheduleWhen, UpdateVoice } from '@atlas/shared';
+import { IMAGE_MAX_BYTES, isTimeZone, PostMessage, RewindRequest, ScheduleWhen, SlashCommand, UpdateVoice } from '@atlas/shared';
 import type { Agents } from './agents.ts';
 import type { Models } from './models.ts';
 import type { Runner } from './runner.ts';
 import type { Rewinds } from './rewind.ts';
+import type { Slash } from './slash.ts';
 import type { Dispatcher } from './dispatcher.ts';
 import type { Settings } from './settings.ts';
 import { parseMemoryRef, type Memories } from './memory.ts';
@@ -45,6 +46,7 @@ export function createApi(deps: {
   models: Models;
   runner: Runner;
   rewinds: Rewinds;
+  slash: Slash;
   dispatcher: Dispatcher;
   settings: Settings;
   canvases: Canvases;
@@ -70,7 +72,7 @@ export function createApi(deps: {
   /** Login and cross-site checks (auth.ts). */
   auth: Auth;
 }): Server {
-  const { kanban, agents, models, runner, rewinds, dispatcher, settings, canvases, documents, memories, cleanup, schedules, local, accounts, chatgpt, claude, plans, notifications, usage, bus, auth } = deps;
+  const { kanban, agents, models, runner, rewinds, slash, dispatcher, settings, canvases, documents, memories, cleanup, schedules, local, accounts, chatgpt, claude, plans, notifications, usage, bus, auth } = deps;
   const app = express();
   const uploads = new Uploads(deps.dataDir);
   try {
@@ -205,7 +207,7 @@ export function createApi(deps: {
   /** What the chat shows between messages (#66): unfinished runs, rewinds in effect, where the context summary ends. */
   app.get('/api/cards/:id/timeline', (req, res) => {
     const id = req.params.id;
-    const timeline: Timeline = { runs: runner.endedRuns(id), rewinds: rewinds.events(id), summary: runner.summaryOf(id) };
+    const timeline: Timeline = { runs: runner.endedRuns(id), rewinds: rewinds.events(id), summary: runner.summaryOf(id), clears: slash.events(id) };
     res.json(timeline);
   });
   app.post('/api/cards/:id/retry', async (req, res) => {
@@ -224,6 +226,13 @@ export function createApi(deps: {
   app.post('/api/cards/:id/rewind', async (req, res) => {
     const { seq } = RewindRequest.parse(req.body ?? {});
     res.json(await rewinds.rewind(req.params.id, seq));
+  });
+  /** Composer slash commands (#99, slash.ts): /clear and /compact [focus]; a running agent is stopped first. */
+  app.post('/api/cards/:id/command', async (req, res) => {
+    res.json(await slash.run(req.params.id, SlashCommand.parse(req.body ?? {})));
+  });
+  app.post('/api/clears/:id/undo', (req, res) => {
+    res.json(slash.undo(req.params.id));
   });
   app.post('/api/rewinds/:id/undo', async (req, res) => {
     const r = await rewinds.undo(req.params.id);
@@ -244,7 +253,7 @@ export function createApi(deps: {
   app.post('/api/agents/:id/main-chat', (req, res) => {
     res.json(kanban.mainChat(req.params.id));
   });
-  /** `/clear`: a fresh main chat; the previous one stays in History. */
+  /** A fresh main chat; the previous one stays in History (the composer's /clear clears the context instead, #99). */
   app.post('/api/agents/:id/main-chat/new', (req, res) => {
     res.status(201).json(kanban.newMainChat(req.params.id));
   });
