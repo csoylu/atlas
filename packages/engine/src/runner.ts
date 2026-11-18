@@ -999,7 +999,7 @@ export class Runner {
       `- Be concise: say what you did and how you checked it. Reply in the language ${name} writes in.`,
       '',
       '# Workspace',
-      `Working directory: ${workdir}. File tools and shell run there; paths outside it are refused.`,
+      `Working directory: ${workdir}. File tools and shell run there. File tools read the workdir and the temp folders (/tmp, $TMPDIR) and write only in the workdir.`,
       `Files there are served at /api/files/${agent.id}/<path>: show pages, built apps (dist/) or images on a canvas`,
       'with a url node. Canvases: html for mockups, markdown for notes, url nodes for svg diagrams (diagrams/*.svg) and apps. Mention the',
       'canvas id, and pass show: [node ids] to canvas_write to display nodes inline in the chat.',

@@ -6,6 +6,10 @@ computed by `scripts/release/changelog.mjs` from the oldest entry to the newest,
 `Fixed` → patch, `Added` or `Changed` → minor, `Breaking` (data or settings stop working without action) → major.
 Never type a version number.
 
+## Changed · #137 · Agents can read files in the temp folders (/tmp, $TMPDIR) without copying them into their workspace
+
+read_file, grep, glob and list_files now also open paths under /tmp, /private/tmp and the system temp folder, read-only, so an agent can look at a ui-check or Playwright screenshot where it was saved. Links are resolved first: a link in /tmp to a file elsewhere is refused. write_file and edit_file still write only in the agent's workspace. A refused path says the rule: "read: workdir and temp folders; write: workdir only". Paths outside the workspace (temp and saved outputs) now show as absolute paths in grep and glob results. No migration.
+
 ## Fixed · #123 · The Windows installer builds again in releases
 
 The Windows packaging step runs in bash, so the version setting reaches electron-builder (PowerShell had turned it into a file name). This is also the first release installed with one click from "Update available".
