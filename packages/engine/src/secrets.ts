@@ -1,4 +1,4 @@
-import { CreateSecret, UpdateSecret, type SecretGrant, type SecretInfo, type SecretKind, type SecretList } from '@atlas/shared';
+import { CreateSecret, UpdateSecret, type SecretGrant, type SecretInfo, type SecretKind, type SecretList, type SecretsPassword, type SecretStoreStatus } from '@atlas/shared';
 import type { Bus } from './events.ts';
 import { ConflictError, NotFoundError } from './kanban.ts';
 import type { Db } from './store/db.ts';
@@ -15,7 +15,24 @@ export interface SecretStore {
   delete(name: string): void;
   /** Shown in Settings, e.g. 'macOS Keychain'. */
   readonly label: string;
+  /**
+   * Server store (secrets.enc, #208): values need a password. Locked, names() still answers, get/set/delete throw
+   * « secret store locked ». Absent: the store is always open (the desktop keychain).
+   */
+  readonly lock?: SecretLock;
 }
+
+export interface SecretLock {
+  status(): SecretStoreStatus;
+  /** create: no file yet, this password makes it. */
+  unlock(password: string, source: 'env' | 'ui', create?: boolean): Promise<void>;
+  lockNow(): void;
+  changePassword(current: string, next: string): Promise<void>;
+}
+
+/** Same text as secretFile.ts SECRETS_LOCKED (kept here so this file needs no import from it). */
+const LOCKED = 'secret store locked: unlock it in Settings → Secrets';
+const isLocked = (store?: SecretStore) => !!store?.lock?.status().locked;
 
 export const SECRET_NAME = /^[A-Z][A-Z0-9_]{1,63}$/;
 /**
@@ -27,6 +44,7 @@ export const isTokenEntry = (name: string) => /^(CLAUDE|CHATGPT)_TOKENS(_[A-Z0-9
 /** Engine env = process env + stored secrets; setting a secret updates it live (models read it at each call). */
 export function envWithSecrets(base: NodeJS.ProcessEnv, store?: SecretStore): NodeJS.ProcessEnv {
   const env = { ...base };
+  if (isLocked(store)) return env; // a locked server store: its values arrive at the unlock (Secrets.unlock)
   for (const n of store?.names() ?? []) if (!isTokenEntry(n)) env[n] = store!.get(n);
   return env;
 }
@@ -71,9 +89,81 @@ export class Secrets {
     private db: Db,
     private bus: Bus,
     readonly store: SecretStore | undefined,
-    /** The engine's environment (server mode: model keys come from it). */
+    /** The engine's environment (server mode: model keys come from it). Stored values are copied in while unlocked. */
     private env: NodeJS.ProcessEnv,
+    /** The environment the engine started with: what a name gets back when a lock takes the stored value away. */
+    private base: NodeJS.ProcessEnv = {},
   ) {}
+
+  // ── Lock (#208, server secrets.enc) ─────────────────────────────────────────────────────────────────────────────
+
+  status(): SecretStoreStatus {
+    if (!this.store) return { kind: 'env', exists: false, locked: false, since: null, source: null, error: null };
+    if (!this.store.lock) return { kind: 'keychain', exists: true, locked: false, since: null, source: null, error: null };
+    return this.store.lock.status();
+  }
+
+  locked(): boolean {
+    return isLocked(this.store);
+  }
+
+  private needLock() {
+    const lock = this.store?.lock;
+    if (!lock) throw new ConflictError(this.store ? `${this.store.label} has no password: it is open while you are signed in to this computer` : 'this engine has no secret store: its keys come from its environment');
+    return lock;
+  }
+
+  /** Stored values into the engine env (models read their keys there at each call), or out of it when locked. */
+  private syncEnv(): void {
+    const locked = this.locked();
+    for (const n of this.store?.names() ?? []) {
+      if (isTokenEntry(n)) continue;
+      if (!locked) this.env[n] = this.store!.get(n);
+      else if (this.base[n] !== undefined) this.env[n] = this.base[n];
+      else delete this.env[n];
+    }
+  }
+
+  private changed(): void {
+    this.syncEnv();
+    if (!this.locked()) this.sync();
+    this.bus.emit({ type: 'secrets.status', status: this.status() });
+    this.bus.emit({ type: 'secrets.updated' });
+  }
+
+  async unlock(password: string, source: 'env' | 'ui' = 'ui'): Promise<SecretStoreStatus> {
+    await this.needLock().unlock(password, source);
+    this.changed();
+    return this.status();
+  }
+
+  lockNow(): SecretStoreStatus {
+    this.needLock().lockNow();
+    this.changed();
+    return this.status();
+  }
+
+  /** No file yet: `next` creates it (no `current`). Else the current password, checked, then re-encryption. */
+  async setPassword(p: SecretsPassword): Promise<SecretStoreStatus> {
+    const lock = this.needLock();
+    if (!lock.status().exists) {
+      if (p.current !== undefined) throw new ConflictError('there is no secrets file yet: leave the current password empty');
+      await lock.unlock(p.next, 'ui', true);
+    } else {
+      if (p.current === undefined) throw new ConflictError('give the current secrets password');
+      await lock.changePassword(p.current, p.next);
+    }
+    this.changed();
+    return this.status();
+  }
+
+  /**
+   * Names held by a locked store (null when it is open): a model whose key is one of them and missing from the
+   * environment stops with « secret store locked ».
+   */
+  lockedNames(): Set<string> | null {
+    return this.locked() ? new Set(this.store!.names()) : null;
+  }
 
   /** Env names of model credentials: models' credential_env and Anthropic accounts' keys. */
   private modelKeyNames(): string[] {
@@ -94,7 +184,7 @@ export class Secrets {
    * whose value is gone was deleted (API keys page). An agent row without a value stays: it shows « no value ».
    */
   sync(): void {
-    if (!this.store) return;
+    if (!this.store || this.locked()) return;
     const names = this.stored();
     const rows = new Map((this.db.prepare('SELECT name, kind FROM secrets').all() as { name: string; kind: SecretKind }[]).map((r) => [r.name, r.kind]));
     const now = new Date().toISOString();
@@ -122,6 +212,7 @@ export class Secrets {
     const rows = this.db.prepare('SELECT * FROM secrets ORDER BY kind DESC, name').all() as SecretRow[];
     return {
       store: this.store?.label ?? null,
+      status: this.status(),
       names: [...names].filter((n) => !isTokenEntry(n)),
       secrets: rows.filter((r) => !isTokenEntry(r.name)).map((r) => toInfo(r, names.has(r.name))),
     };
@@ -135,6 +226,8 @@ export class Secrets {
 
   private needStore(): SecretStore {
     if (!this.store) throw new ConflictError('this engine has no secret store: its keys come from its environment');
+    if (this.locked())
+      throw new ConflictError(this.status().exists ? LOCKED : 'secret store locked: no secrets password yet, set one in Settings → Secrets (or ATLAS_SECRETS_PASSWORD)');
     return this.store;
   }
 
@@ -238,6 +331,12 @@ export class Secrets {
         throw new Error(`secret ${r.name} is not granted to ${agentId}: ask the user to grant it in Settings → Secrets`);
     if (!mine.length) return env;
     if (!this.store) throw new Error('secrets are not available: this engine has no secret store');
+    if (this.locked()) {
+      // Locked: a command that uses a granted secret stops; one that uses none runs, without secrets.
+      const needed = mine.filter((r) => mentions(command, r.name)).map((r) => r.name);
+      if (needed.length) throw new Error(`${LOCKED} (the command uses ${needed.map((n) => '$' + n).join(', ')})`);
+      return env;
+    }
     let names: Set<string>;
     try {
       names = this.stored();
@@ -282,7 +381,7 @@ export class Secrets {
     const add = (name: string, value: unknown) => {
       if (typeof value === 'string' && value.length >= REDACT_MIN && !out.has(value)) out.set(value, name);
     };
-    for (const n of this.store?.names() ?? []) {
+    for (const n of this.locked() ? [] : (this.store?.names() ?? [])) {
       const v = this.store!.get(n);
       if (v === undefined) continue;
       if (!isTokenEntry(n)) {

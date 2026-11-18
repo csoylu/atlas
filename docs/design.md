@@ -492,8 +492,29 @@ the diagram « Secrets in Atlas: flow » and the mockup « Settings → Secrets 
   the model keys and passwords of the engine environment) becomes `[secret NAME]`, longest first; the count goes in
   `tool_calls.secrets_hidden` (`ToolCallTiming.secretsHidden`, the chat's « 1 secret hidden »). A store that can't be
   read withholds the output with the reason. Background log files on disk are not rewritten (reads of them are).
-- Still to come (#205 series): the Settings → Secrets page, the agents' `secret_set` tool, the server's encrypted
-  `secrets.enc` store with its lock.
+- **Server store** (#208, `engine/src/secretFile.ts`): `<dataDir>/secrets.enc`, one JSON file: a header in the clear
+  (version, scrypt cost N=2^15 r=8 p=1 and its random salt, the stored names, a key check) and the values encrypted
+  with AES-256-GCM (random IV per write, the header as additional data). Key = scrypt(secrets password), 64 bytes: AES
+  key + HMAC key for the check (a wrong password is told apart from a changed file). node:crypto only. The password
+  and the key are never written to disk, SQLite or logs; the key stays in memory from the unlock to Lock now or the end
+  of the process. Every write replaces the file atomically (temp file 0600, fsync, rename, fsync of the folder; a temp
+  file left by a kill is removed at the next start), so a kill leaves the old file or the new one (SIGKILL test).
+  - **Unlock**: `ATLAS_SECRETS_PASSWORD` at start (unattended restart, rule 2: interrupted runs resume with their
+    secrets; the first start with it creates the file), or typed in Settings → Secrets. A wrong env password does not
+    stop the engine: it starts locked, the error is printed and in the status. A wrong password answers 403 after 1 s,
+    attempts one at a time. A tampered file (data, tag, IV, names) is refused with « secrets.enc was changed ».
+  - **Locked** (names still readable, values not): a command that mentions a granted secret, a model whose key is
+    only in the store (not in the engine env; checked in `Models.provider`, so the dispatcher shows it on the card and
+    starts the run after the unlock), and every write (`secret_set`, API keys page, PUT/POST/DELETE) stop with
+    « secret store locked: unlock it in Settings → Secrets ». Everything else keeps working, env-var keys included.
+    Stored values are copied into the engine env at the unlock and removed at the lock. A command started before
+    Lock now keeps its env, and its later output is no longer redacted for store values (the key is gone).
+  - **API**: `GET /api/secrets/status` → `SecretStoreStatus` (kind `keychain` | `file` | `env`, exists, locked, since,
+    source `env` | `ui`, error; also in `GET /api/secrets` as `status`, and a `secrets.status` event for the sidebar
+    badge), `POST /api/secrets/unlock {password}`, `POST /api/secrets/lock`, `POST /api/secrets/password {current?,
+    next}` (no file yet: creates it; else checks `current`, re-encrypts with a new salt). Passwords: 8+ characters.
+  - Plan sign-ins (ChatGPT, Claude) stay desktop-only: the server store does not take them. Desktop keeps the Keychain.
+- Still to come (#205 series): the Settings → Secrets page (and its unlock form), the agents' `secret_set` tool.
 
 ## 11. Artifacts (replaced canvases, #120, 18 Nov 2026)
 - An artifact is a file in an agent's workspace: markdown (`docs/*.md`), html (`pages/*.html`), svg (`diagrams/*.svg`)

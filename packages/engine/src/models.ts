@@ -148,9 +148,33 @@ export class Models {
     this.before = local;
   }
   /** Anthropic models without their own key use the accounts (accounts.ts), in priority order. */
-  private accounts: { provider(): Provider; list(): { enabled: boolean; keyPresent: boolean }[] } | null = null; // provider() throws when no account can be used
-  setAccounts(a: { provider(): Provider; list(): { enabled: boolean; keyPresent: boolean }[] }) {
+  private accounts: { provider(): Provider; list(): { enabled: boolean; keyPresent: boolean; secret: string }[] } | null = null; // provider() throws when no account can be used
+  setAccounts(a: { provider(): Provider; list(): { enabled: boolean; keyPresent: boolean; secret: string }[] }) {
     this.accounts = a;
+  }
+
+  /** Names held by a locked server secret store (#208), null when open: see lockedCheck. */
+  private lockedNames: () => Set<string> | null = () => null;
+  setLockedNames(fn: () => Set<string> | null) {
+    this.lockedNames = fn;
+  }
+
+  /**
+   * A model whose key is only in a locked secrets.enc stops with « secret store locked » (not « key missing »): the
+   * fix is the unlock. A key also in the engine's environment keeps working, and so does any account with one.
+   */
+  private lockedCheck(model: Model): void {
+    const locked = this.lockedNames();
+    if (!locked?.size) return;
+    const needs = model.credentialEnv
+      ? [model.credentialEnv]
+      : this.pooled(model)
+        ? this.accounts!.list().filter((a) => a.enabled).map((a) => a.secret)
+        : model.provider === 'claude_code'
+          ? ['CLAUDE_CODE_OAUTH_TOKEN', 'ANTHROPIC_API_KEY']
+          : [];
+    if (needs.length && !needs.some((n) => this.env[n]?.trim()) && needs.some((n) => locked.has(n)))
+      throw new ModelError(`model ${model.id}: secret store locked: unlock it in Settings → Secrets`);
   }
   private pooled(m: { provider: string; credentialEnv: string | null }): boolean {
     return m.provider === 'anthropic' && !m.credentialEnv && !!this.accounts && this.factory === realProviders;
@@ -171,6 +195,7 @@ export class Models {
   /** The provider for a model, with the same account protections for every request. */
   provider(id: string): { model: Model; provider: Provider } {
     const model = this.get(id);
+    this.lockedCheck(model);
     const provider =
       model.provider === 'chatgpt' && this.chatgpt && this.factory === realProviders
         ? this.chatgpt.provider()

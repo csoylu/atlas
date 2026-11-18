@@ -1,9 +1,10 @@
 import { existsSync } from 'node:fs';
 import { join, resolve } from 'node:path';
 import { startEngine } from './index.ts';
+import { serverSecretStore } from './secretFile.ts';
 
 const root = resolve(import.meta.dirname, '../../..');
-// Secrets come from env vars; .env at the repo root is loaded if present (gitignored).
+// Model keys can come from env vars; .env at the repo root is loaded if present (gitignored).
 if (existsSync(join(root, '.env'))) process.loadEnvFile(join(root, '.env'));
 
 const dataDir = resolve(process.env.ATLAS_DATA_DIR ?? join(root, 'data'));
@@ -15,8 +16,12 @@ const password = process.env.ATLAS_PASSWORD || null;
 
 // Agent shells (#136): on the user's own machine they get the login shell's PATH; a server keeps its own environment.
 const shellPath = password ? 'engine' : 'login';
-const engine = await startEngine({ dbFile: join(dataDir, 'atlas.db'), dataDir, port, host, uiDir, password, shellPath });
-console.log(`engine listening on ${engine.url} (data: ${dataDir}; ${password ? 'login required' : 'no login, localhost only'})`);
+// Secrets (#208): <dataDir>/secrets.enc, unlocked at start by ATLAS_SECRETS_PASSWORD, or later in Settings → Secrets.
+const secrets = await serverSecretStore(dataDir, process.env);
+const engine = await startEngine({ dbFile: join(dataDir, 'atlas.db'), dataDir, port, host, uiDir, password, shellPath, secrets });
+const lock = secrets.status();
+const lockText = !lock.exists ? 'no secrets file yet' : lock.locked ? 'secrets locked: unlock them in Settings → Secrets' : 'secrets unlocked';
+console.log(`engine listening on ${engine.url} (data: ${dataDir}; ${password ? 'login required' : 'no login, localhost only'}; ${lockText})`);
 
 let stopping = false;
 const shutdown = async () => {

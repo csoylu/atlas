@@ -56,7 +56,10 @@ export interface EngineOptions {
   memoryReview?: boolean;
   /** Start the dispatcher (default true). Runner-only tests turn it off. */
   dispatch?: boolean;
-  /** Desktop: keys kept in the OS keychain, editable from Settings. */
+  /**
+   * Desktop: keys kept in the OS keychain, editable from Settings. Server (main.ts): secrets.enc, locked until its
+   * password is given (secretFile.ts); plan sign-ins stay desktop-only there.
+   */
   secrets?: SecretStore;
   /** Local model server options (tests pass binary: null and a fake fetch; manageLocal: false skips the watcher). */
   local?: { url?: string; binary?: string | null; fetch?: typeof fetch };
@@ -137,18 +140,21 @@ export async function startEngine(opts: EngineOptions): Promise<Engine> {
   const accounts = new Accounts(db, env, opts.secrets);
   models.setAccounts(accounts);
   const notifications = new Notifications(db, bus, kanban);
-  const plans = new PlanAccounts(db, bus, opts.secrets, notifications, opts.claude?.now ?? opts.chatgpt?.now);
-  const chatgpt = new ChatGpt(bus, opts.secrets, plans, opts.chatgpt);
+  // Plan sign-ins (ChatGPT, Claude) need the keychain: a server's password store doesn't take them (#208).
+  const planStore = opts.secrets?.lock ? undefined : opts.secrets;
+  const plans = new PlanAccounts(db, bus, planStore, notifications, opts.claude?.now ?? opts.chatgpt?.now);
+  const chatgpt = new ChatGpt(bus, planStore, plans, opts.chatgpt);
   models.setChatGpt(chatgpt);
-  const claude = new ClaudePlan(bus, opts.secrets, env, plans, opts.claude);
+  const claude = new ClaudePlan(bus, planStore, env, plans, opts.claude);
   models.setClaude(claude);
   const usage = new Usage(db, bus);
   const memories = new Memories(db, bus);
   const workflows = new Workflows(db, bus, kanban);
   const cleanup = new MemoryCleanup(db, bus, memories);
   const settings = new Settings(db);
-  const secrets = new Secrets(db, bus, opts.secrets, env);
+  const secrets = new Secrets(db, bus, opts.secrets, env, opts.env ?? process.env);
   secrets.sync();
+  models.setLockedNames(() => secrets.lockedNames());
   const shellEnv = new ShellEnv(typeof opts.shellPath === 'object' ? opts.shellPath : { mode: opts.shellPath ?? 'engine' });
   const voice = opts.voice ? new Voice(db, bus, opts.voice) : null;
   let url = '';

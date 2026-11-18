@@ -810,7 +810,9 @@ export type ServerEvent =
   | { type: 'voice.updated'; status: VoiceStatus }
   | { type: 'update.updated'; status: UpdateStatus }
   /** A secret was added, edited, rotated, deleted or used: reload Settings → Secrets (names and metadata only). */
-  | { type: 'secrets.updated' };
+  | { type: 'secrets.updated' }
+  /** The server's secrets.enc was unlocked, locked or got a new password (#208): the sidebar badge and Settings → Secrets. */
+  | { type: 'secrets.status'; status: SecretStoreStatus };
 
 /* ── Voice mode (desktop only): « Hi Atlas », all local (docs/voice-research.md) ─────────────────────── */
 
@@ -1239,9 +1241,27 @@ export interface SecretInfo {
   lastUsedAt: string | null;
   lastUsedBy: string | null;
 }
+/**
+ * Where secret values are kept (#208): 'keychain' (desktop, always open), 'file' (server: secrets.enc, locked until its
+ * password is given), 'env' (no store: keys come from the engine's environment, nothing can be written).
+ */
+export interface SecretStoreStatus {
+  kind: 'keychain' | 'file' | 'env';
+  /** secrets.enc exists (a password was set). False: the first password creates it. Always true for the keychain. */
+  exists: boolean;
+  /** Values can't be read or written: commands that use a secret, models whose key is in the store and new secrets stop. */
+  locked: boolean;
+  /** When it was last unlocked or locked (null for the keychain and env). */
+  since: string | null;
+  /** Who unlocked it: ATLAS_SECRETS_PASSWORD at start, or typed in Settings. Null when locked. */
+  source: 'env' | 'ui' | null;
+  /** ATLAS_SECRETS_PASSWORD was set but did not unlock the file: why. */
+  error: string | null;
+}
 export interface SecretList {
   /** Where values are kept ('macOS Keychain'), or null: this engine has no store (keys come from its environment). */
   store: string | null;
+  status: SecretStoreStatus;
   /** Names with a stored value (plan sign-ins excluded), for the API keys and Model list pages. */
   names: string[];
   secrets: SecretInfo[];
@@ -1256,6 +1276,12 @@ export const CreateSecret = z
   })
   .strict();
 export type CreateSecret = z.infer<typeof CreateSecret>;
+/** POST /api/secrets/unlock (server): the secrets password, kept in memory only. */
+export const UnlockSecrets = z.object({ password: z.string().min(1).max(1024) }).strict();
+export type UnlockSecrets = z.infer<typeof UnlockSecrets>;
+/** POST /api/secrets/password (server): no `current` the first time (it creates secrets.enc), else the current one. */
+export const SecretsPassword = z.object({ current: z.string().min(1).max(1024).optional(), next: z.string().min(8).max(1024) }).strict();
+export type SecretsPassword = z.infer<typeof SecretsPassword>;
 /** Names are fixed after creation; the value changes through PUT /api/secrets/:name only. */
 export const UpdateSecret = z
   .object({ description: z.string().trim().max(500), grant: z.enum(['none', 'agents', 'all']), agents: z.array(z.string()) })
