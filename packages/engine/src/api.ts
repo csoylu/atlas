@@ -32,6 +32,7 @@ import type { PlanAccounts } from './plan-accounts.ts';
 import type { Notifications } from './notifications.ts';
 import type { Usage } from './usage.ts';
 import type { Voice } from './voice.ts';
+import type { Updater } from './updater.ts';
 import { DEFAULT_CONTEXT_WINDOW, MEMORY_BUDGET, type About, type Timeline } from '@atlas/shared';
 
 /** Who the UI acts as. One user (design §1). */
@@ -63,6 +64,7 @@ export function createApi(deps: {
   usage: Usage;
   /** Desktop only; null elsewhere (the /api/voice routes answer 404). */
   voice: Voice | null;
+  updater: Updater;
   bus: Bus;
   dataDir: string;
   version: string;
@@ -124,6 +126,17 @@ export function createApi(deps: {
   app.get('/api/about', (_req, res) => {
     const about: About = { version: deps.version, dataDir: deps.dataDir, server: auth.enabled, voice: !!deps.voice };
     res.json(about);
+  });
+
+  // ── App updates (#123): status, « Check now », Update (Master's click) ──
+  app.get('/api/update', (_req, res) => {
+    res.json(deps.updater.status());
+  });
+  app.post('/api/update/check', async (_req, res) => {
+    res.json(await deps.updater.check());
+  });
+  app.post('/api/update/install', async (_req, res) => {
+    res.json(await deps.updater.install());
   });
 
 

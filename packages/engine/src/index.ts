@@ -31,6 +31,7 @@ import { PlanAccounts } from './plan-accounts.ts';
 import { Notifications } from './notifications.ts';
 import { Voice, type VoiceHost } from './voice.ts';
 import { VoiceChat } from './voiceChat.ts';
+import { Updater, type UpdateHost } from './updater.ts';
 
 export interface EngineOptions {
   /** SQLite file, or ':memory:'. */
@@ -69,6 +70,11 @@ export interface EngineOptions {
   version?: string;
   /** Desktop app on a Mac: voice mode (Settings → Voice). Absent in server mode and dev: the page is hidden. */
   voice?: VoiceHost;
+  /**
+   * App updates from GitHub releases (#123). The packaged Mac app passes a host (it can install); without it the
+   * engine can't install and doesn't check by itself (dev, server). Tests point api/fetch at a fake release server.
+   */
+  updates?: { host: UpdateHost | null; cannotInstall?: string; api?: string; fetch?: typeof fetch; intervalMs?: number | false; openCommand?: string; pid?: number };
 }
 
 export interface Engine {
@@ -98,6 +104,7 @@ export interface Engine {
   voice: Voice | null;
   /** The « Voice » chat the desktop voice loop talks through (desktop on a Mac only). */
   voiceChat: VoiceChat | null;
+  updater: Updater;
   url: string;
   stop(): Promise<void>;
 }
@@ -140,6 +147,18 @@ export async function startEngine(opts: EngineOptions): Promise<Engine> {
   const rewinds = new Rewinds(db, bus, kanban, agents, runner, opts.dataDir, fileLog);
   const dispatcher = new Dispatcher(bus, kanban, agents, models, settings, runner);
   const slash = new Slash(db, bus, kanban, runner);
+  const updater = new Updater(db, bus, {
+    version: opts.version ?? 'dev',
+    dataDir: opts.dataDir,
+    host: opts.updates?.host ?? null,
+    cannotInstall: opts.updates?.cannotInstall ?? 'Updates install by themselves in the Mac app only (this is a development build or a server).',
+    backup: (file) => db.backup(file),
+    api: opts.updates?.api,
+    fetch: opts.updates?.fetch,
+    intervalMs: opts.updates ? opts.updates.intervalMs : false,
+    openCommand: opts.updates?.openCommand,
+    pid: opts.updates?.pid,
+  });
   const server = createApi({
     kanban,
     agents,
@@ -162,6 +181,7 @@ export async function startEngine(opts: EngineOptions): Promise<Engine> {
     notifications,
     usage,
     voice,
+    updater,
     bus,
     dataDir: opts.dataDir,
     version: opts.version ?? 'dev',
@@ -186,6 +206,7 @@ export async function startEngine(opts: EngineOptions): Promise<Engine> {
     schedules.start();
   }
   voice?.start();
+  updater.start();
   const { port } = server.address() as AddressInfo;
   url = `http://127.0.0.1:${port}`;
   return {
@@ -214,8 +235,10 @@ export async function startEngine(opts: EngineOptions): Promise<Engine> {
     usage,
     voice,
     voiceChat,
+    updater,
     url,
     stop: async () => {
+      updater.stop();
       schedules.stop();
       voice?.stop();
       dispatcher.stop();
@@ -239,5 +262,6 @@ export { Kanban } from './kanban.ts';
 export { openDb } from './store/db.ts';
 export type { SecretStore } from './secrets.ts';
 export type { VoiceHost } from './voice.ts';
+export type { UpdateHost } from './updater.ts';
 export type { VoiceChat } from './voiceChat.ts';
 export type { OrbPosition } from './settings.ts';
