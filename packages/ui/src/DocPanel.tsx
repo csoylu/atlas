@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import { KIND_WORD, type Doc, type DocRef, type PanelTab } from '@atlas/shared';
 import { api } from './api.ts';
 import type { MessageStream } from './useMessages.ts';
@@ -149,7 +149,15 @@ export function DocPanel(props: {
  * The documents attached to a card (ticket modal, inbox item): a list; picking one shows it below in the shared
  * viewer, the card's other documents as tabs. « Open in panel » (when given) shows it beside the card's chat.
  */
-export function CardDocs({ cardId, stream, onOpenInPanel, onError }: { cardId: string; stream: MessageStream; onOpenInPanel?(doc: Doc): void; onOpenCard?(id: string): void; onError(e: unknown): void }) {
+export function CardDocs({ cardId, stream, onOpenInPanel, onShow, onError }: {
+  cardId: string;
+  stream: MessageStream;
+  onOpenInPanel?(doc: Doc): void;
+  /** A task's view (#192): a row opens the document there (full modal, or the chat's panel), not inline below. */
+  onShow?(doc: Doc): void;
+  onOpenCard?(id: string): void;
+  onError(e: unknown): void;
+}) {
   const [docs, setDocs] = useState<Doc[]>([]);
   const [shown, setShown] = useState<string | null>(null);
   useEffect(() => {
@@ -164,7 +172,12 @@ export function CardDocs({ cardId, stream, onOpenInPanel, onError }: { cardId: s
       <h3 className="cm-h">Artifacts</h3>
       <div className="cm-docs">
         {docs.map((d) => (
-          <button key={d.id} className={'cm-doc' + (d.id === shown ? ' on' : '')} aria-expanded={d.id === shown} onClick={() => setShown(d.id === shown ? null : d.id)}>
+          <button
+            key={d.id}
+            className={'cm-doc' + (d.id === shown ? ' on' : '')}
+            aria-expanded={onShow ? undefined : d.id === shown}
+            onClick={() => (onShow ? onShow(d) : setShown(d.id === shown ? null : d.id))}
+          >
             <span className="cm-doc-icon">
               <KindIcon kind={d.kind} />
             </span>
@@ -172,7 +185,7 @@ export function CardDocs({ cardId, stream, onOpenInPanel, onError }: { cardId: s
             <span className="cm-doc-meta">
               {KIND_WORD[d.kind]} · v{d.version}
             </span>
-            <span className="cm-doc-open">{d.id === shown ? 'hide' : 'show ↓'}</span>
+            <span className="cm-doc-open">{onShow ? 'Open' : d.id === shown ? 'hide' : 'show ↓'}</span>
           </button>
         ))}
       </div>
@@ -211,5 +224,94 @@ export function CardDocs({ cardId, stream, onOpenInPanel, onError }: { cardId: s
         />
       )}
     </>
+  );
+}
+
+/** A document to read from a task (#192): a chip in its thread (its version and section) or a row of its Artifacts. */
+export interface DocToRead {
+  docId: string;
+  version: number | null;
+  section: string | null;
+  /** A new key opens it again (same chip clicked twice). */
+  key: string;
+}
+
+/**
+ * A document read from the ticket modal (#192): the shared viewer filling the modal, over the task (which stays as it
+ * was: scroll, draft). « ‹ Task » or Esc goes back. The chip's version and section are shown; the task's other
+ * documents are not tabs here, its Artifacts list is one click away.
+ */
+export function TaskDocReader(props: { read: DocToRead; stream: MessageStream; onOpenInPanel?(doc: Doc): void; onBack(): void; onError(e: unknown): void }) {
+  const { read, stream, onBack, onError } = props;
+  const [doc, setDoc] = useState<Doc | null>(null);
+  const back = useRef<HTMLButtonElement>(null);
+  useEffect(() => {
+    let live = true;
+    api.document(read.docId).then((c) => live && setDoc(c.doc), onError);
+    const off = stream.listen('docs', (e) => e.type === 'doc' && e.doc.id === read.docId && setDoc(e.doc));
+    return () => {
+      live = false;
+      off();
+    };
+  }, [read.docId, stream, onError]);
+  // Focus stays inside (Esc comes here): on ‹ Task once open and loaded; a click in the text focuses the reader itself.
+  const loaded = doc !== null;
+  useEffect(() => back.current?.focus({ preventScroll: true }), [read.key, loaded]);
+  return (
+    <div
+      className="cm-reader"
+      role="region"
+      aria-label="Artifact"
+      tabIndex={-1}
+      onKeyDown={(e) => {
+        // Esc goes back to the task (a menu inside closes first); the modal's own Esc sees it handled.
+        if (e.key !== 'Escape' || e.defaultPrevented) return;
+        e.preventDefault();
+        onBack();
+      }}
+    >
+      {doc ? (
+        <ArtifactViewer
+          doc={doc}
+          mode="panel"
+          lead={
+            <button ref={back} type="button" className="sd-btn sd-back" title="Back to the task (Esc)" onClick={onBack}>
+              ‹ Task
+            </button>
+          }
+          want={read.version === null ? null : { version: read.version, key: read.key }}
+          section={read.section}
+          scrollKey={read.key}
+          menu={(close) => (
+            <>
+              {props.onOpenInPanel && (
+                <PopItem
+                  icon={<Icon.panel />}
+                  onClick={() => {
+                    close();
+                    props.onOpenInPanel!(doc);
+                  }}
+                >
+                  Show it beside the task's chat
+                </PopItem>
+              )}
+              <a className="pop-row" role="menuitem" href={libraryHref(doc.id)} onClick={close}>
+                <Icon.library />
+                <span className="pop-t">Open in the Library</span>
+              </a>
+            </>
+          )}
+          stream={stream}
+          onError={onError}
+        />
+      ) : (
+        <div className="sd-head">
+          <button ref={back} type="button" className="sd-btn sd-back" title="Back to the task (Esc)" onClick={onBack}>
+            ‹ Task
+          </button>
+          <span className="cm-faint">Loading…</span>
+        </div>
+      )}
+    </div>
   );
 }

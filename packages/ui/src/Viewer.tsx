@@ -1,7 +1,7 @@
 import { useEffect, useMemo, useRef, useState, type ReactNode } from 'react';
 import Markdown from 'react-markdown';
 import remarkGfm from 'remark-gfm';
-import { changedSections, linkOf, splitSections, USER, type Doc, type DocContent, type DocSection, type DocVersion } from '@atlas/shared';
+import { changedSections, findSection, linkOf, splitSections, USER, type Doc, type DocContent, type DocSection, type DocVersion } from '@atlas/shared';
 import { api, ApiError } from './api.ts';
 import type { MessageStream } from './useMessages.ts';
 import { diagramWidth } from './docPanel.ts';
@@ -344,8 +344,10 @@ function DocBody(props: {
     if (!data || !props.section || !props.scrollKey || scrolled.current === props.scrollKey) return;
     scrolled.current = props.scrollKey;
     if (doc.kind !== 'markdown') return; // html: the fragment in the iframe's URL does it
-    document.getElementById(secId(doc.id, props.section))?.scrollIntoView({ block: 'start', behavior: 'smooth' });
-  }, [data, props.section, props.scrollKey, doc.id, doc.kind]);
+    // An id or a heading's text (a chip keeps what the agent wrote, e.g. « 7. Open questions »).
+    const id = findSection(sections, props.section)?.id ?? props.section;
+    document.getElementById(secId(doc.id, id))?.scrollIntoView({ block: 'start', behavior: 'smooth' });
+  }, [data, sections, props.section, props.scrollKey, doc.id, doc.kind]);
 
   if (!data) return <div className="sd-body loading" />;
   const shown = data.version;

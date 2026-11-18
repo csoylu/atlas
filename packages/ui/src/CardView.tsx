@@ -6,9 +6,9 @@ import remarkGfm from 'remark-gfm';
 import { CARD_STATUSES, cardRef, type Doc, type Agent, type Card, type Model } from '@atlas/shared';
 import { api } from './api.ts';
 import type { MessageStream } from './useMessages.ts';
-import { Activity, CardComposer, CardNotices, RunLine, useCardConversation } from './CardPanel.tsx';
+import { Activity, CardComposer, CardNotices, RunLine, useCardConversation, type MessageRef } from './CardPanel.tsx';
 import { pillStatus, statusChip } from './cardModal.ts';
-import { CardDocs } from './DocPanel.tsx';
+import { CardDocs, TaskDocReader, type DocToRead } from './DocPanel.tsx';
 import { RewindConfirm, RewindNote, useRewind } from './Rewind.tsx';
 import { StatusIcon, STATUS_LABEL } from './StatusIcon.tsx';
 
@@ -26,6 +26,11 @@ export interface CardViewProps {
   onOpenChat(id: string): void;
   /** « open on the right »: a document attached to this card. */
   onOpenDoc(doc: Doc): void;
+  /**
+   * A chip in the thread (#192): show that version and section somewhere else (the thread panel: the chat's documents
+   * panel). Without it (the ticket modal) the document opens over the task, filling the modal.
+   */
+  onOpenRef?(ref: MessageRef): void;
   /** Leave the view (modal or thread panel): after Close task and Delete too. */
   onClose(): void;
   onError(e: unknown): void;
@@ -49,6 +54,10 @@ export const CardView = forwardRef<HTMLTextAreaElement, CardViewProps & { close:
     const [editing, setEditing] = useState(false);
     const titleRef = useRef<HTMLTextAreaElement>(null);
     const bodyRef = useRef<HTMLTextAreaElement>(null);
+    const [reading, setReading] = useState<DocToRead | null>(null);
+    const openRef =
+      props.onOpenRef ?? ((r: MessageRef) => setReading({ docId: r.docId, version: r.version, section: r.section, key: String(Date.now()) }));
+    const showDoc = props.onOpenRef ? props.onOpenDoc : (d: Doc) => setReading({ docId: d.id, version: null, section: null, key: String(Date.now()) });
 
     // Agents edit cards too: follow server changes unless the user is typing in that field.
     useEffect(() => {
@@ -246,7 +255,7 @@ export const CardView = forwardRef<HTMLTextAreaElement, CardViewProps & { close:
               </>
             )}
           </div>
-          <CardDocs cardId={card.id} stream={stream} onOpenInPanel={props.onOpenDoc} onOpenCard={props.onOpen} onError={onError} />
+          <CardDocs cardId={card.id} stream={stream} onShow={showDoc} onOpenCard={props.onOpen} onError={onError} />
           <h3 className="cm-h">Activity</h3>
           <div className="chat cm-activity">
             <Activity
@@ -255,6 +264,7 @@ export const CardView = forwardRef<HTMLTextAreaElement, CardViewProps & { close:
               stream={stream}
               userName={props.userName}
               onOpenCard={props.onOpen}
+              onOpenRef={openRef}
               cards={props.cards}
               onRewind={rw.ask}
               onUndo={rw.undoById}
@@ -292,6 +302,7 @@ export const CardView = forwardRef<HTMLTextAreaElement, CardViewProps & { close:
           </button>
         </footer>
         <RewindConfirm rw={rw} />
+        {reading && <TaskDocReader read={reading} stream={stream} onOpenInPanel={props.onOpenDoc} onBack={() => setReading(null)} onError={onError} />}
       </>
     );
   },
