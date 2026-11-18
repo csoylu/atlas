@@ -173,7 +173,7 @@ export interface FileChange {
  * brings it back) or `kept` (already done or read: it can't be taken back), with why.
  */
 export interface SideEffect {
-  kind: 'task' | 'task_change' | 'message' | 'memory' | 'memory_change' | 'schedule' | 'schedule_delete' | 'canvas' | 'push';
+  kind: 'task' | 'task_change' | 'message' | 'memory' | 'memory_change' | 'schedule' | 'schedule_delete' | 'artifact' | 'canvas' | 'push';
   /** How it is named: « #131 Mockup: artifacts library », « @zurich », « m104 Library tiles… ». */
   label: string;
   /** The card a task or message is about (a link), else null. */
