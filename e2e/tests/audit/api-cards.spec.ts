@@ -22,7 +22,7 @@ test.describe('K · cards, kanban, dispatcher (API)', () => {
     expect((await call(atlas, 'GET', '/cards')).body).toEqual([]);
   });
 
-  test('[K02b] a card cannot be created or moved to "running" by hand (no run exists) - BUG B1: the API accepts it and the card stays "running"', async ({ atlas }) => {
+  test('[K02b] a card cannot be created or moved to "running" by hand (no run exists) (B1, fixed in 69e3ddd)', async ({ atlas }) => {
     expect((await call(atlas, 'POST', '/cards', { title: 'x', status: 'running' })).status).toBe(400);
     const c = await idleCard(atlas);
     expect((await call(atlas, 'PATCH', `/cards/${c.id}`, { status: 'running' })).status).toBe(400);
