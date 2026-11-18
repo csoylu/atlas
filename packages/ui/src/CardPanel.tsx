@@ -1,3 +1,4 @@
+import { rehypeSecrets } from './secretsView.ts';
 import { Fragment, forwardRef, useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from 'react';
 import { AgentFace } from './AgentFace.tsx';
 import Markdown from 'react-markdown';
@@ -763,7 +764,7 @@ type CardLinks = { known(ref: string): boolean; open(ref: string): void; card?(r
 /** `streaming`: a reply still arriving (#79), same markdown as the final one plus the caret at the end of its text. */
 function TextBlock({ text: raw, onOpenRef, quotes, cardLinks, streaming }: { text: string; onOpenRef?(ref: MessageRef): void; quotes?: boolean; cardLinks?: CardLinks; streaming?: boolean }) {
   const text = streaming ? draftMarkdown(raw) : raw;
-  const rehype = streaming ? REHYPE_CARET : undefined;
+  const rehype = streaming ? REHYPE_CARET : REHYPE;
   // « Ask about this »: the quoted document part shows as a chip; the agent got the full quote.
   const ref = quotes ? parseDocRef(text) : null;
   if (ref)
@@ -804,7 +805,9 @@ function TextBlock({ text: raw, onOpenRef, quotes, cardLinks, streaming }: { tex
   );
 }
 
-const REHYPE_CARET = [rehypeCaret];
+// [secret NAME] marks (#209) in every message; the caret too while a reply streams.
+const REHYPE = [rehypeSecrets];
+const REHYPE_CARET = [rehypeSecrets, rehypeCaret];
 
 /** A #N reference in a message's text (#140): plain « #N » in the text's size and line height, title and status on hover. */
 function CardRef({ ref_, links, children }: { ref_: string; links: CardLinks; children: ReactNode }) {

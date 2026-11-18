@@ -10,6 +10,7 @@ import { fileDetail, isLiveShell } from './FileStepDetail.tsx';
 import { ImageThumbs } from './Images.tsx';
 import { webDetail } from './WebStepDetail.tsx';
 import { duration, type ToolOutcome } from './toolRows.ts';
+import { SecretText, hiddenPill } from './SecretMarks.tsx';
 import type { MessageStream } from './useMessages.ts';
 import { KindIcon } from './Viewer.tsx';
 
@@ -85,7 +86,8 @@ export function StepRow({ step, timing, now, at, nested, defaultOpen, forceOpen,
   ) : (
     plain
   );
-  const meta = [...row.meta, ...(cut ? [{ pill: 'warn' as const, text: 'not finished' }] : [])];
+  const hidden = timing?.secretsHidden ?? 0;
+  const meta = [...row.meta, ...(hidden ? [{ pill: 'warn' as const, text: hiddenPill(hidden) }] : []), ...(cut ? [{ pill: 'warn' as const, text: 'not finished' }] : [])];
   return (
     <ChatRow
       icon={<RowIconSvg name={row.icon} />}
@@ -182,7 +184,11 @@ function stepDetail(step: Step, ctx: DetailContext, timing?: ToolCallTiming): Re
   return (
     <>
       <pre className="step-in">{JSON.stringify(step.input, null, 2)}</pre>
-      {step.result && <pre className={'step-out' + (step.result.isError ? ' err' : '')}>{step.result.content}</pre>}
+      {step.result && (
+        <pre className={'step-out' + (step.result.isError ? ' err' : '')}>
+          <SecretText text={step.result.content} />
+        </pre>
+      )}
     </>
   );
 }

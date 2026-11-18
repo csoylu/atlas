@@ -1,6 +1,6 @@
 /** Settings: one page with a grouped sub-navigation (design §12). Each page lives at #/settings/<id>. */
 export const SETTINGS_GROUPS = [
-  { title: 'Team', pages: [{ id: 'agents', label: 'Agents' }, { id: 'memory', label: 'Memory' }, { id: 'board', label: 'Board & triage' }] },
+  { title: 'Team', pages: [{ id: 'agents', label: 'Agents' }, { id: 'memory', label: 'Memory' }, { id: 'board', label: 'Board & triage' }, { id: 'secrets', label: 'Secrets' }] },
   {
     title: 'Models',
     pages: [

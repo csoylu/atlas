@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useState } from 'react';
-import type { About, ShellPathInfo, UpdateStatus, Agent, Card, ChatGptStatus, Model, Settings } from '@atlas/shared';
+import type { About, ShellPathInfo, UpdateStatus, Agent, Card, ChatGptStatus, Model, SecretStoreStatus, Settings } from '@atlas/shared';
 import { api } from './api.ts';
 import { AgentsView } from './AgentsView.tsx';
 import { MemoryPage } from './MemoryPage.tsx';
@@ -10,6 +10,7 @@ import { LocalModels } from './LocalModels.tsx';
 import { ModelListSection } from './ModelSections.tsx';
 import { UsageSection } from './Usage.tsx';
 import { ProfileSettings } from './Profile.tsx';
+import { SecretsPage } from './SecretsPage.tsx';
 import { VoiceSettings } from './VoiceSettings.tsx';
 import { SETTINGS_GROUPS, type SettingsPage } from './settingsPages.ts';
 import { THEMES, type ThemeChoice } from './theme.ts';
@@ -39,6 +40,8 @@ export function SettingsView(props: {
   /** App updates (#123): Settings → About shows the version, the last check and « Check now ». */
   update: UpdateStatus | null;
   onOpenUpdate(): void;
+  /** Where secret values are kept and whether the server's file is locked (#208), live. */
+  secretStatus: SecretStoreStatus | null;
   onError(e: unknown): void;
 }) {
   const { page, stream, onError } = props;
@@ -48,6 +51,7 @@ export function SettingsView(props: {
   const [claudeAccounts, setClaudeAccounts] = useState<number | null>(null);
   const [apiKeys, setApiKeys] = useState<number | null>(null);
   const [keyStore, setKeyStore] = useState<string | null>(null);
+  const [secretCount, setSecretCount] = useState<number | null>(null);
   // Voice exists only in the desktop app (About.voice): hidden from the navigation elsewhere.
   const [voice, setVoice] = useState(false);
   const groups = SETTINGS_GROUPS.map((g) => ({ ...g, pages: g.pages.filter((p) => p.id !== 'voice' || voice) }));
@@ -57,11 +61,21 @@ export function SettingsView(props: {
   }, [onError]);
   useEffect(() => {
     loadCounts();
-    api.secrets().then((s) => setKeyStore(s.store), onError);
+    const secrets = () =>
+      api.secrets().then((s) => {
+        setKeyStore(s.store);
+        setSecretCount(s.secrets.length);
+      }, onError);
+    void secrets();
     api.about().then((a) => setVoice(a.voice), onError);
-    return stream.listen('claude', (e) => {
+    const offSecrets = stream.listen('secrets', () => void secrets());
+    const offClaude = stream.listen('claude', (e) => {
       if (e.type === 'claude') setClaudeAccounts(e.status.accounts.length);
     });
+    return () => {
+      offSecrets();
+      offClaude();
+    };
   }, [loadCounts, stream, onError]);
   const modelsChanged = () => {
     loadCounts();
@@ -70,6 +84,7 @@ export function SettingsView(props: {
 
   const counts: Partial<Record<SettingsPage, number | null>> = {
     agents: props.agents.length,
+    secrets: secretCount,
     subscriptions: claudeAccounts === null || !props.chatgpt ? null : claudeAccounts + props.chatgpt.accounts.length,
     'api-keys': apiKeys,
     'model-list': props.models.length,
@@ -121,6 +136,8 @@ export function SettingsView(props: {
             <AgentsView settings={props.settings} onSettings={props.onSettings} onAgentsChanged={props.onAgentsChanged} onError={onError} />
           ) : page === 'board' ? (
             <BoardSettings settings={props.settings} agents={props.agents} onSettings={props.onSettings} onError={onError} />
+          ) : page === 'secrets' ? (
+            <SecretsPage agents={props.agents} cards={props.cards} models={props.models} status={props.secretStatus} userName={props.settings?.userName ?? null} stream={stream} onError={onError} />
           ) : page === 'subscriptions' ? (
             <>
               <ClaudePlanSection stream={stream} keyStore={keyStore} onChanged={modelsChanged} onError={onError} />

@@ -3,6 +3,8 @@ import type { ToolCallTiming } from '@atlas/shared';
 import type { Step } from './chatTurn.ts';
 import { ansi, bgLog, bgOutput, diffCount, diffLines, editDiff, fileList, grepGroups, hunks, markMatches, parseNumbered, plainText, shellOutput, type DiffItem } from './fileRows.ts';
 import { duration, splitPath } from './toolRows.ts';
+import { HiddenNote, SecretText } from './SecretMarks.tsx';
+import { hiddenNames } from './secretsView.ts';
 
 /**
  * The expanded view of a file or shell tool (#63, mockup pages/chat-activity.html §4): a code view with line numbers,
@@ -139,7 +141,7 @@ const str = (v: unknown) => (typeof v === 'string' ? v : '');
 export const isLiveShell = (step: Step) => step.kind === 'tool' && step.name === 'shell' && step.state === 'running' && (step.input as { background?: unknown } | null)?.background !== true;
 
 /** Box capped at ~260 px (scrolls inside), with Show all when it's cut, and Copy. */
-function View({ head, children, copy, note, foot, term }: { head?: ReactNode; children: ReactNode; copy?: string; note?: string; foot?: ReactNode; term?: boolean }) {
+function View({ head, children, copy, note, foot, term }: { head?: ReactNode; children: ReactNode; copy?: string; note?: ReactNode; foot?: ReactNode; term?: boolean }) {
   const box = useRef<HTMLDivElement>(null);
   const [all, setAll] = useState(false);
   const [cut, setCut] = useState(false);
@@ -271,8 +273,17 @@ function Terminal({ command, text, head, note, foot, live }: { command?: string;
     if (live && scroller) scroller.scrollTop = scroller.scrollHeight;
   }, [live, text]);
   const plain = plainText(text);
+  // Values of secrets the engine replaced by [secret NAME] (#206): marked in the output, and said under it.
+  const hidden = hiddenNames(text);
+  const notes = (
+    <>
+      {note}
+      {note && hidden.length > 0 && ' '}
+      {hidden.length > 0 && <HiddenNote names={hidden} />}
+    </>
+  );
   return (
-    <View term copy={plain || command} note={note} foot={foot}>
+    <View term copy={plain || command} note={note || hidden.length ? notes : undefined} foot={foot}>
       <pre className="fv-term" ref={box}>
         {head && <span className="ansi-dim">{head}{'\n'}</span>}
         {command !== undefined && (
@@ -281,7 +292,7 @@ function Terminal({ command, text, head, note, foot, live }: { command?: string;
             {'\n'}
           </>
         )}
-        {ansi(text.replace(/\n+$/, '')).map((s, i) => (s.cls ? <span key={i} className={s.cls}>{s.text}</span> : s.text))}
+        {ansi(text.replace(/\n+$/, '')).map((s, i) => (s.cls ? <span key={i} className={s.cls}><SecretText text={s.text} /></span> : <SecretText key={i} text={s.text} />))}
         {live && <span className="fv-cursor">▍</span>}
       </pre>
     </View>

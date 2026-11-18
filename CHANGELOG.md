@@ -6,6 +6,10 @@ computed by `scripts/release/changelog.mjs` from the oldest entry to the newest,
 `Fixed` → patch, `Added` or `Changed` → minor, `Breaking` (data or settings stop working without action) → major.
 Never type a version number.
 
+## Added · #209 · Settings → Secrets: see, add, replace, grant and delete your agents' secrets, and see where a value was hidden in a chat
+
+Secrets 4/4 (UI, mockup #205). A new Secrets page in Settings → Team, with a count, lists the agent secrets and their grants (which agents can use each), who made each one and when it was last used, with Replace value, Edit and Delete on each row. Secrets an agent asked for show « No value », with Add the value (the waiting task restarts by itself) and Dismiss. The model keys are listed below as « Models only ». Values are write-only: the field is cleared after saving and a value is never shown again. On a server, a locked secrets file shows an unlock panel and a « Secrets locked · Unlock » badge in the sidebar; once it is unlocked, the page offers Lock now and Change the password. In a chat, a command whose output contained a secret shows « 1 secret hidden », and every `[secret NAME]` is highlighted in the output and in messages. ui-check covers the page, the add form and the locked server.
+
 ## Added · #211 · Drag the border between the chat and the side panel to resize the panel; the width is kept
 
 The separator is an 8 px grab area with an accent line on hover, drag or focus. The panel stays between 360 px and the width that leaves the chat 380 px (over the chat at 960 px and below: up to 94 % of it), and is clamped again when the window shrinks, so it never goes off-screen. The width is saved (`atlas.panel.width`) for every chat and the task thread beside it; double-click resets it, and the keyboard moves it (← wider, → narrower, Shift for bigger steps, Home / End). Dragging over an html page in the panel keeps working. Phones keep the full-screen panel with no handle. In a chat narrower than 460 px the composer strip drops « context » and the token counts, as on a phone. ui-check gains a « panel-max » screen (panel at its widest, chat at its narrowest).

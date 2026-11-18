@@ -25,7 +25,9 @@ export type LiveEvent =
   /** A cleanup proposal was filed or decided (key 'memories'). */
   | { type: 'proposal'; proposal: MemoryProposal }
   /** A run of a workflow started, moved or ended (key 'workflow-runs:<workflow id>'). */
-  | { type: 'workflowRun'; run: WorkflowRun };
+  | { type: 'workflowRun'; run: WorkflowRun }
+  /** A secret was added, edited, rotated, deleted or used (key 'secrets'): reload Settings → Secrets. */
+  | { type: 'secrets' };
 
 export interface MessageStream {
   push(conversationOrCard: string, e: LiveEvent): void;
