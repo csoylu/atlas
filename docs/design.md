@@ -256,9 +256,13 @@ Statuses: `triage → todo → ready → running → (blocked | review) → done
   or the triage agent when the builder is the review agent (zurich's own PRs → atlas). Work with no PR ends with
   `task_complete`; `task_complete` is refused while a linked PR is open.
 - **Read.** `Prs` polls every 60 s (and right after a link or a reviewer run ends) with `gh api`, the user's own gh
-  login with the login shell's PATH: no token anywhere in Atlas. Only tasks `review` are read; one poll at a time.
+  login with the login shell's PATH: no token anywhere in Atlas. Only tasks `review` and `blocked` with linked PRs are
+  read; one poll at a time.
 - **Move** (no agent run, by `github`):
   - every PR merged → `done` (« PR #N merged into main (sha) » is the summary: Inbox update, report to the origin chat);
+    from `blocked` too (#231: a PR merged outside the flow while the task asked the user leaves no decision, so it
+    leaves « Needs you »), unless a run is going in the thread; a blocked task moves on nothing else (open, red CI or
+    closed unmerged stay the user's call);
   - CI red, a conflict with the base, `qa/validated` = failure (its description is the reason), or every PR closed
     unmerged → `ready` for the builder, the reason as a system note in the thread (once per head: `failed_sha`);
   - CI green, not validated, not yet reviewed on this head → the reviewer's run starts **in the task's own thread**

@@ -102,6 +102,28 @@ describe('pull requests linked to tasks (#189)', () => {
     expect(e.notifications.inbox().updates).toMatchObject([{ kind: 'card.done', body: 'PR #41 merged into main (e96a8e2)' }]);
   });
 
+  it('a task blocked on the user whose PR merges goes to Done by itself and leaves « Needs you » (#231)', async () => {
+    const { e, gh } = await setup();
+    const c = card(e);
+    e.kanban.requestReview(c.id, [URL], 'atlas', 'engine + tests');
+    await e.prs.poll();
+    // The reviewer can't validate and asks the user (the #226 case): blocked, the PR still open.
+    e.kanban.block(c.id, { kind: 'needs_input', reason: 'pr_validate refuses the PR: merge it with the script?' }, 'zurich');
+    // Still open on GitHub: the question stands.
+    await e.prs.poll();
+    expect(e.kanban.get(c.id).status).toBe('blocked');
+    expect(e.notifications.inbox().needsYou.map((n) => n.card.id)).toEqual([c.id]);
+
+    // Merged outside the flow (validate.mjs --merge from a terminal): no decision is left.
+    gh.pr = { ...gh.pr, state: 'merged', mergeSha: 'a44628dffff' };
+    await e.prs.poll();
+    const done = e.kanban.get(c.id);
+    expect(done).toMatchObject({ status: 'done', block: null });
+    expect(e.notifications.inbox().needsYou).toEqual([]);
+    expect(e.notifications.inbox().updates).toMatchObject([{ kind: 'card.done', cardId: c.id, body: 'PR #41 merged into main (a44628d)' }]);
+    expect(e.runner.runs(c.id)).toEqual([]); // moved by the poller, no agent run
+  });
+
   it('a failed validation, a red CI, a conflict or a PR closed unmerged send it back to Ready with the reason as a note', async () => {
     const { e, gh } = await setup();
     const c = card(e);

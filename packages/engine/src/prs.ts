@@ -12,7 +12,8 @@ import { isMember, projectRow } from './projects.ts';
 /**
  * Tasks linked to their pull requests (#189, design §7.1). A task In review has open PRs; this module reads them from
  * GitHub (`gh api`, the user's own login: no token in SQLite) and moves the task, with no agent run:
- * - every PR merged (or closed with one merged) → done;
+ * - every PR merged (or closed with one merged) → done; also from blocked (#231: merged outside the flow while the task
+ *   waited on the user, it needs no decision any more);
  * - CI red, a conflict with the base, `qa/validated` failed, or every PR closed unmerged → ready, the reason as a note;
  * - CI green on a head the reviewer hasn't seen → start the reviewer's run in the task's own thread.
  * GitHub unreadable: nothing moves on old data; the card says why, and after 15 min one Inbox item says so.
@@ -180,7 +181,8 @@ export class Prs {
   }
 
   private async pollOnce(): Promise<void> {
-    for (const card of this.kanban.list().filter((c) => c.status === 'review' && c.prs.length)) {
+    // Blocked too (#231): a PR merged while its task waits on the user leaves no decision, so it must not stay in « Needs you ».
+    for (const card of this.kanban.list().filter((c) => (c.status === 'review' || c.status === 'blocked') && c.prs.length)) {
       for (const pr of card.prs.filter((p) => p.state === 'open')) await this.read(card.id, pr);
       try {
         this.decide(card.id);
@@ -235,15 +237,19 @@ export class Prs {
     this.bus.emit({ type: 'notification.created', notification: n });
   }
 
-  /** Move a task In review from what its PRs say. Nothing moves while a PR can't be read. */
+  /**
+   * Move a task In review from what its PRs say. Nothing moves while a PR can't be read. A blocked task (#231) only
+   * moves when its PRs are merged (→ done): anything else stays the user's call.
+   */
   decide(cardId: string): void {
     const card = this.kanban.get(cardId);
-    if (card.status !== 'review' || !card.prs.length) return;
+    if ((card.status !== 'review' && card.status !== 'blocked') || !card.prs.length) return;
     const prs = card.prs;
     if (prs.some((p) => p.error || !p.checkedAt)) return;
     const open = prs.filter((p) => p.state === 'open');
+    const merged = prs.filter((p) => p.state === 'merged');
+    if (card.status === 'blocked' && (open.length || !merged.length || this.runner.current(cardId))) return;
     if (!open.length) {
-      const merged = prs.filter((p) => p.state === 'merged');
       if (merged.length) {
         const text = merged.map((p) => `PR #${p.number} merged into ${p.base ?? 'its base'} (${short(p.mergeSha)})`).join(', ');
         this.kanban.update(cardId, { status: 'done' }, 'github', text);
