@@ -349,8 +349,17 @@ Statuses: `triage → todo → ready → running → (blocked | review) → done
   brings it back. The old « /clear = new main chat » is gone (the API route stays).
 
 ## 9. Workflows (replaced the scheduler, #170, 18 Nov 2026, `engine/src/workflows.ts`, `workflowTime.ts`)
-A workflow is a small graph: one **trigger** wired to **steps**. Mockup: paris's #165. The UI that edits graphs is #171;
-until then the Schedules page lists workflows (one-step ones editable, others as a row with on/off, Run now, Delete).
+A workflow is a small graph: one **trigger** wired to **steps**. Mockup: paris's #165.
+- **UI** (#171, `ui/src/WorkflowsView.tsx`, `WorkflowCanvas.tsx`, `WorkflowStepPanel.tsx`, pure helpers in
+  `workflowView.ts`): the Workflows page (G W; `#/schedules` redirects) lists them with their step chain and last run.
+  `#/workflows/<id>` is the canvas: nodes are absolutely positioned divs (x/y saved), edges are SVG paths drawn by
+  `edgePath` (bezier forward, orthogonal lane backward or down), no graph library. Edit: drag nodes, drag an exit's dot
+  onto a step to wire, click an edge to remove it, Add step, Undo, zoom by buttons (CSS scale), the right panel edits
+  the selected step; every change is saved (debounced) with the revision, a refused save shows the engine's reason
+  with Reload. `#/workflows/<id>/runs[/<run>]`: the same graph with each node's latest state in the run (earlier rounds
+  listed inside), the path taken in green, the run list and its step log, Stop run. Under 640 px: no canvas, the steps
+  as an ordered list with « exit → target », runs, Run now, on/off; no editing. `lastRun` (list) is the latest run
+  that ran (not a skipped firing), with its steps; every run change re-emits `workflow.updated`.
 - **Tables** (migration 0044): `workflows` (name, enabled, origin `'schedules'` when migrated, revision, next_run_at,
   last_fired_at, last_error), `workflow_nodes` (kind trigger | agent | approval | condition, x, y, config JSON,
   `own_card_id` = an agent step's kept task, runtime state outside the revision), `workflow_edges` (from node + named

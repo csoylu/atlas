@@ -6,6 +6,10 @@ computed by `scripts/release/changelog.mjs` from the oldest entry to the newest,
 `Fixed` → patch, `Added` or `Changed` → minor, `Breaking` (data or settings stop working without action) → major.
 Never type a version number.
 
+## Added · #171 · Workflows page with a canvas: wire steps by dragging, follow each run on the graph, read and run them from your phone
+
+Schedules becomes Workflows in the sidebar (G then W; old #/schedules links land there). The list shows each workflow's trigger, its chain of steps, its current or last run with the task, on/off, Run now and Open; migrated ones say « from Schedules ». New workflow asks for a name and how it starts (a time or by hand), then opens the canvas with an empty agent step selected. On the canvas: drag steps, drag an exit's dot onto a step to wire it, click a link to remove it, add agent steps, approvals and conditions, undo, zoom; the right panel edits the selected step (title, agent, prompt with {{previous.summary}}, {{previous.task}}, {{run.id}}, task mode, exits). Every change saves by itself; a save made stale by another change is refused with the reason and a Reload. The Runs view shows the same graph with each step's state and task, the path taken in green, the runs and their step log, and Stop run. On a phone the steps read as a list (« exit → step », an unwired exit « ends the run ») with the runs, Run now and on/off.
+
 ## Fixed · #161 · An update interrupted at the worst moment can no longer leave you without Atlas.app
 
 The helper now swaps the old and new app in one atomic step (renamex_np RENAME_SWAP), so killing it anywhere during

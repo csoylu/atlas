@@ -733,7 +733,7 @@ export interface WorkflowRun {
   reason: string | null;
   startedAt: string;
   endedAt: string | null;
-  /** Only in GET /api/workflow-runs/:id and the workflow.run event. */
+  /** In GET /api/workflow-runs/:id, the workflow.run event and a workflow's lastRun. */
   steps?: WorkflowRunStep[];
 }
 
@@ -750,7 +750,7 @@ export interface Workflow extends WorkflowGraph {
   lastFiredAt: string | null;
   /** Why the trigger last failed to start a run; cleared by the next start. */
   lastError: string | null;
-  /** The latest run (any state), for lists. */
+  /** The latest run that ran (a skipped one only when none did), with its steps, for lists. */
   lastRun: WorkflowRun | null;
   createdBy: string;
   createdAt: string;

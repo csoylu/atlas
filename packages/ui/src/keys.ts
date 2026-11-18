@@ -12,9 +12,9 @@ export function isTyping(target: EventTarget | null): boolean {
   return el.isContentEditable || ['INPUT', 'TEXTAREA', 'SELECT'].includes(el.tagName);
 }
 
-export type GoTo = 'board' | 'library' | 'inbox' | 'schedules';
-export const GO_KEYS: Record<string, GoTo> = { t: 'board', b: 'board', l: 'library', i: 'inbox', s: 'schedules' };
-export const GO_HASH: Record<GoTo, string> = { board: '#/board', library: '#/library', inbox: '#/inbox', schedules: '#/schedules' };
+export type GoTo = 'board' | 'library' | 'inbox' | 'workflows';
+export const GO_KEYS: Record<string, GoTo> = { t: 'board', b: 'board', l: 'library', i: 'inbox', w: 'workflows' };
+export const GO_HASH: Record<GoTo, string> = { board: '#/board', library: '#/library', inbox: '#/inbox', workflows: '#/workflows' };
 
 export type GlobalAction =
   | { kind: 'palette' }
@@ -73,7 +73,7 @@ export const SHORTCUTS: { group: string; keys: string[]; label: string }[] = [
   { group: 'Go to', keys: ['G', 'I'], label: 'Inbox' },
   { group: 'Go to', keys: ['G', 'T'], label: 'Tasks' },
   { group: 'Go to', keys: ['G', 'L'], label: 'Library' },
-  { group: 'Go to', keys: ['G', 'S'], label: 'Schedules' },
+  { group: 'Go to', keys: ['G', 'W'], label: 'Workflows' },
   { group: 'Lists', keys: ['J'], label: 'Next row' },
   { group: 'Lists', keys: ['K'], label: 'Previous row' },
   { group: 'Lists', keys: ['↵'], label: 'Open' },

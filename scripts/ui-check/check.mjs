@@ -418,6 +418,43 @@ const MEMORIES = [
   mem(9306, 'fact', 'agent:atlas', 'The old memory editor in Settings is gone', { status: 'archived', min: 5 * 1440 }),
 ];
 const change = (id, memoryId, action, min, before, o = {}) => ({ id, memoryId, at: ago(min), by: 'atlas', action, before, undoneBy: null, ...o });
+// Workflows (#171): one graph with a loop, an approval and a condition, and a run waiting on the approval after a failed
+// first round of « Validate the PR » (the node keeps that round listed, its border shows the latest state).
+const wfAgo = (min) => new Date(Date.now() - min * 60_000).toISOString();
+const wfCard = (i) => cards[i % Math.max(1, cards.length)]?.id ?? null;
+const WF_STEP = (id, nodeId, kind, round, state, exit, cardId, summary, min) => ({ id, nodeId, kind, round, state, exit, cardId, summary, startedAt: wfAgo(min), endedAt: state === 'running' || state === 'waiting' ? null : wfAgo(min - 1) });
+const WF_RUN = {
+  id: 'wr_uicheck2', workflowId: 'wf_uicheck', number: 2, state: 'waiting', trigger: 'manual', reason: null, startedAt: wfAgo(42), endedAt: null,
+  steps: [
+    WF_STEP(1, 'trigger', 'trigger', 1, 'done', 'start', null, 'run by hand', 42),
+    WF_STEP(2, 'validate', 'agent', 1, 'failed', 'failed', wfCard(0), 'CI red: 2 tests fail in workflows.test.ts (a_very_long_unbroken_identifier_from_the_test_output_that_must_wrap)', 41),
+    WF_STEP(3, 'fix', 'agent', 1, 'done', 'done', wfCard(1), 'fixed the two tests, pushed', 30),
+    WF_STEP(4, 'again', 'condition', 1, 'done', 'yes', null, 'step validate ran 1 time: fewer than 3', 20),
+    WF_STEP(5, 'validate', 'agent', 2, 'done', 'done', wfCard(2), 'validated: tests green, screenshots match', 19),
+    WF_STEP(6, 'ok', 'approval', 1, 'waiting', null, wfCard(3), null, 5),
+  ],
+};
+const WF_RUN1 = { ...WF_RUN, id: 'wr_uicheck1', number: 1, state: 'failed', reason: '« Validate the PR » failed: the branch is gone (nothing is linked to « failed »)', startedAt: wfAgo(1500), endedAt: wfAgo(1490), steps: [WF_STEP(1, 'trigger', 'trigger', 1, 'done', 'start', null, 'run by hand', 1500), WF_STEP(2, 'validate', 'agent', 1, 'failed', 'failed', wfCard(0), 'the branch is gone', 1499)] };
+const WORKFLOW = {
+  id: 'wf_uicheck', name: 'Validate, fix, approve and merge a pull request (a deliberately long workflow name)', enabled: true, origin: null, revision: 3,
+  nextRunAt: null, lastFiredAt: wfAgo(42), lastError: null, lastRun: WF_RUN, createdBy: 'user', createdAt: wfAgo(3000), updatedAt: wfAgo(60),
+  nodes: [
+    { id: 'trigger', kind: 'trigger', x: 40, y: 120, config: { kind: 'manual' } },
+    { id: 'validate', kind: 'agent', x: 290, y: 120, config: { title: 'Validate the PR', agentId: 'zurich', prompt: 'Validate {{previous.summary}}', newTaskEachRun: true } },
+    { id: 'fix', kind: 'agent', x: 290, y: 380, config: { title: 'Fix what QA found', agentId: 'munih', prompt: 'Fix: {{previous.summary}}', newTaskEachRun: true } },
+    { id: 'again', kind: 'condition', x: 540, y: 380, config: { test: 'ranFewer', title: '', node: 'validate', times: 3 } },
+    { id: 'ok', kind: 'approval', x: 540, y: 120, config: { title: 'Merge it?', question: 'Merge? {{previous.summary}}' } },
+    { id: 'merge', kind: 'agent', x: 790, y: 120, config: { title: 'Merge and release', agentId: 'atlas', prompt: 'Merge {{run.id}}', newTaskEachRun: false } },
+  ],
+  edges: [
+    { from: 'trigger', exit: 'start', to: 'validate' }, { from: 'validate', exit: 'done', to: 'ok' }, { from: 'validate', exit: 'failed', to: 'fix' },
+    { from: 'fix', exit: 'done', to: 'again' }, { from: 'again', exit: 'yes', to: 'validate' }, { from: 'ok', exit: 'approved', to: 'merge' },
+  ],
+};
+const WORKFLOW_OFF = { ...WORKFLOW, id: 'wf_uicheckoff', name: 'Weekly funding-rate digest', enabled: false, origin: 'schedules', lastRun: null,
+  nodes: [{ id: 'trigger', kind: 'trigger', x: 40, y: 120, config: { kind: 'time', repeat: 'cron', cron: '0 9 * * 1', at: null, timezone: 'Europe/Paris' } }, { id: 'step1', kind: 'agent', x: 300, y: 120, config: { title: 'Weekly funding-rate digest', agentId: 'atlas', prompt: 'Digest', newTaskEachRun: true } }],
+  edges: [{ from: 'trigger', exit: 'start', to: 'step1' }] };
+
 const MEMORY_CHANGES = [
   change(9403, 9301, 'pin', 20, { text: MEMORIES[0].text, kind: 'rule', status: 'active', pinned: false }),
   change(9402, 9303, 'update', 90, { text: 'npm is not on PATH', kind: 'fact', status: 'active', pinned: false }),
@@ -498,7 +535,12 @@ const SCREENS = [
   // ⌘K palette over the chat (query « lib », as in the mockup) and the « ? » cheat sheet over the board.
   { name: 'palette', hash: `#/chat/${chat.id}`, ready: '.chat-pin', pins: true, then: { js: `window.dispatchEvent(new KeyboardEvent('keydown', { key: 'k', metaKey: true, bubbles: true })); await new Promise((r) => setTimeout(r, 300)); const i = document.querySelector('.pal-in input'); Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, 'value').set.call(i, 'lib'); i.dispatchEvent(new Event('input', { bubbles: true }));`, ready: '.pal-op.on' }, keys: ['.pal-t', '.pal-sec', '.pal-ctx'] },
   { name: 'shortcuts', hash: '#/board', ready: '.board', then: { js: `window.dispatchEvent(new KeyboardEvent('keydown', { key: '?', shiftKey: true, bubbles: true }));`, ready: '.keys-sheet' }, keys: ['.keys-head h2', '.keys-row > span:first-child', '.pal-sec'] },
-  { name: 'schedules', hash: '#/schedules', ready: '.nav-item', keys: ['h2', '.nav-item'] },
+  // Workflows (#171): the list (fixtures on top of the real ones), the canvas in Edit with a step selected, the canvas in
+  // Runs with the waiting run; on a phone the canvas screens show the steps as a list.
+  { name: 'workflows', hash: '#/workflows', ready: '.wf-row', workflows: true, keys: ['.wf-row .model-name', '.wf-chain', '.st-chip', '.wf-row .head-btn'] },
+  { name: 'workflow-edit', hash: '#/workflows/wf_uicheck', ready: '.wf-node, .wf-phone', workflows: true, then: { js: `document.querySelector('.wf-plane .wf-node[data-id="validate"]')?.dispatchEvent(new PointerEvent('pointerdown', { bubbles: true, button: 0, isPrimary: true })); document.querySelector('.wf-plane .wf-node[data-id="validate"]')?.dispatchEvent(new PointerEvent('pointerup', { bubbles: true, button: 0, isPrimary: true })); await new Promise((r) => setTimeout(r, 200)); document.body.dataset.wfSel = '1';`, ready: 'body[data-wf-sel]' }, keys: ['.wf-title', '.wf-kind', '.wf-out', '.wf-side .sd-head b', '.wf-side .field > span'] },
+  { name: 'workflow-runs', hash: '#/workflows/wf_uicheck/runs/wr_uicheck2', ready: '.wf-run, .wf-phone', workflows: true, keys: ['.wf-title', '.wf-run .st-chip', '.wf-steps-log .t', '.wf-runs button'] },
+  { name: 'workflow-off', hash: '#/workflows/wf_uicheckoff', ready: '.wf-off', workflows: true, keys: ['.wf-off', '.wf-title'] },
   ...SETTINGS.map((p) => ({ name: 'settings-' + p, hash: '#/settings/' + p, ready: '.settings', keys: ['.settings-group-title', '.settings-nav button', 'h2'] })),
 ].filter((s) => !ONLY?.length || ONLY.some((o) => s.name.startsWith(o)));
 if (!doc) console.warn('No document in the workspace: the panel screen is skipped.');
@@ -566,6 +608,16 @@ handlers.set('Fetch.requestPaused', async ({ requestId, request }) => {
     const memId = request.method === 'GET' && screen?.memory && /^\/api\/memories\/m?(\d+)$/.exec(url.pathname);
     if (memId) return await json(MEMORIES.find((m) => m.id === Number(memId[1])));
     if (request.method === 'GET' && /^\/api\/agents\/[^/]+\/memory-budget$/.test(url.pathname) && screen?.memory) return await json({ used: 1509, limit: 3000 });
+    if (screen?.workflows && request.method === 'GET') {
+      const W = [WORKFLOW, WORKFLOW_OFF];
+      if (url.pathname === '/api/workflows') return await json([...W, ...(await get('/workflows'))]);
+      const one = W.find((w) => url.pathname === `/api/workflows/${w.id}`);
+      if (one) return await json(one);
+      if (url.pathname === '/api/workflows/wf_uicheck/runs') return await json([WF_RUN, WF_RUN1].map(({ steps, ...r }) => r));
+      if (url.pathname === '/api/workflows/wf_uicheckoff/runs') return await json([]);
+      const run = [WF_RUN, WF_RUN1].find((r) => url.pathname === `/api/workflow-runs/${r.id}`);
+      if (run) return await json(run);
+    }
     if (request.method === 'GET' && url.pathname === '/api/inbox' && screen?.inbox) return await json(INBOX);
     if (request.method === 'GET' && url.pathname === '/api/memory-proposals' && screen?.inbox) return await json(PROPOSALS);
     if (request.method === 'GET' && url.pathname === '/api/cards' && screen?.system) return await json([...(await get('/cards')), ...TOOL_CARDS]);

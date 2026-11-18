@@ -49,7 +49,7 @@ describe('globalKey', () => {
     expect(globalKey(key('b'), null, { gAt: 9_000, now: 9_500 })).toEqual({ kind: 'go', to: 'board' });
     expect(globalKey(key('l'), null, { gAt: 9_000, now: 9_500 })).toEqual({ kind: 'go', to: 'library' });
     expect(globalKey(key('I'), null, { gAt: 9_000, now: 9_500 })).toEqual({ kind: 'go', to: 'inbox' });
-    expect(globalKey(key('s'), null, { gAt: 9_000, now: 9_500 })).toEqual({ kind: 'go', to: 'schedules' });
+    expect(globalKey(key('w'), null, { gAt: 9_000, now: 9_500 })).toEqual({ kind: 'go', to: 'workflows' });
     expect(globalKey(key('b'), null, { gAt: 9_000, now: 9_000 + G_WINDOW + 1 })).toBeNull();
     expect(globalKey(key('b'), null, idle)).toBeNull();
   });

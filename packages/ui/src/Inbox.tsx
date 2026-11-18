@@ -504,7 +504,7 @@ function refName(id: string, cards: Card[]): string {
   return c ? cardRef(c) : id;
 }
 
-function useMedia(query: string): boolean {
+export function useMedia(query: string): boolean {
   const [on, setOn] = useState(() => window.matchMedia(query).matches);
   useEffect(() => {
     const m = window.matchMedia(query);

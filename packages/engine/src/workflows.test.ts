@@ -217,6 +217,8 @@ describe('workflows (#170, design §9)', () => {
       [1, 'running'],
     ]);
     expect(engine.kanban.list()).toHaveLength(1);
+    // Lists show the run that is going (with its step), not the skipped firings after it.
+    expect(wf.get(w.id).lastRun).toMatchObject({ number: 1, state: 'running', steps: [{ nodeId: 'trigger', state: 'done' }, { nodeId: 'a', state: 'running' }] });
 
     const card = engine.kanban.list()[0]!;
     const stopped = wf.stopRun(wf.runs(w.id)[2]!.id);

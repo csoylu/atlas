@@ -1,5 +1,5 @@
 import { useMemo } from 'react';
-import type { Doc, Folder, Memory, MemoryProposal, PanelTab, ClaudePlanStatus, LocalPull, LocalStatus, Message, Run, ToolCallTiming, VoiceStatus } from '@atlas/shared';
+import type { Doc, Folder, Memory, MemoryProposal, PanelTab, ClaudePlanStatus, LocalPull, LocalStatus, Message, Run, ToolCallTiming, VoiceStatus, WorkflowRun } from '@atlas/shared';
 
 /** Fan-out of live chat events to whichever card panel is listening. */
 export type LiveEvent =
@@ -23,7 +23,9 @@ export type LiveEvent =
   /** A memory was added or changed (key 'memories'). */
   | { type: 'memory'; memory: Memory }
   /** A cleanup proposal was filed or decided (key 'memories'). */
-  | { type: 'proposal'; proposal: MemoryProposal };
+  | { type: 'proposal'; proposal: MemoryProposal }
+  /** A run of a workflow started, moved or ended (key 'workflow-runs:<workflow id>'). */
+  | { type: 'workflowRun'; run: WorkflowRun };
 
 export interface MessageStream {
   push(conversationOrCard: string, e: LiveEvent): void;

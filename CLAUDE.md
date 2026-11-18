@@ -74,7 +74,7 @@ node scripts/orb-check/check.mjs   # voice orb overlay: screenshots of every sta
 
 **Responsive check** (`scripts/ui-check/check.mjs`, macOS: needs Google Chrome and Xcode's `swiftc`). Opens the running
 Atlas app's UI in headless Chrome at 1440 / 1100 / 900 / 390 px (390 = phone, touch) on every main screen: chat with
-pins, ticket modal, side panel, board, inbox, Library (list with tiles, search, a doc, its version picker), schedules, every settings page. It reports page-wide horizontal overflow (and
+pins, ticket modal, side panel, board, inbox, Library (list with tiles, search, a doc, its version picker), workflows (list, canvas edit, canvas runs, off), every settings page. It reports page-wide horizontal overflow (and
 the phone zoom-out it causes), text under 12px, text off-screen outside a scroller, pins or chat buttons covering
 messages or the composer, the modal or panel off-screen, uncaught page errors, and key labels that Apple Vision OCR
 (`ocr.swift`) can't read at confidence ≥ 0.5. Exit code 1 on any issue; screenshots + `report.json` in
