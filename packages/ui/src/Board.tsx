@@ -11,6 +11,7 @@ import {
   filterCount,
   matches,
   parseView,
+  phoneColumn,
   showAfterLabel,
   whyLine,
   type BoardFilter,
@@ -19,6 +20,7 @@ import {
 } from './boardView.ts';
 import { PrLine } from './PrChips.tsx';
 import { prUnreadable } from './prView.ts';
+import { useMedia } from './Inbox.tsx';
 
 const HINT: Partial<Record<CardStatus, string>> = {
   triage: 'Ideas land here. The triage agent shapes them into tasks.',
@@ -89,6 +91,22 @@ export function Board(props: {
     needs: props.cards.filter((c) => matches(c, 'needs', view.filter)).length,
     running: props.cards.filter((c) => matches(c, 'running', view.filter)).length,
   };
+
+  // Phone (#229): one column at a time, picked from a row of status chips (name + count); no folded rails.
+  const phone = useMedia('(max-width: 640px)');
+  const [savedCol, setSavedCol] = useState(() => localStorage.getItem('atlas.board.col'));
+  const countIn = (s: CardStatus) => shown.filter((c) => c.status === s).length;
+  const phoneCol = phoneColumn(columns, savedCol, countIn);
+  const pickCol = (s: CardStatus) => {
+    setSavedCol(s);
+    localStorage.setItem('atlas.board.col', s);
+  };
+
+  // Keep the chosen chip in sight when it changes (a reload on Done, a tab switch).
+  const chipsRef = useRef<HTMLDivElement>(null);
+  useEffect(() => {
+    chipsRef.current?.querySelector('.board-chip.on')?.scrollIntoView({ block: 'nearest', inline: 'nearest' });
+  }, [phoneCol, phone]);
 
   const drop = (status: CardStatus) => ({
     onDragOver: (e: DragEvent) => {
@@ -189,19 +207,38 @@ export function Board(props: {
         </button>
       </HeaderActions>
 
+      {view.layout === 'board' && phone && columns.length > 1 && (
+        <div className="board-chips" role="tablist" aria-label="Status" ref={chipsRef}>
+          {columns.map((status) => (
+            <button
+              key={status}
+              type="button"
+              role="tab"
+              aria-selected={phoneCol === status}
+              className={'board-chip' + (phoneCol === status ? ' on' : '')}
+              onClick={() => pickCol(status)}
+            >
+              <StatusIcon status={status} />
+              {STATUS_LABEL[status]}
+              <span className="tab-n">{countIn(status)}</span>
+            </button>
+          ))}
+        </div>
+      )}
       {view.layout === 'board' ? (
-        <div className="board">
-          {columns.map((status) => {
+        <div className={'board' + (phone ? ' one' : '')}>
+          {(phone ? [phoneCol] : columns).map((status) => {
             const cards = shown.filter((c) => c.status === status);
-            // An empty column is a slim rail (still a drop target) unless Display → « Show empty columns ».
-            const empty = cards.length === 0 && !view.showEmpty;
-            const isFolded = empty || folded.has(status);
+            // An empty column is a slim rail (still a drop target) unless Display → « Show empty columns ». On a phone
+            // the one column shown is always open.
+            const empty = cards.length === 0 && !view.showEmpty && !phone;
+            const isFolded = empty || (!phone && folded.has(status));
             return (
               <section key={status} className={'column ' + status + (over === status ? ' over' : '') + (isFolded ? ' folded' : '') + (empty ? ' col-empty' : '')} {...drop(status)}>
                 <h2 className="col-head">
                   <button
                     className="fold"
-                    onClick={() => (empty ? save({ ...view, showEmpty: true }) : toggle(status))}
+                    onClick={() => (phone ? undefined : empty ? save({ ...view, showEmpty: true }) : toggle(status))}
                     aria-expanded={!isFolded}
                     title={empty ? `No ${STATUS_LABEL[status]} tasks: click to show empty columns` : isFolded ? `Show ${STATUS_LABEL[status]}` : `Fold ${STATUS_LABEL[status]}`}
                   >

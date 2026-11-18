@@ -79,3 +79,13 @@ export function parseView(raw: string | null): BoardView {
     showEmpty: o.showEmpty === true,
   };
 }
+
+/**
+ * Phone board (#229): one column at a time. The saved column if this tab shows it, else the first column with tasks
+ * in it, else the first column. The saved choice is kept even when a tab hides it, so coming back finds it again.
+ */
+export function phoneColumn(columns: readonly CardStatus[], saved: string | null, count: (s: CardStatus) => number): CardStatus {
+  const keep = columns.find((s) => s === saved);
+  if (keep) return keep;
+  return columns.find((s) => count(s) > 0) ?? columns[0]!;
+}
