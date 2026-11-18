@@ -1,7 +1,7 @@
 import { execFileSync } from 'node:child_process';
 import { existsSync, readdirSync, readFileSync, statSync } from 'node:fs';
 import { join, relative } from 'node:path';
-import type { Page } from '@playwright/test';
+import { expect, type Page } from '@playwright/test';
 import WebSocket from 'ws';
 import type { TestAtlas } from './engine.ts';
 
@@ -22,6 +22,7 @@ export class Leaks {
   private offLogs: (() => void) | null = null;
   private offBus: (() => void) | null = null;
   private ws: WebSocket | null = null;
+  private wsOpen: Promise<unknown> = Promise.resolve();
 
   /** A value that must stay out of every sink. */
   watch(label: string, value: string): string {
@@ -61,6 +62,7 @@ export class Leaks {
     const ws = new WebSocket(atlas.url.replace(/^http/, 'ws') + '/api/events');
     ws.on('message', (d) => void this.put('websocket (second client)', d.toString()));
     this.ws = ws;
+    this.wsOpen = new Promise((res, rej) => (ws.once('open', res), ws.once('error', rej)));
     if (page) {
       page.on('response', async (r) => {
         if (!r.url().includes('/api/')) return;
@@ -131,9 +133,23 @@ export class Leaks {
     this.put('checkpoint snapshots', out.toString('latin1'));
   }
 
+  /**
+   * Events reach the clients in order: emit a marker and wait until each client has it, then everything emitted before it
+   * has been received too (no sleep).
+   */
+  private async flushEvents(atlas: TestAtlas): Promise<void> {
+    await this.wsOpen; // an event emitted before the second client is connected would never reach it
+    const mark = `flush-${++this.marks}`;
+    atlas.engine.bus.emit({ type: 'secrets.updated', mark } as never); // the UI ignores the extra field
+    const seen = (sink: string) => this.sink(sink).includes(mark);
+    const sinks = ['websocket (second client)', ...(this.sinks.has('websocket (page)') ? ['websocket (page)'] : [])];
+    await expect.poll(() => sinks.every(seen), { timeout: 5000, message: 'the events reach the clients' }).toBe(true);
+  }
+  private marks = 0;
+
   /** Where each watched value shows up (plaintext, base64, hex), as « sink: label (form) ». Empty = clean. */
   async findings(atlas: TestAtlas, o: { sweep?: boolean } = {}): Promise<string[]> {
-    await new Promise((r) => setTimeout(r, 150)); // the last events reach the second client
+    await this.flushEvents(atlas);
     if (o.sweep !== false) await this.sweep(atlas);
     this.modelRequests(atlas);
     this.snapshots(atlas);

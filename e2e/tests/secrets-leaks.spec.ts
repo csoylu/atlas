@@ -50,7 +50,7 @@ test('every road a shell has to print a secret: nothing outside the store, chat 
   leaks.allow(/^outputs\/[^/]+\/bg_.*\.log$/); // known limit: a background process's log keeps the raw value (docs/qa/210-secrets-leak-audit.md)
   leaks.watch('LEAK_KEY (rotated)', 'rotated-QWERTY-5555555555');
   await page.goto(`${atlas.url}/#/settings/secrets`);
-  atlas.engine.secrets.create({ name: 'LEAK_KEY', value: K, description: 'audit', grant: 'all', agents: [] }, { by: 'user' });
+  atlas.engine.secrets.create({ name: 'LEAK_KEY', value: K, description: 'audit', grant: 'all', agents: [], project: null }, { by: 'user' });
 
   const bgId = (req: ModelRequest): string => /started (\S+) in the background/.exec(JSON.stringify(req.messages))![1]!;
   const savedPath = (req: ModelRequest): string => /full output is in (\S+\.txt)/.exec(JSON.stringify(req.messages))![1]!;
@@ -59,8 +59,8 @@ test('every road a shell has to print a secret: nothing outside the store, chat 
     'Print the key every way',
     'atlas',
     sh('echo "out=$LEAK_KEY"; echo "err=$LEAK_KEY" >&2; echo "bye=$LEAK_KEY"; exit 3'),
-    sh('echo "bg=$LEAK_KEY"; sleep 1; echo "bg2=$LEAK_KEY"', true),
-    sh('sleep 2'), // the background process has written both lines
+    sh('echo "bg=$LEAK_KEY"; sleep 1; echo "bg2=$LEAK_KEY"; touch bg-done', true),
+    sh('for i in $(seq 300); do [ -f bg-done ] && break; sleep 0.1; done; [ -f bg-done ]'), // wait for the marker the background process leaves after both lines
     (req) => tu('shell_output', { id: bgId(req) }),
     sh('head -c 29900 /dev/zero | tr "\\0" x; echo; echo "tail=$LEAK_KEY"; head -c 2000 /dev/zero | tr "\\0" y; echo'),
     (req) => tu('read_file', { path: savedPath(req) }),
@@ -106,7 +106,7 @@ async function print(w: { atlas: TestAtlas; leaks: Leaks }, ...commands: string[
 
 test.describe('known limits (docs/qa/210-secrets-leak-audit.md)', () => {
   test.beforeEach(async ({ w }) => {
-    w.atlas.engine.secrets.create({ name: 'LIMIT_KEY', value: LIMIT, description: 'limits', grant: 'all', agents: [] }, { by: 'user' });
+    w.atlas.engine.secrets.create({ name: 'LIMIT_KEY', value: LIMIT, description: 'limits', grant: 'all', agents: [], project: null }, { by: 'user' });
   });
 
   test('a transformed value is not recognised: base64, hex, reversed, split in pieces, a single character', async ({ w }) => {
@@ -129,20 +129,20 @@ test.describe('known limits (docs/qa/210-secrets-leak-audit.md)', () => {
   });
 
   test('a value under 8 characters is not hidden at all (the UI says so when it is added)', async ({ w }) => {
-    w.atlas.engine.secrets.create({ name: 'SHORT_KEY', value: 'abc123', description: '', grant: 'all', agents: [] }, { by: 'user' });
+    w.atlas.engine.secrets.create({ name: 'SHORT_KEY', value: 'abc123', description: '', grant: 'all', agents: [], project: null }, { by: 'user' });
     const [out] = await print(w, 'echo "short=$SHORT_KEY"');
     expect(out).toContain('short=abc123');
   });
 
   test('after a rotation the old value is no longer hidden (it is gone from the store: nothing remembers it)', async ({ w }) => {
     const OLD = 'old-canary-ZZZZZZ-111111';
-    w.atlas.engine.secrets.create({ name: 'OLD_KEY', value: OLD, description: '', grant: 'all', agents: [] }, { by: 'user' });
+    w.atlas.engine.secrets.create({ name: 'OLD_KEY', value: OLD, description: '', grant: 'all', agents: [], project: null }, { by: 'user' });
     w.atlas.engine.secrets.setValue('OLD_KEY', 'new-canary-YYYYYY-222222', { by: 'user' });
     const [out] = await print(w, `echo "${OLD}"`); // e.g. a log line, an old config file still holding it
     expect(out).toContain(OLD);
   });
 
-  test('a file the agent writes keeps the value on disk (workdir, checkpoints) and in the shell\'s environment for as long as the command runs', async ({ w }) => {
+  test('a file the agent writes keeps the value: on disk, in the files API, in a Library artifact (SQLite) and in the rewind snapshot', async ({ w }) => {
     const [out] = await print(w, 'mkdir -p docs; echo "$LIMIT_KEY" > saved.txt; echo "k: $LIMIT_KEY" > docs/note.md; cat saved.txt');
     expect(out).toContain('[secret LIMIT_KEY]'); // the output is hidden…
     const hits = files(w.atlas.dataDir).filter((f) => f.data.includes(Buffer.from(LIMIT)));
@@ -160,7 +160,7 @@ test.describe('known limits (docs/qa/210-secrets-leak-audit.md)', () => {
   });
 
   test('a user who pastes a value into a chat: it is stored as typed and sent to the model (the redactor only reads tool outputs)', async ({ w }) => {
-    w.atlas.engine.secrets.create({ name: 'PASTED_KEY', value: 'pasted-canary-AAAA-333333', description: '', grant: 'all', agents: [] }, { by: 'user' });
+    w.atlas.engine.secrets.create({ name: 'PASTED_KEY', value: 'pasted-canary-AAAA-333333', description: '', grant: 'all', agents: [], project: null }, { by: 'user' });
     const chat = await w.atlas.chat();
     await w.atlas.say(chat.id, 'here is the key: pasted-canary-AAAA-333333');
     await w.atlas.idle(chat.id);

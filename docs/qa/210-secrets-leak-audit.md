@@ -19,6 +19,10 @@ in plain text, base64 and hex, in:
 | WebSocket events | the page's frames, a second client on `/api/events`, and the in-process bus |
 | What the model was sent | every request the scripted provider recorded (system prompt, tools, whole history) |
 
+There is no export to audit: `api.ts` has no export or backup route (the only database copy is `db.backup`, used by the
+tests' own throwaway engines). The data folder sweep above covers every file such a copy would contain; the rewind
+snapshots are the only « export » of workspace files, and they are read too.
+
 A control test plants a value in a file (base64), the logs, a chat message and checks that the audit reports each place:
 an audit that finds nothing is not proof until it can find something.
 
