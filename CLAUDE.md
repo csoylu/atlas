@@ -85,7 +85,10 @@ messages or the composer, the modal or panel off-screen, uncaught page errors, a
   Breaking → major): never type a number. CI (`.github/workflows/ci.yml`) refuses a push to main without exactly one
   new top entry, runs the tests, builds the Mac app (arm64 + x64 zip and dmg, SHA256SUMS.txt), tags `v<version>` and
   publishes the GitHub release with that entry as its notes. No release when tests fail.
-- **Work in progress goes to a branch** (and a PR), never to main.
+- **Every change reaches main through a pull request** (Master, 18 Nov 2026): no direct push to main, for anyone, docs
+  included. Work goes to a branch (`<type>/<task number>-<slug>`), then a PR whose base is main (check a stacked PR's
+  base before merging). One merged PR = one push to main = one changelog entry = one release. main refuses
+  force-pushes and deletion (GitHub branch protection).
 - **Agents never install the app.** No `install:mac`: Master's Atlas shows "Update available" and installs on
   Master's click (it restarts; running tasks resume). `install:mac` stays for a manual build from source.
 - **Testing without installing:**
