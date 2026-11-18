@@ -140,7 +140,7 @@ export const CARD_TOOLS = {
         if (!secrets) throw new Error('secrets are not available here');
         if (kanban.get(cardId).board === 'direct') throw new Error('a direct chat does not block: ask the user for the secret in the chat (Settings → Secrets)');
         // The row first (idempotent): a crash before the block re-runs the task, which blocks again on the same row.
-        secrets.need(agentId, cardId, secret, secret_description);
+        secrets.need(agentId, kanban.get(cardId).projectId, cardId, secret, secret_description);
         const reason = `${question}\n\nNeeds secret ${secret}: add its value in Settings → Secrets; the task restarts by itself.`;
         kanban.block(cardId, { kind, reason, options, until: null }, agentId);
         return `task blocked (${kind}) until the user adds the value of ${secret} in Settings → Secrets; it restarts by itself then`;

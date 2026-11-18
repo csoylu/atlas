@@ -1,4 +1,4 @@
-import type { About, Account, Agent, Card, CardStatus, ChatGptModel, ChatGptStatus, ChatUsage, ClaudePlanModel, ClaudePlanStatus, ClearEvent, CompactResult, CreateAccount, CreateAgent, CreateCard, CreateModelRequest, CreatePlanAccount, CreateWorkflow, Doc, DocContent, DocHit, DocRef, DocVersion, FileChange, Folder, Inbox, LocalModel, LocalPull, LocalStatus, Memory, MemoryChange, MemoryProposal, MemoryQuery, Message, Model, ModelTest, Notification, PanelTab, PlanProvider, RewindPreview, RewindResult, Run, CreateSecret, SecretInfo, SecretList, SecretStoreStatus, UpdateSecret, SaveWorkflowGraph, ServerEvent, Settings, Timeline, ToolCallTiming, UpdateAccount, UpdateAgent, UpdateChatGpt, UpdateClaudePlan, UpdateLocal, UpdateMemory, UpdateModelRequest, UpdatePlanAccount, UpdateStatus, UpdateVoice, Upload, UsageSummary, VoiceName, VoiceStatus, TriggerPreview, UpdateWorkflow, Workflow, WorkflowRun } from '@atlas/shared';
+import type { About, Account, Agent, Card, CardStatus, ChatGptModel, ChatGptStatus, ChatUsage, ClaudePlanModel, ClaudePlanStatus, ClearEvent, CompactResult, CreateAccount, CreateAgent, CreateCard, CreateModelRequest, CreatePlanAccount, CreateWorkflow, Doc, DocContent, DocHit, DocRef, DocVersion, FileChange, Folder, Inbox, LocalModel, LocalPull, LocalStatus, Memory, MemoryBudget, MemoryChange, MemoryProposal, MemoryQuery, Message, Model, ModelTest, Notification, PanelTab, PlanProvider, RewindPreview, RewindResult, Run, CreateSecret, SecretInfo, SecretList, SecretStoreStatus, UpdateSecret, SaveWorkflowGraph, ServerEvent, Settings, Timeline, ToolCallTiming, UpdateAccount, UpdateAgent, UpdateChatGpt, UpdateClaudePlan, UpdateLocal, UpdateMemory, UpdateModelRequest, UpdatePlanAccount, UpdateStatus, UpdateVoice, Upload, UsageSummary, VoiceName, VoiceStatus, TriggerPreview, UpdateWorkflow, Workflow, WorkflowRun } from '@atlas/shared';
 
 /** HTTP error with the parsed body (e.g. a 409's details). */
 export class ApiError extends Error {
@@ -138,7 +138,7 @@ export const api = {
   memoryProposals: (cardId: string) => call<MemoryProposal[]>('GET', '/memory-proposals?cardId=' + encodeURIComponent(cardId)),
   approveProposal: (id: number) => call<MemoryProposal>('POST', `/memory-proposals/${id}/approve`),
   rejectProposal: (id: number) => call<MemoryProposal>('POST', `/memory-proposals/${id}/reject`),
-  memoryBudget: (agentId: string) => call<{ used: number; limit: number }>('GET', `/agents/${agentId}/memory-budget`),
+  memoryBudget: (agentId: string) => call<MemoryBudget>('GET', `/agents/${agentId}/memory-budget`),
   models: () => call<Model[]>('GET', '/models'),
   createModel: (m: CreateModelRequest) => call<Model>('POST', '/models', m),
   updateModel: (id: string, patch: UpdateModelRequest) => call<Model>('PATCH', `/models/${id}`, patch),

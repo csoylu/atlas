@@ -19,7 +19,7 @@ import {
 } from './memoryView.ts';
 
 const mem = (p: Partial<Memory>): Memory => ({
-  id: 1, kind: 'fact', scope: 'agent:atlas', text: 't', sourceConversationId: null, sourceSeq: null, sourceCardId: null, cardId: null,
+  id: 1, kind: 'fact', scope: 'agent:atlas', projectId: 'atlas', text: 't', sourceConversationId: null, sourceSeq: null, sourceCardId: null, cardId: null,
   status: 'active', pinned: false, createdAt: '2026-11-16T10:00:00Z', confirmedAt: '2026-11-16T10:00:00Z', updatedAt: '2026-11-16T10:00:00Z', updatedBy: 'atlas', ...p,
 });
 const ch = (p: Partial<MemoryChange>): MemoryChange => ({ id: 1, memoryId: 1, at: '2026-11-17T08:00:00Z', by: 'atlas', action: 'add', before: null, undoneBy: null, ...p });
@@ -77,7 +77,7 @@ describe('memory page', () => {
 describe('memory digest', () => {
   const changes = [
     ch({ id: 1, memoryId: 1, action: 'add' }),
-    ch({ id: 2, memoryId: 1, action: 'update', before: { text: 'old', kind: 'fact', scope: 'shared', status: 'active', pinned: false }, at: '2026-11-17T09:00:00Z' }),
+    ch({ id: 2, memoryId: 1, action: 'update', before: { text: 'old', kind: 'fact', scope: 'shared', projectId: 'atlas', status: 'active', pinned: false }, at: '2026-11-17T09:00:00Z' }),
     ch({ id: 3, memoryId: 2, action: 'add', by: 'scout' }),
     ch({ id: 4, memoryId: 2, action: 'confirm' }),
     ch({ id: 5, memoryId: 3, action: 'update', by: 'user' }),

@@ -11,6 +11,8 @@ import type { Secrets } from './secrets.ts';
 export interface SecretToolContext {
   secrets: Secrets;
   agentId: string;
+  /** The run's project (#215): a new secret belongs to it; only its own and global ones are visible. */
+  projectId: string;
   /** The task it works on (created_card); null in a direct chat. */
   cardId: string | null;
   workdir: string;
@@ -43,7 +45,7 @@ const SPECS = {
       'in your workdir with your shell environment and stores its trimmed stdout; the output never reaches you, the ' +
       'transcript or the model provider (the result says only how many chars were stored). value: the value itself, ' +
       'when no command can produce it; it is hidden as [secret NAME] in the stored transcript, but the model provider ' +
-      'has already seen it in this call. A new secret is granted to you only. You can overwrite or delete only secrets ' +
+      'has already seen it in this call. A new secret belongs to this project and is granted to you only. You can overwrite or delete only secrets ' +
       'you created, never the user\'s or another agent\'s, nor a model key. Never print a value.',
     input: SecretSet,
   },
@@ -79,7 +81,7 @@ export async function runSecretTool(name: string, input: unknown, ctx: SecretToo
   try {
     if (name === 'secret_delete') {
       const { name: n } = SecretDelete.parse(input);
-      ctx.secrets.agentDelete(ctx.agentId, n);
+      ctx.secrets.agentDelete(ctx.agentId, ctx.projectId, n);
       return { output: `deleted ${n}`, isError: false };
     }
     const parsed = SecretSet.safeParse(input);
@@ -88,7 +90,7 @@ export async function runSecretTool(name: string, input: unknown, ctx: SecretToo
     const value = i.command !== undefined ? await valueOf(i.command, ctx) : i.value!;
     const v = value.trim();
     if (!v) throw new Error(i.command !== undefined ? 'the command printed nothing on stdout: nothing stored' : 'the value is empty: nothing stored');
-    const { created } = ctx.secrets.agentSet(ctx.agentId, ctx.cardId, i.name, v, i.description);
+    const { created } = ctx.secrets.agentSet(ctx.agentId, ctx.projectId, ctx.cardId, i.name, v, i.description);
     const short = v.length < 8 ? ' (under 8 chars: too short to be hidden from outputs)' : '';
     return { output: `stored ${i.name}, ${v.length} chars${created ? ', granted to you only' : ' (replaced its value)'}${short}. Use it as $${i.name} in shell commands.`, isError: false };
   } catch (e) {

@@ -514,7 +514,7 @@ function SecretForm(props: { secret?: SecretInfo; agents: Agent[]; store: string
     e.preventDefault();
     setBusy(true);
     const agents = grant === 'agents' ? picked : [];
-    (s ? api.updateSecret(s.name, { description, grant, agents }) : api.createSecret({ name, description, value, grant, agents }))
+    (s ? api.updateSecret(s.name, { description, grant, agents }) : api.createSecret({ name, description, value, grant, agents, project: null })) // global until the Projects UI picks one (#215)
       .then(
         () => {
           setValue('');

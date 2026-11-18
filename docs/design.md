@@ -854,7 +854,7 @@ These override the sections above where they differ.
   so the microphone closes and the orb hides; a timer ends a timed pause (re-armed at engine start); turning voice
   mode on/off clears it. No CPU indicator (Master, 14 Nov 2026).
 
-## 17. Projects (#213, #214, 18 Nov 2026, `engine/src/projects.ts`, migrations 0048, 0051)
+## 17. Projects (#213, #214, 18 Nov 2026, `engine/src/projects.ts`, migrations 0048, 0051, 0052)
 
 A project is a repo the team works on: a name, a GitHub repo `owner/name` (fixed once set), a lead, members, a colour
 (a hue Atlas picks from `PROJECT_HUES`, editable), active or archived. Model: diagram « Projects in Atlas: model »
@@ -909,7 +909,19 @@ A project is a repo the team works on: a name, a GitHub repo `owner/name` (fixed
   there are archived (read-only, searchable); then its runs there stop. Its workspace stays on disk, listed in
   `Project.kept` and still served; re-adding the agent takes it back as is. `DELETE /api/projects/:id/kept/:agent`
   deletes a kept clone (Master's explicit action, never automatic; an agent's own workdir is never deleted).
-- **Next**: memory and secrets levels (#215), the UI (Projects page, switcher).
+- **Memory levels (#215, migration 0052)**: `global` (the user's own rules and preferences, who the user is:
+  `project_id` null), a project's (`shared` + `project_id`) and an agent's in a project (`agent:<id>` + `project_id`).
+  A run sees global + its project's + its own there, in the always-on block, recall, memory_search, memory_update,
+  the [memory] change notes, the background review and the weekly cleanup; another project's memory never. Tool
+  scopes: `self` = you in this project, `shared` = this project, `global` = the user's own rules. Migration 0052 rebuilds
+  `memories` (CHECK: global ⇔ no project) and keeps everything in « Atlas »; the lead moves the user's general
+  preferences to global by hand (`PATCH /api/memories/:id {"scope":"global"}`). Budget: 3000 always-on chars per run
+  (global + project + own), of which global at most 2000 (`MEMORY_BUDGET_GLOBAL`), so each project keeps ≥ 1000. The
+  kind `project` is shown as « task notes ».
+- **Secrets per project (#215)**: `secrets.project` null = global. A run's env and instructions hold global + its
+  project's secrets (still per agent grant); `secret_set` and « needs secret » create in the run's project. The
+  redactor masks every stored value, whatever the project. `GET /api/secrets?project=<id|name|global>` filters.
+- **Next**: the UI (Projects page, switcher).
 
 ## 18. Open questions
 - Import Hermes data (agents' prompts, memory, open cards) at step 6, or start clean?

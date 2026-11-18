@@ -1,8 +1,8 @@
 import { z } from 'zod';
-import { currentToolName, MEMORY_BUDGET, MEMORY_TEXT_MAX, MemoryKind, TODO_LIMIT, TodoItem, type Memory } from '@atlas/shared';
+import { currentToolName, MEMORY_BUDGET, MEMORY_BUDGET_GLOBAL, MEMORY_TEXT_MAX, MemoryKind, TODO_LIMIT, TodoItem, type Memory } from '@atlas/shared';
 import { renderTodos } from './context.ts';
 import type { Kanban } from './kanban.ts';
-import { agentScope, memoryRef, parseMemoryRef, SHARED, type Memories, type Source } from './memory.ts';
+import { agentScope, GLOBAL, inView, kindTag, memoryRef, parseMemoryRef, SHARED, type Memories, type Source, type View } from './memory.ts';
 import { describeTrigger, oneStep, type Workflows } from './workflows.ts';
 import type { ToolSpec } from './providers/types.ts';
 import { ProjectArg } from './cardTools.ts';
@@ -22,15 +22,29 @@ export interface TeamToolContext {
 }
 
 const memoryId = z.union([z.string(), z.number().int()]).describe('memory id, e.g. m12');
+const scopeName = (m: Memory) => (m.scope === SHARED ? 'shared' : m.scope === GLOBAL ? 'global' : 'yours');
 const memoryLine = (m: Memory) =>
-  `- [${memoryRef(m.id)} · ${m.kind} · ${m.scope === SHARED ? 'shared' : 'yours'}${m.status !== 'active' ? ` · ${m.status}` : ''} · ${m.confirmedAt.slice(0, 10)}] ${m.text}`;
-/** A memory this agent may change: its own or a shared one. */
+  `- [${memoryRef(m.id)} · ${kindTag(m.kind)} · ${scopeName(m)}${m.status !== 'active' ? ` · ${m.status}` : ''} · ${m.confirmedAt.slice(0, 10)}] ${m.text}`;
+/** The run's view (#215): this agent in its task's project. */
+const viewOf = (ctx: TeamToolContext): View => ({ agentId: ctx.agentId, projectId: ctx.kanban.get(ctx.cardId).projectId });
+/** A memory this run may change: a global one, its project's shared ones, its own there. Another project's is « not found ». */
 function ownMemory(ctx: TeamToolContext, ref: string | number): Memory {
-  const m = ctx.memories.get(parseMemoryRef(ref));
-  if (m.scope !== SHARED && m.scope !== agentScope(ctx.agentId)) throw new Error(`${memoryRef(m.id)} belongs to ${m.scope}: you can change only yours and shared ones`);
+  const id = parseMemoryRef(ref);
+  const m = ctx.memories.get(id);
+  if (!inView(m, viewOf(ctx))) {
+    // Another agent's or another project's memory: say no more than that it isn't yours to change.
+    if (m.projectId === viewOf(ctx).projectId) throw new Error(`${memoryRef(m.id)} belongs to ${m.scope}: you can change only yours, shared and global ones`);
+    throw new Error(`memory ${memoryRef(id)} not found`);
+  }
   return m;
 }
-const budgetNote = (ctx: TeamToolContext) => ` · always-on ${ctx.memories.used(ctx.agentId)}/${MEMORY_BUDGET} chars`;
+/** self / shared / global → the stored scope. */
+const scopeOf = (s: 'self' | 'shared' | 'global', agentId: string) => (s === 'shared' ? SHARED : s === 'global' ? GLOBAL : agentScope(agentId));
+const budgetNote = (ctx: TeamToolContext) =>
+  ` · always-on ${ctx.memories.used(viewOf(ctx))}/${MEMORY_BUDGET} chars (global ${ctx.memories.usedGlobal()}/${MEMORY_BUDGET_GLOBAL})`;
+const ScopeArg = z
+  .enum(['self', 'shared', 'global'])
+  .describe("self: you in this project; shared: every agent of this project; global: the user's own rules and preferences, for every project");
 
 interface TeamTool<S extends z.ZodType> {
   description: string;
@@ -56,41 +70,55 @@ export const TEAM_TOOLS = {
   memory_add: tool({
     description:
       `Save one durable memory (one idea, ≤ ${MEMORY_TEXT_MAX} chars). kind: rule (how to work) and preference (the user's) are ` +
-      `always in your instructions (budget ${MEMORY_BUDGET} chars, own + shared); fact (where things are, how things work) and ` +
-      'project (about the current task: goes stale when it ends) are recalled when a conversation matches them. ' +
-      'scope: self (you, your workdir) or shared (every agent). Not progress or logs. If similar memories exist, nothing is ' +
-      'saved and they are listed: call again with update: <id> to change one, or new: true if yours is really different.',
+      `always in your instructions (budget ${MEMORY_BUDGET} chars: global + this project + yours, global at most ${MEMORY_BUDGET_GLOBAL}); ` +
+      'fact (where things are, how things work) and project (task notes: about the current task, stale when it ends) are ' +
+      'recalled when a conversation matches them. scope: self (you, in this project) or shared (every agent of this ' +
+      "project: its repo, setup, conventions); global only for the user's own rules and preferences that hold in every " +
+      'project (how they want to be addressed, how they like to work), never for facts about one repo. Not progress or ' +
+      'logs. If similar memories exist, nothing is saved and they are listed: call again with update: <id> to change one, ' +
+      'or new: true if yours is really different.',
     input: z.object({
       kind: MemoryKind,
-      scope: z.enum(['self', 'shared']).default('self'),
+      scope: ScopeArg.default('self'),
       text: z.string().trim().min(1).max(MEMORY_TEXT_MAX),
       update: memoryId.optional().describe('id of a similar memory to replace with this text'),
       new: z.boolean().optional().describe('true: save even though similar memories exist'),
     }),
     run: (i, ctx) => {
+      const view = viewOf(ctx);
       if (i.update !== undefined) {
         const m = ctx.memories.update(ownMemory(ctx, i.update).id, { text: i.text, kind: i.kind }, ctx.agentId);
-        return `updated ${memoryRef(m.id)} (${m.kind}, ${m.scope})${budgetNote(ctx)}`;
+        return `updated ${memoryRef(m.id)} (${kindTag(m.kind)}, ${scopeName(m)})${budgetNote(ctx)}`;
       }
-      const scope = i.scope === 'shared' ? SHARED : agentScope(ctx.agentId);
+      const scope = scopeOf(i.scope, ctx.agentId);
       if (!i.new) {
-        const similar = ctx.memories.similar([agentScope(ctx.agentId), SHARED], i.text);
+        const similar = ctx.memories.similar(view, i.text);
         if (similar.length)
           throw new Error(
             ['Nothing saved: similar memories exist.', ...similar.map(memoryLine), 'Call memory_add again with update: <id> to replace one, or new: true if yours is different.'].join('\n'),
           );
       }
-      const m = ctx.memories.add({ kind: i.kind, scope, text: i.text, cardId: i.kind === 'project' ? ctx.workCard : null }, ctx.agentId, ctx.source);
-      return `saved ${memoryRef(m.id)} (${m.kind}, ${m.scope}${m.cardId ? `, until ${ctx.kanban.ref(m.cardId)} ends` : ''})${budgetNote(ctx)}`;
+      const m = ctx.memories.add(
+        { kind: i.kind, scope, ...(scope === GLOBAL ? {} : { projectId: view.projectId }), text: i.text, cardId: i.kind === 'project' ? ctx.workCard : null },
+        ctx.agentId,
+        ctx.source,
+      );
+      return `saved ${memoryRef(m.id)} (${kindTag(m.kind)}, ${scopeName(m)}${m.cardId ? `, until ${ctx.kanban.ref(m.cardId)} ends` : ''})${budgetNote(ctx)}`;
     },
   }),
   memory_update: tool({
-    description: 'Rewrite one of your or the shared memories (id like m12). The same text again just confirms it is still true.',
-    input: z.object({ id: memoryId, text: z.string().trim().min(1).max(MEMORY_TEXT_MAX), kind: MemoryKind.optional() }),
-    run: ({ id, text, kind }, ctx) => {
+    description:
+      'Rewrite one of your, this project\'s shared or the global memories (id like m12). The same text again just confirms ' +
+      "it is still true. scope moves it: self (you in this project), shared (this project), global (only the user's own " +
+      'rules and preferences that hold in every project).',
+    input: z.object({ id: memoryId, text: z.string().trim().min(1).max(MEMORY_TEXT_MAX), kind: MemoryKind.optional(), scope: ScopeArg.optional() }),
+    run: ({ id, text, kind, scope }, ctx) => {
       const before = ownMemory(ctx, id);
-      const m = ctx.memories.update(before.id, { text, ...(kind ? { kind } : {}), ...(before.status !== 'active' ? { status: 'active' as const } : {}) }, ctx.agentId);
-      return `${m.text === before.text && m.kind === before.kind && before.status === 'active' ? 'confirmed' : 'updated'} ${memoryRef(m.id)}${budgetNote(ctx)}`;
+      const to = scope ? scopeOf(scope, ctx.agentId) : before.scope;
+      const move = to !== before.scope ? { scope: to, ...(to !== GLOBAL ? { projectId: viewOf(ctx).projectId } : {}) } : {};
+      const m = ctx.memories.update(before.id, { text, ...(kind ? { kind } : {}), ...move, ...(before.status !== 'active' ? { status: 'active' as const } : {}) }, ctx.agentId);
+      const same = m.text === before.text && m.kind === before.kind && m.scope === before.scope && before.status === 'active';
+      return `${same ? 'confirmed' : 'updated'} ${memoryRef(m.id)}${m.scope !== before.scope ? ` (now ${scopeName(m)})` : ''}${budgetNote(ctx)}`;
     },
   }),
   memory_forget: tool({
@@ -102,10 +130,10 @@ export const TEAM_TOOLS = {
     },
   }),
   memory_search: tool({
-    description: 'Search your and the shared memories by keywords (facts and project notes not recalled in your instructions, stale ones too).',
+    description: "Search your, this project's shared and the global memories by keywords (facts and task notes not recalled in your instructions, stale ones too).",
     input: z.object({ query: z.string().trim().min(1) }),
-    run: ({ query }, { memories, agentId }) => {
-      const found = memories.search(agentId, query);
+    run: ({ query }, ctx) => {
+      const found = ctx.memories.search(viewOf(ctx), query);
       return found.length ? found.map(memoryLine).join('\n') : `no memory matches "${query}"`;
     },
   }),

@@ -3,7 +3,7 @@ import { z } from 'zod';
 import type { Agents } from './agents.ts';
 import { renderForSummary } from './context.ts';
 import type { Kanban } from './kanban.ts';
-import { agentScope, memoryRef, parseMemoryRef, SHARED, type Memories } from './memory.ts';
+import { agentScope, GLOBAL, inView, kindTag, memoryRef, parseMemoryRef, SHARED, type Memories, type View } from './memory.ts';
 import type { Models } from './models.ts';
 import type { Provider } from './providers/types.ts';
 import type { Settings } from './settings.ts';
@@ -45,9 +45,9 @@ export function looksSecret(text: string): boolean {
  * user's own latest words, from any conversation, says plainly that adds and updates use their language, and has the
  * model name that language first in its reply (`"language"`), before it writes any text.
  */
-const SYSTEM = (user: string, agent: string, voice: string[]) =>
+const SYSTEM = (user: string, agent: string, project: string, voice: string[]) =>
   [
-    `You review a conversation between ${user} and the AI agent @${agent}, to keep @${agent}'s long-term memory useful.`,
+    `You review a conversation between ${user} and the AI agent @${agent} in project ${project}, to keep @${agent}'s long-term memory useful.`,
     'Most conversations need no change: then reply {"language":"...","changes":[]}.',
     `Keep only what stays true and useful in later conversations: ${user}'s lasting rules and preferences, facts about their`,
     'setup and projects, where things are, how things work. Never: progress or logs of the work, one-off details, secrets',
@@ -56,8 +56,9 @@ const SYSTEM = (user: string, agent: string, voice: string[]) =>
     `Language: write every memory text (add and update) in the language of ${user}'s own messages, never in the language of`,
     `the agent, the tools or the existing memories; an update of a memory written in another language is rewritten in ${user}'s.`,
     ...(voice.length ? [`${user}'s latest messages, to tell their language:`, ...voice.map((v) => `- "${v}"`)] : []),
-    `kind: rule (how the agent must work, as ${user} asked), preference (${user}'s taste), fact, project (about current`,
-    'work; it goes stale). scope: agent (only this agent) or shared (true for every agent).',
+    `kind: rule (how the agent must work, as ${user} asked), preference (${user}'s taste), fact, project (task notes: about`,
+    `the current task; it goes stale). scope: agent (only this agent in ${project}) or shared (true for every agent of ${project}).`,
+    'Global memories (every project) are left alone.',
     `You may update or forget a memory the conversation shows is wrong or outdated, except those marked "by ${user}".`,
     `Reply with JSON only, no prose: {"language":"<${user}'s language>","changes":[...]} with at most ${MAX_CHANGES} items, each one of`,
     '{"action":"add","kind":"fact","scope":"agent","text":"..."} {"action":"update","id":"m12","text":"..."} {"action":"forget","id":"m12"}',
@@ -128,16 +129,20 @@ export class MemoryReview {
       let convo = renderForSummary(fresh);
       if (convo.length > MAX_CHARS) convo = '…\n' + convo.slice(-MAX_CHARS);
       const user = this.settings.user().name;
-      const mine = this.visible(agentId, convo);
+      // The card's project only (#215): global + that project + this agent there.
+      const view: View = { agentId, projectId: card.projectId };
+      const mine = this.visible(view, convo);
+      const where = (m: Memory) => (m.scope === SHARED ? 'shared' : m.scope === GLOBAL ? 'global, read-only' : 'agent');
       const memo = mine.length
-        ? mine.map((m) => `- [${memoryRef(m.id)} · ${m.kind} · ${m.scope === SHARED ? 'shared' : 'agent'}${this.byUser(m.id) ? ` · by ${user}` : ''}] ${m.text}`).join('\n')
+        ? mine.map((m) => `- [${memoryRef(m.id)} · ${kindTag(m.kind)} · ${where(m)}${this.byUser(m.id) ? ` · by ${user}` : ''}] ${m.text}`).join('\n')
         : '(empty)';
+      const projectName = (this.db.prepare('SELECT name FROM projects WHERE id = ?').get(card.projectId) as { name: string } | undefined)?.name ?? card.projectId;
       const { model, provider } = this.models.provider(modelId);
       const res = await (provider as Provider).complete(
         {
           model: model.name,
           maxTokens: Math.min(model.maxTokens, 2000),
-          system: SYSTEM(user, agentId, this.userVoice()),
+          system: SYSTEM(user, agentId, projectName, this.userVoice()),
           messages: [
             {
               role: 'user',
@@ -151,7 +156,7 @@ export class MemoryReview {
       );
       this.usage?.record({ model, agentId, cardId: card.id, conversationId: card.conversationId, kind: 'review', usage: res.usage, accountId: res.account });
       const text = res.content.flatMap((b) => (b.type === 'text' ? [b.text] : [])).join('\n');
-      const applied = this.apply(parseReply(text), agentId, card, user);
+      const applied = this.apply(parseReply(text), view, card, user);
       this.db.prepare('UPDATE conversations SET reviewed_upto_seq = ? WHERE id = ?').run(last, card.conversationId);
       if (applied.length) this.kanban.event(card.id, 'memory_reviewed', { model: modelId, changes: applied });
       return applied;
@@ -161,9 +166,9 @@ export class MemoryReview {
   }
 
   /** The agent's always-on memories, plus facts and notes that match the conversation. */
-  private visible(agentId: string, convo: string): Memory[] {
+  private visible(v: View, convo: string): Memory[] {
     const seen = new Set<number>();
-    return [...this.memories.alwaysOn(agentId), ...this.memories.search(agentId, convo.slice(-8000), { limit: 20, recall: true })].filter(
+    return [...this.memories.alwaysOn(v), ...this.memories.search(v, convo.slice(-8000), { limit: 20, recall: true })].filter(
       (m) => !seen.has(m.id) && seen.add(m.id),
     );
   }
@@ -187,18 +192,18 @@ export class MemoryReview {
   }
 
   /** Apply what is allowed; a refused change (duplicate, budget, secret, the user's) is skipped, never forced. */
-  private apply(changes: ReviewChange[], agentId: string, card: Card, user: string): string[] {
+  private apply(changes: ReviewChange[], view: View, card: Card, user: string): string[] {
+    const agentId = view.agentId;
     const by = `review:${agentId}`;
-    const scopes = [agentScope(agentId), SHARED];
     const out: string[] = [];
     for (const c of changes.slice(0, MAX_CHANGES)) {
       try {
         if (c.action === 'add') {
           if (looksSecret(c.text) || c.text.length > MEMORY_TEXT_MAX) continue;
           const scope = c.scope === 'shared' ? SHARED : agentScope(agentId);
-          if (this.memories.similar(scopes, c.text).length) continue;
+          if (this.memories.similar(view, c.text).length) continue;
           const m = this.memories.add(
-            { kind: c.kind as MemoryKind, scope, text: c.text, cardId: c.kind === 'project' && card.board !== 'direct' ? card.id : null },
+            { kind: c.kind as MemoryKind, scope, projectId: view.projectId, text: c.text, cardId: c.kind === 'project' && card.board !== 'direct' ? card.id : null },
             by,
             { conversationId: card.conversationId, seq: null },
           );
@@ -207,7 +212,8 @@ export class MemoryReview {
         }
         const id = parseMemoryRef(c.id);
         const m = this.memories.get(id);
-        if (!scopes.includes(m.scope) || m.status === 'archived' || this.byUser(id)) continue;
+        // Only this project's (shared or the agent's own there); never global, another agent's or another project's.
+        if (m.scope === GLOBAL || !inView(m, view) || m.status === 'archived' || this.byUser(id)) continue;
         if (c.action === 'update') {
           if (looksSecret(c.text) || c.text.length > MEMORY_TEXT_MAX) continue;
           this.memories.update(id, { text: c.text }, by);
