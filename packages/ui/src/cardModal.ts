@@ -115,6 +115,15 @@ export function linkCardRefsMd(md: string, known: (ref: string) => boolean): str
   return out + link(md.slice(last));
 }
 
+/**
+ * A #N reference inside running text (#140) shows as plain « #N »; the title and status live in the hover title and
+ * the accessible name instead of a chip. `status` is the status's display label.
+ */
+export function proseRefLabel(ref: string, card?: { title: string; status: string }): { title: string; label: string } {
+  if (!card) return { title: 'Open the task', label: `${ref}: open the task` };
+  return { title: `${ref} ${card.title} · ${card.status}`, label: `${ref} ${card.title}, ${card.status}: open the task` };
+}
+
 /** todo_write({ todos }) → its list, or null if the input isn't one (then it shows as a plain tool line). */
 export function todoList(input: unknown): TodoItem[] | null {
   const todos = (input as { todos?: unknown } | null)?.todos;
