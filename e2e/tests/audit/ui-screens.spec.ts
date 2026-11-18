@@ -24,14 +24,14 @@ test.describe('U · screens (Playwright, real UI, scripted model)', () => {
     await expect(page.getByRole('navigation').first()).toBeVisible();
   });
 
-  test('[U02] sidebar: Inbox / Tasks / Library / Schedules navigate and set the hash, no console errors', async ({ page, atlas }) => {
+  test('[U02] sidebar: Inbox / Tasks / Library / Workflows navigate and set the hash, no console errors', async ({ page, atlas }) => {
     const bad = watch(page);
     await page.goto(atlas.url);
     for (const [label, hash] of [
       ['Inbox', '#/inbox'],
       ['Tasks', '#/board'],
       ['Library', '#/library'],
-      ['Schedules', '#/schedules'],
+      ['Workflows', '#/workflows'],
     ] as const) {
       await page.getByRole('button', { name: new RegExp('^' + label) }).first().click();
       await expect.poll(() => page.evaluate(() => location.hash)).toContain(hash);
@@ -170,29 +170,37 @@ test.describe('U · screens (Playwright, real UI, scripted model)', () => {
     expect(bad).toEqual([]);
   });
 
-  test('[U12] schedules: create from the form, Run now opens a card, pause, delete (edit and live preview NOT exercised)', async ({ page, atlas }) => {
+  test('[U12] workflows: create from the list (by hand), the canvas opens; Run now from the list opens its task; off; delete (wiring: workflows.spec.ts)', async ({ page, atlas }) => {
     const bad = watch(page);
     page.on('dialog', (d) => d.accept());
-    atlas.model.next(tu('task_complete', { summary: 'scheduled run done' }));
-    await page.goto(atlas.url + '/#/schedules');
+    atlas.model.next(tu('task_complete', { summary: 'workflow run done' }));
+    await page.goto(atlas.url + '/#/workflows');
     await expect(page.getByText('Memory cleanup').first()).toBeVisible();
-    await page.getByRole('button', { name: 'New schedule' }).click();
-    await page.getByPlaceholder(/What the agent should do each time/).fill('Ping the team');
-    await page.getByRole('button', { name: 'Create schedule' }).click();
-    await expect.poll(async () => (await call(atlas, 'GET', '/workflows')).body.map((x: any) => x.name)).toContain('Ping the team');
+    await page.getByRole('button', { name: 'New workflow' }).click();
+    await page.getByLabel('Name').fill('Ping the team');
+    await page.getByRole('radio', { name: /Only by hand/ }).click();
+    await page.getByRole('button', { name: 'Create and open the canvas' }).click();
+    await expect.poll(() => page.evaluate(() => location.hash)).toMatch(/#\/workflows\/wf_/);
+    const side = page.getByRole('complementary', { name: 'Step' });
+    await side.getByLabel('Agent').selectOption('atlas');
+    await side.getByLabel('Prompt').fill('Ping the team');
+    const wf = (await call(atlas, 'GET', '/workflows')).body.find((x: any) => x.name === 'Ping the team');
+    await expect.poll(async () => (await call(atlas, 'GET', `/workflows/${wf.id}`)).body.nodes.find((n: any) => n.id === 'step1').config.prompt).toBe('Ping the team');
+    await page.goto(atlas.url + '/#/workflows');
     const row = page.locator('.model-list > *').filter({ hasText: 'Ping the team' }).first();
     await expect(row).toBeVisible();
     await row.getByRole('button', { name: 'Run now' }).click();
     await expect.poll(async () => (await call(atlas, 'GET', '/cards')).body.length).toBeGreaterThan(0);
     await expect.poll(() => page.evaluate(() => location.hash)).toContain('card='); // Run now opens the card
     await page.keyboard.press('Escape');
-    // pause
-    const sch = (await call(atlas, 'GET', '/workflows')).body.find((x: any) => x.name === 'Ping the team');
+    // off
     await row.locator('label.switch').click();
-    await expect.poll(async () => (await call(atlas, 'GET', `/workflows/${sch.id}`)).body.enabled).toBe(false);
-    await page.goto(atlas.url + '/#/schedules');
-    await page.locator('.model-list > *').filter({ hasText: 'Ping the team' }).first().getByRole('button', { name: 'Delete' }).click();
-    await expect.poll(async () => (await call(atlas, 'GET', '/workflows')).body.some((x: any) => x.id === sch.id)).toBe(false);
+    await expect.poll(async () => (await call(atlas, 'GET', `/workflows/${wf.id}`)).body.enabled).toBe(false);
+    // delete: from the trigger's panel
+    await row.getByRole('button', { name: 'Open' }).click();
+    await page.locator('.wf-node[data-id="trigger"]').click();
+    await page.getByRole('button', { name: 'Delete workflow' }).click();
+    await expect.poll(async () => (await call(atlas, 'GET', '/workflows')).body.some((x: any) => x.id === wf.id)).toBe(false);
     expect(bad).toEqual([]);
   });
 
@@ -256,8 +264,8 @@ test.describe('U · screens (Playwright, real UI, scripted model)', () => {
     await page.keyboard.press('l');
     await expect.poll(() => page.evaluate(() => location.hash)).toContain('#/library');
     await page.keyboard.press('g');
-    await page.keyboard.press('s');
-    await expect.poll(() => page.evaluate(() => location.hash)).toContain('#/schedules');
+    await page.keyboard.press('w');
+    await expect.poll(() => page.evaluate(() => location.hash)).toContain('#/workflows');
     await page.keyboard.press('g');
     await page.keyboard.press('t');
     await expect.poll(() => page.evaluate(() => location.hash)).toContain('#/board');
@@ -282,7 +290,7 @@ test.describe('U · screens (Playwright, real UI, scripted model)', () => {
     await page.setViewportSize({ width: 390, height: 844 });
     const ch = await atlas.chat();
     await atlas.converse(ch.id, 'hi');
-    for (const h of ['#/inbox', '#/board', '#/library', '#/schedules', '#/settings/memory', `#/chat/${ch.id}`]) {
+    for (const h of ['#/inbox', '#/board', '#/library', '#/workflows', '#/settings/memory', `#/chat/${ch.id}`]) {
       await page.goto(atlas.url + '/' + h);
       await page.waitForTimeout(250);
       const over = await page.evaluate(() => document.documentElement.scrollWidth - window.innerWidth);

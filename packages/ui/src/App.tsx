@@ -11,7 +11,7 @@ import { useMessageStream } from './useMessages.ts';
 import { useMemoryDigest } from './MemoryDigest.tsx';
 import { withDigest } from './memoryView.ts';
 import { Library } from './Library.tsx';
-import { SchedulesView } from './SchedulesView.tsx';
+import { WorkflowsView } from './WorkflowsView.tsx';
 import { Welcome } from './Profile.tsx';
 import { ChatView } from './ChatView.tsx';
 import { PlanWelcome } from './ChatGptSection.tsx';
@@ -30,10 +30,10 @@ import { LAST_AGENT, TOGGLE_PANEL } from './ChatView.tsx';
 
 /**
  * Route in the URL hash, so reloads and the Electron window keep the place: #/inbox/<item>, #/board, #/library/<docId>,
- * #/schedules, #/chat/<id> or #/settings/<page>. Old links #/doc/<id> go to the Library viewer, #/canvas/<id> to the Library. Old settings hashes (#/agents, #/models, #/settings/canvas) are rewritten in place.
+ * #/workflows[/<id>[/runs[/<run id>]]], #/chat/<id> or #/settings/<page>. Old links #/doc/<id> go to the Library viewer, #/schedules to #/workflows, #/canvas/<id> to the Library. Old settings hashes (#/agents, #/models, #/settings/canvas) are rewritten in place.
  * `?card=<id>` on any route opens that card's ticket modal over it (#/chat/c_1?card=c_2).
  */
-type View = 'inbox' | 'chat' | 'board' | 'library' | 'schedules' | 'settings';
+type View = 'inbox' | 'chat' | 'board' | 'library' | 'workflows' | 'settings';
 type Route = { view: View; target: string | null; card: string | null; /** What follows #/settings/memory: a scope or m12. */ rest: string };
 function useRoute(): [Route, (hash: string) => void] {
   const parse = (): Route => ({ rest: '', ...parseView(), card: splitHash(location.hash).card });
@@ -55,7 +55,12 @@ function useRoute(): [Route, (hash: string) => void] {
       return { view: 'library', target: view === 'doc' && id ? decodeURIComponent(id) : null };
     }
     if (view === 'chat') return { view: 'chat', target: id || null };
-    if (view === 'schedules') return { view: 'schedules', target: null };
+    // Schedules became Workflows (#171): old links land on the list.
+    if (view === 'schedules') {
+      history.replaceState(null, '', withCard('#/workflows', card));
+      return { view: 'workflows', target: null };
+    }
+    if (view === 'workflows') return { view: 'workflows', target: id ? decodeURIComponent(id) : null, rest: path.split('/').slice(3).join('/') };
     if (view === 'inbox') return { view: 'inbox', target: id ? decodeURIComponent(id) : null };
     return { view: 'board', target: null };
   };
@@ -190,6 +195,7 @@ export function App() {
         else if (e.type === 'panel.updated') stream.push('panel:' + e.chatId, { type: 'panel', tabs: e.tabs });
         else if (e.type === 'workflow.updated') setWorkflows((ws) => { const i = ws.findIndex(w => w.id === e.workflow.id); const next = ws.slice(); if (i < 0) return [...ws, e.workflow]; next[i] = e.workflow; return next; });
         else if (e.type === 'workflow.deleted') setWorkflows((ws) => ws.filter(w => w.id !== e.id));
+        else if (e.type === 'workflow.run') stream.push('workflow-runs:' + e.run.workflowId, { type: 'workflowRun', run: e.run });
         else if (e.type === 'local.updated') stream.push('local', { type: 'local', status: e.status });
         else if (e.type === 'local.pull') stream.push('local', { type: 'pull', pull: e.pull });
         else if (e.type === 'voice.updated') stream.push('voice', { type: 'voice', status: e.status });
@@ -364,11 +370,12 @@ export function App() {
     { view: 'inbox', label: 'Inbox', hash: '#/inbox', icon: <Icon.inbox />, keys: 'G then I' },
     { view: 'board', label: 'Tasks', hash: '#/board', icon: <Icon.board />, keys: 'G then T' },
     { view: 'library', label: 'Library', hash: '#/library', icon: <Icon.library />, keys: 'G then L' },
-    { view: 'schedules', label: 'Schedules', hash: '#/schedules', icon: <Icon.clock />, keys: 'G then S' },
+    { view: 'workflows', label: 'Workflows', hash: '#/workflows', icon: <Icon.workflows />, keys: 'G then W' },
   ];
   const openChat = route.view === 'chat' ? chats.find((c) => c.id === route.target) : undefined;
   const badge = shownInbox?.badge ?? 0;
-  const activeSchedules = workflows.filter((s) => s.enabled).length;
+  const activeWorkflows = workflows.filter((s) => s.enabled).length;
+  const openWorkflow = route.view === 'workflows' && route.target ? workflows.find((w) => w.id === route.target) : undefined;
   /** An agent is busy while one of its cards runs or one of its chats is answering. */
   const busy = (id: string) => cards.some((c) => c.assignee === id && c.status === 'running') || chats.some((c) => c.assignee === id && c.working);
   const mainChats = new Set(agents.flatMap((a) => (a.mainChat ? [a.mainChat] : [])));
@@ -404,8 +411,10 @@ export function App() {
           ? route.target
             ? { parts: [<a key="l" className="crumb-link" href="#/library">Library</a>], title: libraryTitle ?? 'Document' }
             : { parts: [], title: 'Library' }
-          : route.view === 'schedules'
-            ? { parts: [], title: 'Schedules', sub: `${activeSchedules} active of ${workflows.length}` }
+          : route.view === 'workflows'
+            ? route.target
+              ? { parts: [<a key="w" className="crumb-link" href="#/workflows">Workflows</a>], title: openWorkflow?.name ?? 'Workflow' }
+              : { parts: [], title: 'Workflows', sub: `${activeWorkflows} on of ${workflows.length}` }
             : route.view === 'settings'
               ? { parts: [<span key="s" className="crumb-part">Settings</span>], title: settingsLabel(route.target as SettingsPage) }
               : { parts: [], title: 'Document' };
@@ -615,8 +624,18 @@ export function App() {
             onTitle={setLibraryTitle}
             onError={fail}
           />
-        ) : route.view === 'schedules' ? (
-          <SchedulesView workflows={workflows} agents={agents} onOpenCard={setOpenId} onError={fail} />
+        ) : route.view === 'workflows' ? (
+          <WorkflowsView
+            workflows={workflows}
+            agents={agents}
+            cards={cards}
+            target={route.target}
+            rest={route.rest}
+            stream={stream}
+            go={go}
+            onOpenCard={setOpenId}
+            onError={fail}
+          />
         ) : (
         <Board
           cards={cards}

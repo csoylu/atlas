@@ -700,7 +700,8 @@ export class Workflows {
   }
 
   private toWorkflow(r: WfRow): Workflow {
-    const last = this.db.prepare('SELECT * FROM workflow_runs WHERE workflow_id = ? ORDER BY number DESC LIMIT 1').get(r.id) as RunRow | undefined;
+    // The latest run that ran: a skipped firing doesn't hide the run it was skipped for (lists show its step and task).
+    const last = this.db.prepare("SELECT * FROM workflow_runs WHERE workflow_id = ? ORDER BY state = 'skipped', number DESC LIMIT 1").get(r.id) as RunRow | undefined;
     const edges = this.db.prepare('SELECT from_node, exit, to_node FROM workflow_edges WHERE workflow_id = ? ORDER BY rowid').all(r.id) as { from_node: string; exit: string; to_node: string }[];
     return {
       id: r.id,
@@ -711,7 +712,7 @@ export class Workflows {
       nextRunAt: r.next_run_at,
       lastFiredAt: r.last_fired_at,
       lastError: r.last_error,
-      lastRun: last ? toRun(last) : null,
+      lastRun: last ? { ...toRun(last), steps: this.steps(last.id).map(toStep) } : null,
       createdBy: r.created_by,
       createdAt: r.created_at,
       updatedAt: r.updated_at,
@@ -731,6 +732,11 @@ export class Workflows {
     }
     if (!outer) return;
     const { runs, workflows } = this.touched;
+    // A workflow's lastRun carries its steps: lists follow every step of a run.
+    for (const id of runs) {
+      const r = this.db.prepare('SELECT workflow_id FROM workflow_runs WHERE id = ?').get(id) as { workflow_id: string } | undefined;
+      if (r) workflows.add(r.workflow_id);
+    }
     const deleted = this.deleted;
     this.reset();
     for (const id of deleted) this.bus.emit({ type: 'workflow.deleted', id });

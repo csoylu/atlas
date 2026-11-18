@@ -38,6 +38,7 @@ export const Icon = {
   chevDown: svg(<path d="m4 6 4 4 4-4" />, 12),
   ask: svg(<path d="M2.5 3.5h11v7.5H7l-3 2.5v-2.5H2.5z" />, 14),
   clock: svg(<><circle cx="8" cy="8" r="5.5" /><path d="M8 5v3l2 1.5" /></>),
+  workflows: svg(<><rect x="1.75" y="2.5" width="4.5" height="3.5" rx="1" /><rect x="9.75" y="2.5" width="4.5" height="3.5" rx="1" /><rect x="9.75" y="10" width="4.5" height="3.5" rx="1" /><path d="M6.25 4.25h3.5M12 6v4" /></>),
   search: svg(<><circle cx="7" cy="7" r="4.5" /><path d="M10.5 10.5 14 14" /></>, 14),
   edit: svg(<path d="M10.5 2.5 13.5 5.5 6 13H3v-3z" />, 14),
   plus: svg(<path d="M8 3v10M3 8h10" />, 14),

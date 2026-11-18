@@ -108,7 +108,7 @@ export function Palette(props: {
     nav('go:inbox', 'Go to Inbox', '#/inbox', <Icon.inbox />, 'G I');
     nav('go:board', 'Go to Tasks', '#/board', <Icon.board />, 'G T', 'board cards');
     nav('go:library', 'Go to Library', '#/library', <Icon.library />, 'G L', 'documents artifacts');
-    nav('go:schedules', 'Go to Schedules', '#/schedules', <Icon.clock />, 'G S');
+    nav('go:workflows', 'Go to Workflows', '#/workflows', <Icon.workflows />, 'G W');
     for (const p of SETTINGS_PAGES) nav('go:settings:' + p.id, 'Settings: ' + p.label, '#/settings/' + p.id, <Icon.gear />, undefined, 'preferences');
     const action = (id: string, title: string, icon: ReactNode, run: () => void, kbd?: string, keywords?: string) =>
       out.push({ id, section: 'Actions', title, icon, kbd, keywords, run: act(run) });
