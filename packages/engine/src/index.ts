@@ -152,9 +152,10 @@ export async function startEngine(opts: EngineOptions): Promise<Engine> {
   const workflows = new Workflows(db, bus, kanban);
   const cleanup = new MemoryCleanup(db, bus, memories);
   const settings = new Settings(db);
-  const secrets = new Secrets(db, bus, opts.secrets, env, opts.env ?? process.env);
+  const secrets = new Secrets(db, bus, opts.secrets, env, opts.env ?? process.env, kanban);
   secrets.sync();
   models.setLockedNames(() => secrets.lockedNames());
+  secrets.resume(); // a value added just before a crash: its waiting task goes back to work (#207)
   const shellEnv = new ShellEnv(typeof opts.shellPath === 'object' ? opts.shellPath : { mode: opts.shellPath ?? 'engine' });
   const voice = opts.voice ? new Voice(db, bus, opts.voice) : null;
   let url = '';

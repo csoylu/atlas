@@ -1240,6 +1240,8 @@ export interface SecretInfo {
   updatedBy: string;
   lastUsedAt: string | null;
   lastUsedBy: string | null;
+  /** « Needs secret X » (#207): the blocked task that waits for this value (or grant); it restarts by itself then. */
+  waitingCard: string | null;
 }
 /**
  * Where secret values are kept (#208): 'keychain' (desktop, always open), 'file' (server: secrets.enc, locked until its

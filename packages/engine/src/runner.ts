@@ -44,6 +44,7 @@ import type { FileLog } from './fileLog.ts';
 import { Background, exitNote, type BgProcess } from './background.ts';
 import type { ShellEnv } from './shellEnv.ts';
 import type { Secrets } from './secrets.ts';
+import { isSecretTool, redactSecretCalls, runSecretTool, secretToolSpecs } from './secretTools.ts';
 
 interface RunRow {
   id: string;
@@ -485,6 +486,7 @@ export class Runner {
         ...teamToolSpecs(),
         ...(this.opts.documents ? docToolSpecs() : []),
         ...(cleanup ? cleanupToolSpecs() : []),
+        ...(this.opts.secrets ? secretToolSpecs() : []),
       ];
       // Documents: a direct chat's panel is its own; a card's is the chat it was created from. Work is attached to its card.
       const panelChat = first.board === 'direct' ? first.id : first.originCard;
@@ -544,7 +546,8 @@ export class Runner {
           .run(exact && res.usage.input > 0 ? res.usage.input : null, exact && res.usage.input > 0 ? seen : null, card.conversationId);
         if (res.content.length === 0) throw new ModelError(`model ${model.id} returned an empty answer (stop: ${res.stopReason})`);
         if (turn === 0 && model.lastError) this.models.record(model.id, null);
-        const reply = this.kanban.appendMessage(cardId, 'assistant', agent.id, res.content, seen);
+        // A secret_set value is stored as [secret NAME] (#207); the calls below run with the real input.
+        const reply = this.kanban.appendMessage(cardId, 'assistant', agent.id, redactSecretCalls(res.content), seen);
         if (res.stopReason === 'pause_turn') {
           paused = true;
           continue;
@@ -559,21 +562,23 @@ export class Runner {
           uses.map(async (u) => {
             const { lastInsertRowid } = this.db
               .prepare("INSERT INTO tool_calls (run_id, tool_use_id, name, input, status, started_at) VALUES (?, ?, ?, ?, 'running', ?)")
-              .run(runId, u.id, u.name, JSON.stringify(u.input), new Date().toISOString());
+              .run(runId, u.id, u.name, JSON.stringify((redactSecretCalls([u])[0] as typeof u).input), new Date().toISOString());
             this.emitCalls([Number(lastInsertRowid)]);
             let r: { output: string; isError: boolean; images?: ImageBlock[] };
             let detail: ToolCallDetail | null = null;
             const live = this.liveTail(Number(lastInsertRowid), cardId);
             const invalid = invalidToolInput(u.input);
             // Card, canvas and team tools run synchronously: what the tables gained in between is theirs (#138).
-            const mark = this.opts.effects && !invalid ? this.opts.effects.mark() : null;
+            const mark = this.opts.effects && !invalid && !isSecretTool(u.name) ? this.opts.effects.mark() : null;
             if (invalid) r = { output: invalid, isError: true };
             else if (isCardTool(u.name)) {
-              const c = runCardTool(u.name, u.input, { kanban: this.kanban, agentId: agent.id, cardId });
+              const c = runCardTool(u.name, u.input, { kanban: this.kanban, agentId: agent.id, cardId, ...(this.opts.secrets ? { secrets: this.opts.secrets } : {}) });
               if (c.terminal && !c.isError) terminal = c.terminal;
               r = c;
             } else if (this.opts.documents && isDocTool(u.name))
               r = runDocTool(u.name, u.input, { documents: this.opts.documents, agentId: agent.id, chatId: panelChat, cardId: workCard, cardRef: (id) => this.kanban.ref(id) });
+            else if (this.opts.secrets && isSecretTool(u.name))
+              r = await runSecretTool(u.name, u.input, { secrets: this.opts.secrets, agentId: agent.id, cardId: workCard, workdir, signal, env: (command) => this.shellEnvFor(agent.id, command) });
             else if (cleanup && isCleanupTool(u.name)) r = runCleanupTool(u.name, u.input, { cleanup, kanban: this.kanban, agents: this.agents, agentId: agent.id, cardId });
             else if (isTeamTool(u.name)) {
               const changeBefore = this.memories.lastChange();
@@ -991,6 +996,7 @@ export class Runner {
       '# Secrets',
       `Your shell commands get these as environment variables. Use them as $NAME in commands (e.g. curl "…?apikey=$${mine[0]!.name}");`,
       'never print, echo, log, write to a file or paste a value: tool output shows a value as [secret NAME].',
+      'A new one: secret_set (prefer command). One only the user can give: task_block with secret: "NAME".',
       ...mine.map((s) => `- $${s.name}${s.description ? `: ${s.description}` : ''}${s.hasValue ? '' : ` (no value yet: ${this.user().name} must add it in Settings → Secrets)`}`),
     ];
   }

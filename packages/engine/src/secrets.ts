@@ -2,6 +2,7 @@ import { CreateSecret, UpdateSecret, type SecretGrant, type SecretInfo, type Sec
 import type { Bus } from './events.ts';
 import { ConflictError, NotFoundError } from './kanban.ts';
 import type { Db } from './store/db.ts';
+import type { Kanban } from './kanban.ts';
 
 /**
  * Where model keys come from (CLAUDE.md rule 5). The desktop app passes a store backed by the OS keychain
@@ -73,6 +74,7 @@ interface SecretRow {
   updated_by: string;
   last_used_at: string | null;
   last_used_by: string | null;
+  waiting_card: string | null;
 }
 
 /** Who writes: 'user' (Settings) or an agent id, and the task it worked on. */
@@ -93,6 +95,8 @@ export class Secrets {
     private env: NodeJS.ProcessEnv,
     /** The environment the engine started with: what a name gets back when a lock takes the stored value away. */
     private base: NodeJS.ProcessEnv = {},
+    /** For « needs secret X » (#207): the waiting task goes back to work once the value is there. */
+    private kanban?: Kanban,
   ) {}
 
   // ── Lock (#208, server secrets.enc) ─────────────────────────────────────────────────────────────────────────────
@@ -129,6 +133,7 @@ export class Secrets {
     if (!this.locked()) this.sync();
     this.bus.emit({ type: 'secrets.status', status: this.status() });
     this.bus.emit({ type: 'secrets.updated' });
+    this.resume();
   }
 
   async unlock(password: string, source: 'env' | 'ui' = 'ui'): Promise<SecretStoreStatus> {
@@ -276,6 +281,7 @@ export class Secrets {
       .prepare('UPDATE secrets SET description = ?, grant_to = ?, agents = ?, updated_at = ?, updated_by = ? WHERE name = ?')
       .run(p.description ?? cur.description, grant, JSON.stringify(agents), new Date().toISOString(), who.by, name);
     this.bus.emit({ type: 'secrets.updated' });
+    this.resume();
     return this.get(name);
   }
 
@@ -298,6 +304,7 @@ export class Secrets {
     store.set(name, v);
     this.db.prepare('UPDATE secrets SET updated_at = ?, updated_by = ? WHERE name = ?').run(now, who.by, name);
     this.bus.emit({ type: 'secrets.updated' });
+    this.resume();
   }
 
   /** The value first, then the row: a crash in between leaves a row with « no value », never a value without a row. */
@@ -306,6 +313,142 @@ export class Secrets {
     if (isTokenEntry(name)) throw new ConflictError('sign out instead (Settings → Subscriptions)');
     if (store.names().includes(name)) store.delete(name);
     this.db.prepare('DELETE FROM secrets WHERE name = ?').run(name);
+    this.bus.emit({ type: 'secrets.updated' });
+  }
+
+  /** Names no agent may take: plan sign-ins, model keys, engine passwords, shell basics. */
+  private refuseName(name: string): void {
+    if (!SECRET_NAME.test(name)) throw new ConflictError(`${name} is not a valid variable name: A-Z, 0-9 and _, starting with a letter`);
+    if (isTokenEntry(name)) throw new ConflictError(`${name} belongs to a sign-in (ChatGPT or Claude plan)`);
+    if (this.modelKeyNames().includes(name) || ENGINE_ONLY.includes(name)) throw new ConflictError(`${name} is a model key: agents can't set or use it`);
+    if (RESERVED.includes(name)) throw new ConflictError(`${name} is a variable every shell needs: pick another name`);
+  }
+
+  private row(name: string): SecretRow | undefined {
+    return this.db.prepare('SELECT * FROM secrets WHERE name = ?').get(name) as SecretRow | undefined;
+  }
+
+  /** Why `agentId` may not change this row, or null. */
+  private notOwner(r: SecretRow, agentId: string): string | null {
+    if (r.kind === 'model_key') return `${r.name} is a model key: agents can't set or delete it`;
+    if (r.created_by === agentId) return null;
+    return `${r.name} belongs to ${r.created_by === 'user' ? 'the user' : `@${r.created_by}`}: you can only change secrets you created (pick another name, or ask the user)`;
+  }
+
+  /**
+   * secret_set (#207): an agent stores a value. New: granted to that agent only, created by it, from its task. An
+   * existing name only if the agent created it (rotation). The row goes before the value, like create().
+   */
+  agentSet(agentId: string, cardId: string | null, name: string, value: string, description?: string): { created: boolean } {
+    const store = this.needStore();
+    this.refuseName(name);
+    const v = value.trim();
+    if (!v) throw new ConflictError('the value is empty: nothing stored');
+    const r = this.row(name);
+    if (!r && store.names().includes(name)) throw new ConflictError(`${name} is a model key: agents can't set or use it`);
+    const now = new Date().toISOString();
+    if (r) {
+      const why = this.notOwner(r, agentId);
+      if (why) throw new ConflictError(why);
+      store.set(name, v);
+      this.db
+        .prepare('UPDATE secrets SET description = ?, updated_at = ?, updated_by = ? WHERE name = ?')
+        .run(description?.trim() || r.description, now, agentId, name);
+    } else {
+      this.db
+        .prepare(
+          "INSERT INTO secrets (name, description, kind, grant_to, agents, created_by, created_card, created_at, updated_at, updated_by) VALUES (?, ?, 'agent', 'agents', ?, ?, ?, ?, ?, ?)",
+        )
+        .run(name, description?.trim() ?? '', JSON.stringify([agentId]), agentId, cardId, now, now, agentId);
+      try {
+        store.set(name, v);
+      } catch (e) {
+        this.db.prepare('DELETE FROM secrets WHERE name = ?').run(name);
+        throw e;
+      }
+    }
+    this.bus.emit({ type: 'secrets.updated' });
+    this.resume();
+    return { created: !r };
+  }
+
+  /** secret_delete (#207): only a secret the agent created. */
+  agentDelete(agentId: string, name: string): void {
+    const r = this.row(name);
+    if (!r || isTokenEntry(name)) throw new NotFoundError(`no secret ${name}`);
+    const why = this.notOwner(r, agentId);
+    if (why) throw new ConflictError(why);
+    this.delete(name);
+  }
+
+  /**
+   * « Needs secret X » (task_block with `secret`, #207): a row without a value, granted to the agent, that the user
+   * fills in Settings → Secrets; the task goes back to work by itself then (resume()). An existing row the agent can't
+   * use yet (no value, or not granted) just gets the task as waiting. Idempotent: a run that blocks again after a crash
+   * finds its row.
+   */
+  need(agentId: string, cardId: string, name: string, description?: string): void {
+    this.needStore();
+    this.refuseName(name);
+    const r = this.row(name);
+    if (!r && this.stored().has(name)) throw new ConflictError(`${name} is a model key: agents can't set or use it`);
+    const now = new Date().toISOString();
+    if (!r) {
+      this.db
+        .prepare(
+          "INSERT INTO secrets (name, description, kind, grant_to, agents, created_by, created_card, created_at, updated_at, updated_by, waiting_card) VALUES (?, ?, 'agent', 'agents', ?, ?, ?, ?, ?, ?, ?)",
+        )
+        .run(name, description?.trim() ?? '', JSON.stringify([agentId]), agentId, cardId, now, now, agentId, cardId);
+    } else {
+      if (r.kind === 'model_key') throw new ConflictError(`${name} is a model key: agents can't set or use it`);
+      if (this.stored().has(name) && grantedTo(toInfo(r, true), agentId))
+        throw new ConflictError(`${name} already has a value and is granted to you: use $${name} in your commands`);
+      this.db
+        .prepare('UPDATE secrets SET waiting_card = ?, description = ? WHERE name = ?')
+        .run(cardId, r.description || description?.trim() || '', name);
+    }
+    this.bus.emit({ type: 'secrets.updated' });
+  }
+
+  /**
+   * Tasks waiting on a secret that is now there (value stored, granted to the task's agent) go back to work: a note in
+   * the thread, status ready, the wait cleared, in one transaction. Also run at engine start: a crash between the
+   * value's write and this leaves the task blocked until then, never lost. A task no longer blocked just drops the wait.
+   */
+  resume(): void {
+    const kanban = this.kanban;
+    if (!kanban || !this.store || this.locked()) return; // a locked store: resumed at the unlock (changed())
+    const rows = this.db.prepare('SELECT * FROM secrets WHERE waiting_card IS NOT NULL').all() as SecretRow[];
+    if (!rows.length) return;
+    let names: Set<string>;
+    try {
+      names = this.stored();
+    } catch (e) {
+      console.error('secrets: the store could not be read to resume waiting tasks', e);
+      return;
+    }
+    for (const r of rows) {
+      const card = (() => {
+        try {
+          return kanban.get(r.waiting_card!);
+        } catch {
+          return null;
+        }
+      })();
+      const clear = () => this.db.prepare('UPDATE secrets SET waiting_card = NULL WHERE name = ? AND waiting_card = ?').run(r.name, r.waiting_card);
+      if (!card || card.status !== 'blocked') {
+        clear();
+        continue;
+      }
+      if (!names.has(r.name) || !card.assignee || !grantedTo(toInfo(r, true), card.assignee)) continue;
+      this.db.transaction(() => {
+        kanban.appendMessage(card.id, 'user', 'system', [
+          { type: 'text', text: `The secret ${r.name} now has a value: use $${r.name} in your shell commands (never print it). Continue the task.` },
+        ]);
+        kanban.update(card.id, { status: 'ready' }, 'user');
+        clear();
+      })();
+    }
     this.bus.emit({ type: 'secrets.updated' });
   }
 
@@ -431,4 +574,5 @@ const toInfo = (r: SecretRow, hasValue: boolean): SecretInfo => ({
   updatedBy: r.updated_by,
   lastUsedAt: r.last_used_at,
   lastUsedBy: r.last_used_by,
+  waitingCard: r.waiting_card,
 });
