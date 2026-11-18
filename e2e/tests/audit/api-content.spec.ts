@@ -166,7 +166,7 @@ test.describe('H · schedules, notifications', () => {
     const mine = list.find((s: any) => s.title === 'Tool schedule');
     expect(mine).toBeTruthy();
     expect(mine.createdBy).toBe('atlas');
-    expect(JSON.stringify(atlas.model.of('main')[2].req.messages.at(-1))).toContain('Tool schedule');
+    expect(JSON.stringify(atlas.model.of('main')[2]!.req.messages.at(-1))).toContain('Tool schedule');
     atlas.model.next(tu('schedule_delete', { id: mine.id }), say('gone'));
     await atlas.say(ch.id, 'delete it');
     await expect.poll(async () => (await call(atlas, 'GET', '/schedules')).body.some((s: any) => s.id === mine.id), { timeout: 15_000 }).toBe(false);
