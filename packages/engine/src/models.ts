@@ -30,6 +30,7 @@ export const realProviders: ProviderFactory = (m, env) => {
       baseURL: m.baseUrl ?? undefined,
       authToken: token,
       maxRetries: 0,
+      origin: token ? 'claude_code:token' : 'claude_code:key',
       headers: { 'user-agent': 'claude-code/2.1.322', ...(token ? { 'anthropic-beta': 'oauth-2025-04-20' } : {}) },
     });
   }
@@ -39,7 +40,7 @@ export const realProviders: ProviderFactory = (m, env) => {
   if (m.provider === 'anthropic') {
     if (!key)
       throw new ModelError(`model ${m.id} needs ${m.credentialEnv ?? 'an API key'}: set it in Settings → Model list (desktop) or in the engine's environment`);
-    return new AnthropicProvider(key, m.baseUrl ?? undefined);
+    return new AnthropicProvider(key, { baseURL: m.baseUrl ?? undefined, origin: `key:${m.credentialEnv}` });
   }
   if (!m.baseUrl) throw new ModelError(`model ${m.id} has no base URL`);
   return new OpenAiCompatProvider(m.baseUrl, key);

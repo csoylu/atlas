@@ -374,6 +374,69 @@ describe('Claude plan (Atlas’s own approved OAuth client)', () => {
     expect(an.seen.filter((r) => r.url.includes('/v1/messages')).map((r) => r.headers.get('authorization')).slice(2)).toEqual(['Bearer at2']);
   });
 
+  it('a web search replays only through the subscription that ran it: after a failover it goes as text (#173)', async () => {
+    const { an, u } = await setup({}, { dispatch: true });
+    const j = { 'content-type': 'application/json' };
+    const complete = async (accountId?: string) => {
+      const { url } = (await (await fetch(u + '/claude/login', { method: 'POST', headers: j, body: JSON.stringify({ accountId }) })).json()) as { url: string };
+      const state = new URL(url).searchParams.get('state');
+      expect((await fetch(u + '/claude/complete', { method: 'POST', headers: j, body: JSON.stringify({ code: 'c#' + state }) })).status).toBe(200);
+    };
+    await complete();
+    const created = (await (await fetch(u + '/plan-accounts', { method: 'POST', headers: j, body: JSON.stringify({ provider: 'claude_plan', label: 'Work' }) })).json()) as ClaudePlanStatus;
+    const [main, work] = [created.accounts[0]!, created.accounts.find((a) => a.label === 'Work')!];
+    await complete(work.id);
+    engine!.models.create({ id: 'opus', provider: 'claude_plan', name: 'claude-opus-5' });
+    engine!.agents.update('atlas', { modelId: 'opus' });
+    const results = [{ type: 'web_search_result', url: 'https://ex.com/a', title: 'A', encrypted_content: 'EncByMain', page_age: null }];
+    const searched = () =>
+      sseWith({}, [
+        { type: 'message_start', message: { id: 'm1', type: 'message', role: 'assistant', model: 'claude-x', content: [], stop_reason: null, usage: { input_tokens: 10, output_tokens: 0 } } },
+        { type: 'content_block_start', index: 0, content_block: { type: 'server_tool_use', id: 'srv_1', name: 'web_search', input: {} } },
+        { type: 'content_block_delta', index: 0, delta: { type: 'input_json_delta', partial_json: '{"query":"atlas"}' } },
+        { type: 'content_block_stop', index: 0 },
+        { type: 'content_block_start', index: 1, content_block: { type: 'web_search_tool_result', tool_use_id: 'srv_1', content: results } },
+        { type: 'content_block_stop', index: 1 },
+        { type: 'content_block_start', index: 2, content_block: { type: 'text', text: '' } },
+        { type: 'content_block_delta', index: 2, delta: { type: 'text_delta', text: 'Found A.' } },
+        { type: 'content_block_stop', index: 2 },
+        { type: 'message_delta', delta: { stop_reason: 'end_turn' }, usage: { output_tokens: 3 } },
+        { type: 'message_stop' },
+      ]);
+    an.messages = [() => searched()];
+    const chat = (await (await fetch(u + '/agents/atlas/chats', { method: 'POST' })).json()) as { id: string };
+    const say = (text: string) => fetch(u + `/cards/${chat.id}/messages`, { method: 'POST', headers: j, body: JSON.stringify({ text }) });
+    await say('look it up');
+    await expect.poll(() => engine!.kanban.messages(chat.id).filter((m) => m.author === 'atlas').length, { timeout: 5000 }).toBe(1);
+    expect(engine!.kanban.messages(chat.id).find((m) => m.author === 'atlas')!.content[1]).toEqual({ type: 'web_search_tool_result', tool_use_id: 'srv_1', content: results, origin: `plan:${main.id}` });
+
+    // Main answers again: the search goes exactly as Anthropic sent it. Then Main is out and Work answers: as text.
+    an.messages = [() => answer('Again from Main.')];
+    await say('more');
+    await expect.poll(() => engine!.kanban.messages(chat.id).filter((m) => m.author === 'atlas').length, { timeout: 5000 }).toBe(2);
+    an.messages = [
+      (h) =>
+        h.get('authorization') === 'Bearer at1'
+          ? Response.json({ type: 'error', error: { type: 'rate_limit_error', message: 'usage limit' } }, { status: 429, headers: { 'retry-after': '3600' } })
+          : answer('From Work.'),
+    ];
+    await say('and now?');
+    await expect.poll(() => engine!.kanban.messages(chat.id).filter((m) => m.author === 'atlas').length, { timeout: 5000 }).toBe(3);
+    const sent = an.seen.filter((r) => r.url.includes('/v1/messages')).map((r) => ({ auth: r.headers.get('authorization'), msgs: r.body!.messages as { content: unknown[] }[] }));
+    // (The chat's naming call may come in between: the turns are found by what they send.)
+    const turn = (auth: string, last: string) => sent.find((r) => r.auth === auth && r.msgs.length > 1 && JSON.stringify(r.msgs.at(-1)).includes(last))!.msgs;
+    expect(turn('Bearer at1', 'more')[1]!.content.slice(0, 2)).toEqual([
+      { type: 'server_tool_use', id: 'srv_1', name: 'web_search', input: { query: 'atlas' } },
+      { type: 'web_search_tool_result', tool_use_id: 'srv_1', content: results },
+    ]);
+    const fromWork = turn('Bearer at2', 'and now?');
+    expect(JSON.stringify(fromWork)).not.toContain('EncByMain');
+    expect(fromWork[1]!.content.slice(0, 2)).toEqual([
+      { type: 'text', text: '(searched the web: {"query":"atlas"})' },
+      { type: 'text', text: '(web search: 1 results: A <https://ex.com/a>; results omitted to fit the context)' },
+    ]);
+  });
+
   it('keeps several subscriptions apart: own keychain entry, order, rename, remove; one account cannot be signed in twice', async () => {
     const { u, status, secrets } = await setup({});
     const j = { 'content-type': 'application/json' };

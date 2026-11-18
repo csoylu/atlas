@@ -31,8 +31,9 @@ interface Row {
 /** Default pause when Anthropic gives no reset time. */
 const COOLDOWN_MS = { rate: 60_000, overloaded: 30_000, auth: 30 * 60_000, billing: 60 * 60_000 };
 
-export type ProviderMaker = (key: string, onHeaders: (h: Headers) => void) => Provider;
-const realMaker: ProviderMaker = (key, onHeaders) => new AnthropicProvider(key, { maxRetries: 0, onHeaders });
+/** origin: the account, stamped on its web search results (#173: they replay only through it). */
+export type ProviderMaker = (key: string, onHeaders: (h: Headers) => void, origin: string) => Provider;
+const realMaker: ProviderMaker = (key, onHeaders, origin) => new AnthropicProvider(key, { maxRetries: 0, onHeaders, origin });
 
 export class Accounts {
   constructor(
@@ -181,7 +182,7 @@ export class Accounts {
     let transient = true;
     for (const a of usable) {
       let streamed = false;
-      const provider = this.make(this.env[a.secret]!, (h) => this.recordLimits(a.id, h));
+      const provider = this.make(this.env[a.secret]!, (h) => this.recordLimits(a.id, h), `account:${a.id}`);
       try {
         const res = await provider.complete(
           req,

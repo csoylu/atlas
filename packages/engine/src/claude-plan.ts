@@ -474,6 +474,8 @@ export class ClaudePlan {
               maxRetries: 0,
               fetch: this.fetchFn,
               onHeaders: (h) => this.plans.recordQuota(r.id, claudeQuota(h, this.now()), rawLimitHeaders(h)),
+              // Web search results replay only through the subscription that ran them (#173).
+              origin: `plan:${r.id}`,
             });
             try {
               return await p.complete(req, (t, kind) => (onStream(), onText(t, kind)), signal);

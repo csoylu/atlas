@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { AnthropicProvider, adaptiveThinking, systemBlocks, WEB_SEARCH, withCacheBreakpoints } from './anthropic.ts';
+import { AnthropicProvider, adaptiveThinking, searchesFor, systemBlocks, WEB_SEARCH, withCacheBreakpoints } from './anthropic.ts';
 import type { ModelRequest } from './types.ts';
 
 describe('adaptiveThinking', () => {
@@ -90,7 +90,7 @@ describe('web search (server tool)', () => {
       bodies.push(JSON.parse(String(init!.body)));
       return answer();
     }) as typeof globalThis.fetch;
-    return { bodies, p: new AnthropicProvider('k', { fetch, maxRetries: 0, ...(baseURL ? { baseURL } : {}) }) };
+    return { bodies, p: new AnthropicProvider('k', { fetch, maxRetries: 0, origin: 'account:a', ...(baseURL ? { baseURL } : {}) }), fetch };
   };
 
   it('offers web_search_20250305 on the Anthropic API, keeps the blocks and replays them as-is', async () => {
@@ -99,11 +99,36 @@ describe('web search (server tool)', () => {
     expect(bodies[0]!.tools).toEqual([{ name: 'shell', description: 'd', input_schema: { type: 'object' } }, WEB_SEARCH]);
     expect(res.content).toEqual([
       { type: 'server_tool_use', id: 'srv_1', name: 'web_search', input: { query: 'atlas' } },
-      { type: 'web_search_tool_result', tool_use_id: 'srv_1', content: results },
+      { type: 'web_search_tool_result', tool_use_id: 'srv_1', content: results, origin: 'account:a' },
       { type: 'text', text: 'Found A.' },
     ]);
     await p.complete(req([...req().messages, { role: 'assistant', content: res.content }, { role: 'user', content: [{ type: 'text', text: 'more' }] }]), () => {}, new AbortController().signal);
-    expect((bodies[1]!.messages as { content: unknown }[])[1]!.content).toEqual(res.content);
+    // Exactly as Anthropic sent it: Atlas's origin field stays home.
+    expect((bodies[1]!.messages as { content: unknown }[])[1]!.content).toEqual([
+      { type: 'server_tool_use', id: 'srv_1', name: 'web_search', input: { query: 'atlas' } },
+      { type: 'web_search_tool_result', tool_use_id: 'srv_1', content: results },
+      { type: 'text', text: 'Found A.' },
+    ]);
+  });
+
+  it('sends a search from another account, or of unknown origin, as text with its request (#173)', async () => {
+    const { bodies, p, fetch } = make();
+    const res = await p.complete(req(), () => {}, new AbortController().signal);
+    const history = req([...req().messages, { role: 'assistant', content: res.content }, { role: 'user', content: [{ type: 'text', text: 'more' }] }]);
+    const other = new AnthropicProvider('k2', { fetch, maxRetries: 0, origin: 'account:b' });
+    await other.complete(history, () => {}, new AbortController().signal);
+    const text = [
+      { type: 'text', text: '(searched the web: {"query":"atlas"})' },
+      { type: 'text', text: '(web search: 1 results: A <https://ex.com/a>; results omitted to fit the context)' },
+      { type: 'text', text: 'Found A.' },
+    ];
+    expect((bodies[1]!.messages as { content: unknown }[])[1]!.content).toEqual(text);
+    expect(JSON.stringify(bodies[1])).not.toContain('encrypted_content');
+    const { origin: _, ...unstamped } = res.content[1] as { origin?: string };
+    const old = [res.content[0]!, unstamped as typeof res.content[number], res.content[2]!];
+    expect(searchesFor([{ role: 'assistant', content: old }], 'account:a')[0]!.content).toEqual(text);
+    const none = [{ role: 'user' as const, content: [{ type: 'text' as const, text: 'hi' }] }];
+    expect(searchesFor(none, 'account:a')).toBe(none);
   });
 
   it('puts cache_control only on agent turns: stable system prefix + the last two user messages; none on one-shot calls', async () => {

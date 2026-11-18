@@ -149,7 +149,9 @@ export const ContentBlock = z.discriminatedUnion('type', [
   // A tool the provider runs itself (Anthropic's web search). Replayed to the API as-is; never run by Atlas.
   z.object({ type: z.literal('server_tool_use'), id: z.string(), name: z.string(), input: z.unknown() }),
   // Its result: Anthropic's content (search results with encrypted_content, or an error object), kept verbatim.
-  z.object({ type: z.literal('web_search_tool_result'), tool_use_id: z.string(), content: z.unknown() }),
+  // origin: the account that ran it (#173): its encrypted_content only replays through that account; Atlas's own
+  // field, never sent. Missing on results stored before #173 (they replay as text).
+  z.object({ type: z.literal('web_search_tool_result'), tool_use_id: z.string(), content: z.unknown(), origin: z.string().optional() }),
 ]);
 export type ContentBlock = z.infer<typeof ContentBlock>;
 

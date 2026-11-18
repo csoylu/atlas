@@ -1,6 +1,7 @@
 import Anthropic from '@anthropic-ai/sdk';
 import type { ContentBlock, ImageBlock } from '@atlas/shared';
 import { hasImage, imageLine } from '../images.ts';
+import { resultText, searchedText } from '../context.ts';
 import { ModelError, toolInput, type ModelRequest, type ModelResponse, type OnDelta, type Provider } from './types.ts';
 
 /** An Anthropic HTTP error with what account failover needs (status, the response headers). */
@@ -29,16 +30,23 @@ export interface AnthropicOptions {
   systemPrefix?: string;
   /** Offer Anthropic's web search when asked (req.webSearch). Default: only against api.anthropic.com, not a proxy or another server. */
   webSearch?: boolean;
+  /**
+   * The account this provider calls as (#173), stamped on the web search results it gets back. Anthropic encrypts a
+   * result's pages for the account that ran the search: only results with this origin replay verbatim (searchesFor).
+   */
+  origin?: string;
 }
 
 export class AnthropicProvider implements Provider {
   private client: Anthropic;
   private systemPrefix: string | undefined;
   private webSearch: boolean;
+  private origin: string | undefined;
   constructor(apiKey: string | null, opts: AnthropicOptions | string = {}) {
     const o = typeof opts === 'string' ? { baseURL: opts } : opts;
     this.systemPrefix = o.systemPrefix;
     this.webSearch = o.webSearch ?? isAnthropicApi(o.baseURL);
+    this.origin = o.origin;
     const onHeaders = o.onHeaders;
     const f = o.fetch ?? fetch;
     this.client = new Anthropic({
@@ -58,6 +66,11 @@ export class AnthropicProvider implements Provider {
     });
   }
 
+  /** The history as this provider sends it: web searches for its account (searchesFor), pictures in Anthropic's shape. */
+  private wire(messages: ModelRequest['messages']): ModelRequest['messages'] {
+    return anthropicMessages(searchesFor(messages, this.origin));
+  }
+
   async complete(req: ModelRequest, onText: OnDelta, signal: AbortSignal): Promise<ModelResponse> {
     try {
       // The raw event stream, accumulated here (not the SDK's MessageStream): the SDK parses a tool call's arguments
@@ -70,7 +83,7 @@ export class AnthropicProvider implements Provider {
           // Stable prefix is cached (design §5).
           system: [...(this.systemPrefix ? [{ type: 'text' as const, text: this.systemPrefix }] : []), ...systemBlocks(req)],
           // The history too: breakpoints at its end (withCacheBreakpoints).
-          messages: (req.cache ? withCacheBreakpoints(anthropicMessages(req.messages)) : anthropicMessages(req.messages)) as Anthropic.MessageParam[],
+          messages: (req.cache ? withCacheBreakpoints(this.wire(req.messages)) : this.wire(req.messages)) as Anthropic.MessageParam[],
           tools: [...(req.tools as Anthropic.ToolUnion[]), ...(req.webSearch && this.webSearch ? [WEB_SEARCH] : [])],
           ...(req.effort ? { output_config: { effort: req.effort } } : {}),
           // Newer models think adaptively but omit the thinking text by default: ask for the summary so the user sees it.
@@ -93,7 +106,8 @@ export class AnthropicProvider implements Provider {
           else if (b.type === 'tool_use') blocks[ev.index] = { type: 'tool_use', id: b.id, name: b.name, input: {}, json: '' };
           // Web search runs at Anthropic: kept verbatim so it replays (encrypted_content included) and shows in the UI.
           else if (b.type === 'server_tool_use') blocks[ev.index] = { type: 'server_tool_use', id: b.id, name: b.name, input: {}, json: '' };
-          else if (b.type === 'web_search_tool_result') blocks[ev.index] = { type: 'web_search_tool_result', tool_use_id: b.tool_use_id, content: b.content };
+          else if (b.type === 'web_search_tool_result')
+            blocks[ev.index] = { type: 'web_search_tool_result', tool_use_id: b.tool_use_id, content: b.content, ...(this.origin ? { origin: this.origin } : {}) };
           else throw new ModelError(`Anthropic returned an unsupported block type: ${b.type}`);
         } else if (ev.type === 'content_block_delta') {
           const b = blocks[ev.index];
@@ -142,6 +156,31 @@ export class AnthropicProvider implements Provider {
       throw e;
     }
   }
+}
+
+/**
+ * Web search results as one account may send them (#173). Anthropic encrypts a result's pages (encrypted_content) for
+ * the account that ran the search and refuses them from another one: 400 « Invalid encrypted_content in search_result
+ * block », on every retry (paris's main chat after the failover to a second Claude plan). A result from `origin` goes
+ * exactly as stored, minus Atlas's origin field; one from another account, or stored before origins existed, becomes its
+ * line of text together with its request (never cut, never re-typed). pairServerTools has already put each result in
+ * its request's message. Returns the input itself when it holds no result.
+ */
+export function searchesFor(messages: ModelRequest['messages'], origin: string | undefined): ModelRequest['messages'] {
+  const isResult = (b: ContentBlock) => b.type === 'web_search_tool_result';
+  if (!messages.some((m) => m.content.some(isResult))) return messages;
+  return messages.map((m) => {
+    if (!m.content.some(isResult)) return m;
+    const foreign = new Set(m.content.flatMap((b) => (b.type === 'web_search_tool_result' && (!origin || b.origin !== origin) ? [b.tool_use_id] : [])));
+    const content = m.content.map((b): ContentBlock => {
+      if (b.type === 'server_tool_use' && foreign.has(b.id)) return searchedText(b);
+      if (b.type !== 'web_search_tool_result') return b;
+      if (foreign.has(b.tool_use_id)) return resultText(b);
+      const { origin: _, ...sent } = b;
+      return sent;
+    });
+    return { role: m.role, content };
+  });
 }
 
 /**
