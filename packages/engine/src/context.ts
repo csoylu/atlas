@@ -124,8 +124,10 @@ export function compactedView(
   return [{ role: 'user', content: lead }, ...view];
 }
 
-const searchedText = (b: { input: unknown }): ContentBlock => ({ type: 'text', text: `(searched the web: ${JSON.stringify(b.input)})` });
-const resultText = (b: { content: unknown }): ContentBlock => ({ type: 'text', text: `(${searchSummary(b.content)}; results omitted to fit the context)` });
+/** A web search request as text (pruned, folded, or not sendable as is). */
+export const searchedText = (b: { input: unknown }): ContentBlock => ({ type: 'text', text: `(searched the web: ${JSON.stringify(b.input)})` });
+/** A web search result as its one line of text. */
+export const resultText = (b: { content: unknown }): ContentBlock => ({ type: 'text', text: `(${searchSummary(b.content)}; results omitted to fit the context)` });
 
 /**
  * Provider web searches as the API accepts them (#144): every web_search_tool_result right after its server_tool_use,
@@ -196,6 +198,8 @@ export function serverToolProblem(view: Turn[]): string | null {
       if (b.type === 'server_tool_use') uses.add(b.id);
       if (b.type === 'web_search_tool_result') {
         if (!uses.has(b.tool_use_id)) return `messages.${m}.content.${i}: web_search_tool_result ${b.tool_use_id} without its server_tool_use before it in the same message`;
+        const bad = searchResultProblem(b.content);
+        if (bad) return `messages.${m}.content.${i}: web_search_tool_result ${b.tool_use_id}: ${bad}`;
         answered.add(b.tool_use_id);
       }
     }
@@ -204,6 +208,26 @@ export function serverToolProblem(view: Turn[]): string | null {
         const b = t.content[i]!;
         if (b.type === 'server_tool_use' && !answered.has(b.id)) return `messages.${m}.content.${i}: server_tool_use ${b.id} without its web_search_tool_result`;
       }
+  }
+  return null;
+}
+
+/**
+ * Why Anthropic would refuse a stored web search result's content, or null (#173): a list of web_search_result items,
+ * each with its url and a non-empty encrypted_content string, or one web_search_tool_result_error. A result cut,
+ * re-serialised or re-typed somewhere fails here. (A result from another account looks valid: searchesFor turns it into
+ * text at send time, where the account is known.)
+ */
+export function searchResultProblem(content: unknown): string | null {
+  if (!Array.isArray(content)) {
+    const e = content as { type?: unknown; error_code?: unknown } | null;
+    return e?.type === 'web_search_tool_result_error' && typeof e.error_code === 'string' ? null : 'its content is neither a list of results nor an error';
+  }
+  for (let j = 0; j < content.length; j++) {
+    const r = content[j] as { type?: unknown; url?: unknown; encrypted_content?: unknown } | null;
+    if (r?.type !== 'web_search_result') return `result ${j} is of type ${String(r?.type)}, not web_search_result`;
+    if (typeof r.url !== 'string' || !r.url) return `result ${j} has no url`;
+    if (typeof r.encrypted_content !== 'string' || !r.encrypted_content) return `result ${j} has no encrypted_content`;
   }
   return null;
 }

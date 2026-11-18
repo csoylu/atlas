@@ -6,6 +6,10 @@ computed by `scripts/release/changelog.mjs` from the oldest entry to the newest,
 `Fixed` → patch, `Added` or `Changed` → minor, `Breaking` (data or settings stop working without action) → major.
 Never type a version number.
 
+## Fixed · #173 · A chat with a web search no longer dies after Atlas switches to another Claude subscription
+
+Anthropic encrypts web search results for the account that ran the search and refuses them from any other one (400 « Invalid `encrypted_content` in `search_result` block », on every retry). paris's main chat broke this way when the first Claude plan hit its limit and calls moved to the second one. Each new search result now records the account that ran it; it is sent exactly as stored through that account, and as one line of text together with its request through any other (results stored before this fix go as text). The pre-send check also stops with the message and block named when a stored result is cut or malformed.
+
 ## Fixed · #184 · The end-to-end suite is green again: K12 follows the #131 Todo behaviour, and four flaky spots in the tests are fixed
 
 `e2e/tests/audit/api-cards.spec.ts` K12 now expects a transient block to wait in Todo with `retry.at` about 30 min ahead, no block, "retrying at" as the waiting reason and nothing in Inbox « Needs you » (it still expected `blocked`, stale since #131). `ui-134.spec.ts` killed the `sleep` commands of the tests running in parallel (a blanket `pkill`): each test now kills only its own. `U15` (Esc pressed before the palette listens) and `steps-timeline` (group opened by itself) retry under load instead of failing one run in ~30. `artifacts.spec.ts`: the four fixed `waitForTimeout(600)` wait for the chip row to stop scrolling, and an unused variable is gone. Tests only: no change in the app. Full suite: 178 passed, 1 skipped, 10 of 11 runs in a row green under load (one run lost seven serial tests to a machine stall).

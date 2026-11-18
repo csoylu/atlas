@@ -277,4 +277,30 @@ describe('provider web search pairs (#144)', () => {
       'messages.0.content.0: server_tool_use y without its web_search_tool_result',
     );
   });
+
+  it('names a result whose content was cut or re-typed (#173)', () => {
+    const view = (content: unknown) => [{ role: 'user' as const, content: t('x') }, { role: 'assistant' as const, content: [search('s'), { type: 'web_search_tool_result', tool_use_id: 's', content } as ContentBlock] }];
+    const ok = { type: 'web_search_result', url: 'https://ex.com', title: 'Ex', encrypted_content: 'e' };
+    expect(serverToolProblem(view([ok]))).toBeNull();
+    expect(serverToolProblem(view({ type: 'web_search_tool_result_error', error_code: 'max_uses_exceeded' }))).toBeNull();
+    expect(serverToolProblem(view([ok, { ...ok, encrypted_content: '' }]))).toBe('messages.1.content.1: web_search_tool_result s: result 1 has no encrypted_content');
+    expect(serverToolProblem(view([{ ...ok, type: 'search_result' }]))).toBe('messages.1.content.1: web_search_tool_result s: result 0 is of type search_result, not web_search_result');
+    expect(serverToolProblem(view('cut…'))).toBe('messages.1.content.1: web_search_tool_result s: its content is neither a list of results nor an error');
+  });
+
+  it("replays #173's stored shape (search, result, thinking, tool_use in one answer) followed by 40+ messages verbatim", () => {
+    seq = 0;
+    const msgs = [m('user', t('make it bigger'))];
+    const answer: ContentBlock[] = [thinking, search('s'), { ...found('s'), origin: 'plan:a' } as ContentBlock, thinking, use('k')];
+    msgs.push(m('assistant', answer, 1));
+    msgs.push(m('user', [result('k')]));
+    for (let i = 0; i < 22; i++) {
+      msgs.push(m('assistant', i % 2 ? t('reply ' + i) : [thinking, use('u' + i)], seq));
+      msgs.push(m('user', i % 2 ? t('next ' + i) : [result('u' + i)]));
+    }
+    expect(msgs.length).toBeGreaterThan(45);
+    const view = compactedView(msgs, null, null);
+    expect(serverToolProblem(view)).toBeNull();
+    expect(view[1]!.content).toEqual(answer); // exactly as stored (the provider drops only Atlas's origin field)
+  });
 });
