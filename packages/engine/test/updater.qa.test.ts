@@ -7,6 +7,7 @@ import { Bus } from '../src/events.ts';
 import { openDb, type Db } from '../src/store/db.ts';
 import { HELPER, Updater, zipName, type UpdaterOptions } from '../src/updater.ts';
 import { FakeGitHub, fakeApp, sha, zipOf } from './updaterKit.ts';
+import { until } from './kit/index.ts';
 
 /**
  * QA of the app updater (#124): the cases the build task's own tests (src/updater.test.ts) do not cover. Everything runs
@@ -14,13 +15,7 @@ import { FakeGitHub, fakeApp, sha, zipOf } from './updaterKit.ts';
  * Cases still done by hand are listed in docs/qa/124-updater-report.md.
  */
 const mac = process.platform === 'darwin';
-const wait = async (ok: () => boolean, ms = 10_000) => {
-  const end = Date.now() + ms;
-  while (!ok()) {
-    if (Date.now() > end) throw new Error('timed out');
-    await new Promise((r) => setTimeout(r, 25));
-  }
-};
+const wait = (ok: () => boolean, ms = 10_000) => until(ok, 'the condition', ms); // the test kit's wait (#126)
 const versionOf = (app: string): string | null => {
   try {
     return execFileSync('plutil', ['-extract', 'CFBundleShortVersionString', 'raw', '-o', '-', join(app, 'Contents/Info.plist')], { stdio: ['ignore', 'pipe', 'ignore'] }).toString().trim();
