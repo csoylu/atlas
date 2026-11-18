@@ -1,9 +1,6 @@
 # #127 · Verification of #120 artifacts (PR #7, feat/artifacts @ ad3cb59)
 
-Verdict: **the feature works; one blocker for merging: PR #7 now conflicts with main.** Details below.
-
-## Blocker
-- `git merge-tree origin/main origin/feat/artifacts` (18 Nov 2026, after PRs #8/#11/#12 and the #139 rows) reports content conflicts in `packages/engine/src/runner.ts`, `packages/ui/src/App.tsx`, `Board.tsx`, `CardView.tsx`, `api.ts`, `styles.css`, `scripts/ui-check/check.mjs` and an add/add in `typeRules.test.ts`. munih must merge main into the branch again and re-run typecheck, npm test and ui-check. My checks were done on the PR head as it is.
+Verdict: **approved and merged** (PR #7, merge eae55f9). First head ad3cb59 passed every check but conflicted with main; munih merged main four times (head 2504179 merged), and zurich validated that head. The tables below were measured on ad3cb59 and re-run on efa5602 (migration on a fresh copy: 47 canvases, e2e 87/87, ui-check 1440 + 390 no issues).
 
 ## Passed
 | Area | How | Result |
