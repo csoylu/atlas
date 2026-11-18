@@ -63,7 +63,7 @@ function ChatWithPanel(props: Parameters<typeof ChatView>[0] & { chat: Card }) {
   // An agent opening or focusing a tab shows the panel again.
   const lastFocus = tabs.reduce((m, t) => (t.focusedAt > m ? t.focusedAt : m), '');
   useEffect(() => setHidden(false), [lastFocus]);
-  // v3: a task created from this chat opens as a thread beside it (others, and « Details », in the ticket modal).
+  // v3: a task created from this chat opens beside it, the whole task (others in the ticket modal).
   const [threadId, setThreadId] = useState<string | null>(null);
   const thread = threadId ? props.cards.find((c) => c.id === threadId && c.board !== 'direct') : undefined;
   const openCard = (ref: string) => {
@@ -107,14 +107,17 @@ function ChatWithPanel(props: Parameters<typeof ChatView>[0] & { chat: Card }) {
           key={thread.id}
           card={thread}
           cards={props.cards}
+          chats={props.chats}
           agents={props.agents}
           models={props.models}
           plan={thread.modelId ? props.models.find((m) => m.id === thread.modelId)?.provider === 'chatgpt' : props.planAgents.has(thread.assignee ?? '')}
           mode={mode}
           stream={stream}
           userName={props.userName}
-          onOpenCard={openCard}
-          onDetails={() => props.onOpenCard(thread.id)}
+          onOpen={openCard}
+          onOpenChat={(id) => (id === chat.id ? setThreadId(null) : props.onOpenChat(id))}
+          // A document of the task opens in this chat's documents panel, in the thread's place.
+          onOpenDoc={(doc) => api.panelOpen(chat.id, doc.id).then(() => (setThreadId(null), setHidden(false)), onError)}
           onClose={() => setThreadId(null)}
           onError={onError}
         />

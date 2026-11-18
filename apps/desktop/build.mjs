@@ -14,7 +14,7 @@ await build({
   outfile: 'dist/main.mjs',
   // Native module (rebuilt for Electron by electron-builder) and ws's optional native helpers stay outside.
   // sherpa-onnx-node (voice) loads its prebuilt addon + dylibs from node_modules at runtime.
-  external: ['electron', 'better-sqlite3', 'sherpa-onnx-node', 'bufferutil', 'utf-8-validate'],
+  external: ['electron', 'better-sqlite3', 'sharp', 'sherpa-onnx-node', 'bufferutil', 'utf-8-validate'],
   // CommonJS dependencies bundled into ESM still call require().
   banner: { js: "import { createRequire as __cr } from 'node:module'; const require = __cr(import.meta.url);" },
   sourcemap: true,

@@ -1,4 +1,5 @@
-import type { ContentBlock } from '@atlas/shared';
+import type { ContentBlock, ImageBlock } from '@atlas/shared';
+import { imageLine } from '../images.ts';
 import { CHATGPT_USAGE_URL } from '@atlas/shared';
 import { ModelError, toolInput, type ModelRequest, type ModelResponse, type OnDelta, type Provider } from './types.ts';
 import { PlanLimitError } from '../plan-accounts.ts';
@@ -6,11 +7,16 @@ import { PlanLimitError } from '../plan-accounts.ts';
 /** Atlas's tools go to the model as one namespace (ChatGPT plan usage accepts function tools only inside one). */
 export const NAMESPACE = 'atlas';
 
+type InputPart = { type: 'input_text'; text: string } | { type: 'input_image'; image_url: string; detail: 'auto' };
 type InputItem =
-  | { role: 'user'; content: { type: 'input_text'; text: string }[] }
+  | { role: 'user'; content: InputPart[] }
   | { role: 'assistant'; content: { type: 'output_text'; text: string }[] }
   | { type: 'function_call'; call_id: string; name: string; namespace: string; arguments: string }
-  | { type: 'function_call_output'; call_id: string; output: string };
+  | { type: 'function_call_output'; call_id: string; output: string | InputPart[] };
+
+/** A picture as a Responses input part (data URL); one without bytes goes as its text line. */
+const imagePart = (b: ImageBlock): InputPart =>
+  b.data ? { type: 'input_image', image_url: `data:${b.media_type};base64,${b.data}`, detail: 'auto' } : { type: 'input_text', text: imageLine(b) };
 
 /**
  * Anthropic-shaped transcript → Responses API input items. The system prompt goes in `instructions` (system message
@@ -26,9 +32,24 @@ export function toResponsesInput(req: ModelRequest): InputItem[] {
         if (b.type === 'tool_use')
           out.push({ type: 'function_call', call_id: b.id, name: b.name, namespace: NAMESPACE, arguments: JSON.stringify(b.input ?? {}) });
     } else {
-      for (const b of m.content) if (b.type === 'tool_result') out.push({ type: 'function_call_output', call_id: b.tool_use_id, output: b.content });
-      const text = m.content.flatMap((b) => (b.type === 'text' ? [b.text] : [])).join('\n\n');
-      if (text) out.push({ role: 'user', content: [{ type: 'input_text', text }] });
+      // A tool's pictures ride in its output (the route takes an input_text/input_image array there, checked 18 Nov 2026).
+      for (const b of m.content)
+        if (b.type === 'tool_result')
+          out.push({
+            type: 'function_call_output',
+            call_id: b.tool_use_id,
+            output: b.images?.length ? [{ type: 'input_text', text: b.content }, ...b.images.map(imagePart)] : b.content,
+          });
+      // The user's text and pictures, in order; consecutive texts joined as before.
+      const parts: InputPart[] = [];
+      for (const b of m.content) {
+        if (b.type === 'text') {
+          const last = parts.at(-1);
+          if (last?.type === 'input_text') last.text += '\n\n' + b.text;
+          else parts.push({ type: 'input_text', text: b.text });
+        } else if (b.type === 'image') parts.push(imagePart(b));
+      }
+      if (parts.length) out.push({ role: 'user', content: parts });
     }
   }
   return out;

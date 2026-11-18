@@ -86,8 +86,38 @@ export const UpdateCard = z
   .partial();
 export type UpdateCard = z.infer<typeof UpdateCard>;
 
+/* ── Images (#103) ─────────────────────────────────────────────────────────── */
+
+export const IMAGE_TYPES = ['image/png', 'image/jpeg', 'image/gif', 'image/webp'] as const;
+export const ImageMediaType = z.enum(IMAGE_TYPES);
+export type ImageMediaType = z.infer<typeof ImageMediaType>;
+/** An image file over this size is refused (upload, read_file, web_fetch). */
+export const IMAGE_MAX_BYTES = 10 * 1024 * 1024;
+/** Images per user message. */
+export const IMAGE_MAX_PER_MESSAGE = 5;
+/** Only the newest this-many images of a conversation go to the model as pictures; older ones become a text line. */
+export const IMAGE_KEEP = 6;
+
+/**
+ * A picture in the transcript. The bytes stay in a file (absolute `path`, in an agent workspace or its outputs);
+ * the transcript keeps only this reference, so SQLite stays small. `data` (base64 of the possibly downscaled picture,
+ * with `media_type` describing it) is filled only in the view handed to a provider, never stored.
+ */
+export const ImageBlock = z.object({
+  type: z.literal('image'),
+  path: z.string(),
+  media_type: ImageMediaType,
+  width: z.number().int(),
+  height: z.number().int(),
+  bytes: z.number().int(),
+  sha256: z.string(),
+  data: z.string().optional(),
+});
+export type ImageBlock = z.infer<typeof ImageBlock>;
+
 /** Content blocks, Anthropic-shaped so the transcript can be replayed to a model as-is. */
 export const ContentBlock = z.discriminatedUnion('type', [
+  ImageBlock,
   z.object({ type: z.literal('text'), text: z.string() }),
   z.object({ type: z.literal('thinking'), thinking: z.string(), signature: z.string() }),
   z.object({ type: z.literal('redacted_thinking'), data: z.string() }),
@@ -97,6 +127,8 @@ export const ContentBlock = z.discriminatedUnion('type', [
     tool_use_id: z.string(),
     content: z.string(),
     is_error: z.boolean().optional(),
+    /** Pictures the tool returned (read_file / web_fetch of an image). */
+    images: z.array(ImageBlock).optional(),
   }),
   // A tool the provider runs itself (Anthropic's web search). Replayed to the API as-is; never run by Atlas.
   z.object({ type: z.literal('server_tool_use'), id: z.string(), name: z.string(), input: z.unknown() }),
@@ -159,7 +191,23 @@ export type TodoItem = z.infer<typeof TodoItem>;
 export const TODO_LIMIT = 50;
 
 /** A user message; `ref` = the document part it is about (« Ask about this » in the side panel). */
-export const PostMessage = z.object({ text: z.string().trim().min(1).max(100_000), ref: DocRef.optional() });
+/** `uploads`: ids from POST /api/cards/:id/uploads; a message may be images only (then `text` is empty). */
+export const PostMessage = z
+  .object({
+    text: z.string().trim().max(100_000).default(''),
+    ref: DocRef.optional(),
+    uploads: z.array(z.string().regex(/^up_[a-z0-9-]+$/)).max(IMAGE_MAX_PER_MESSAGE).default([]),
+  })
+  .refine((m) => m.text.length > 0 || m.uploads.length > 0, { message: 'a message needs text or an image' });
+/** An image waiting to be sent (POST /api/cards/:id/uploads): the composer shows it, the message names its id. */
+export interface Upload {
+  id: string;
+  name: string;
+  media_type: ImageMediaType;
+  width: number;
+  height: number;
+  bytes: number;
+}
 
 /** Canvas nodes (design §16): one zod entry per renderer kind. Adding a kind = one entry here + one UI renderer. */
 const NodeBase = z.object({

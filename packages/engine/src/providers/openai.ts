@@ -1,9 +1,12 @@
 import { randomUUID } from 'node:crypto';
-import type { ContentBlock } from '@atlas/shared';
+import type { ContentBlock, ImageBlock } from '@atlas/shared';
+import { imageLine, viewHasPictures } from '../images.ts';
 import { ModelError, toolInput, type ModelRequest, type ModelResponse, type OnDelta, type Provider } from './types.ts';
 
+type OaPart = { type: 'text'; text: string } | { type: 'image_url'; image_url: { url: string } };
 type OaMessage =
-  | { role: 'system' | 'user'; content: string }
+  | { role: 'system'; content: string }
+  | { role: 'user'; content: string | OaPart[] }
   | { role: 'assistant'; content: string | null; tool_calls?: OaToolCall[] }
   | { role: 'tool'; tool_call_id: string; content: string };
 interface OaToolCall {
@@ -26,12 +29,29 @@ export function toOpenAiMessages(req: ModelRequest): OaMessage[] {
       out.push({ role: 'assistant', content: text || null, ...(calls.length ? { tool_calls: calls } : {}) });
     } else {
       for (const b of m.content) if (b.type === 'tool_result') out.push({ role: 'tool', tool_call_id: b.tool_use_id, content: b.content });
-      const text = m.content.flatMap((b) => (b.type === 'text' ? [b.text] : [])).join('\n\n');
-      if (text) out.push({ role: 'user', content: text });
+      // Tool messages carry text only: a tool's pictures follow in a user message, named by the call they came from.
+      const parts: OaPart[] = [];
+      for (const b of m.content)
+        if (b.type === 'tool_result' && b.images?.length) {
+          parts.push({ type: 'text', text: `Pictures returned by tool call ${b.tool_use_id}:` });
+          parts.push(...b.images.map(imagePart));
+        }
+      for (const b of m.content) {
+        if (b.type === 'text') {
+          const last = parts.at(-1);
+          if (last?.type === 'text' && !last.text.startsWith('Pictures returned')) last.text += '\n\n' + b.text;
+          else parts.push({ type: 'text', text: b.text });
+        } else if (b.type === 'image') parts.push(imagePart(b));
+      }
+      // Text only: a plain string, as before (servers without vision support still read it).
+      if (parts.length) out.push({ role: 'user', content: parts.every((p) => p.type === 'text') ? parts.map((p) => (p as { text: string }).text).join('\n\n') : parts });
     }
   }
   return out;
 }
+
+const imagePart = (b: ImageBlock): OaPart =>
+  b.data ? { type: 'image_url', image_url: { url: `data:${b.media_type};base64,${b.data}` } } : { type: 'text', text: imageLine(b) };
 
 /** Any OpenAI-compatible /v1/chat/completions server: llama.cpp, Ollama, LM Studio, vLLM. */
 export class OpenAiCompatProvider implements Provider {
@@ -40,8 +60,36 @@ export class OpenAiCompatProvider implements Provider {
     private apiKey: string | undefined,
   ) {}
 
+  private vision = new Map<string, boolean | null>();
+  /**
+   * True when the server says the model has no vision (Ollama's /api/show `capabilities`). Servers without that route
+   * (llama.cpp, LM Studio) answer null: the request goes, and a refusal is reported as « can't see images ».
+   */
+  private async noVision(model: string, signal: AbortSignal): Promise<boolean> {
+    if (!this.vision.has(model)) {
+      let v: boolean | null = null;
+      try {
+        const res = await fetch(this.baseUrl.replace(/\/v1\/?$/, '') + '/api/show', {
+          method: 'POST',
+          signal: AbortSignal.any([signal, AbortSignal.timeout(5000)]),
+          headers: { 'content-type': 'application/json' },
+          body: JSON.stringify({ model }),
+        });
+        const j = res.ok ? ((await res.json()) as { capabilities?: unknown }) : null;
+        if (Array.isArray(j?.capabilities)) v = j.capabilities.includes('vision');
+      } catch (e) {
+        signal.throwIfAborted();
+        void e; // not an Ollama server: unknown, the request itself tells
+      }
+      this.vision.set(model, v);
+    }
+    return this.vision.get(model) === false;
+  }
+
   async complete(req: ModelRequest, onText: OnDelta, signal: AbortSignal): Promise<ModelResponse> {
     const url = this.baseUrl.replace(/\/$/, '') + '/chat/completions';
+    if (viewHasPictures(req.messages) && (await this.noVision(req.model, signal)))
+      throw new ModelError(`model ${req.model} at ${this.baseUrl} can't see images (it has no vision capability): pick a vision model for this chat, or send text only`);
     let res: Response;
     try {
       res = await fetch(url, {
@@ -68,6 +116,9 @@ export class OpenAiCompatProvider implements Provider {
       throw new ModelError(`model ${req.model} at ${this.baseUrl} is not reachable: ${cause}`);
     }
     if (!res.ok || !res.body) {
+      // A refused request with pictures: most likely a model without vision; say so instead of a bare HTTP error.
+      if (res.status >= 400 && res.status < 500 && viewHasPictures(req.messages))
+        throw new ModelError(`model ${req.model} at ${this.baseUrl} refused a message with images (HTTP ${res.status}: ${(await res.text()).slice(0, 300)}): this model can't see images; pick a vision model for this chat`);
       throw new ModelError(
         `model ${req.model} at ${this.baseUrl} answered HTTP ${res.status}: ${(await res.text()).slice(0, 500)}`,
         res.status === 429 || res.status >= 500,

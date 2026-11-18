@@ -275,6 +275,9 @@ function run(git: string, args: string[], env: NodeJS.ProcessEnv, input?: string
       if (partialOk && (err as { code?: unknown }).code === 1 && /unable to (index|stat)|could not open|permission denied/i.test(msg)) return ok(stdout);
       fail(new SnapshotError(`git ${args.find((a) => !a.startsWith('-') && !a.includes('=')) ?? ''} failed: ${msg || err.message}`));
     });
+    // git can exit before reading its input (an error, a kill): the write then fails with EPIPE. The exit callback above
+    // reports the real failure; unhandled, that write error would crash the engine (zurich #100, 3 in ~330 e2e runs).
+    child.stdin?.on('error', () => {});
     child.stdin?.end(input ?? '');
   });
 }

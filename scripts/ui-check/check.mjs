@@ -114,8 +114,10 @@ const fixture = (n, title, patch) => ({
   ...chat, id: `c_uicheck${n}`, title, body: '', board: 'main', originCard: chat.id, conversationId: `conv_c_uicheck${n}`,
   createdBy: chat.assignee ?? 'atlas', createdAt: now, updatedAt: now, block: null, waiting: null, parents: [], ...patch,
 });
+// A long brief: the `thread` screen opens this card beside the chat; the panel shows its first lines and « Show more ».
+const THREAD_BODY = '## Goal\n\nCheck every main screen at four widths with screenshots and OCR, so that cut or overlapping text is caught before Master sees it.\n\n' + Array.from({ length: 14 }, (_, i) => `- Step ${i + 1}: open the screen, wait for it, take the screenshot and read the key labels back.`).join('\n');
 const FIXTURE_CARDS = [
-  fixture(1, 'Responsive pass with screenshot + OCR test harness on the real UI', { status: 'running' }),
+  fixture(1, 'Responsive pass with screenshot + OCR test harness on the real UI', { status: 'running', body: THREAD_BODY }),
   fixture(2, 'Pick a storage layout for documents', { status: 'blocked', block: { kind: 'needs_input', reason: 'Which layout?', options: [] } }),
   fixture(3, 'Rewrite the scheduler tests', { status: 'blocked', block: { kind: 'needs_input', reason: 'Stopped by you', options: [] } }),
   fixture(4, 'A very long card title that must end in an ellipsis instead of pushing the layout wider than the screen', { status: 'review' }),
@@ -331,6 +333,17 @@ const SYS_TIMELINE = {
 };
 // A markdown table with card-ref chips in columns 1 and 3 and long text in column 2 (#85): the text column must stay
 // readable (wrap at words, never crushed to a few letters by the chips).
+// Images (#103): a pasted screenshot in a user message and a picture a read_file returned; the files are served by the
+// harness (a generated png), uploads from the `chat-images` screen get a fixture answer (nothing is written).
+const IMG_PNG = Buffer.from(await (await import('sharp')).default({ create: { width: 640, height: 400, channels: 3, background: '#4a7bd0' } }).composite([{ input: Buffer.from('<svg width="640" height="400"><rect x="40" y="40" width="560" height="60" fill="#fff"/><text x="60" y="84" font-size="34" font-family="Helvetica">Fixture screenshot</text></svg>'), top: 0, left: 0 }]).png().toBuffer());
+const IMG = (name) => ({ type: 'image', path: `/Users/x/workspaces/${agent}/uploads/${name}`, media_type: 'image/png', width: 640, height: 400, bytes: IMG_PNG.length, sha256: 'f'.repeat(64) });
+const IMAGE_MSGS = [
+  { id: 'm_uicheckimg1', conversationId: chat.conversationId, seq: 4e6, role: 'user', author: 'user', at: now, content: [{ type: 'text', text: 'What is wrong in this screenshot?' }, IMG('2026-11-18-screenshot.png'), { type: 'text', text: '[attached: uploads/2026-11-18-screenshot.png]' }] },
+  { id: 'm_uicheckimg2', conversationId: chat.conversationId, seq: 4e6 + 1, role: 'assistant', author: agent, at: now, content: [{ type: 'tool_use', id: 'timg1', name: 'read_file', input: { path: 'shots/board-390.png' } }] },
+  { id: 'm_uicheckimg3', conversationId: chat.conversationId, seq: 4e6 + 2, role: 'user', author: 'tool', at: now, content: [{ type: 'tool_result', tool_use_id: 'timg1', content: '[image: shots/board-390.png (640×400 px, 9 KB)]', images: [IMG('board-390.png')] }] },
+  { id: 'm_uicheckimg4', conversationId: chat.conversationId, seq: 4e6 + 3, role: 'assistant', author: agent, at: now, content: [{ type: 'text', text: 'The title bar is cut at 390 px; my own screenshot shows the same.' }] },
+];
+let uploadSeq = 0;
 const TABLE_MSGS = [
   { id: 'm_uichecktbl1', conversationId: chat.conversationId, seq: 3e6, role: 'user', author: 'user', content: [{ type: 'text', text: 'What is left to do?' }], at: now },
   { id: 'm_uichecktbl2', conversationId: chat.conversationId, seq: 3e6 + 1, role: 'assistant', author: agent, at: now, content: [{ type: 'text', text: [
@@ -414,6 +427,8 @@ const SETTINGS = ['agents', 'board', 'subscriptions', 'api-keys', 'local', 'mode
 /** name, hash, selector that means "loaded", fixtures on, key labels to OCR. */
 const SCREENS = [
   { name: 'chat', hash: `#/chat/${chat.id}`, ready: '.chat-pin', pins: true, keys: ['.chat-pin-title', '.chat-pin-state', '.msg .who', '.nav-item'] },
+  // The composer starts at 4 lines, grows to 40% of the window, then scrolls inside, and shrinks back (#102).
+  { name: 'chat-composer', hash: `#/chat/${chat.id}`, ready: '.composer textarea', then: { js: `const ta = document.querySelector('.composer textarea'); const send = document.querySelector('.composer .send-btn'); if (!ta || !send) throw new Error('no composer'); const set = Object.getOwnPropertyDescriptor(HTMLTextAreaElement.prototype, 'value').set; const type = async (v) => { ta.focus(); set.call(ta, v); ta.dispatchEvent(new Event('input', { bubbles: true })); await new Promise((r) => setTimeout(r, 150)); return ta.getBoundingClientRect().height; }; const lh = parseFloat(getComputedStyle(ta).lineHeight), cap = Math.round((visualViewport?.height ?? innerHeight) * 0.4); const start = await type(''), five = await type('a\\nb\\nc\\nd\\ne\\nf'), full = await type(Array.from({ length: 30 }, (_, i) => 'line ' + i).join('\\n')); const sendBottom = send.getBoundingClientRect().bottom, scrolls = ta.scrollHeight > ta.clientHeight + 1 && getComputedStyle(ta).overflowY === 'auto'; const back = await type(''); const bad = []; if (start < lh * 4 - 1) bad.push('starts at ' + start + 'px, under 4 lines of ' + lh + 'px'); if (five <= start) bad.push('does not grow with 6 lines (' + five + 'px)'); if (full > cap + 1 || full < cap - lh) bad.push('30 lines give ' + full + 'px, cap is ' + cap + 'px'); if (!scrolls) bad.push('does not scroll inside at the cap'); if (sendBottom > innerHeight) bad.push('send button below the window (' + sendBottom + ' > ' + innerHeight + ')'); if (Math.abs(back - start) > 1) bad.push('does not shrink back after clearing (' + back + ' vs ' + start + ')'); if (bad.length) throw new Error('composer (#102): ' + bad.join('; ')); ta.blur(); ta.dataset.growOk = '1';`, ready: '.composer textarea[data-grow-ok]' }, keys: ['.msg .who'] },
   { name: 'chat-reports', hash: `#/chat/${chat.id}`, ready: '.card-report', reports: true, then: { js: `const row = [...document.querySelectorAll('.card-report')].find((r) => r.querySelector('.chat-row-ref')?.textContent === '#57'); if (!row) throw new Error('no #57 report row: ' + document.querySelectorAll('.card-report').length + ' report rows, ' + location.hash + ' ' + document.body.innerText.slice(0, 400) + ' ' + [...document.querySelectorAll('.card-report .chat-row-ref')].map((e) => e.textContent).join(',')); row.querySelector('.chat-row-line').click(); await new Promise((r) => setTimeout(r, 100)); const body = row.querySelector('.chat-row-body'); if (!body) throw new Error('#57 did not expand: ' + row.outerHTML.slice(0, 300)); body.scrollIntoView({ block: 'center' });`, ready: '.card-report .chat-row-body' }, keys: ['.chat-row-ref', '.chat-row-verb', '.card-report .chat-row-obj', '.chat-row-open'] },
   { name: 'chat-tools', hash: `#/chat/${chat.id}`, ready: '.chat-row.steps', tools: true, then: { js: `const grp = [...document.querySelectorAll('.chat-row.steps:not(.running)')].filter((g) => g.querySelector(':scope > .chat-row-line .chat-pill.bad')).at(-1); const g = grp.querySelector(':scope > .chat-row-line'); g.click(); await new Promise((r) => setTimeout(r, 100)); const f = grp.querySelector('.chat-row.nested.tone-bad > .chat-row-line'); f.click(); await new Promise((r) => setTimeout(r, 100)); g.scrollIntoView({ block: 'start' });`, ready: '.chat-row.nested.tone-bad .chat-row-body' }, keys: ['.chat-row.steps > .chat-row-line .chat-row-verb', '.chat-row.steps > .chat-row-line .chat-row-rest', '.chat-row.nested .chat-row-obj', '.chat-pill', '.artifact .art-title'] },
   { name: 'chat-tools-cards', hash: `#/chat/${chat.id}`, ready: '.chat-row.steps', tools: true, then: { js: `const grp = [...document.querySelectorAll('.chat-row.steps')].filter((g) => g.querySelector(':scope > .chat-row-line .row-ic.cardp')).at(-1); const g = grp.querySelector(':scope > .chat-row-line'); g.click(); await new Promise((r) => setTimeout(r, 100)); for (const l of grp.querySelectorAll('.chat-row.nested > .chat-row-line.expandable')) l.click(); await new Promise((r) => setTimeout(r, 150)); g.scrollIntoView({ block: 'start' });`, ready: '.step-chip' }, keys: ['.chat-row.nested .chat-row-ref', '.chat-row.nested .chat-row-obj', '.step-chip-title', '.step-chip small', '.step-board-st', '.step-hit-t'] },
@@ -424,8 +439,13 @@ const SCREENS = [
   { name: 'chat-system', hash: `#/chat/${chat.id}`, ready: '.sys-row', system: true, then: { js: `for (const s of ['.sys-rewind', '.sys-msg']) document.querySelector(s + ' > .chat-row-line').click(); await new Promise((r) => setTimeout(r, 150)); document.querySelector('.sys-play').scrollIntoView({ block: 'start' });`, ready: '.sys-files' }, keys: ['.sys-row .chat-row-verb', '.sys-row .chat-row-obj', '.sys-foot .chat-row-open', '.sys-files .sys-file'] },
   { name: 'chat-system-end', hash: `#/chat/${chat.id}`, ready: '.sys-alert .sys-foot', system: true, keys: ['.sys-alert .chat-row-verb', '.sys-foot .chat-row-open'] },
   { name: 'chat-table', hash: `#/chat/${chat.id}`, ready: '.msg .md table .card-ref', table: true, then: { js: `[...document.querySelectorAll('.msg .md table')].at(-1).scrollIntoView({ block: 'center' });`, ready: '.msg .md table' }, keys: ['.msg .md td', '.msg .md th', '.msg .md td .card-ref'] },
+  // #103: paste one image and drop another into the composer (2 thumbnails, send enabled), then the transcript's
+  // thumbnails (a pasted screenshot, a read_file picture inside its step) and the full-size view.
+  { name: 'chat-images', hash: `#/chat/${chat.id}`, ready: '.msg-image img', images: true, then: { js: `const png = await (await fetch(document.querySelector('.msg-image img').src)).blob(); const file = (n) => new File([png], n, { type: 'image/png' }); const ta = document.querySelector('.composer textarea'); const dt1 = new DataTransfer(); dt1.items.add(file('pasted.png')); ta.dispatchEvent(new ClipboardEvent('paste', { clipboardData: dt1, bubbles: true, cancelable: true })); const dt2 = new DataTransfer(); dt2.items.add(file('dropped.png')); const form = ta.closest('form'); form.dispatchEvent(new DragEvent('dragover', { dataTransfer: dt2, bubbles: true, cancelable: true })); form.dispatchEvent(new DragEvent('drop', { dataTransfer: dt2, bubbles: true, cancelable: true })); await new Promise((r) => setTimeout(r, 400)); const thumbs = document.querySelectorAll('.composer .attach-thumb'); const bad = []; if (thumbs.length !== 2) bad.push(thumbs.length + ' thumbnails after a paste and a drop, want 2'); if (document.querySelector('.composer .attach-thumb.bad, .composer .attach-thumb.busy')) bad.push('an attachment failed or is still uploading: ' + (document.querySelector('.attach-note')?.textContent ?? '')); if (document.querySelector('.composer .send-btn').disabled) bad.push('send disabled with 2 images and no text'); if (!document.querySelector('.composer .attach-btn')) bad.push('no attach button'); const step = [...document.querySelectorAll('.chat-row.step')].find((r) => r.textContent.includes('board-390')); if (!step) bad.push('no read_file step for the picture'); else { step.querySelector('.chat-row-line').click(); await new Promise((r) => setTimeout(r, 150)); if (!step.querySelector('.msg-image img')) bad.push('the read_file step shows no picture when opened'); } if (bad.length) throw new Error('images (#103): ' + bad.join('; ')); document.querySelector('.msg-image').click(); await new Promise((r) => setTimeout(r, 150));`, ready: '.lightbox img' }, keys: ['.lightbox-bar span', '.lightbox-bar a'] },
   { name: 'chat-tools-live', hash: `#/chat/${chat.id}`, ready: '.chat-row.steps.running', tools: true, keys: ['.chat-row.steps.running > .chat-row-line .chat-row-verb', '.chat-row.plan .chat-row-obj', '.chat-row.plan .todo-list li'] },
   { name: 'modal', hash: `#/chat/${chat.id}?card=${modalCard.id}`, ready: '.card-modal', pins: true, keys: ['.cm-title', '.cm-pill', '.cm-h', '.cm-foot button'] },
+  // A task of this chat opened beside it (#107): the whole task, its description clamped, the conversation and composer in view.
+  { name: 'thread', hash: `#/chat/${chat.id}`, ready: '.chat-pin', pins: true, then: { js: `const pin = [...document.querySelectorAll('.chat-pin')].find((p) => p.textContent.includes('Responsive pass')); if (!pin) throw new Error('no fixture pin'); pin.querySelector('.chat-pin-open').click();`, ready: '.thread-panel .cm-more' }, keys: ['.thread-panel .cm-title', '.thread-panel .cm-pill', '.thread-panel .cm-more', '.thread-panel .cm-h', '.thread-panel .cm-foot button'] },
   { name: 'modal-blocked', hash: `#/chat/${chat.id}?card=${modalCard.id}`, ready: '.card-modal', blocked: true, keys: ['.cm-title', '.ask-kind', '.cm-foot button'] },
   { name: 'panel', hash: `#/chat/${chat.id}`, ready: '.side-doc', pins: true, panel: true, keys: ['.sd-tab', '.sd-ask', '.side-doc h1', '.side-doc h2', '.chat-pin-title'] },
   { name: 'board', hash: '#/board', ready: '.board', keys: ['.board .name', '.card-title', '.nav-item'] },
@@ -518,6 +538,14 @@ handlers.set('Fetch.requestPaused', async ({ requestId, request }) => {
     if (request.method === 'GET' && url.pathname === `/api/cards/${chat.id}/messages` && screen?.system) return await json([...(await get(`/cards/${chat.id}/messages`)), ...SYS_MSGS]);
     if (request.method === 'GET' && url.pathname === `/api/cards/${chat.id}/timeline` && screen?.system) return await json(SYS_TIMELINE);
     if (request.method === 'GET' && url.pathname === `/api/cards/${chat.id}/runs` && screen?.system) return await json([SYS_LATEST]);
+    if (request.method === 'GET' && url.pathname === `/api/cards/${chat.id}/messages` && screen?.images) return await json([...(await get(`/cards/${chat.id}/messages`)), ...IMAGE_MSGS]);
+    if (request.method === 'GET' && url.pathname === `/api/cards/${chat.id}/image` && screen?.images)
+      return await send('Fetch.fulfillRequest', { requestId, responseCode: 200, responseHeaders: [{ name: 'Content-Type', value: 'image/png' }], body: IMG_PNG.toString('base64') });
+    if (request.method === 'POST' && url.pathname === `/api/cards/${chat.id}/uploads` && screen?.images)
+      return await send('Fetch.fulfillRequest', {
+        requestId, responseCode: 201, responseHeaders: [{ name: 'Content-Type', value: 'application/json' }],
+        body: Buffer.from(JSON.stringify({ id: `up_uicheck-${uploadSeq++}`, name: url.searchParams.get('name') ?? 'image.png', media_type: 'image/png', width: 640, height: 400, bytes: IMG_PNG.length })).toString('base64'),
+      });
     if (request.method === 'GET' && url.pathname === '/api/cards' && screen?.table) return await json([...(await get('/cards')), ...TOOL_CARDS]);
     if (request.method === 'GET' && url.pathname === `/api/cards/${chat.id}/messages` && screen?.table) return await json([...(await get(`/cards/${chat.id}/messages`)), ...TABLE_MSGS]);
     if (request.method === 'GET' && url.pathname === '/api/cards' && screen?.tools) return await json([...(await get('/cards')), ...TOOL_CARDS]);
@@ -625,6 +653,16 @@ const CHECK = (devW, devH) => `((minFont, W, H) => {${VISIBLE_RECT}
     const cp = document.querySelector('.chat-view .chat-pane');
     if (sd.classList.contains('side') && cp && shown(cp) && meet(cp.getBoundingClientRect(), r)) issues.push('side panel overlaps the chat');
     if (r.width < Math.min(320, W)) issues.push('panel too narrow: ' + Math.round(r.width) + 'px');
+    // A task beside its chat (#107): the composer and the footer stay in view, the brief doesn't push them out.
+    if (sd.classList.contains('thread-panel')) {
+      for (const sel of ['.composer textarea', '.cm-foot', '.cm-head']) {
+        const el = sd.querySelector(sel), q = el && el.getBoundingClientRect();
+        if (!q || q.height < 1 || !inside(q) || q.right > r.right + 1) issues.push('thread panel: ' + sel + ' not in view');
+      }
+      const body = sd.querySelector('.cm-body'), desc = sd.querySelector('div.cm-desc');
+      if (body && desc && desc.getBoundingClientRect().height > body.clientHeight * 0.6) issues.push('thread panel: the description fills the panel');
+      if (sd.scrollWidth > sd.clientWidth + 1) issues.push('thread panel scrolls sideways');
+    }
   }
   // 5. Markdown table cells with prose stay readable: never narrower than ~10 characters, never broken inside a word.
   for (const td of document.querySelectorAll('.md td, .md th')) {
@@ -649,9 +687,9 @@ const KEYS = (selectors) => `((sels) => {${VISIBLE_RECT}
       const input = e.tagName === 'INPUT' || e.tagName === 'TEXTAREA';
       const text = (input ? e.value : e.innerText || '').split('\\n')[0].trim();
       if (!text) continue;
-      let r, lines = 1;
-      if (input) r = e.getBoundingClientRect();
-      else { const rg = document.createRange(); rg.selectNodeContents(e); r = rg.getBoundingClientRect(); lines = new Set([...rg.getClientRects()].map((q) => Math.round(q.top))).size; }
+      let r, lines = 1, first;
+      if (input) r = first = e.getBoundingClientRect();
+      else { const rg = document.createRange(); rg.selectNodeContents(e); r = rg.getBoundingClientRect(); const qs = [...rg.getClientRects()]; lines = new Set(qs.map((q) => Math.round(q.top))).size; first = qs.find((q) => q.height > 0) || r; }
       const v = visibleRect(e, r);
       if (v.width < 24 || v.height < 6) continue;
       const s = getComputedStyle(e); if (s.visibility === 'hidden' || +s.opacity < 0.5) continue;
@@ -663,6 +701,9 @@ const KEYS = (selectors) => `((sels) => {${VISIBLE_RECT}
       if (lines > 1 && v.width < r.width - 1) continue;
       // A line cut by a scroller's top or bottom edge (the next message peeking in): half a line can't be read.
       if (lines === 1 && v.height < r.height * 0.8) continue;
+      // Same for the first line of a label whose inline parts sit at slightly different tops (counted as several
+      // lines): OCR reads the first line, so it must be (almost) whole (#102: a report row cut at 54% by the scroller).
+      if (Math.min(v.top + v.height, first.bottom) - Math.max(v.top, first.top) < first.height * 0.8) continue;
       // Clipped (ellipsis, scrolled row): only the visible start of the text can be read.
       out.push({ sel, text, shown: v.width / r.width, x: v.left, y: v.top, w: v.width, h: v.height }); n++;
     }
