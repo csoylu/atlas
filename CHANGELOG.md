@@ -6,9 +6,9 @@ computed by `scripts/release/changelog.mjs` from the oldest entry to the newest,
 `Fixed` → patch, `Added` or `Changed` → minor, `Breaking` (data or settings stop working without action) → major.
 Never type a version number.
 
-## Added · #178 · A test that only passed on a retry is now listed by name in the test output and in the CI job summary
+## Added · #178 · A test that only passed on a retry is now named in the test output and as a warning in CI
 
-vitest retries a failed test (twice in CI), which let a flaky test pass quietly. A small reporter (`scripts/test/retryReporter.ts`) now lists every test that needed a retry: in the console, as a GitHub warning annotation and in the job summary of the `test` job. A run with no retry prints and writes nothing. It reports only; the test is still green, fix the test.
+vitest retries a failed test (twice in CI), which let a flaky test pass quietly. A small reporter (`scripts/test/retryReporter.ts`) now lists every test that failed and then passed on a retry, by name and file: in the console, and on GitHub Actions as a `::warning` annotation (vitest's own « Flaky Tests » section in the job summary and its failure annotations are kept). A run with no flaky test prints nothing. It reports only; the run stays green, fix the test.
 
 ## Changed · #189 · Tasks know their pull requests: a task with an open PR waits In review for QA and moves to Done by itself when the PR merges
 
