@@ -6,6 +6,10 @@ computed by `scripts/release/changelog.mjs` from the oldest entry to the newest,
 `Fixed` → patch, `Added` or `Changed` → minor, `Breaking` (data or settings stop working without action) → major.
 Never type a version number.
 
+## Fixed · #174 · In old chats, a canvas step now shows the page its canvas was converted to, and opens it
+
+A canvas_create, canvas_write or canvas_read row whose canvas became an html page in the « Canvases » folder (#120) shows that page's artifact card; a canvas with no page keeps its plain row. Documents now carry `fromCanvas` in the API.
+
 ## Fixed · #145 · In an expanded « N steps » group, the timeline line now runs through the middle of every row icon.
 
 The line sat 1.5 px left of the icons (3 px on a phone). Each step row now draws its own piece of the line from its icon's

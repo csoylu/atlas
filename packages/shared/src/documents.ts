@@ -68,6 +68,8 @@ export interface Doc {
   folderId: string | null;
   /** The direct chat it was first opened in, else the chat its card came from (the Library's chat filter). */
   chatId: string | null;
+  /** The canvas (cv_ id) this page was converted from (#120); old chats link their canvas_* rows to it (#174). */
+  fromCanvas: string | null;
 }
 
 export interface DocVersion {

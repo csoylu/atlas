@@ -102,6 +102,28 @@ export const cardRef = (v: unknown) => (typeof v === 'number' ? `#${v}` : typeof
 
 type Spec = Omit<RowModel, 'tone' | 'meta' | 'short' | 'detail' | 'weight'> & Partial<Pick<RowModel, 'tone' | 'meta' | 'detail' | 'weight' | 'short'>>;
 
+/**
+ * The canvas an old canvas_* call was about (#174): canvas_create's « created cv_x », canvas_write / canvas_read's
+ * input id, an old panel_open({ canvas }). Only successful calls; null otherwise. Since #120 that canvas may live on as
+ * a converted html page (Doc.fromCanvas), which the chat then shows as the artifact chip.
+ */
+export function canvasIdOf(name: string, input: unknown, result: ToolOutcome | undefined): string | null {
+  if (!result || result.isError) return null;
+  const o = (input && typeof input === 'object' ? input : {}) as Input;
+  const cv = (v: unknown) => (typeof v === 'string' && /^cv_[\w-]+$/.test(v) ? v : null);
+  switch (name) {
+    case 'canvas_create':
+      return /created (cv_[\w-]+)/.exec(result.content)?.[1] ?? null;
+    case 'canvas_write':
+    case 'canvas_read':
+      return cv(o.id);
+    case 'panel_open':
+      return cv(o.canvas);
+    default:
+      return null;
+  }
+}
+
 /** The failure wording of each tool: "Couldn't edit". */
 const FAILED: Record<string, string> = {
   read_file: 'Couldn’t read', write_file: 'Couldn’t write', edit_file: 'Couldn’t edit', list_files: 'Couldn’t list',

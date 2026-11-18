@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import type { ContentBlock, Message } from '@atlas/shared';
-import { draftSegments, endedOnFailure, groupSummary, groupTurn, turns, type Segment } from './chatTurn.ts';
+import { draftSegments, endedOnFailure, groupSummary, groupTurn, stepArtifact, turns, type Segment } from './chatTurn.ts';
 import type { ToolOutcome } from './toolRows.ts';
 
 let seq = 0;
@@ -19,6 +19,17 @@ const ok = (content: string): ToolOutcome => ({ content, isError: false });
 const kinds = (s: Segment[]) => s.map((x) => (x.kind === 'group' ? `group(${x.steps.length})` : x.kind === 'pin' ? `pin:${x.pin}` : x.kind));
 
 describe('groupTurn', () => {
+  it('pins an old canvas_* call as the artifact chip of its converted page, else keeps the plain row (#174)', () => {
+    const page = { docId: 'doc_p', version: 1, title: 'Board', where: 'pages/canvases/board.html', kind: 'html' as const, section: null, updated: false };
+    const canvasPage = (id: string) => (id === 'cv_conv' ? page : undefined);
+    const ms = [msg([use('a', 'canvas_write', { id: 'cv_conv' }), use('b', 'canvas_write', { id: 'cv_gone' }), use('c', 'canvas_read', { id: 'cv_gone' })])];
+    const res = new Map([['a', ok('canvas cv_conv is now v2 with 1 node')], ['b', ok('canvas cv_gone is now v3 with 1 node')], ['c', ok('{}')]]);
+    const segs = groupTurn(ms, res, { live: false, canvasPage });
+    expect(kinds(segs)).toEqual(['pin:doc', 'group(2)']);
+    expect(stepArtifact((segs[0] as Extract<Segment, { kind: 'pin' }>).step, canvasPage)).toEqual(page);
+    expect(kinds(groupTurn(ms, res, { live: false }))).toEqual(['group(3)']);
+  });
+
   it('folds 2+ calls in a row into a group; text breaks it; a single call stays a row', () => {
     const ms = [msg([text('Looking.'), use('a', 'read_file', { path: 'x.ts' })]), msg([use('b', 'grep', { pattern: 'y' })]), msg([text('Found it.'), use('c', 'shell', { command: 'npm test' })])];
     const res = new Map([['a', ok('1|x')], ['b', ok('x.ts:1:y')], ['c', ok('exit 0\n')]]);

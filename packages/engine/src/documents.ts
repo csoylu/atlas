@@ -29,6 +29,7 @@ interface Row {
   pinned_at: string | null;
   folder_id: string | null;
   name: string | null;
+  from_canvas: string | null;
   /** COALESCE(chat_id, the card's origin chat), from DOC_SELECT. */
   chat: string | null;
 }
@@ -47,6 +48,7 @@ const toDoc = (r: Row): Doc => ({
   pinned: r.pinned_at !== null,
   folderId: r.folder_id,
   chatId: r.chat,
+  fromCanvas: r.from_canvas,
 });
 
 const stampOf = (file: string) => {
