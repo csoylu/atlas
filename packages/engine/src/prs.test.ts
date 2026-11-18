@@ -74,7 +74,9 @@ describe('pull requests linked to tasks (#189)', () => {
   });
 
   it("CI green starts the reviewer's run in the same thread, once per head; merged → done by itself", async () => {
-    const { e, gh, idle } = await setup({ script: [text('checked, validated and merged')] });
+    const gh = fakeGitHub();
+    // The reviewer validates the head (scripts/pr/validate.mjs --ok): GitHub then says qa success.
+    const { e, idle } = await setup({ gh, script: [() => ((gh.pr.qa = 'success'), text('checked, validated'))] });
     const c = card(e);
     e.kanban.requestReview(c.id, [URL], 'atlas', 'engine + tests');
     gh.pr.ci = 'success';
@@ -88,7 +90,7 @@ describe('pull requests linked to tasks (#189)', () => {
     // The same head again: no second run.
     await e.prs.poll();
     expect(e.runner.runs(c.id)).toHaveLength(1);
-    expect(e.kanban.get(c.id).waiting).toBe('@zurich checked it: waiting for the validation on GitHub');
+    expect(e.kanban.get(c.id).waiting).toBe('validated: waiting for the merge');
 
     gh.pr = { ...gh.pr, state: 'merged', mergeSha: 'e96a8e2ffff' };
     await e.prs.poll();
@@ -170,7 +172,7 @@ describe('pull requests linked to tasks (#189)', () => {
     const dataDir = mkdtempSync(join(tmpdir(), 'atlas-prs-'));
     const dbFile = join(dataDir, 'atlas.db');
     const gh = fakeGitHub();
-    let t = await setup({ dbFile, dataDir, gh, script: [text('checking')] });
+    let t = await setup({ dbFile, dataDir, gh, script: [() => ((gh.pr.qa = 'success'), text('validated'))] });
     const c = card(t.e);
     t.e.kanban.requestReview(c.id, [URL], 'atlas', 'engine + tests');
     gh.pr.ci = 'success';
@@ -200,17 +202,77 @@ describe('pull requests linked to tasks (#189)', () => {
     expect(t.e.kanban.get(c.id).status).toBe('done');
   });
 
-  it('Retry on a task In review starts the reviewer again on the same head', async () => {
-    const { e, gh, idle } = await setup({ script: [text('one'), text('two')] });
+  it('a review run that ends without a verdict is started once more, then shown on the card and in the Inbox; Retry starts it again (#221)', async () => {
+    const gh = fakeGitHub();
+    const { e, idle } = await setup({ gh, script: [text('one'), text('two'), text('three'), () => ((gh.pr.qa = 'success'), text('validated'))] });
     const c = card(e);
     e.kanban.requestReview(c.id, [URL], 'atlas', 'x');
     gh.pr.ci = 'success';
     await e.prs.poll();
-    await eventually(() => e.runner.runs(c.id).length === 1);
+    // Run 1 ends, GitHub says nothing about the head: the next read starts run 2, told why.
     await idle(c.id);
+    expect(e.runner.runs(c.id)).toHaveLength(1);
+    await e.prs.poll();
+    await eventually(() => e.runner.runs(c.id).length === 2, { what: 'the second review run' });
+    await idle(c.id);
+    const kicks = e.kanban.messages(c.id).filter((m) => m.author === 'system').map((m) => JSON.stringify(m.content));
+    expect(kicks).toHaveLength(2);
+    expect(kicks[0]).not.toContain('ended without a verdict');
+    expect(kicks[1]).toContain('Your last review run of this head ended without a verdict');
+    // Run 2 too: no third run, the card says why, one Inbox item (not twice).
+    await e.prs.poll();
+    await e.prs.poll();
+    expect(e.runner.runs(c.id)).toHaveLength(2);
+    expect(e.kanban.get(c.id)).toMatchObject({ status: 'review', waiting: 'review by @zurich ended without a verdict on aaaaaaa (2 runs): Retry starts it again' });
+    const stalled = () => e.notifications.inbox().updates.filter((u) => u.kind === 'review.stalled');
+    expect(stalled()).toMatchObject([
+      { title: 'Review by @zurich ended without a verdict', cardId: c.id, body: expect.stringContaining('PR #41 (aaaaaaa) of “Workflows”: 2 review runs ended without validating or failing it') },
+    ]);
+    // Retry: the reviewer checks the same head again; it ends the same way: shown again.
     await e.dispatcher.retry(c.id);
-    await eventually(() => e.runner.runs(c.id).length === 2, { what: 'a second reviewer run' });
+    await eventually(() => e.runner.runs(c.id).length === 3, { what: 'a third reviewer run' });
     await idle(c.id);
+    await e.prs.poll();
+    expect(stalled()).toHaveLength(2);
+    expect(e.runner.runs(c.id)).toHaveLength(3);
+    // A new head is a new review: it starts, and its verdict ends the stall.
+    gh.pr = { ...gh.pr, headSha: 'bbbbbbb2222' };
+    await e.prs.poll();
+    await eventually(() => e.runner.runs(c.id).length === 4, { what: 'the review of the new head' });
+    await idle(c.id);
+    await e.prs.poll();
+    expect(e.kanban.get(c.id).waiting).toBe('validated: waiting for the merge');
+  });
+
+  it("the reviewer's model sees the builder's turns as the builder's, not as its own (#221)", async () => {
+    const gh = fakeGitHub();
+    let seen: import('./providers/types.ts').ModelRequest | null = null;
+    const { e, idle } = await setup({
+      gh,
+      script: [
+        use('task_list', {}),
+        use('task_request_review', { summary: 'engine + tests', prs: [URL] }),
+        (req) => ((seen = req), (gh.pr.qa = 'success'), text('validated')),
+      ],
+    });
+    const c = card(e);
+    e.kanban.update(c.id, { status: 'running' }, 'dispatcher');
+    e.runner.wake(c.id, { kind: 'work', kick: 'go' });
+    await idle(c.id);
+    expect(e.kanban.get(c.id).status).toBe('review');
+    gh.pr.ci = 'success';
+    await e.prs.poll();
+    await eventually(() => seen, { what: "the reviewer's model call" });
+    await idle(c.id);
+    const req = seen as unknown as import('./providers/types.ts').ModelRequest;
+    // No assistant turn: zurich hasn't spoken yet; atlas's turns are context, named.
+    expect(req.messages.map((m) => m.role)).toEqual(['user']);
+    const all = JSON.stringify(req.messages);
+    expect(all).toContain('[@atlas, another agent, wrote this in the thread (not you):]');
+    expect(all).toContain('→ task_request_review');
+    expect(all).toContain("← @atlas's task_list");
+    expect(all).not.toContain('"tool_use"');
+    expect(all).toContain('the earlier messages marked @atlas are theirs, not yours');
   });
 });
 

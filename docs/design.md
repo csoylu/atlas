@@ -266,6 +266,15 @@ Statuses: `triage → todo → ready → running → (blocked | review) → done
     per head (`reviewed_sha`); a new `task_request_review` clears it. The reviewer validates and merges with
     the `pr_validate` tool (#216: `scripts/pr/validate.mjs` run in-process with the gate of the task's project: repo,
     CI job, changelog rule); the merge then moves the card. The reviewer must be a member of the task's project. Retry on an In review card starts the reviewer again.
+    The kick is always appended (`kickAlways`, #221), even when the builder's last tool result leaves a turn owed:
+    without it the reviewer got the builder's thread ending on « in review: PR #N waits for @zurich » and carried on
+    as the builder.
+  - **A review run that ends without a verdict** (#221: done or failed, the PR still open on the same head, no
+    `qa/validated` success or failure) is not a review: `reviewed_sha` is cleared and the reviewer starts once more,
+    told why (`review_retry` event; `REVIEW_TRIES` = 2 runs per head, counted from `review_started` events, which
+    carry the run id). After the second, the card's why-line says « review by @zurich ended without a verdict on
+    abc1234 (2 runs): Retry starts it again » and one Inbox item (`review.stalled`, once per run: `review_stalled`
+    event); the task stays In review. Retry runs it again; a new head is a new review.
 - **GitHub unreadable** (gh missing, logged out, offline): nothing moves on old data; the card's why-line and the task
   view's banner say « can't read PR #N from GitHub since 10:42: gh: not logged in »; after 15 min one Inbox item
   (`github.unreadable`), archived by itself when a read works again.
@@ -274,6 +283,17 @@ Statuses: `triage → todo → ready → running → (blocked | review) → done
 - Any GitHub repo the gh login can read; no other forge.
 
 ## 8. Context management
+- **Several agents in one thread** (#221). The provider knows only « user » and « assistant », so another agent's turns
+  replayed as assistant turns read as the running agent's own (zurich, reviewing in munih's thread, said « I built it…
+  I won't validate my own work »). The view is built for the running agent (`othersAsContext`, context.ts): an
+  assistant message by another agent becomes user context opening with « [@munih, another agent, wrote this in the
+  thread (not you):] », its tool calls one line each (input ≤ 600 chars), their results « ← @munih's shell: … »
+  (≤ 2000 chars), its thinking left out; the running agent's own turns, the user's and system notes are unchanged.
+  The transcript itself is not changed. The thread's todo list is re-injected only for its assignee; the summarizer
+  is told to say which agent did what. Where two agents share a thread today: the reviewer in the builder's task
+  (§7.1), atlas reviewing zurich's PRs (same path), a task note or `agent_message` delivered into a thread (already a
+  user message naming its sender). Workflow agent steps « in the same task thread » (workflows v2) get the same view
+  for free: whatever runs there sees the others as named context.
 - The full transcript is never deleted. What's sent to the model is a **view**: system prompt + memory + card + the
   conversation summary (if any) + the most recent messages that fit.
 - Compaction when the view passes 70 % of the context window: a summary call over the oldest part, stored in

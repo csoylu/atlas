@@ -111,6 +111,11 @@ export interface WakeOptions {
   kind?: RunKind;
   /** If the agent owes no reply, append this note (author 'system') so the transcript says why the run started. */
   kick?: string;
+  /**
+   * Append the kick even if a reply is owed: the run is another agent's (the reviewer, #221). The owed turn (the
+   * builder's last tool result) isn't addressed to it, and without the kick it would carry on the builder's work.
+   */
+  kickAlways?: boolean;
 }
 
 /** What the dispatcher needs to know when a run ends. */
@@ -357,7 +362,7 @@ export class Runner {
       })
       .immediate();
     if (!claimed) return null;
-    if (!owed && o.kick) this.kanban.appendMessage(card.id, 'user', 'system', [{ type: 'text', text: o.kick }]);
+    if (o.kick && (!owed || o.kickAlways)) this.kanban.appendMessage(card.id, 'user', 'system', [{ type: 'text', text: o.kick }]);
     this.emitRun(runId);
     const ctrl = new AbortController();
     const done = this.loop(runId, card.id, agentId, kind, ctrl.signal).finally(() => this.active.delete(card.id));
@@ -521,7 +526,7 @@ export class Runner {
         const system = this.systemPrompt(agent, card, kind, workdir);
         // The task's own images (#119) open the view: not in the transcript, so they follow the task's current list.
         const taskBlocks = card.board === 'direct' ? [] : taskImageBlocks(card, workdir);
-        const { view, exact } = await this.contextFor(card, transcript, model, provider, system.text, tools, signal, estimateTokens(taskBlocks));
+        const { view, exact } = await this.contextFor(card, agent.id, transcript, model, provider, system.text, tools, signal, estimateTokens(taskBlocks));
         // The newest pictures carry their bytes (read from their files now); older ones go as a text line.
         // The task's pictures always go, whatever the number of newer ones (they open the view, the oldest place).
         const pinned = new Set(taskBlocks.filter((b): b is ImageBlock => b.type === 'image'));
@@ -709,6 +714,8 @@ export class Runner {
    */
   private async contextFor(
     card: Card,
+    /** The running agent: other agents' messages are labelled as theirs (#221). */
+    self: string,
     transcript: ReturnType<Runner['transcript']>,
     model: Model,
     provider: Provider,
@@ -722,7 +729,10 @@ export class Runner {
     const overhead = estimateTokens(system) + estimateTokens(tools) + extra;
     const budget = Math.floor(window * COMPACT_AT);
     let conv = this.conversation(card);
-    const viewOf = (pruneUpto = conv.pruneUpto) => compactedView(transcript, conv.summary, conv.uptoSeq, pruneUpto, conv.todos);
+    // Another agent's turns in this thread are shown as theirs, not as the running agent's own (#221); the thread's todo
+    // list is its assignee's.
+    const todos = !card.assignee || card.assignee === self ? conv.todos : null;
+    const viewOf = (pruneUpto = conv.pruneUpto) => compactedView(transcript, conv.summary, conv.uptoSeq, pruneUpto, todos, self);
     let view = viewOf();
     // The provider's count of the last turn + the messages since; chars/4 only without a reading.
     let size = measuredSize(conv.reading, transcript) ?? overhead + estimateTokens(view);
@@ -1165,6 +1175,7 @@ const SUMMARY_SYSTEM = [
   'Write what the agent needs to carry on: the goal; what the user asked and decided (their exact words where they matter);',
   'what was done (files, commands, results, task and artifact ids); what was learned; errors and how they were fixed;',
   'what remains. Keep identifiers, paths, numbers and URLs exact. Plain text, no preamble.',
+  'Several agents can write in one thread (a builder and its reviewer): say which agent (the name before each message) did what.',
 ].join(' ');
 
 /** Full outputs older than this are deleted at start. */

@@ -10,7 +10,7 @@ export const INTERRUPTED = 'interrupted by a restart or a stop before this tool 
  * - consecutive messages of one role are merged, tool results first,
  * - every tool_use gets a tool_result; missing ones (restart, stop) get a synthetic one.
  */
-export function buildMessages(messages: (Message & { contextUpto?: number | null })[]): ModelRequest['messages'] {
+export function buildMessages(messages: (Message & { contextUpto?: number | null })[], self?: string): ModelRequest['messages'] {
   const pos = new Map<string, number>();
   for (const m of messages) pos.set(m.id, m.seq);
   for (const a of messages) {
@@ -18,7 +18,8 @@ export function buildMessages(messages: (Message & { contextUpto?: number | null
     for (const u of messages)
       if (u.role === 'user' && u.seq > a.contextUpto && u.seq < a.seq) pos.set(u.id, Math.max(pos.get(u.id)!, a.seq + 0.5));
   }
-  const ordered = [...messages].sort((x, y) => pos.get(x.id)! - pos.get(y.id)!);
+  const sorted = [...messages].sort((x, y) => pos.get(x.id)! - pos.get(y.id)!);
+  const ordered = self ? othersAsContext(sorted, self) : sorted;
 
   const out: ModelRequest['messages'] = [];
   for (const m of ordered) {
@@ -40,6 +41,58 @@ export function buildMessages(messages: (Message & { contextUpto?: number | null
     for (const u of uses) if (!have.has(u.id)) next.content.push({ type: 'tool_result', tool_use_id: u.id, content: INTERRUPTED, is_error: true });
     const rank = (b: ContentBlock) => (b.type === 'tool_result' ? 0 : 1);
     next.content.sort((a, b) => rank(a) - rank(b));
+  }
+  return out;
+}
+
+/** Who wrote a message that is not the running agent's own (othersAsContext): the line that opens it. */
+export const otherLead = (author: string) => `[@${author}, another agent, wrote this in the thread (not you):]`;
+const OTHER_INPUT = 600;
+const OTHER_RESULT = 2000;
+
+/**
+ * Two agents in one thread (#221: the reviewer runs in the builder's task thread; atlas reviews zurich's PRs; workflow
+ * steps): the provider only knows « user » and « assistant », so another agent's turns replayed as assistant turns read
+ * as the running agent's own, and it takes the other's work for its own. Here, for the agent `self`:
+ * - an assistant message by another agent becomes a user message opening with otherLead(author): its text, its tool
+ *   calls as one line each (input shortened), its web searches as their line; its thinking is left out (private notes,
+ *   and a signature only replays for the model that wrote it);
+ * - the results of those calls become text lines « ← @author's tool: … » (shortened, pictures as their line).
+ * The running agent's own messages, the user's, notes and system messages are unchanged. Returns copies.
+ */
+export function othersAsContext(messages: Msg[], self: string): Msg[] {
+  const cap = (s: string, n: number) => (s.length > n ? `${s.slice(0, n)}… (${s.length} chars)` : s);
+  const other = (m: Msg) => m.role === 'assistant' && m.author !== self && m.author !== 'system';
+  if (!messages.some(other)) return messages;
+  const foreign = new Map<string, { author: string; name: string }>(); // tool_use id → who called what
+  for (const m of messages.filter(other))
+    for (const b of m.content) if (b.type === 'tool_use' || b.type === 'server_tool_use') foreign.set(b.id, { author: m.author, name: b.name });
+  const out: Msg[] = [];
+  for (const m of messages) {
+    if (other(m)) {
+      const parts = m.content.flatMap((b): string[] => {
+        if (b.type === 'text') return b.text.trim() ? [b.text] : [];
+        if (b.type === 'tool_use') return [`→ ${b.name} ${cap(JSON.stringify(b.input), OTHER_INPUT)}`];
+        if (b.type === 'server_tool_use') return [`→ ${b.name} (run by the provider) ${cap(JSON.stringify(b.input), OTHER_INPUT)}`];
+        if (b.type === 'web_search_tool_result') return [`← ${searchSummary(b.content)}`];
+        if (b.type === 'image') return [imageLine(b)];
+        if (b.type === 'tool_result') return [`← ${cap(b.content, OTHER_RESULT)}`];
+        return []; // thinking, redacted_thinking
+      });
+      if (parts.length) out.push({ ...m, role: 'user', content: [{ type: 'text', text: `${otherLead(m.author)}\n${parts.join('\n')}` }] });
+      continue;
+    }
+    if (m.role === 'user' && m.content.some((b) => b.type === 'tool_result' && foreign.has(b.tool_use_id))) {
+      const content = m.content.map((b): ContentBlock => {
+        if (b.type !== 'tool_result' || !foreign.has(b.tool_use_id)) return b;
+        const who = foreign.get(b.tool_use_id)!;
+        const pics = (b.images ?? []).map(imageLine);
+        return { type: 'text', text: [`← @${who.author}'s ${who.name}${b.is_error ? ' (error)' : ''}: ${cap(b.content, OTHER_RESULT)}`, ...pics].join('\n') };
+      });
+      out.push({ ...m, content });
+      continue;
+    }
+    out.push(m);
   }
   return out;
 }
@@ -120,9 +173,11 @@ export function compactedView(
   uptoSeq: number | null,
   pruneUpto: number | null = null,
   todos: TodoItem[] | null = null,
+  /** The running agent: other agents' messages are shown as theirs (othersAsContext). */
+  self?: string,
 ): Turn[] {
   const rest = uptoSeq == null ? transcript : transcript.filter((m) => m.seq > uptoSeq);
-  const view = pairServerTools(buildMessages(pruneMessages(rest, pruneUpto)));
+  const view = pairServerTools(buildMessages(pruneMessages(rest, pruneUpto), self));
   const lead: ContentBlock[] = [];
   if (summary) lead.push({ type: 'text', text: `${SUMMARY_LEAD}\n\n${summary}` });
   const todoVisible = rest.some((m) => m.content.some((b) => b.type === 'tool_use' && b.name === 'todo_write'));
