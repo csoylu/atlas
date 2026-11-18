@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
-import { cardRef, MEMORY_BUDGET, MEMORY_REVIEW_EVERY as REVIEW_EVERY, MEMORY_TEXT_MAX, type Agent, type Card, type Memory, type MemoryKind, type Model, type Settings } from '@atlas/shared';
+import { cardRef, MEMORY_BUDGET, MEMORY_BUDGET_GLOBAL, MEMORY_REVIEW_EVERY as REVIEW_EVERY, MEMORY_TEXT_MAX, type Agent, type Card, type Memory, type MemoryKind, type Model, type Settings } from '@atlas/shared';
 import { api } from './api.ts';
 import type { MessageStream } from './useMessages.ts';
 import { HeaderActions, Icon } from './ScreenHeader.tsx';
@@ -100,7 +100,7 @@ export function MemoryPage(props: {
   const counts = chipCounts(list ?? [], status === 'archived' ? 'archived' : 'live');
   // A memory link shows that memory alone (its live copy once the list has it), whatever the filters.
   const shown = focused ? [list?.find((m) => m.id === focused.id) ?? focused] : shownMemories(list ?? [], { kind, status });
-  const scopes = ['shared', ...props.agents.map((a) => 'agent:' + a.id)];
+  const scopes = ['global', 'shared', ...props.agents.map((a) => 'agent:' + a.id)];
   const update = (m: Memory, patch: Parameters<typeof api.updateMemory>[1]) =>
     api.updateMemory(m.id, patch).then((x) => {
       setList((l) => l && l.map((y) => (y.id === x.id ? x : y)));
@@ -125,7 +125,7 @@ export function MemoryPage(props: {
         <Menu
           open={menu}
           onOpen={setMenu}
-          title="Filter by scope: shared, or one agent's own"
+          title="Filter by scope: global, shared in a project, or one agent's own"
           label={
             <>
               <Icon.filter />
@@ -140,8 +140,8 @@ export function MemoryPage(props: {
           </PopRow>
           {scopes.map((s) => (
             <PopRow key={s} on={view.scope === s} onClick={() => (save({ ...view, scope: s }), setMenu(false))}>
-              {s === 'shared' ? <Icon.memory /> : <Avatar id={s.slice('agent:'.length)} />}
-              {s === 'shared' ? 'Shared by all agents' : scopeLabel(s)}
+              {s === 'shared' || s === 'global' ? <Icon.memory /> : <Avatar id={s.slice('agent:'.length)} />}
+              {s === 'shared' ? 'Shared in a project' : s === 'global' ? 'Global (yours, every project)' : scopeLabel(s)}
             </PopRow>
           ))}
         </Menu>
@@ -150,7 +150,8 @@ export function MemoryPage(props: {
         <h2>Memory</h2>
         <p>
           What every agent keeps. Rules, preferences and pinned memories are always in its instructions (up to {MEMORY_BUDGET}{' '}
-          characters per agent, own + shared); facts and project notes are recalled when a conversation matches them.
+          characters per agent in a project: global + the project's + its own, global at most {MEMORY_BUDGET_GLOBAL}); facts
+          and task notes are recalled when a conversation matches them.
         </p>
         {props.settings && (
           <label className="field settings-field mem-review">
@@ -177,7 +178,7 @@ export function MemoryPage(props: {
       <div className="mem-bar">
         <div className="mem-chips" role="group" aria-label="Kind and status">
           {KIND_CHIPS.map((k) => chip(!focused && view.status === 'live' && view.kind === k.id, k.label, counts[k.id], () => setKind(k.id)))}
-          {chip(!focused && view.status === 'stale', 'Stale', counts.stale, () => setStatus('stale'), 'Project notes of a task that is done or closed: out of recall')}
+          {chip(!focused && view.status === 'stale', 'Stale', counts.stale, () => setStatus('stale'), 'Task notes of a task that is done or closed: out of recall')}
           {chip(status === 'archived', 'Archived', counts.archived, () => setStatus('archived'), 'Forgotten memories: never deleted, restore them here')}
         </div>
         <label className="mem-search">
@@ -222,7 +223,7 @@ export function MemoryPage(props: {
                 )}
               </p>
             ) : (
-              <p>No memories yet. Agents save rules, preferences, facts and project notes with memory_add; they show up here.</p>
+              <p>No memories yet. Agents save rules, preferences, facts and task notes with memory_add; they show up here.</p>
             )}
           </div>
         )}
@@ -303,7 +304,7 @@ function MemoryRow(props: { m: Memory; focused: boolean; cards: Card[]; chats: C
             <select value={edit.kind} aria-label="Kind" onChange={(e) => setEdit({ ...edit, kind: e.target.value as MemoryKind })}>
               {(['rule', 'preference', 'fact', 'project'] as const).map((k) => (
                 <option key={k} value={k}>
-                  {k}
+                  {k === 'project' ? 'task note' : k}
                 </option>
               ))}
             </select>
@@ -326,7 +327,7 @@ function MemoryRow(props: { m: Memory; focused: boolean; cards: Card[]; chats: C
         </button>
       )}
       <span className="mem-scope">
-        {m.scope === 'shared' ? 'shared' : (
+        {m.scope === 'shared' || m.scope === 'global' ? m.scope : (
           <>
             <Avatar id={m.scope.slice('agent:'.length)} />
             <span>{m.scope.slice('agent:'.length)}</span>

@@ -10,17 +10,18 @@ export const KIND_CHIPS: { id: MemoryKind | 'all'; label: string }[] = [
   { id: 'rule', label: 'Rules' },
   { id: 'preference', label: 'Preferences' },
   { id: 'fact', label: 'Facts' },
-  { id: 'project', label: 'Projects' },
+  { id: 'project', label: 'Task notes' },
 ];
 /** The short badge of a kind. */
-export const KIND_BADGE: Record<MemoryKind, string> = { rule: 'rule', preference: 'pref', fact: 'fact', project: 'project' };
+/** `project` is shown as task notes (#215): « project » means a project now. */
+export const KIND_BADGE: Record<MemoryKind, string> = { rule: 'rule', preference: 'pref', fact: 'fact', project: 'task' };
 
 /** `live` = active and stale (stale ones dimmed); `stale` / `archived` show only those. */
 export type MemStatus = 'live' | 'stale' | 'archived';
 export interface MemView {
   kind: MemoryKind | 'all';
   status: MemStatus;
-  /** `shared`, `agent:<id>` or null = every scope. */
+  /** `global`, `shared`, `agent:<id>` or null = every scope. */
   scope: string | null;
 }
 export const DEFAULT_VIEW: MemView = { kind: 'all', status: 'live', scope: null };
@@ -39,7 +40,7 @@ export function parseMemView(raw: string | null): MemView {
     scope: typeof v.scope === 'string' && isScope(v.scope) ? v.scope : null,
   };
 }
-const isScope = (s: string) => /^(shared|agent:[a-z][a-z0-9_-]*)$/.test(s);
+const isScope = (s: string) => /^(global|shared|agent:[a-z][a-z0-9_-]*)$/.test(s);
 
 /**
  * What follows #/settings/memory: a scope (« shared », « agent:atlas ») filters the page, a memory id (« m12 ») shows
@@ -79,11 +80,11 @@ export function chipCounts(list: Memory[], status: MemStatus): Record<MemoryKind
 }
 
 /** « shared », « @atlas ». */
-export const scopeLabel = (scope: string) => (scope === 'shared' ? 'shared' : '@' + scope.replace(/^agent:/, ''));
+export const scopeLabel = (scope: string) => (scope === 'shared' || scope === 'global' ? scope : '@' + scope.replace(/^agent:/, ''));
 
 /**
  * Where a memory came from, as a link: the chat (#/chat/<id>?msg=<seq>) or the board card's ticket (?card=<id>&msg=<seq>
- * over the current view). A project memory with no source conversation points at its card. null: no source (v1 memory).
+ * over the current view). A task note with no source conversation points at its card. null: no source (v1 memory).
  */
 export function sourceLink(
   m: Pick<Memory, 'sourceCardId' | 'sourceSeq' | 'cardId'>,
@@ -121,7 +122,7 @@ export function groupForSeq(starts: number[], seq: number): number {
 /* ── Daily digest ─────────────────────────────────────────────────────────── */
 
 /**
- * What the digest reports: changes by agents, and project notes gone stale (even when your move of the card did it);
+ * What the digest reports: changes by agents, and task notes gone stale (even when your move of the card did it);
  * not your own edits, not confirmations or undos.
  */
 export const digestWorthy = (c: MemoryChange) => c.action === 'stale' || (c.by !== 'user' && c.action !== 'confirm' && c.action !== 'undo');

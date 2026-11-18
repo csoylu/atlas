@@ -1,10 +1,10 @@
 import { z } from 'zod';
-import { MEMORY_BUDGET, MEMORY_TEXT_MAX, MemoryKind, MemoryScope, ProposalAction, type Card, type Memory, type MemoryProposal, type ProposalStatus } from '@atlas/shared';
+import { MEMORY_BUDGET, MEMORY_BUDGET_GLOBAL, MEMORY_TEXT_MAX, MemoryKind, MemoryScope, ProposalAction, type Card, type Memory, type MemoryProposal, type ProposalStatus } from '@atlas/shared';
 import type { Db } from './store/db.ts';
 import type { Bus } from './events.ts';
 import type { Agents } from './agents.ts';
 import { ConflictError, InvalidError, NotFoundError, type Kanban } from './kanban.ts';
-import { memoryRef, parseMemoryRef, SHARED, type Memories } from './memory.ts';
+import { GLOBAL, kindTag, memoryRef, parseMemoryRef, SHARED, type Memories } from './memory.ts';
 import { localTimeZone, type Workflows } from './workflows.ts';
 import type { ToolSpec } from './providers/types.ts';
 
@@ -20,10 +20,10 @@ export const CLEANUP_BY = 'workflow:' + CLEANUP_SCHEDULE;
 export const isCleanupCard = (card: Pick<Card, 'createdBy'>) => card.createdBy === CLEANUP_BY || card.createdBy === 'schedule:' + CLEANUP_SCHEDULE;
 
 export const CLEANUP_PROMPT = [
-  'Weekly memory cleanup. Call memory_review to read every memory of every agent, then file one memory_propose per change:',
+  "Weekly memory cleanup. Call memory_review to read this project's memories (and the global ones), then file one memory_propose per change:",
   '- merge duplicates and near-duplicates into one clear text (≤ 500 chars; keep every specific detail);',
   '- resolve contradictions: say which memory wins and why (if you cannot tell, propose archiving the older one and say so);',
-  '- archive stale or obsolete memories: project notes of finished tasks, facts about work that is over;',
+  '- archive stale or obsolete memories: task notes of finished tasks, facts about work that is over;',
   '- fix a wrong kind (a fact filed as a rule…) or scope (an agent memory every agent needs → shared; a shared one only one agent uses → agent:<id>);',
   '- where an always-on total is near its budget, propose merges, or kind fact for long rules that are only sometimes relevant.',
   'Skip what is pending or was rejected (memory_review lists them). Change nothing yourself: no memory_add, memory_update or',
@@ -54,7 +54,7 @@ export const ProposeInput = z
     ids: z.array(z.union([z.string(), z.number().int()])).min(1).describe('memory ids, e.g. ["m3", "m7"]; merge: the first one is kept'),
     text: z.string().trim().min(1).max(MEMORY_TEXT_MAX).optional().describe('merge (required) and update: the new text'),
     kind: MemoryKind.optional().describe('merge and update: a new kind'),
-    scope: MemoryScope.optional().describe('merge and update: a new scope, shared or agent:<id>'),
+    scope: MemoryScope.optional().describe("merge and update: a new scope in this project, shared or agent:<id> (global: Master's call, not a proposal)"),
     reason: z.string().trim().min(1).max(500).describe('why, in one sentence Master can judge'),
   })
   .strict();
@@ -100,6 +100,13 @@ export class MemoryCleanup {
   propose(cardId: string, input: ProposeInput, by: string): { proposal: MemoryProposal; existed: boolean } {
     const p = ProposeInput.parse(input);
     const ids = [...new Set(p.ids.map(parseMemoryRef))];
+    // The cleanup card's project and the global ones only (#215): another project's memory is « not found ».
+    const projectId = this.projectOfCard(cardId);
+    for (const id of ids) {
+      const m = this.memories.get(id);
+      if (m.scope !== GLOBAL && m.projectId !== projectId) throw new NotFoundError(`memory ${memoryRef(id)} not found`);
+    }
+    if (p.scope === GLOBAL) throw new InvalidError('moving a memory to global is Master\'s call: not a proposal');
     if (p.action === 'merge' && ids.length < 2) throw new InvalidError('merge needs at least two memories');
     if (p.action === 'merge' && !p.text) throw new InvalidError('merge needs the merged text');
     if (p.action === 'update' && ids.length !== 1) throw new InvalidError('update is about one memory: use merge for several');
@@ -136,7 +143,12 @@ export class MemoryCleanup {
           .all(...p.memoryIds, p.createdAt) as { memory_id: number }[];
         if (changed.length)
           throw new ConflictError(`${changed.map((c) => memoryRef(c.memory_id)).join(', ')} changed after this proposal: reject it, the next cleanup looks again`);
-        const edit = { ...(p.text ? { text: p.text } : {}), ...(p.kind ? { kind: p.kind } : {}), ...(p.scope ? { scope: p.scope } : {}) };
+        // A new scope stays in the cleanup card's project (a global memory moved to shared lands there).
+        const edit = {
+          ...(p.text ? { text: p.text } : {}),
+          ...(p.kind ? { kind: p.kind } : {}),
+          ...(p.scope ? { scope: p.scope, ...(p.scope !== GLOBAL ? { projectId: this.projectOfCard(p.cardId) } : {}) } : {}),
+        };
         const [first, ...rest] = p.memoryIds;
         if (p.action === 'archive') for (const m of p.memoryIds) this.memories.forget(m, by);
         else {
@@ -162,15 +174,26 @@ export class MemoryCleanup {
     return this.emit(id);
   }
 
-  /** What memory_review shows: every live memory by scope, the always-on totals, pending and recently rejected proposals. */
-  review(agentIds: string[], cardRef: (id: string) => string): string {
-    const rows = this.memories.list().filter((m) => m.status !== 'archived');
+  /** The project of a cleanup card (the default project when the card is gone). */
+  private projectOfCard(cardId: string): string {
+    const r = this.db.prepare('SELECT project_id FROM cards WHERE id = ?').get(cardId) as { project_id: string | null } | undefined;
+    return r?.project_id ?? (this.db.prepare("SELECT id FROM projects WHERE status = 'active' ORDER BY created_at, rowid LIMIT 1").get() as { id: string }).id;
+  }
+
+  /**
+   * What memory_review shows: the live memories of one project and the global ones, by scope, the always-on totals of
+   * its members, its pending and recently rejected proposals. Nothing of another project (#215).
+   */
+  review(projectId: string, cardRef: (id: string) => string): string {
+    const rows = this.memories.list().filter((m) => m.status !== 'archived' && (m.scope === GLOBAL || m.projectId === projectId));
+    const agentIds = (this.db.prepare('SELECT agent_id FROM project_members WHERE project_id = ? ORDER BY agent_id').all(projectId) as { agent_id: string }[]).map((r) => r.agent_id);
+    const name = (this.db.prepare('SELECT name FROM projects WHERE id = ?').get(projectId) as { name: string } | undefined)?.name ?? projectId;
     const cardStatus = this.db.prepare('SELECT status FROM cards WHERE id = ?');
     const line = (m: Memory) => {
       const card = m.cardId ? (cardStatus.get(m.cardId) as { status: string } | undefined) : undefined;
       const tags = [
         memoryRef(m.id),
-        m.kind,
+        kindTag(m.kind),
         ...(m.pinned ? ['pinned'] : []),
         ...(m.status !== 'active' ? [m.status] : []),
         `confirmed ${m.confirmedAt.slice(0, 10)}`,
@@ -178,19 +201,28 @@ export class MemoryCleanup {
       ];
       return `- [${tags.join(' · ')}] ${m.text}`;
     };
-    const scopes = [SHARED, ...agentIds.map((a) => `agent:${a}`), ...new Set(rows.map((m) => m.scope))].filter((s, i, all) => all.indexOf(s) === i);
-    const out: string[] = [`${rows.length} memories (active and stale; archived ones left out). Always-on = rules, preferences and pinned, ${MEMORY_BUDGET} chars per agent, own + shared.`];
+    const scopes = [GLOBAL, SHARED, ...agentIds.map((a) => `agent:${a}`), ...new Set(rows.map((m) => m.scope))].filter((s, i, all) => all.indexOf(s) === i);
+    const out: string[] = [
+      `${rows.length} memories of project ${name} and global ones (active and stale; archived ones left out). Always-on = rules, preferences and pinned, ${MEMORY_BUDGET} chars per agent in a project: global + ${name} + its own (global at most ${MEMORY_BUDGET_GLOBAL}).`,
+    ];
     for (const s of scopes) {
       const list = rows.filter((m) => m.scope === s).sort((a, b) => a.id - b.id);
       if (!list.length) continue;
       const agent = s.startsWith('agent:') ? s.slice('agent:'.length) : null;
-      out.push('', `## ${s}${agent ? ` (always-on of @${agent}: ${this.memories.used(agent)}/${MEMORY_BUDGET} chars)` : ''}`, ...list.map(line));
+      const title =
+        s === GLOBAL
+          ? `## global (Master's own, every project: ${this.memories.usedGlobal()}/${MEMORY_BUDGET_GLOBAL} chars)`
+          : s === SHARED
+            ? `## shared (${name})`
+            : `## ${s} in ${name}${agent ? ` (always-on of @${agent}: ${this.memories.used({ agentId: agent, projectId })}/${MEMORY_BUDGET} chars)` : ''}`;
+      out.push('', title, ...list.map(line));
     }
+    const mine = (p: MemoryProposal) => this.projectOfCard(p.cardId) === projectId;
     const describe = (p: MemoryProposal) =>
       `- ${proposalRef(p.id)} ${p.action} ${p.memoryIds.map(memoryRef).join(' + ')}${p.kind ? ` kind ${p.kind}` : ''}${p.scope ? ` scope ${p.scope}` : ''}${p.text ? `: "${p.text}"` : ''} (${p.reason})`;
-    const pending = this.list({ status: 'pending' });
+    const pending = this.list({ status: 'pending' }).filter(mine);
     const since = new Date(Date.now() - 90 * 24 * 3600_000).toISOString();
-    const rejected = this.list({ status: 'rejected' }).filter((p) => (p.decidedAt ?? '') >= since);
+    const rejected = this.list({ status: 'rejected' }).filter((p) => mine(p) && (p.decidedAt ?? '') >= since);
     if (pending.length) out.push('', 'Pending (waiting for Master: do not propose again):', ...pending.map(describe));
     if (rejected.length) out.push('', 'Rejected by Master in the last 90 days (do not propose again):', ...rejected.map(describe));
     return out.join('\n');
@@ -247,9 +279,10 @@ export interface CleanupToolContext {
 
 const TOOLS = {
   memory_review: {
-    description: 'Every memory of every agent (active and stale), by scope, with always-on totals, and the proposals pending or rejected. Read it before proposing.',
+    description:
+      "Every memory of this task's project and the global ones (active and stale), by scope, with always-on totals, and the proposals pending or rejected. Read it before proposing.",
     input: z.object({}),
-    run: (_i: unknown, ctx: CleanupToolContext) => ctx.cleanup.review(ctx.agents.list().map((a) => a.id), (id) => ctx.kanban.ref(id)),
+    run: (_i: unknown, ctx: CleanupToolContext) => ctx.cleanup.review(ctx.kanban.get(ctx.cardId).projectId, (id) => ctx.kanban.ref(id)),
   },
   memory_propose: {
     description:

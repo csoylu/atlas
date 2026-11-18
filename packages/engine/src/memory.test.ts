@@ -16,6 +16,7 @@ afterEach(async () => {
   await engine?.stop();
   engine = undefined;
 });
+const V = (agentId: string, projectId = 'atlas') => ({ agentId, projectId });
 const text = (t: string): ContentBlock[] => [{ type: 'text', text: t }];
 const start = async (fake = new FakeProvider([])) =>
   (engine = await startEngine({ dbFile: ':memory:', dataDir: mkdtempSync(join(tmpdir(), 'atlas-')), port: 0, dispatch: false, providers: () => fake, env: {} }));
@@ -78,9 +79,9 @@ describe('memory v2: store', () => {
     expect(confirmed.confirmedAt >= confirmed.updatedAt).toBe(true);
     m.forget(b.id, 'atlas');
     expect(m.get(b.id).status).toBe('archived');
-    expect(m.alwaysOn('atlas')).toEqual([]);
+    expect(m.alwaysOn(V('atlas'))).toEqual([]);
     m.update(b.id, { status: 'active' }, 'user');
-    expect(m.alwaysOn('atlas').map((x) => x.id)).toEqual([b.id]);
+    expect(m.alwaysOn(V('atlas')).map((x) => x.id)).toEqual([b.id]);
 
     const changes = m.changes('2000-01-01');
     expect(changes.map((c) => [c.memoryId, c.action])).toEqual([
@@ -110,7 +111,7 @@ describe('memory v2: store', () => {
     e.agents.create({ id: 'munih', modelId: e.agents.get('atlas').modelId });
     const rule = (n: number) => 'r'.repeat(n);
     for (let i = 0; i < 5; i++) m.add({ kind: 'rule', scope: 'agent:atlas', text: rule(500) }, 'atlas');
-    expect(m.used('atlas')).toBe(2500);
+    expect(m.used(V('atlas'))).toBe(2500);
     m.add({ kind: 'preference', scope: 'agent:atlas', text: rule(400) }, 'atlas');
     expect(() => m.add({ kind: 'rule', scope: 'agent:atlas', text: rule(101) }, 'atlas')).toThrow(/3001\/3000.*Merge or shorten/s);
     // Facts aren't always on: no budget.
@@ -120,15 +121,15 @@ describe('memory v2: store', () => {
     // Shared rows count for every agent: munih has room, atlas doesn't.
     expect(() => m.add({ kind: 'rule', scope: 'shared', text: rule(200) }, 'user')).toThrow(/@atlas would be 3100/);
     m.add({ kind: 'rule', scope: 'agent:munih', text: rule(200) }, 'user');
-    expect(m.used('munih')).toBe(200);
+    expect(m.used(V('munih'))).toBe(200);
     // Forgetting makes room again; an agent already over the budget (v1 migration) can still shrink.
-    const first = m.alwaysOn('atlas')[0]!;
+    const first = m.alwaysOn(V('atlas'))[0]!;
     m.forget(first.id, 'atlas');
     m.add({ kind: 'rule', scope: 'shared', text: rule(200) }, 'user');
-    e.db.prepare("UPDATE memories SET text = ? WHERE id = ?").run(rule(1500), m.alwaysOn('atlas')[0]!.id);
-    expect(m.used('atlas')).toBeGreaterThan(MEMORY_BUDGET);
-    m.update(m.alwaysOn('atlas')[0]!.id, { text: rule(100) }, 'atlas');
-    expect(m.used('atlas')).toBeLessThanOrEqual(MEMORY_BUDGET);
+    e.db.prepare("UPDATE memories SET text = ? WHERE id = ?").run(rule(1500), m.alwaysOn(V('atlas'))[0]!.id);
+    expect(m.used(V('atlas'))).toBeGreaterThan(MEMORY_BUDGET);
+    m.update(m.alwaysOn(V('atlas'))[0]!.id, { text: rule(100) }, 'atlas');
+    expect(m.used(V('atlas'))).toBeLessThanOrEqual(MEMORY_BUDGET);
   });
 
   it('finds similar memories by shared keywords, not by common words', () => {
@@ -204,8 +205,8 @@ describe('memory v2: in the system prompt', () => {
     e.kanban.update(card.id, { status: 'closed' }, 'user');
     expect(m.get(project.id).status).toBe('stale');
     expect(m.changes('2000-01-01')[0]).toMatchObject<Partial<MemoryChange>>({ memoryId: project.id, action: 'stale', by: 'user' });
-    expect(m.recall('atlas', 'orb stutter frame').map((x) => x.id)).not.toContain(project.id);
-    expect(m.search('atlas', 'stutter').map((x) => [x.id, x.status])).toEqual([[project.id, 'stale']]); // memory_search still finds it
+    expect(m.recall(V('atlas'), 'orb stutter frame').map((x) => x.id)).not.toContain(project.id);
+    expect(m.search(V('atlas'), 'stutter').map((x) => [x.id, x.status])).toEqual([[project.id, 'stale']]); // memory_search still finds it
   });
 
   it('a project memory saved on a work card belongs to it and goes stale when it is done; a direct chat recalls on its first message', async () => {

@@ -78,7 +78,7 @@ describe('secret_set and secret_delete', () => {
     expect(stored(l)).not.toContain(V);
     // Granted to atlas only: listed in its instructions from the next turn on, never to another agent.
     expect(l.fake.calls[2]!.system).toContain('- $GEN_KEY: made by a command');
-    expect(l.engine.secrets.granted('zurich').map((s) => s.name)).not.toContain('GEN_KEY');
+    expect(l.engine.secrets.granted('zurich', 'atlas').map((s) => s.name)).not.toContain('GEN_KEY');
   });
 
   it('value form: stored, and [secret NAME] in the stored tool call and in every later request', async () => {
@@ -110,7 +110,7 @@ describe('secret_set and secret_delete', () => {
     ]);
     l.engine.agents.create({ id: 'zurich', rolePrompt: '', modelId: 'sonnet' } as Parameters<typeof l.engine.agents.create>[0]);
     expect((await l.call('POST', '/secrets', { name: 'USERS', value: 'user-value-123456789', grant: 'all' })).status).toBe(201);
-    l.engine.secrets.agentSet('zurich', null, 'ZURICHS', 'zurich-value-12345678');
+    l.engine.secrets.agentSet('zurich', 'atlas', null, 'ZURICHS', 'zurich-value-12345678');
     await run(l);
     const r = (i: number) => results(l.fake.calls[i]!)[0]!;
     expect(r(1)).toMatch(/^stored MINE/);
@@ -155,7 +155,7 @@ describe('needs secret X (task_block with secret)', () => {
     expect(await info(l, 'DUNE_API_KEY')).toMatchObject({ hasValue: true, waitingCard: null });
 
     // Dismiss: another request, deleted without a value.
-    l.engine.secrets.need('atlas', card.id, 'OTHER_KEY');
+    l.engine.secrets.need('atlas', 'atlas', card.id, 'OTHER_KEY');
     expect(await info(l, 'OTHER_KEY')).toMatchObject({ hasValue: false });
     expect((await l.call('DELETE', '/secrets/OTHER_KEY')).status).toBe(204);
     expect(await info(l, 'OTHER_KEY')).toBeUndefined();

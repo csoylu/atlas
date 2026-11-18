@@ -34,7 +34,7 @@ import type { Usage } from './usage.ts';
 import type { Voice } from './voice.ts';
 import type { Updater } from './updater.ts';
 import type { ShellEnv } from './shellEnv.ts';
-import { DEFAULT_CONTEXT_WINDOW, MEMORY_BUDGET, type About, type Timeline } from '@atlas/shared';
+import { DEFAULT_CONTEXT_WINDOW, MEMORY_BUDGET, MEMORY_BUDGET_GLOBAL, type About, type MemoryBudget, type Timeline } from '@atlas/shared';
 
 /** Who the UI acts as. One user (design §1). */
 const USER = 'user';
@@ -355,7 +355,7 @@ export function createApi(deps: {
   // ── Memory v2 (design §8): Settings → Memory, the daily digest ────────
   app.get('/api/memories', (req, res) => {
     const q = req.query as Record<string, string | undefined>;
-    res.json(memories.list({ scope: q.scope, kind: q.kind as never, status: q.status as never, q: q.q || undefined }));
+    res.json(memories.list({ scope: q.scope, project: q.project || undefined, kind: q.kind as never, status: q.status as never, q: q.q || undefined }));
   });
   app.post('/api/memories', (req, res) => {
     res.status(201).json(memories.add(req.body, USER));
@@ -374,7 +374,10 @@ export function createApi(deps: {
   app.get('/api/memories/:id', (req, res) => {
     res.json(memories.get(parseMemoryRef(req.params.id)));
   });
-  /** Edit, pin, archive ({status: 'archived'}) or restore ({status: 'active'}). */
+  /**
+   * Edit, pin, archive ({status: 'archived'}), restore ({status: 'active'}) or move (#215): {scope: 'global'} makes it
+   * one of the user's own (every project), {scope: 'shared' | 'agent:<id>', projectId} puts it in a project.
+   */
   app.patch('/api/memories/:id', (req, res) => {
     res.json(memories.update(parseMemoryRef(req.params.id), req.body, USER));
   });
@@ -395,10 +398,18 @@ export function createApi(deps: {
   app.post('/api/memory-proposals/:id/reject', (req, res) => {
     res.json(cleanup.reject(proposalId(req.params.id)));
   });
-  /** An agent's always-on memory size against the budget. */
+  /** An agent's always-on memory in a project (?project=, default the default project) against the budget (#215). */
   app.get('/api/agents/:id/memory-budget', (req, res) => {
     agents.get(req.params.id);
-    res.json({ used: memories.used(req.params.id), limit: MEMORY_BUDGET });
+    const projectId = typeof req.query.project === 'string' && req.query.project ? projects.get(req.query.project).id : projects.defaultId();
+    const body: MemoryBudget = {
+      used: memories.used({ agentId: req.params.id, projectId }),
+      limit: MEMORY_BUDGET,
+      global: memories.usedGlobal(),
+      globalLimit: MEMORY_BUDGET_GLOBAL,
+      projectId,
+    };
+    res.json(body);
   });
   app.get('/api/models', (_req, res) => {
     res.json(models.list());
@@ -502,8 +513,9 @@ export function createApi(deps: {
   });
 
   // Secrets (#206): model keys and agent secrets. Names and metadata only; values go in, never out.
-  app.get('/api/secrets', (_req, res) => {
-    res.json(deps.secrets.list());
+  /** ?project=global: the global ones; ?project=<id>: that project's (#215). */
+  app.get('/api/secrets', (req, res) => {
+    res.json(deps.secrets.list(typeof req.query.project === 'string' && req.query.project ? req.query.project : undefined));
   });
   // The server's secrets.enc (#208): status for the sidebar badge, unlock, lock now, first or new password.
   // The password is used once to derive the key and is never stored, logged or sent back.

@@ -511,31 +511,40 @@ export interface Model {
 }
 
 /**
- * Memory v2 (design §8): one row per memory. Scope `shared` (every agent) or `agent:<id>` (that agent, i.e. its
- * workdir/project). Rules, preferences and pinned rows are always in the system prompt (MEMORY_BUDGET chars per agent,
- * own + shared, enforced on write); facts and project notes come back by recall (FTS on the card / first message).
+ * Memory v2 (design §8), per project since #215. Three levels: `global` (the user's own rules and preferences, who the
+ * user is: every project, projectId null), `shared` (every member of one project) and `agent:<id>` (that agent in one
+ * project). A run sees global + its project's shared + its own in that project, nothing of another project. Rules,
+ * preferences and pinned rows are always in the system prompt (MEMORY_BUDGET chars per run, of which global takes at
+ * most MEMORY_BUDGET_GLOBAL, enforced on write); facts and task notes (kind `project`) come back by recall.
  */
 export const MEMORY_TEXT_MAX = 500;
+/** Always-on chars a run sees: global + its project + its own there. */
 export const MEMORY_BUDGET = 3000;
+/** The global part of MEMORY_BUDGET: every project keeps at least MEMORY_BUDGET - MEMORY_BUDGET_GLOBAL for itself. */
+export const MEMORY_BUDGET_GLOBAL = 1500;
 export const MEMORY_RECALL = 8;
 /** The background memory review reads a chat again after this many new messages (v3). */
 export const MEMORY_REVIEW_EVERY = 20;
+/** `project` = task notes (about one task, stale when it ends): the stored value predates projects (#215). */
 export const MemoryKind = z.enum(['rule', 'preference', 'fact', 'project']);
 export type MemoryKind = z.infer<typeof MemoryKind>;
 export const MemoryStatus = z.enum(['active', 'stale', 'archived']);
 export type MemoryStatus = z.infer<typeof MemoryStatus>;
-export const MemoryScope = z.string().regex(/^(shared|agent:[a-z][a-z0-9_-]*)$/, 'shared or agent:<id>');
+export const MemoryScope = z.string().regex(/^(global|shared|agent:[a-z][a-z0-9_-]*)$/, 'global, shared or agent:<id>');
+export const GLOBAL_SCOPE = 'global';
 export interface Memory {
   id: number;
   kind: MemoryKind;
   scope: string;
+  /** The project of a `shared` or `agent:<id>` memory; null for `global`. */
+  projectId: string | null;
   text: string;
   /** Where it was learned: a message of a conversation (null when the user wrote it or it came from the v1 migration). */
   sourceConversationId: string | null;
   sourceSeq: number | null;
   /** That conversation's card (to open it), when it still exists. */
   sourceCardId: string | null;
-  /** Project memories: the card they belong to; it goes `stale` when that card is done or closed. */
+  /** Task notes: the card they belong to; they go `stale` when that card is done or closed. */
   cardId: string | null;
   status: MemoryStatus;
   pinned: boolean;
@@ -544,20 +553,40 @@ export interface Memory {
   updatedAt: string;
   updatedBy: string;
 }
+/** `projectId`: a project memory's project (omitted = the default project); none for a global one. */
 export const CreateMemory = z
-  .object({ kind: MemoryKind, scope: MemoryScope, text: z.string().trim().min(1).max(MEMORY_TEXT_MAX), pinned: z.boolean().default(false), cardId: z.string().nullable().default(null) })
+  .object({
+    kind: MemoryKind,
+    scope: MemoryScope,
+    text: z.string().trim().min(1).max(MEMORY_TEXT_MAX),
+    pinned: z.boolean().default(false),
+    cardId: z.string().nullable().default(null),
+    projectId: z.string().min(1).nullable().optional(),
+  })
   .strict();
 export type CreateMemory = z.input<typeof CreateMemory>;
-/** Edit, pin, archive (status archived) or restore (status active). */
+/**
+ * Edit, pin, archive (status archived), restore (status active) or move: scope `global` drops the project; `shared` or
+ * `agent:<id>` from global takes `projectId` (omitted = the default project); `projectId` alone moves it to that project.
+ */
 export const UpdateMemory = z
-  .object({ text: z.string().trim().min(1).max(MEMORY_TEXT_MAX), kind: MemoryKind, scope: MemoryScope, pinned: z.boolean(), status: MemoryStatus })
+  .object({ text: z.string().trim().min(1).max(MEMORY_TEXT_MAX), kind: MemoryKind, scope: MemoryScope, projectId: z.string().min(1), pinned: z.boolean(), status: MemoryStatus })
   .partial()
   .strict();
 export type UpdateMemory = z.infer<typeof UpdateMemory>;
+/** `project`: one project's memories (global ones are scope `global`). */
 export const MemoryQuery = z
-  .object({ scope: MemoryScope, kind: MemoryKind, status: MemoryStatus, q: z.string().trim().min(1) })
+  .object({ scope: MemoryScope, project: z.string().min(1), kind: MemoryKind, status: MemoryStatus, q: z.string().trim().min(1) })
   .partial();
 export type MemoryQuery = z.infer<typeof MemoryQuery>;
+/** An agent's always-on memory in one project: the run's total and its global part, against their budgets. */
+export interface MemoryBudget {
+  used: number;
+  limit: number;
+  global: number;
+  globalLimit: number;
+  projectId: string;
+}
 /** One change to a memory, for the daily digest and its undo. `before`: the row before the change (null for an add). */
 export interface MemoryChange {
   id: number;
@@ -565,7 +594,7 @@ export interface MemoryChange {
   at: string;
   by: string;
   action: 'add' | 'update' | 'confirm' | 'forget' | 'restore' | 'pin' | 'unpin' | 'stale' | 'undo';
-  before: { text: string; kind: MemoryKind; scope: string | null; status: MemoryStatus; pinned: boolean } | null;
+  before: { text: string; kind: MemoryKind; scope: string | null; projectId: string | null; status: MemoryStatus; pinned: boolean } | null;
   /** Undone by a later change (its id). */
   undoneBy: number | null;
 }
@@ -1250,7 +1279,7 @@ export interface SecretInfo {
   grant: SecretGrant;
   /** The agents of grant 'agents' (empty otherwise). */
   agents: string[];
-  /** Null = global (every secret today). Later: the project that owns it, injected only into that project's tasks. */
+  /** Null = global (every project); else the project that owns it: only its runs get it, only its members can be granted it. */
   project: string | null;
   /** False when the row exists but the store holds no value (a crash between the two writes, or an agent's request). */
   hasValue: boolean;
@@ -1297,6 +1326,8 @@ export const CreateSecret = z
     value: z.string().trim().min(1),
     grant: z.enum(['none', 'agents', 'all']).default('none'),
     agents: z.array(z.string()).default([]),
+    /** Null = global; a project id (or name): only that project's runs get it (#215). */
+    project: z.string().min(1).nullable().default(null),
   })
   .strict();
 export type CreateSecret = z.infer<typeof CreateSecret>;
@@ -1308,7 +1339,7 @@ export const SecretsPassword = z.object({ current: z.string().min(1).max(1024).o
 export type SecretsPassword = z.infer<typeof SecretsPassword>;
 /** Names are fixed after creation; the value changes through PUT /api/secrets/:name only. */
 export const UpdateSecret = z
-  .object({ description: z.string().trim().max(500), grant: z.enum(['none', 'agents', 'all']), agents: z.array(z.string()) })
+  .object({ description: z.string().trim().max(500), grant: z.enum(['none', 'agents', 'all']), agents: z.array(z.string()), project: z.string().min(1).nullable() })
   .partial()
   .strict();
 export type UpdateSecret = z.infer<typeof UpdateSecret>;

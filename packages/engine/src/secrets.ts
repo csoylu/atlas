@@ -211,16 +211,26 @@ export class Secrets {
     if (changed) this.bus.emit({ type: 'secrets.updated' });
   }
 
-  list(): SecretList {
+  /** `project` (#215): `global` = the global ones only; a project id = that project's only; omitted = every secret. */
+  list(project?: string): SecretList {
     this.sync();
     const names = this.stored();
     const rows = this.db.prepare('SELECT * FROM secrets ORDER BY kind DESC, name').all() as SecretRow[];
+    const pid = project === undefined || project === 'global' ? project : this.projectOf(project);
+    const inFilter = (r: SecretRow) => pid === undefined || (pid === 'global' ? r.project === null : r.project === pid);
     return {
       store: this.store?.label ?? null,
       status: this.status(),
       names: [...names].filter((n) => !isTokenEntry(n)),
-      secrets: rows.filter((r) => !isTokenEntry(r.name)).map((r) => toInfo(r, names.has(r.name))),
+      secrets: rows.filter((r) => !isTokenEntry(r.name) && inFilter(r)).map((r) => toInfo(r, names.has(r.name))),
     };
+  }
+
+  /** A project's id from its id or name. */
+  private projectOf(p: string): string {
+    const r = this.db.prepare('SELECT id FROM projects WHERE id = ? OR name = ? COLLATE NOCASE').get(p, p) as { id: string } | undefined;
+    if (!r) throw new NotFoundError(`project ${p} not found`);
+    return r.id;
   }
 
   get(name: string): SecretInfo {
@@ -236,12 +246,18 @@ export class Secrets {
     return this.store;
   }
 
-  private checkGrant(kind: SecretKind, grant: SecretGrant, agents: string[]): string[] {
+  /** The agents of a grant; a project's secret can be granted only to that project's members (#215). */
+  private checkGrant(kind: SecretKind, grant: SecretGrant, agents: string[], project: string | null = null): string[] {
     if (kind === 'model_key' && grant !== 'none') throw new ConflictError('model keys are never given to agents');
+    if (kind === 'model_key' && project) throw new ConflictError('model keys are global: they belong to no project');
     if (grant !== 'agents') return [];
     const list = [...new Set(agents)];
     if (!list.length) throw new ConflictError('pick at least one agent, or grant it to no agent');
-    for (const a of list) if (!this.db.prepare('SELECT 1 FROM agents WHERE id = ?').get(a)) throw new ConflictError(`agent ${a} does not exist`);
+    for (const a of list) {
+      if (!this.db.prepare('SELECT 1 FROM agents WHERE id = ?').get(a)) throw new ConflictError(`agent ${a} does not exist`);
+      if (project && !this.db.prepare('SELECT 1 FROM project_members WHERE project_id = ? AND agent_id = ?').get(project, a))
+        throw new ConflictError(`@${a} is not a member of project ${project}: a project's secret goes only to its members`);
+    }
     return list;
   }
 
@@ -254,13 +270,14 @@ export class Secrets {
     if (RESERVED.includes(c.name)) throw new ConflictError(`${c.name} is a variable every shell needs: pick another name`);
     if (this.db.prepare('SELECT 1 FROM secrets WHERE name = ?').get(c.name) || store.names().includes(c.name))
       throw new ConflictError(`a secret named ${c.name} already exists`);
-    const agents = this.checkGrant('agent', c.grant, c.agents);
+    const project = c.project === null ? null : this.projectOf(c.project);
+    const agents = this.checkGrant('agent', c.grant, c.agents, project);
     const now = new Date().toISOString();
     this.db
       .prepare(
-        "INSERT INTO secrets (name, description, kind, grant_to, agents, created_by, created_card, created_at, updated_at, updated_by) VALUES (?, ?, 'agent', ?, ?, ?, ?, ?, ?, ?)",
+        "INSERT INTO secrets (name, description, kind, grant_to, agents, project, created_by, created_card, created_at, updated_at, updated_by) VALUES (?, ?, 'agent', ?, ?, ?, ?, ?, ?, ?, ?)",
       )
-      .run(c.name, c.description, c.grant, JSON.stringify(agents), who.by, who.card ?? null, now, now, who.by);
+      .run(c.name, c.description, c.grant, JSON.stringify(agents), project, who.by, who.card ?? null, now, now, who.by);
     try {
       store.set(c.name, c.value);
     } catch (e) {
@@ -271,15 +288,16 @@ export class Secrets {
     return this.get(c.name);
   }
 
-  /** Description and grant; the name never changes. */
+  /** Description, grant and project (null = global); the name never changes. */
   update(name: string, input: UpdateSecret, who: SecretActor): SecretInfo {
     const p = UpdateSecret.parse(input);
     const cur = this.get(name);
     const grant = p.grant ?? cur.grant;
-    const agents = this.checkGrant(cur.kind, grant, p.agents ?? cur.agents);
+    const project = p.project === undefined ? cur.project : p.project === null ? null : this.projectOf(p.project);
+    const agents = this.checkGrant(cur.kind, grant, p.agents ?? cur.agents, project);
     this.db
-      .prepare('UPDATE secrets SET description = ?, grant_to = ?, agents = ?, updated_at = ?, updated_by = ? WHERE name = ?')
-      .run(p.description ?? cur.description, grant, JSON.stringify(agents), new Date().toISOString(), who.by, name);
+      .prepare('UPDATE secrets SET description = ?, grant_to = ?, agents = ?, project = ?, updated_at = ?, updated_by = ? WHERE name = ?')
+      .run(p.description ?? cur.description, grant, JSON.stringify(agents), project, new Date().toISOString(), who.by, name);
     this.bus.emit({ type: 'secrets.updated' });
     this.resume();
     return this.get(name);
@@ -328,6 +346,16 @@ export class Secrets {
     return this.db.prepare('SELECT * FROM secrets WHERE name = ?').get(name) as SecretRow | undefined;
   }
 
+  /**
+   * A row a run in `projectId` may know of: global or that project's. Another project's row is refused without naming
+   * its project or owner (names are unique across projects, so the name itself can't be reused).
+   */
+  private rowIn(name: string, projectId: string): SecretRow | undefined {
+    const r = this.row(name);
+    if (r && r.project !== null && r.project !== projectId) throw new ConflictError(`the name ${name} is taken: pick another name`);
+    return r;
+  }
+
   /** Why `agentId` may not change this row, or null. */
   private notOwner(r: SecretRow, agentId: string): string | null {
     if (r.kind === 'model_key') return `${r.name} is a model key: agents can't set or delete it`;
@@ -336,15 +364,16 @@ export class Secrets {
   }
 
   /**
-   * secret_set (#207): an agent stores a value. New: granted to that agent only, created by it, from its task. An
-   * existing name only if the agent created it (rotation). The row goes before the value, like create().
+   * secret_set (#207): an agent stores a value. New: in the run's project (#215), granted to that agent only, created
+   * by it, from its task. An existing name only if the agent created it (rotation). The row goes before the value,
+   * like create().
    */
-  agentSet(agentId: string, cardId: string | null, name: string, value: string, description?: string): { created: boolean } {
+  agentSet(agentId: string, projectId: string, cardId: string | null, name: string, value: string, description?: string): { created: boolean } {
     const store = this.needStore();
     this.refuseName(name);
     const v = value.trim();
     if (!v) throw new ConflictError('the value is empty: nothing stored');
-    const r = this.row(name);
+    const r = this.rowIn(name, projectId);
     if (!r && store.names().includes(name)) throw new ConflictError(`${name} is a model key: agents can't set or use it`);
     const now = new Date().toISOString();
     if (r) {
@@ -357,9 +386,9 @@ export class Secrets {
     } else {
       this.db
         .prepare(
-          "INSERT INTO secrets (name, description, kind, grant_to, agents, created_by, created_card, created_at, updated_at, updated_by) VALUES (?, ?, 'agent', 'agents', ?, ?, ?, ?, ?, ?)",
+          "INSERT INTO secrets (name, description, kind, grant_to, agents, project, created_by, created_card, created_at, updated_at, updated_by) VALUES (?, ?, 'agent', 'agents', ?, ?, ?, ?, ?, ?, ?)",
         )
-        .run(name, description?.trim() ?? '', JSON.stringify([agentId]), agentId, cardId, now, now, agentId);
+        .run(name, description?.trim() ?? '', JSON.stringify([agentId]), projectId, agentId, cardId, now, now, agentId);
       try {
         store.set(name, v);
       } catch (e) {
@@ -372,10 +401,10 @@ export class Secrets {
     return { created: !r };
   }
 
-  /** secret_delete (#207): only a secret the agent created. */
-  agentDelete(agentId: string, name: string): void {
+  /** secret_delete (#207): only a secret the agent created, global or in the run's project. */
+  agentDelete(agentId: string, projectId: string, name: string): void {
     const r = this.row(name);
-    if (!r || isTokenEntry(name)) throw new NotFoundError(`no secret ${name}`);
+    if (!r || isTokenEntry(name) || (r.project !== null && r.project !== projectId)) throw new NotFoundError(`no secret ${name}`);
     const why = this.notOwner(r, agentId);
     if (why) throw new ConflictError(why);
     this.delete(name);
@@ -387,21 +416,21 @@ export class Secrets {
    * use yet (no value, or not granted) just gets the task as waiting. Idempotent: a run that blocks again after a crash
    * finds its row.
    */
-  need(agentId: string, cardId: string, name: string, description?: string): void {
+  need(agentId: string, projectId: string, cardId: string, name: string, description?: string): void {
     this.needStore();
     this.refuseName(name);
-    const r = this.row(name);
+    const r = this.rowIn(name, projectId);
     if (!r && this.stored().has(name)) throw new ConflictError(`${name} is a model key: agents can't set or use it`);
     const now = new Date().toISOString();
     if (!r) {
       this.db
         .prepare(
-          "INSERT INTO secrets (name, description, kind, grant_to, agents, created_by, created_card, created_at, updated_at, updated_by, waiting_card) VALUES (?, ?, 'agent', 'agents', ?, ?, ?, ?, ?, ?, ?)",
+          "INSERT INTO secrets (name, description, kind, grant_to, agents, project, created_by, created_card, created_at, updated_at, updated_by, waiting_card) VALUES (?, ?, 'agent', 'agents', ?, ?, ?, ?, ?, ?, ?, ?)",
         )
-        .run(name, description?.trim() ?? '', JSON.stringify([agentId]), agentId, cardId, now, now, agentId, cardId);
+        .run(name, description?.trim() ?? '', JSON.stringify([agentId]), projectId, agentId, cardId, now, now, agentId, cardId);
     } else {
       if (r.kind === 'model_key') throw new ConflictError(`${name} is a model key: agents can't set or use it`);
-      if (this.stored().has(name) && grantedTo(toInfo(r, true), agentId))
+      if (this.stored().has(name) && grantedTo(toInfo(r, true), agentId, projectId))
         throw new ConflictError(`${name} already has a value and is granted to you: use $${name} in your commands`);
       this.db
         .prepare('UPDATE secrets SET waiting_card = ?, description = ? WHERE name = ?')
@@ -440,7 +469,7 @@ export class Secrets {
         clear();
         continue;
       }
-      if (!names.has(r.name) || !card.assignee || !grantedTo(toInfo(r, true), card.assignee)) continue;
+      if (!names.has(r.name) || !card.assignee || !grantedTo(toInfo(r, true), card.assignee, card.projectId)) continue;
       this.db.transaction(() => {
         kanban.appendMessage(card.id, 'user', 'system', [
           { type: 'text', text: `The secret ${r.name} now has a value: use $${r.name} in your shell commands (never print it). Continue the task.` },
@@ -452,25 +481,29 @@ export class Secrets {
     this.bus.emit({ type: 'secrets.updated' });
   }
 
-  /** The agent secrets an agent may use (names and descriptions, for its instructions). */
-  granted(agentId: string): SecretInfo[] {
-    return this.list().secrets.filter((s) => grantedTo(s, agentId));
+  /** The agent secrets an agent may use in a project: global + that project's (names and descriptions, for its instructions). */
+  granted(agentId: string, projectId: string): SecretInfo[] {
+    return this.list().secrets.filter((s) => grantedTo(s, agentId, projectId));
   }
 
   /**
-   * The environment of one command of `agentId`: the base (login PATH, git author) without any model key or engine
-   * password, plus the agent's granted secrets, read now (a rotation applies to the next command). Throws, so the
-   * command does not run, when the store can't be read or the command uses a secret it can't have.
+   * The environment of one command of `agentId` in a run of `projectId`: the base (login PATH, git author) without any
+   * model key or engine password, plus the agent's granted secrets there (global + that project's, #215), read now (a
+   * rotation applies to the next command). Throws, so the command does not run, when the store can't be read or the
+   * command uses a secret it can see but not have. Another project's secrets are out of sight: never in the env (even
+   * when the engine's own env has one by that name), never named in an error.
    */
-  envFor(agentId: string, base: NodeJS.ProcessEnv, command: string): NodeJS.ProcessEnv {
+  envFor(agentId: string, projectId: string, base: NodeJS.ProcessEnv, command: string): NodeJS.ProcessEnv {
     const env = { ...base };
     for (const n of [...this.modelKeyNames(), ...ENGINE_ONLY]) delete env[n];
     const rows = this.db.prepare('SELECT * FROM secrets').all() as SecretRow[];
     for (const r of rows) if (r.kind === 'model_key') delete env[r.name];
     for (const n of Object.keys(env)) if (isTokenEntry(n)) delete env[n];
-    const mine = rows.filter((r) => r.kind === 'agent' && grantedTo(toInfo(r, false), agentId));
+    const mine = rows.filter((r) => r.kind === 'agent' && grantedTo(toInfo(r, false), agentId, projectId));
+    // Not granted here: never in the env, whatever the base holds under that name.
+    for (const r of rows) if (r.kind === 'agent' && !mine.includes(r)) delete env[r.name];
     for (const r of rows)
-      if (r.kind === 'agent' && !mine.includes(r) && mentions(command, r.name))
+      if (r.kind === 'agent' && !mine.includes(r) && (r.project === null || r.project === projectId) && mentions(command, r.name))
         throw new Error(`secret ${r.name} is not granted to ${agentId}: ask the user to grant it in Settings → Secrets`);
     if (!mine.length) return env;
     if (!this.store) throw new Error('secrets are not available: this engine has no secret store');
@@ -556,8 +589,9 @@ export class Secrets {
   }
 }
 
-const grantedTo = (s: Pick<SecretInfo, 'kind' | 'grant' | 'agents'>, agentId: string) =>
-  s.kind === 'agent' && (s.grant === 'all' || (s.grant === 'agents' && s.agents.includes(agentId)));
+/** An agent secret this agent may use in a run of `projectId`: global or that project's, and granted to it. */
+const grantedTo = (s: Pick<SecretInfo, 'kind' | 'grant' | 'agents' | 'project'>, agentId: string, projectId: string) =>
+  s.kind === 'agent' && (s.project === null || s.project === projectId) && (s.grant === 'all' || (s.grant === 'agents' && s.agents.includes(agentId)));
 
 const toInfo = (r: SecretRow, hasValue: boolean): SecretInfo => ({
   name: r.name,

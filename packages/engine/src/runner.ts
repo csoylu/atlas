@@ -37,7 +37,7 @@ import { docToolSpecs, isDocTool, runDocTool } from './docTools.ts';
 import type { Documents } from './documents.ts';
 import { isTeamTool, runTeamTool, teamToolSpecs } from './teamTools.ts';
 import { cleanupToolSpecs, isCleanupCard, isCleanupTool, runCleanupTool, type MemoryCleanup } from './cleanup.ts';
-import { memoryDeltaNote, renderMemory, SHARED, type Memories } from './memory.ts';
+import { GLOBAL, memoryDeltaNote, renderMemory, SHARED, type Memories } from './memory.ts';
 import type { Workflows } from './workflows.ts';
 import type { FileLog } from './fileLog.ts';
 import { Background, exitNote, type BgProcess } from './background.ts';
@@ -177,10 +177,13 @@ export class Runner {
     return this.opts.secrets ? this.opts.secrets.redact(text) : { text, hidden: 0 };
   }
 
-  /** The environment of one shell command: login PATH and git author (#136), the agent's granted secrets (#206). */
-  private async shellEnvFor(agentId: string, command: string): Promise<NodeJS.ProcessEnv> {
+  /**
+   * The environment of one shell command: login PATH and git author (#136), the agent's granted secrets (#206): the
+   * global ones and those of the run's project (#215).
+   */
+  private async shellEnvFor(agentId: string, projectId: string, command: string): Promise<NodeJS.ProcessEnv> {
     const base = this.opts.shellEnv ? await this.opts.shellEnv.for(agentId) : process.env;
-    return this.opts.secrets ? this.opts.secrets.envFor(agentId, base, command) : base;
+    return this.opts.secrets ? this.opts.secrets.envFor(agentId, projectId, base, command) : base;
   }
 
   /** A background process ended by itself (or was lost in a restart): a system note in its conversation wakes the agent. */
@@ -588,9 +591,17 @@ export class Runner {
             } else if (this.opts.documents && isDocTool(u.name))
               r = runDocTool(u.name, u.input, { documents: this.opts.documents, agentId: agent.id, chatId: panelChat, cardId: workCard, cardRef: (id) => this.kanban.ref(id), scope: (asked) => this.kanban.scope(agent.id, cardId, asked) });
             else if (this.opts.secrets && isSecretTool(u.name))
-              r = await runSecretTool(u.name, u.input, { secrets: this.opts.secrets, agentId: agent.id, cardId: workCard, workdir, signal, env: (command) => this.shellEnvFor(agent.id, command) });
+              r = await runSecretTool(u.name, u.input, {
+                secrets: this.opts.secrets,
+                agentId: agent.id,
+                projectId: card.projectId,
+                cardId: workCard,
+                workdir,
+                signal,
+                env: (command) => this.shellEnvFor(agent.id, card.projectId, command),
+              });
             else if (isPrTool(u.name))
-              r = await runPrTool(u.name, u.input, { db: this.db, kanban: this.kanban, agentId: agent.id, cardId, workdir, signal, env: () => this.shellEnvFor(agent.id, ''), ...this.opts.prTool });
+              r = await runPrTool(u.name, u.input, { db: this.db, kanban: this.kanban, agentId: agent.id, cardId, workdir, signal, env: () => this.shellEnvFor(agent.id, card.projectId, ''), ...this.opts.prTool });
             else if (cleanup && isCleanupTool(u.name)) r = runCleanupTool(u.name, u.input, { cleanup, kanban: this.kanban, agents: this.agents, agentId: agent.id, cardId });
             else if (isTeamTool(u.name)) {
               const changeBefore = this.memories.lastChange();
@@ -621,7 +632,7 @@ export class Runner {
                   onDetail: (d) => (detail = d),
                   onOutput: live.push,
                   ...(this.opts.engine ? { engine: { ...this.opts.engine(), agentId: agent.id, filesRoot: filesRoot(this.db, agent.id, first.projectId) } } : {}),
-                  ...(this.opts.shellEnv || this.opts.secrets ? { env: (command: string) => this.shellEnvFor(agent.id, command) } : {}),
+                  ...(this.opts.shellEnv || this.opts.secrets ? { env: (command: string) => this.shellEnvFor(agent.id, card.projectId, command) } : {}),
                   ...(this.opts.secrets ? { redact: (t: string) => this.redact(t).text } : {}),
                 });
               const log = this.opts.fileLog;
@@ -977,13 +988,18 @@ export class Runner {
     const row = this.db.prepare('SELECT memory_snapshot FROM conversations WHERE id = ?').get(card.conversationId) as { memory_snapshot: string | null } | undefined;
     if (row?.memory_snapshot) return row.memory_snapshot.split('\n');
     const seen = this.memories.lastChange();
-    const always = this.memories.alwaysOn(agent.id);
-    const lines = renderMemory(
-      always.filter((m) => m.scope !== SHARED),
-      always.filter((m) => m.scope === SHARED),
-      this.memories.recall(agent.id, this.recallText(card)),
-      this.memories.used(agent.id),
-    );
+    // Global + the card's project + this agent there (#215): nothing of another project.
+    const view = { agentId: agent.id, projectId: card.projectId };
+    const always = this.memories.alwaysOn(view);
+    const lines = renderMemory({
+      global: always.filter((m) => m.scope === GLOBAL),
+      project: always.filter((m) => m.scope === SHARED),
+      own: always.filter((m) => m.scope !== SHARED && m.scope !== GLOBAL),
+      recalled: this.memories.recall(view, this.recallText(card)),
+      used: this.memories.used(view),
+      projectName: projectRow(this.db, card.projectId).name,
+      user: this.user().name,
+    });
     this.db.prepare('UPDATE conversations SET memory_snapshot = ?, memory_seen = ? WHERE id = ?').run(lines.join('\n'), seen, card.conversationId);
     return lines;
   }
@@ -994,9 +1010,10 @@ export class Runner {
       | { memory_snapshot: string | null; memory_seen: number | null }
       | undefined;
     if (!row?.memory_snapshot || row.memory_seen == null) return;
-    const changes = this.memories.changesAfter(row.memory_seen, agentId);
+    const view = { agentId, projectId: card.projectId };
+    const changes = this.memories.changesAfter(row.memory_seen, view);
     if (!changes.length) return;
-    const note = memoryDeltaNote(changes, agentId);
+    const note = memoryDeltaNote(changes, view);
     this.db.transaction(() => {
       // Nothing left to say (e.g. added then forgotten): still move the watermark, so these changes are not read again.
       if (note) this.kanban.appendMessage(card.id, 'user', 'system', [{ type: 'text', text: note }]);
@@ -1004,9 +1021,9 @@ export class Runner {
     })();
   }
 
-  /** The secrets this agent may use (#206): names and descriptions, never a value. */
-  private secretsBlock(agentId: string): string[] {
-    const mine = this.opts.secrets?.granted(agentId) ?? [];
+  /** The secrets this agent may use in this project (#206, #215): names and descriptions, never a value. */
+  private secretsBlock(agentId: string, projectId: string): string[] {
+    const mine = this.opts.secrets?.granted(agentId, projectId) ?? [];
     if (!mine.length) return [];
     return [
       '',
@@ -1118,7 +1135,7 @@ export class Runner {
             'is asking about (path, version, section): answer that, and update it if asked.',
           ]
         : []),
-      ...this.secretsBlock(agent.id),
+      ...this.secretsBlock(agent.id, project.id),
       '',
       `# Team (project ${project.name})`,
       roster,
