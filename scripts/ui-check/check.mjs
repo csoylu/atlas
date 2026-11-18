@@ -634,7 +634,7 @@ handlers.set('Fetch.requestPaused', async ({ requestId, request }) => {
         case undefined: return await json(screen?.taskImages ? withTaskImages(card) : card);
         case 'messages': case 'runs': case 'tool-calls': return await json([]);
         case 'timeline': return await json({ runs: [], rewinds: [], summary: null });
-        case 'usage': return await json(await get(`/cards/${chat.id}/usage`));
+        case 'usage': return await json({ calls: 0, input: 0, output: 0, cached: 0, lastInput: null, lastModelId: null, contextWindow: null, plan: null });
         default: return await send('Fetch.continueRequest', { requestId });
       }
     }
