@@ -4,7 +4,7 @@ import { existsSync } from 'node:fs';
 import { join, relative } from 'node:path';
 import { WebSocketServer } from 'ws';
 import { ZodError } from 'zod';
-import { AddCardImages, CreateCard, CreateModelRequest, CreateSecret, UpdateSecret, IMAGE_MAX_BYTES, IMAGE_MAX_PER_TASK, isTimeZone, PostMessage, RewindRequest, SlashCommand, TriggerPreview, UpdateModelRequest, UpdateVoice } from '@atlas/shared';
+import { AddCardImages, CreateCard, CreateModelRequest, CreateSecret, SecretsPassword, UnlockSecrets, UpdateSecret, IMAGE_MAX_BYTES, IMAGE_MAX_PER_TASK, isTimeZone, PostMessage, RewindRequest, SlashCommand, TriggerPreview, UpdateModelRequest, UpdateVoice } from '@atlas/shared';
 import type { Agents } from './agents.ts';
 import type { Models } from './models.ts';
 import type { Runner } from './runner.ts';
@@ -16,6 +16,7 @@ import { parseMemoryRef, type Memories } from './memory.ts';
 import type { MemoryCleanup } from './cleanup.ts';
 import { localTimeZone, upcoming, type Workflows } from './workflows.ts';
 import type { Secrets } from './secrets.ts';
+import { SecretsPasswordError } from './secretFile.ts';
 import type { Documents } from './documents.ts';
 import { findSection, formatDocRef, splitSections } from '@atlas/shared';
 import { workdirOf } from './agents.ts';
@@ -485,6 +486,22 @@ export function createApi(deps: {
   app.get('/api/secrets', (_req, res) => {
     res.json(deps.secrets.list());
   });
+  // The server's secrets.enc (#208): status for the sidebar badge, unlock, lock now, first or new password.
+  // The password is used once to derive the key and is never stored, logged or sent back.
+  app.get('/api/secrets/status', (_req, res) => {
+    res.json(deps.secrets.status());
+  });
+  app.post('/api/secrets/unlock', async (req, res) => {
+    res.json(await deps.secrets.unlock(UnlockSecrets.parse(req.body).password, 'ui'));
+    dispatcher.tick();
+  });
+  app.post('/api/secrets/lock', (_req, res) => {
+    res.json(deps.secrets.lockNow());
+  });
+  app.post('/api/secrets/password', async (req, res) => {
+    res.json(await deps.secrets.setPassword(SecretsPassword.parse(req.body)));
+    dispatcher.tick();
+  });
   app.post('/api/secrets', (req, res) => {
     res.status(201).json(deps.secrets.create(CreateSecret.parse(req.body), { by: 'user' }));
   });
@@ -783,6 +800,7 @@ export function createApi(deps: {
   const onError: ErrorRequestHandler = (err, _req, res, _next) => {
     if (err instanceof ZodError) res.status(400).json({ error: 'invalid request', issues: err.issues });
     else if (err instanceof NotFoundError) res.status(404).json({ error: err.message });
+    else if (err instanceof SecretsPasswordError) res.status(403).json({ error: err.message });
     else if (err instanceof ConflictError) res.status(409).json({ error: err.message });
     else if (err instanceof InvalidError) res.status(400).json({ error: err.message });
     else if ((err as { type?: string }).type === 'entity.too.large')

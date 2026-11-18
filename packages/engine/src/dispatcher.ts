@@ -55,7 +55,8 @@ export class Dispatcher {
     this.timer = setInterval(() => this.tick(), intervalMs);
     this.timer.unref();
     this.unsubscribe = this.bus.on((e) => {
-      if (e.type === 'card.updated' || e.type === 'run.updated') this.soon();
+      // An unlocked secret store (#208) can make a model usable again.
+      if (e.type === 'card.updated' || e.type === 'run.updated' || e.type === 'secrets.status') this.soon();
     });
     this.tick();
   }

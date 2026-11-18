@@ -52,8 +52,8 @@ if a model is down, the run stops and shows the error.
   from its library. Any OpenAI-compatible server (llama.cpp, LM Studio, vLLM) works too.
 
 You can sign in more than one Claude or ChatGPT account. When one hits its usage limit, it's paused until its reset
-time and the work moves to the next account. Keys and tokens are stored in the macOS Keychain on desktop and in
-environment variables on a server. They never go into the database, the logs or the UI.
+time and the work moves to the next account. Keys and tokens are stored in the macOS Keychain on desktop, and on a
+server in environment variables or an encrypted `secrets.enc` (below). They never go into the database, the logs or the UI.
 
 ## Quick start
 
@@ -79,6 +79,15 @@ Settings → Subscriptions, API keys or Local.
 **Server mode:** `npm run build && npm start` serves the built UI from the engine (http://localhost:4317). Set `ATLAS_PASSWORD` (12+
 characters) to require a login, keep the engine on `127.0.0.1` and put Caddy (HTTPS) or Tailscale in front of it.
 See `.env.example`.
+
+Secrets on a server (model keys typed in Settings, agent secrets) go in `<data dir>/secrets.enc`, encrypted with
+AES-256-GCM under a key derived from a secrets password (scrypt). The password is never stored. Set
+`ATLAS_SECRETS_PASSWORD` in the server's environment to unlock it at every start (the first start creates the file),
+or leave it out and unlock from the UI after each restart (`POST /api/secrets/unlock`; Settings → Secrets once that
+page ships). While locked, commands that use a secret and models whose key is in the file wait with « secret store
+locked »; everything else works, keys from environment variables included. Back up `secrets.enc` with the database:
+without the password it can't be read, and a lost password can't be recovered. After changing the password, update
+`ATLAS_SECRETS_PASSWORD` too, or the next start stays locked.
 
 **Contributing:** `npm run typecheck && npm test` before every commit. The restart test and the agent-loop test with a
 fake provider must stay green. Read [CLAUDE.md](CLAUDE.md) for the rules and [docs/design.md](docs/design.md) for the
