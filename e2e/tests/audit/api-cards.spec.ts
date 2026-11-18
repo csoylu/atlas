@@ -119,13 +119,17 @@ test.describe('K · cards, kanban, dispatcher (API)', () => {
     await expect.poll(async () => (await atlas.card(c.id)).status).toBe('done');
   });
 
-  test('[K12] transient block carries a retry time (until) and is not reported as needing the user', async ({ atlas }) => {
+  test('[K12] transient block (#131) waits in Todo with a retry time (retry.at), no block, and does not need the user', async ({ atlas }) => {
     atlas.model.next(tu('task_block', { kind: 'transient', question: 'rate limited', retry_in_minutes: 30 }));
     const c = await atlas.task('transient');
-    await expect.poll(async () => (await atlas.card(c.id)).status).toBe('blocked');
+    await expect.poll(async () => (await atlas.card(c.id)).retry?.reason).toBe('rate limited');
     const card = await atlas.card(c.id);
-    expect(card.block?.kind).toBe('transient');
-    expect(Date.parse(card.block!.until!)).toBeGreaterThan(Date.now() + 25 * 60_000);
+    expect(card.status).toBe('todo');
+    expect(card.block).toBeNull();
+    const at = Date.parse(card.retry!.at);
+    expect(at).toBeGreaterThan(Date.now() + 25 * 60_000);
+    expect(at).toBeLessThan(Date.now() + 35 * 60_000);
+    expect(card.waiting).toMatch(/retrying at/i);
     expect((await call(atlas, 'GET', '/inbox')).body.needsYou.length).toBe(0);
   });
 

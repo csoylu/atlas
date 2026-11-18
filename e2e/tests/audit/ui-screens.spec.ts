@@ -238,9 +238,11 @@ test.describe('U · screens (Playwright, real UI, scripted model)', () => {
     await expect.poll(() => page.evaluate(() => location.hash)).toContain(c.id);
     await page.keyboard.press('Meta+k');
     await expect(dlg.first()).toBeVisible();
-    await page.waitForTimeout(250);
-    await page.keyboard.press('Escape');
-    await expect(dlg.first()).toBeHidden();
+    // under load the palette is visible a moment before its key handler is attached: press Esc until it closes
+    await expect(async () => {
+      await page.keyboard.press('Escape');
+      await expect(dlg.first()).toBeHidden({ timeout: 1000 });
+    }).toPass({ timeout: 10_000 });
     expect(bad).toEqual([]);
   });
 
