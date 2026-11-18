@@ -2,6 +2,8 @@ import { useEffect, useState } from 'react';
 import type { Doc, Folder } from '@atlas/shared';
 import { api } from './api.ts';
 import type { MessageStream } from './useMessages.ts';
+import type { Artifact } from './cardModal.ts';
+import type { CanvasPage } from './chatTurn.ts';
 
 /**
  * Artifacts (#120): what the viewer, the chat card and the Library share. Pages and links run in an opaque-origin
@@ -71,18 +73,56 @@ export function useFolders(stream: MessageStream, onError: (e: unknown) => void)
  */
 const latest = new Map<string, number>();
 let latestLoad: Promise<void> | null = null;
+/** One Library fetch for the latest versions and the converted canvases (a failed fetch is retried by the next user). */
+function loadLatest(): Promise<void> {
+  latestLoad ??= api.documents().then(
+    (ds) =>
+      ds.forEach((d) => {
+        latest.set(d.id, Math.max(d.version, latest.get(d.id) ?? 0));
+        noteCanvas(d);
+      }),
+    () => void (latestLoad = null),
+  );
+  return latestLoad;
+}
+
+/** A converted canvas page as the chat's artifact chip (#174): its latest version, never « Updated to ». */
+export const canvasArtifact = (d: Pick<Doc, 'id' | 'title' | 'path' | 'kind' | 'version'>): Artifact => ({
+  docId: d.id,
+  version: d.version,
+  title: d.title,
+  where: d.path,
+  kind: d.kind,
+  section: null,
+  updated: false,
+});
+const canvasPages = new Map<string, Artifact>();
+const noteCanvas = (d: Doc) => void (d.fromCanvas && canvasPages.set(d.fromCanvas, canvasArtifact(d)));
+
+/**
+ * Old chats' canvas_* rows (#174): cv_ id → the html page it was converted to (#120), from the same Library fetch.
+ * Re-renders once the fetch lands.
+ */
+export function useCanvasPages(): CanvasPage {
+  const [, setLoaded] = useState(latestLoad !== null && canvasPages.size > 0);
+  useEffect(() => {
+    let live = true;
+    void loadLatest().then(() => live && setLoaded(true));
+    return () => {
+      live = false;
+    };
+  }, []);
+  return (id) => canvasPages.get(id);
+}
 export function useLatestVersion(docId: string, stream: MessageStream): number | null {
   const [v, setV] = useState<number | null>(latest.get(docId) ?? null);
   useEffect(() => {
     let live = true;
-    latestLoad ??= api.documents().then(
-      (ds) => ds.forEach((d) => latest.set(d.id, Math.max(d.version, latest.get(d.id) ?? 0))),
-      () => void (latestLoad = null),
-    );
-    void latestLoad.then(() => live && setV(latest.get(docId) ?? null));
+    void loadLatest().then(() => live && setV(latest.get(docId) ?? null));
     const off = stream.listen('docs', (e) => {
       if (e.type !== 'doc') return;
       latest.set(e.doc.id, e.doc.version);
+      noteCanvas(e.doc);
       if (e.doc.id === docId && live) setV(e.doc.version);
     });
     return () => {

@@ -361,7 +361,7 @@ describe('artifacts (#120)', () => {
     expect(docs.convertCanvases()).toBe(1);
     expect(docs.convertCanvases()).toBe(0);
     const d = docs.byPath('atlas', 'pages/canvases/old-board.html')!;
-    expect(d).toMatchObject({ kind: 'html', title: 'Old board', updatedAt: '2026-11-01T10:00:00.000Z' });
+    expect(d).toMatchObject({ kind: 'html', title: 'Old board', updatedAt: '2026-11-01T10:00:00.000Z', fromCanvas: 'cv_1' });
     expect(docs.folder(d.folderId!).name).toBe('Canvases');
     const html = readFileSync(join(ws, d.path), 'utf8');
     expect(html.indexOf('Notes')).toBeLessThan(html.indexOf('Mock'));

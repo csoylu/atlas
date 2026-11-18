@@ -1,6 +1,6 @@
 import { currentToolName, type ContentBlock, type Message, type ToolCallDetail } from '@atlas/shared';
-import { artifactOf } from './cardModal.ts';
-import { thinkingRow, toolRow, type RowIcon, type RowModel, type ToolOutcome } from './toolRows.ts';
+import { artifactOf, type Artifact } from './cardModal.ts';
+import { canvasIdOf, thinkingRow, toolRow, type RowIcon, type RowModel, type ToolOutcome } from './toolRows.ts';
 
 /**
  * An agent's turn in the chat (#59): its consecutive messages split into text, single steps, « N steps » groups and
@@ -42,7 +42,11 @@ type Use = Extract<ContentBlock, { type: 'tool_use' | 'server_tool_use' }>;
  * into a group; fewer stay single rows. `live`: the turn is still running (calls without a result are running, the
  * latest todo_write is pinned). `details`: the engine's file tool details by tool_use id.
  */
-export function groupTurn(messages: Message[], results: Map<string, ToolOutcome>, opts: { live: boolean; details?: (id: string) => ToolCallDetail | undefined }): Segment[] {
+export function groupTurn(
+  messages: Message[],
+  results: Map<string, ToolOutcome>,
+  opts: { live: boolean; details?: (id: string) => ToolCallDetail | undefined; canvasPage?: CanvasPage },
+): Segment[] {
   const out: Segment[] = [];
   let pending: Step[] = [];
   const flush = () => {
@@ -66,7 +70,7 @@ export function groupTurn(messages: Message[], results: Map<string, ToolOutcome>
         const row = toolRow(b.name, b.input, result, detail);
         const state: StepState = result ? (result.isError || row.tone === 'bad' ? 'failed' : 'done') : opts.live ? 'running' : 'cut';
         const step: Step = { id: b.id, kind: 'tool', name: b.name, input: b.input, result, ...(detail ? { detail } : {}), row, state, at: m.at };
-        const pin = pinOf(step, b.id === lastPlan);
+        const pin = pinOf(step, b.id === lastPlan, opts.canvasPage);
         if (pin) {
           flush();
           out.push({ kind: 'pin', pin, step });
@@ -91,11 +95,25 @@ export function draftSegments(parts: readonly { kind: 'thinking' | 'text'; text:
   });
 }
 
-function pinOf(s: Step, livePlan: boolean): Pin | null {
-  const ok = s.result && !s.result.isError;
+/** The converted page of a canvas (cv_ id → its artifact, #174), if there is one. */
+export type CanvasPage = (canvasId: string) => Artifact | undefined;
+
+/**
+ * The artifact a step shows as a chip: what artifact_create / artifact_update / panel_open made or opened, or, in old
+ * chats, the page an old canvas_* call's canvas was converted to (#174). Null: the step stays a plain row.
+ */
+export function stepArtifact(s: Pick<Step, 'name' | 'input' | 'result'>, canvasPage?: CanvasPage): Artifact | null {
+  if (!s.result || s.result.isError) return null;
+  const art = artifactOf(s.name, s.input, s.result.content);
+  if (art) return art;
+  const cv = canvasPage && canvasIdOf(s.name, s.input, s.result);
+  return (cv && canvasPage(cv)) || null;
+}
+
+function pinOf(s: Step, livePlan: boolean, canvasPage?: CanvasPage): Pin | null {
   if (currentToolName(s.name) === 'task_block') return 'ask';
   if (s.name === 'todo_write' && livePlan) return 'plan';
-  if (ok && artifactOf(s.name, s.input, s.result!.content)) return 'doc';
+  if (stepArtifact(s, canvasPage)) return 'doc';
   return null;
 }
 
