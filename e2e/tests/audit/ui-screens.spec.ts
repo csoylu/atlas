@@ -151,9 +151,8 @@ test.describe('U · screens (Playwright, real UI, scripted model)', () => {
     expect(bad).toEqual([]);
   });
 
-  test('[U11] library: lists a document, opens its viewer, New whiteboard creates a canvas (versions UI NOT exercised)', async ({ page, atlas }) => {
+  test('[U11] library: lists a document, opens its viewer, New folder creates a folder (versions UI NOT exercised)', async ({ page, atlas }) => {
     const bad = watch(page);
-    page.on('dialog', (d) => d.accept(d.defaultValue() || 'Audit board')); // « New whiteboard » asks the name with prompt()
     const ch = await atlas.chat();
     atlas.model.next(tu('write_file', { path: 'docs/spec.md', content: '# Spec\n\n## One\ntext\n' }), say('done'));
     await atlas.say(ch.id, 'write spec');
@@ -164,8 +163,10 @@ test.describe('U · screens (Playwright, real UI, scripted model)', () => {
     await page.goto(atlas.url + '/#/library/' + doc.id);
     await expect(page.getByRole('heading', { name: 'One' }).first()).toBeVisible();
     await page.goto(atlas.url + '/#/library');
-    await page.getByRole('button', { name: /New whiteboard/ }).first().click();
-    await expect.poll(async () => (await call(atlas, 'GET', '/canvases')).body.length).toBe(1);
+    await page.getByRole('button', { name: 'New folder' }).first().click();
+    await page.getByRole('textbox', { name: 'Folder name' }).fill('Audit folder');
+    await page.getByRole('textbox', { name: 'Folder name' }).press('Enter');
+    await expect.poll(async () => (await call(atlas, 'GET', '/folders')).body.map((f: any) => f.name)).toEqual(['Audit folder']);
     expect(bad).toEqual([]);
   });
 
