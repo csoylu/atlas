@@ -16,6 +16,9 @@
 // the branch is pushed with --force-with-lease, then CI `test` must pass on the new head, which gets the validation and
 // is merged. GitHub runs no CI on a conflicting head, so in that case CI that has not run on the old head is not
 // required (#195); CI still running or red there is refused. Any other conflicting file: refused, the author rebases.
+// Tasks (#189): Atlas reads `qa/validated` itself. A task In review whose PR gets --fail goes back to Ready for its
+// builder with the description (« <who>: why ») as a note, so write the reason for the builder; --ok --merge moves it
+// to Done. No « Validate PR #N » task is needed: the reviewer's run starts in the builder's task when CI is green.
 // Needs the GitHub CLI `gh`, logged in (it is not on the agents' PATH: /opt/homebrew/bin is tried).
 import { execFileSync } from 'node:child_process';
 import { existsSync } from 'node:fs';

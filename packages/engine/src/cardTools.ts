@@ -97,6 +97,11 @@ export const CARD_TOOLS = {
     input: z.object({ summary: z.string().min(1) }),
     terminal: 'complete',
     run: ({ summary }, { kanban, agentId, cardId }) => {
+      const open = kanban.get(cardId).prs.filter((p) => p.state === 'open');
+      if (open.length)
+        throw new Error(
+          `${open.map((p) => `PR #${p.number}`).join(', ')} still open: the task finishes by itself when ${open.length > 1 ? 'they merge' : 'it merges'} (task_request_review hands it to QA).`,
+        );
       kanban.update(cardId, { status: 'done' }, agentId, summary);
       kanban.event(cardId, 'completed', { by: agentId, summary });
       return 'task done';
@@ -134,13 +139,19 @@ export const CARD_TOOLS = {
     },
   }),
   task_request_review: tool({
-    description: 'Hand the finished work to the user for review. The summary says what to look at and how it was verified.',
-    input: z.object({ summary: z.string().min(1) }),
+    description:
+      'Hand your open pull request(s) to QA: the task goes In review, the reviewer agent checks it once CI is green, and ' +
+      'the task moves by itself: merged → done, CI red / conflict / validation failed → back to you with the reason. ' +
+      'prs: the GitHub PR urls. Work with no pull request (mockup, report) ends with task_complete instead; a question ' +
+      'for the user is task_block.',
+    input: z.object({
+      summary: z.string().min(1),
+      prs: z.array(z.string()).min(1, 'give the url of your open pull request (no PR: use task_complete)').describe('GitHub pull request urls, e.g. https://github.com/owner/repo/pull/12'),
+    }),
     terminal: 'review',
-    run: ({ summary }, { kanban, agentId, cardId }) => {
-      kanban.update(cardId, { status: 'review' }, agentId, summary);
-      kanban.event(cardId, 'review_requested', { by: agentId, summary });
-      return 'review requested';
+    run: ({ summary, prs }, { kanban, agentId, cardId }) => {
+      const c = kanban.requestReview(cardId, prs, agentId, summary);
+      return `in review: ${c.prs.map((p) => `PR #${p.number}`).join(', ')} ${c.reviewer ? `waits for @${c.reviewer}` : 'has no reviewer (no review agent set: tell the user)'}`;
     },
   }),
   history_search: tool({

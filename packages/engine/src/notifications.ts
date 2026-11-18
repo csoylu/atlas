@@ -25,7 +25,7 @@ const toNotification = (r: Row): Notification => ({
 });
 
 /** Rows the Inbox shows from the card's live state instead (« Needs you »), never as updates. */
-const LIVE = "('card.blocked', 'card.review')";
+const LIVE = "('card.blocked', 'card.review')"; // card.review: rows from before #189 (in review no longer needs the user)
 const UPDATES_SHOWN = 200;
 
 export interface NewNotification {
@@ -63,22 +63,21 @@ export class Notifications {
   }
 
   /**
-   * « Needs you »: board cards blocked (except transient: those retry by themselves) or in review, from their live
+   * « Needs you »: board cards blocked (except transient: those retry by themselves) (not in review: that waits for QA, #189), from their live
    * state. « Updates »: rows not archived, newest first, without the card.blocked / card.review ones.
    */
   inbox(): Inbox {
     const latest = this.db.prepare(`SELECT * FROM notifications WHERE card_id = ? AND kind IN ${LIVE} ORDER BY id DESC LIMIT 1`);
     const lastRun = this.db.prepare('SELECT status FROM runs WHERE card_id = ? ORDER BY started_at DESC LIMIT 1');
-    // The handoff of card_request_review is also a card event: reviews requested before the Inbox existed (no row) keep it.
-    const handoff = this.db.prepare("SELECT payload FROM card_events WHERE card_id = ? AND kind = 'review_requested' AND at >= ? ORDER BY id DESC LIMIT 1");
     const needsYou: InboxNeed[] = this.kanban
       .list()
-      .filter((c) => c.status === 'review' || (c.status === 'blocked' && c.block?.kind !== 'transient'))
+      // In review waits for QA, not the user (#189).
+      .filter((c) => c.status === 'blocked' && c.block?.kind !== 'transient')
       .map((card) => {
         const entered = this.enteredAt(card.id, card.status);
         const row = latest.get(card.id) as Row | undefined;
         // A row from an earlier wait (before the card moved on and came back) doesn't describe this one.
-        const own = row && row.kind === (card.status === 'review' ? 'card.review' : 'card.blocked') && row.at >= entered ? row : undefined;
+        const own = row && row.kind === 'card.blocked' && row.at >= entered ? row : undefined;
         const run = lastRun.get(card.id) as { status: string } | undefined;
         return {
           card,
@@ -86,7 +85,7 @@ export class Notifications {
           failed: card.status === 'blocked' && card.block?.kind === 'capability' && run?.status === 'failed',
           notificationId: own?.id ?? null,
           unread: !!own && !own.read_at,
-          summary: card.status === 'review' ? own?.body || reviewSummary(handoff.get(card.id, entered) as { payload: string } | undefined) : null,
+          summary: null,
         };
       })
       .sort((a, b) => b.since.localeCompare(a.since));
@@ -131,10 +130,4 @@ export class Notifications {
     const { changes } = this.db.prepare(sql).run({ at: new Date(this.now()).toISOString(), id });
     if (changes) this.bus.emit({ type: 'inbox.changed' });
   }
-}
-
-function reviewSummary(row: { payload: string } | undefined): string | null {
-  if (!row) return null;
-  const s = (JSON.parse(row.payload) as { summary?: unknown }).summary;
-  return typeof s === 'string' && s ? s : null;
 }

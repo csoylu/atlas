@@ -11,6 +11,7 @@ import { pillStatus, statusChip } from './cardModal.ts';
 import { CardDocs, TaskDocReader, type DocToRead } from './DocPanel.tsx';
 import { RewindConfirm, RewindNote, useRewind } from './Rewind.tsx';
 import { StatusIcon, STATUS_LABEL } from './StatusIcon.tsx';
+import { PrRows } from './PrChips.tsx';
 
 export interface CardViewProps {
   card: Card;
@@ -141,6 +142,12 @@ export const CardView = forwardRef<HTMLTextAreaElement, CardViewProps & { close:
                 ))}
               </select>
             </label>
+            {card.status === 'review' && card.reviewer && (
+              <span className="prop-pill rv-face" title="Reviewer: checks and merges the pull request">
+                <AgentFace id={card.reviewer} />
+                review @{card.reviewer}
+              </span>
+            )}
             {card.originCard ? (
               origin ? (
                 <button type="button" className="cm-origin" onClick={() => props.onOpenChat(origin.id)} title="Open that chat">
@@ -188,6 +195,7 @@ export const CardView = forwardRef<HTMLTextAreaElement, CardViewProps & { close:
               e.currentTarget.blur();
             }}
           />
+          <PrRows card={card} />
         </header>
         <div className="cm-body">
           <div className={'cm-desc-area drop-zone' + (drop.dragging ? ' dropping' : '')} {...drop.props} onPaste={onPaste}>

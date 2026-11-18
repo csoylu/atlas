@@ -17,6 +17,8 @@ import {
   type BoardLayout,
   type BoardTab,
 } from './boardView.ts';
+import { PrLine } from './PrChips.tsx';
+import { prUnreadable } from './prView.ts';
 
 const HINT: Partial<Record<CardStatus, string>> = {
   triage: 'Ideas land here. The triage agent shapes them into tasks.',
@@ -24,7 +26,7 @@ const HINT: Partial<Record<CardStatus, string>> = {
   ready: 'Starts as soon as the assignee is free.',
   running: 'An agent is working on it.',
   blocked: 'Needs an answer or access.',
-  review: 'Waiting for a reviewer.',
+  review: 'Its pull request is with QA. Merged → Done by itself.',
 };
 const TABS: { id: BoardTab; label: string; long?: string }[] = [
   { id: 'all', label: 'All', long: ' tasks' },
@@ -259,6 +261,7 @@ export function Board(props: {
                       <span className="id">{cardRef(c)}</span>
                       <StatusIcon status={c.status} />
                       <span className="card-title">{c.title}</span>
+                      <PrLine card={c} />
                       {why && <span className={'why' + (why.blocked ? ' blocked' : '')}>{why.text}</span>}
                       <Labels card={c} cards={props.cards} />
                       {c.assignee ? <Avatar id={c.assignee} /> : <span className="avatar-none" />}
@@ -304,13 +307,19 @@ function BoardCard({ card: c, cards, open, onOpen }: { card: Card; cards: Card[]
       <div className="card-top">
         <span className="id" title={c.id}>{cardRef(c)}</span>
         {c.assignee ? <Avatar id={c.assignee} /> : <span className="unassigned">unassigned</span>}
+        {c.status === 'review' && c.reviewer && (
+          <span className="rv-face" title={'reviewer @' + c.reviewer}>
+            <AgentFace id={c.reviewer} title={'reviewer @' + c.reviewer} />
+          </span>
+        )}
       </div>
       <div className="card-tt">
         <StatusIcon status={c.status} />
         <span className="card-title">{c.title}</span>
       </div>
+      <PrLine card={c} />
       {why && (
-        <div className={'why' + (why.blocked ? ' blocked' : '')} title={c.block?.reason ?? c.waiting ?? undefined}>
+        <div className={'why' + (why.blocked ? ' blocked' : '') + (prUnreadable(c) ? ' prc-unreadable' : '')} title={c.block?.reason ?? c.waiting ?? undefined}>
           {why.blocked && <StatusIcon status="blocked" size={12} />}
           <span>{why.text}</span>
         </div>

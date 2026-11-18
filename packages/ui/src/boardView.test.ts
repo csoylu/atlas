@@ -7,11 +7,11 @@ const card = (p: Partial<Card>): Card =>
 const any = { agent: null, priority: null };
 
 describe('board view', () => {
-  it('tabs: All cards shows every column but archived, Needs you = blocked + review, Running = running', () => {
+  it('tabs: All cards shows every column but archived, Needs you = blocked (in review waits for QA, #189), Running = running', () => {
     expect(columnsFor('all')).not.toContain('archived');
     expect(columnsFor('all')).toContain('closed');
-    expect(columnsFor('needs')).toEqual(['blocked', 'review']);
-    expect(matches(card({ status: 'review' }), 'needs', any)).toBe(true);
+    expect(columnsFor('needs')).toEqual(['blocked']);
+    expect(matches(card({ status: 'review' }), 'needs', any)).toBe(false);
     expect(matches(card({ status: 'ready' }), 'needs', any)).toBe(false);
     expect(matches(card({ status: 'running' }), 'running', any)).toBe(true);
   });

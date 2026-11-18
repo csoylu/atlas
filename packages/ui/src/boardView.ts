@@ -13,7 +13,7 @@ export type BoardFilter = { agent: string | null; priority: number | null };
 export const BOARD_COLUMNS = CARD_STATUSES.filter((s) => s !== 'archived');
 const TAB_STATUSES: Record<BoardTab, readonly CardStatus[]> = {
   all: BOARD_COLUMNS,
-  needs: ['blocked', 'review'],
+  needs: ['blocked'], // In review waits for QA, not you (#189)
   running: ['running'],
 };
 /** Columns where « + » makes sense: a new card can start there (the engine moves it on from running/blocked/review). */

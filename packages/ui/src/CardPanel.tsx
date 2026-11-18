@@ -194,9 +194,10 @@ export function CardPanel(props: {
   );
 }
 
-/** The plain-words reason a card isn't moving (a question or review shows in the conversation, see AskMessage). */
+/** The plain-words reason a card isn't moving (a question shows in the conversation, see AskMessage). */
 export function CardNotices({ card, onError }: { card: Card; onError(e: unknown): void }) {
-  if (!card.waiting || card.block || card.status === 'review') return null;
+  // GitHub unreadable: the task view's banner already says it (PrRows).
+  if (!card.waiting || card.block || (card.status === 'review' && card.prs.some((p) => p.error))) return null;
   return (
     <div className="waiting-line">
       {card.waiting}
@@ -290,7 +291,8 @@ export function Activity(props: {
   const [expanded, setExpanded] = useState(false);
   useEffect(() => setExpanded(false), [fold, card.id]);
   const shown = messages.filter((m) => m.author !== 'tool' && (expanded || m.seq > fold));
-  const asking = !!card.block || card.status === 'review';
+  // In review waits for QA, not the user (#189): its reason is a notice line, not a question.
+  const asking = !!card.block;
   // The question is the agent's last message: highlight that one instead of repeating it.
   const last = shown.at(-1);
   const inline = !!card.block && !draft && last?.role === 'assistant' && msgText(last) === card.block.reason.trim();

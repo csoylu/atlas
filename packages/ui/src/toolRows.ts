@@ -308,7 +308,8 @@ function describe(name: string, o: Input, out: string, ok: boolean, detail?: Too
     case 'task_block':
       return { icon: 'hand', tone: 'warn', verb: 'Asked you', running: 'Asking you', object: plainLine(str(o.question) ?? ''), rest: str(o.kind)?.replace('_', ' '), detail: 'quote', weight: 'write', short: { verb: 'asked you' } };
     case 'task_request_review':
-      return { icon: 'inbox', tone: 'warn', verb: 'Sent for your review', running: 'Sending for your review', rest: plainLine(str(o.summary) ?? ''), detail: 'quote', weight: 'write', short: { verb: 'sent it for your review' } };
+      // #189: hands the PR to QA (In review), not to the user.
+      return { icon: 'inbox', verb: 'Sent to QA', running: 'Sending to QA', object: Array.isArray(o.prs) ? o.prs.map((u) => `PR #${String(u).match(/\/pull\/(\d+)/)?.[1] ?? '?'}`).join(', ') : undefined, rest: plainLine(str(o.summary) ?? ''), detail: 'quote', weight: 'write', short: { verb: 'sent it to QA' } };
     case 'task_complete':
       return { icon: 'check', tone: 'ok', verb: 'Finished the task', running: 'Finishing the task', rest: plainLine(str(o.summary) ?? ''), detail: 'quote', weight: 'write', short: { verb: 'finished the task' } };
     case 'history_search': {
