@@ -5,6 +5,10 @@ it). New entries are one file per pull request in `changelog/` (`<task>-<slug>.m
 computed by `scripts/release/changelog.mjs` from 0.3.0 (v3, cad983f) through these entries, oldest first, then the
 files in the order they reached main. Read the whole changelog with `node scripts/release/changelog.mjs full`.
 
+## Fixed · #225 · The UI check no longer cries wolf on « Links », « task not found » banners and « Failed to fetch », and now catches header text drawn over header text
+
+ui-check (`scripts/ui-check/check.mjs`): the OCR comparison treats `i`, `I` and `l` as one letter (« Links » read as « LInks »); fixture tasks answer every request the thread asks for them; opening an Inbox update gets a fake « marked read »; an error banner on any screen and two overlapping text boxes in a header are issues. The check would have caught #224's « Tasks » / « All tasks » overlap at 390 px.
+
 ## Fixed · #224 · On a phone the Tasks header no longer draws the « All tasks » tab over the « Tasks » title
 
 Under 640 px the tabs (All · Needs you · Running) take the title's place in the one-row header and scroll sideways if counts make them too wide; wider screens are unchanged.

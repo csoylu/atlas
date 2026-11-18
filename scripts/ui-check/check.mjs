@@ -392,6 +392,7 @@ const INBOX_CARDS = [
   fixture('i4', 'Command palette (⌘K)', { number: 9143, assignee: 'atlas', status: 'done', originCard: null }),
   fixture('i5', 'Memory cleanup', { number: 9146, assignee: 'atlas', status: 'done', originCard: null }),
 ];
+const ALL_FIXTURE_CARDS = [...FIXTURE_CARDS, ...REPORT_CARDS, ...TOOL_CARDS, ...INBOX_CARDS];
 const note = (id, kind, title, body, cardId, min, read) => ({ id, at: ago(min), kind, title, body, cardId, readAt: read ? ago(min - 1) : null, archivedAt: null });
 const INBOX = {
   needsYou: [
@@ -622,6 +623,21 @@ handlers.set('Fetch.requestPaused', async ({ requestId, request }) => {
       body: Buffer.from(JSON.stringify(body)).toString('base64'),
     });
   try {
+    // The fixture tasks exist only in the list responses: serve what the page asks for one (the task, its thread, runs,
+    // usage), so a thread opened on it shows the real UI and no « not found » banner (#225). Images keep their own handler.
+    const fx = request.method === 'GET' && /^\/api\/cards\/(c_uicheck[^/]*)(?:\/([a-z-]+))?$/.exec(url.pathname);
+    if (fx && fx[2] !== 'image') {
+      const card = ALL_FIXTURE_CARDS.find((c) => c.id === fx[1]);
+      // Not a fixture (a link target like c_uicheck9131): the engine answers 404, and the page's banner is flagged.
+      if (!card) return await send('Fetch.continueRequest', { requestId });
+      switch (fx[2]) {
+        case undefined: return await json(screen?.taskImages ? withTaskImages(card) : card);
+        case 'messages': case 'runs': case 'tool-calls': return await json([]);
+        case 'timeline': return await json({ runs: [], rewinds: [], summary: null });
+        case 'usage': return await json(await get(`/cards/${chat.id}/usage`));
+        default: return await send('Fetch.continueRequest', { requestId });
+      }
+    }
     if (request.method === 'GET' && url.pathname === '/api/cards' && screen?.blocked) return await json((await get('/cards')).map(blockedModal));
     if (request.method === 'GET' && url.pathname === '/api/cards' && (screen?.inbox || screen?.memory)) return await json([...(await get('/cards')), ...INBOX_CARDS]);
     // Memory fixtures (#82); other Inbox screens get no digest, so their list stays the mockup's.
@@ -694,6 +710,12 @@ handlers.set('Fetch.requestPaused', async ({ requestId, request }) => {
     }
     if (url.pathname === `/api/chats/${chat.id}/panel` && request.method === 'GET') return await json(screen?.panel ? panelTabs() : []);
     if (screen?.panel && /^\/api\/chats\/[^/]+\/panel\/(seen|focus)$/.test(url.pathname)) return await json(panelTabs());
+    // Opening an update in the Inbox marks it read: answer « done » without storing anything, so the page raises no
+    // « Failed to fetch » banner (#225). The write is still listed as refused.
+    if (request.method === 'POST' && screen?.inbox && /^\/api\/notifications\/[^/]+\/read$/.test(url.pathname)) {
+      refusedWrites.push(`${screen?.name}: ${request.method} ${url.pathname} (answered 204, nothing stored)`);
+      return await send('Fetch.fulfillRequest', { requestId, responseCode: 204, responseHeaders: [] });
+    }
     if (!['GET', 'HEAD', 'OPTIONS'].includes(request.method) && url.pathname !== '/api/auth/check') {
       refusedWrites.push(`${screen?.name}: ${request.method} ${url.pathname}`);
       return await send('Fetch.failRequest', { requestId, errorReason: 'BlockedByClient' });
@@ -799,6 +821,35 @@ const CHECK = (devW, devH) => `((minFont, W, H) => {${VISIBLE_RECT}
     const fs = parseFloat(getComputedStyle(td).fontSize), w = td.getBoundingClientRect().width;
     if (w < fs * 6) issues.push('table column crushed to ' + Math.round(w) + 'px: "' + text.slice(0, 30) + '"');
   }
+  // 6. An error banner the page raised on its own (« task c_… not found », a failed fetch): a fixture the harness forgot to
+  // serve, or a real bug. No screen expects one.
+  for (const b of document.querySelectorAll('.error[role=alert], .login-error')) if (shown(b)) issues.push('error banner: "' + short(b) + '"');
+  // 7. Two pieces of text in the same header never overlap (#224: the « All tasks » tab drawn over the « Tasks » title at
+  // 390 px). Text boxes of the visible text nodes, clipped like the page clips them; an overlap of more than 2 px both ways.
+  for (const hd of document.querySelectorAll('header, .screen-head, .section-head, .cm-head')) {
+    if (!shown(hd) || hd.closest('[aria-hidden=true]')) continue;
+    const boxes = [];
+    const walk = document.createTreeWalker(hd, NodeFilter.SHOW_TEXT);
+    for (let n; (n = walk.nextNode()); ) {
+      const e = n.parentElement;
+      if (!n.textContent.trim() || !e || e.closest('svg, [aria-hidden=true], script, style') || !shown(e)) continue;
+      const rg = document.createRange(); rg.selectNodeContents(n);
+      // One box per line of the text node (a wrapped paragraph's bounding box would cover its neighbours).
+      for (const q of rg.getClientRects()) {
+        const v = visibleRect(e, q);
+        // An ellipsized title clips itself: its text node is wider than what is drawn.
+        const es = getComputedStyle(e), eb = e.getBoundingClientRect();
+        if (es.overflowX !== 'visible') { v.left = Math.max(v.left, eb.left); v.right = Math.min(v.right, eb.right); v.width = Math.max(0, v.right - v.left); }
+        if (es.overflowY !== 'visible') { v.top = Math.max(v.top, eb.top); v.bottom = Math.min(v.bottom, eb.bottom); v.height = Math.max(0, v.bottom - v.top); }
+        if (v.width > 2 && v.height > 2) boxes.push({ text: n.textContent.trim().slice(0, 30), r: v });
+      }
+    }
+    for (let i = 0; i < boxes.length; i++) for (let j = i + 1; j < boxes.length; j++) {
+      const a = boxes[i].r, b = boxes[j].r;
+      if (Math.min(a.right, b.right) - Math.max(a.left, b.left) > 2 && Math.min(a.bottom, b.bottom) - Math.max(a.top, b.top) > 2)
+        if (boxes[i].text !== boxes[j].text) issues.push('header text overlaps: "' + boxes[i].text + '" and "' + boxes[j].text + '"');
+    }
+  }
   const pl = document.querySelector('.pal');
   if (pl) { const r = pl.getBoundingClientRect(); if (!inside(r)) issues.push('palette off-screen: ' + [r.left, r.top, r.right, r.bottom].map(Math.round)); }
   return [...new Set(issues)];
@@ -845,7 +896,9 @@ if (!existsSync(OCR_BIN) || statSync(OCR_BIN).mtimeMs < statSync(OCR_SRC).mtimeM
 // Vision sometimes answers with Cyrillic / Greek look-alikes (« Аpp »): fold them to Latin before comparing.
 const LOOKALIKE = { а: 'a', в: 'b', е: 'e', к: 'k', м: 'm', н: 'h', о: 'o', р: 'p', с: 'c', т: 't', у: 'y', х: 'x', і: 'i', α: 'a', ο: 'o', ν: 'v', ρ: 'p', τ: 't', ι: 'i', κ: 'k' };
 // In Inter a capital I and a lowercase l are the same glyph, so OCR reads either: compare them as one letter.
-const norm = (s) => s.replace(/I/g, 'l').toLowerCase().normalize('NFKD').replace(/./g, (c) => LOOKALIKE[c] ?? c).replace(/[^a-z0-9]/g, '');
+// OCR also reads a lowercase i as a capital I (« Links » → « LInks », a tab at 900 px, #225), so i, I and l count as one
+// letter. A narrow tolerance: only these three letters, only when comparing; every other letter must match.
+const norm = (s) => s.toLowerCase().normalize('NFKD').replace(/./g, (c) => LOOKALIKE[c] ?? c).replace(/[il]/g, 'l').replace(/[^a-z0-9]/g, '');
 /** Smallest edit distance between `p` and any substring of `t` (approximate substring match). */
 function fuzzy(p, t) {
   let prev = new Array(t.length + 1).fill(0);
