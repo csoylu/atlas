@@ -162,33 +162,34 @@ interface Seen {
 class Cdp {
   private seq = 0;
   private pending = new Map<number, { resolve: (v: any) => void; reject: (e: Error) => void }>();
-  private handlers = new Map<string, (p: any) => void>();
+  private handlers = new Map<string, (p: any, sessionId?: string) => void>();
   constructor(private ws: WebSocket) {
     ws.on('message', (raw) => {
-      const d = JSON.parse(String(raw)) as { id?: number; method?: string; params?: unknown; error?: { message: string }; result?: unknown };
+      const d = JSON.parse(String(raw)) as { id?: number; method?: string; params?: unknown; sessionId?: string; error?: { message: string }; result?: unknown };
       if (d.id && this.pending.has(d.id)) {
         const p = this.pending.get(d.id)!;
         this.pending.delete(d.id);
         if (d.error) p.reject(new Error(d.error.message));
         else p.resolve(d.result);
-      } else if (d.method) this.handlers.get(d.method)?.(d.params);
+      } else if (d.method) this.handlers.get(d.method)?.(d.params, d.sessionId);
     });
     ws.on('close', () => {
       for (const p of this.pending.values()) p.reject(new Error('Chrome closed the connection'));
       this.pending.clear();
     });
   }
-  on(method: string, h: (p: any) => void) {
+  /** Events of the page and of its out-of-process frames (sessionId set: a frame attached with flatten). */
+  on(method: string, h: (p: any, sessionId?: string) => void) {
     this.handlers.set(method, h);
   }
-  send<T = any>(method: string, params: Record<string, unknown> = {}): Promise<T> {
+  send<T = any>(method: string, params: Record<string, unknown> = {}, sessionId?: string): Promise<T> {
     return new Promise((resolve, reject) => {
       const id = ++this.seq;
       this.pending.set(id, {
         resolve,
         reject: (e) => reject(new Error(`${method}: ${e.message}`)),
       });
-      this.ws.send(JSON.stringify({ id, method, params }));
+      this.ws.send(JSON.stringify({ id, method, params, ...(sessionId ? { sessionId } : {}) }));
     });
   }
   async evaluate<T>(expression: string): Promise<T> {
@@ -276,24 +277,33 @@ export async function takeScreenshot(
   const seen: Seen = { errors: [], refused: [] };
   let waiting = 'Chrome to start';
   const chrome: Browser = {};
+  let pendingNow = (): string[] => [];
   try {
     const run = async (): Promise<ShotResult> => {
       const cdp = new Cdp(await launch(chrome, chromePath, signal, ctx.onSpawn));
       const phone = o.width < PHONE_BELOW;
 
-      // Requests: count the in-flight ones (network quiet) and refuse every write.
-      const inflight = new Set<string>();
+      // Requests: count the in-flight ones (network quiet) and refuse every write. Out-of-process frames (sandboxed
+      // mockups in the chat, iframes of other sites) are attached as their own sessions, with the same rules.
+      const inflight = new Map<string, string>();
+      const key = (sessionId: string | undefined, requestId: string) => `${sessionId ?? ''}:${requestId}`;
       let lastActivity = Date.now();
       const touch = () => (lastActivity = Date.now());
-      cdp.on('Network.requestWillBeSent', (p) => (inflight.add(p.requestId), touch()));
-      const done = (p: { requestId: string }) => (inflight.delete(p.requestId), touch());
+      let mainFrame = '';
+      cdp.on('Network.requestWillBeSent', (p, sid) => (inflight.set(key(sid, p.requestId), `${p.request.method} ${String(p.request.url).replace(base.origin, '')}`), touch()));
+      pendingNow = () => (loaded ? [...new Set(inflight.values())] : ['(the page load event)', ...new Set(inflight.values())]);
+      const done = (p: { requestId: string }, sid?: string) => (inflight.delete(key(sid, p.requestId)), touch());
       cdp.on('Network.loadingFinished', done);
-      cdp.on('Network.loadingFailed', (p) => {
-        done(p);
+      // A frame's document loaded in another process finishes there: its response is the end of it here.
+      cdp.on('Network.responseReceived', (p, sid) => {
+        if (p.type === 'Document' && p.frameId !== mainFrame) done(p, sid);
+      });
+      cdp.on('Network.loadingFailed', (p, sid) => {
+        done(p, sid);
         if (!String(p.errorText).startsWith('net::ERR_BLOCKED_BY_CLIENT') && !p.canceled && p.type !== 'EventSource' && p.type !== 'WebSocket') seen.errors.push(`request failed: ${p.errorText}`);
       });
-      cdp.on('Fetch.requestPaused', ({ requestId, request }: { requestId: string; request: { method: string; url: string } }) => {
-        if (allowedRequest(request.method, request.url, base.origin)) return void cdp.send('Fetch.continueRequest', { requestId }).catch(() => {});
+      cdp.on('Fetch.requestPaused', ({ requestId, request }: { requestId: string; request: { method: string; url: string } }, sid) => {
+        if (allowedRequest(request.method, request.url, base.origin)) return void cdp.send('Fetch.continueRequest', { requestId }, sid).catch(() => {});
         let where = request.url;
         try {
           const u = new URL(request.url);
@@ -301,26 +311,36 @@ export async function takeScreenshot(
         } catch {
           // keep the raw url
         }
-        const sameEngine = where.startsWith('/');
-        const known = sameEngine ? ctx.engine.answer?.(request.method, where) : undefined;
+        const known = where.startsWith('/') ? ctx.engine.answer?.(request.method, where) : undefined;
         if (known !== undefined)
           return void cdp
-            .send('Fetch.fulfillRequest', { requestId, responseCode: 200, responseHeaders: [{ name: 'Content-Type', value: 'application/json' }], body: Buffer.from(JSON.stringify(known)).toString('base64') })
+            .send('Fetch.fulfillRequest', { requestId, responseCode: 200, responseHeaders: [{ name: 'Content-Type', value: 'application/json' }], body: Buffer.from(JSON.stringify(known)).toString('base64') }, sid)
             .catch(() => {});
         seen.refused.push(`${request.method} ${where}`);
-        void cdp.send('Fetch.failRequest', { requestId, errorReason: 'BlockedByClient' }).catch(() => {});
+        void cdp.send('Fetch.failRequest', { requestId, errorReason: 'BlockedByClient' }, sid).catch(() => {});
       });
       cdp.on('Runtime.exceptionThrown', ({ exceptionDetails: d }) => seen.errors.push('page error: ' + String(d.exception?.description ?? d.text).split('\n')[0]));
       cdp.on('Runtime.consoleAPICalled', ({ type, args }) => {
         if (type === 'error') seen.errors.push('console.error: ' + (args as { value?: unknown; description?: string }[]).map((a) => (a.value !== undefined ? String(a.value) : (a.description ?? ''))).join(' ').slice(0, 300));
       });
+      const watch = async (sid?: string) => {
+        await cdp.send('Runtime.enable', {}, sid);
+        await cdp.send('Network.enable', {}, sid);
+        await cdp.send('Fetch.enable', { patterns: [{ urlPattern: '*', requestStage: 'Request' }] }, sid);
+        if (sid && o.theme) await cdp.send('Emulation.setEmulatedMedia', { features: [{ name: 'prefers-color-scheme', value: o.theme }] }, sid);
+        await cdp.send('Target.setAutoAttach', { autoAttach: true, waitForDebuggerOnStart: true, flatten: true }, sid);
+      };
+      cdp.on('Target.attachedToTarget', ({ sessionId, targetInfo }: { sessionId: string; targetInfo: { type: string } }) => {
+        const go = () => cdp.send('Runtime.runIfWaitingForDebugger', {}, sessionId).catch(() => {});
+        if (targetInfo.type !== 'iframe' && targetInfo.type !== 'worker') return void go();
+        void watch(sessionId).catch(() => {}).finally(go);
+      });
       let loaded = false;
       cdp.on('Page.loadEventFired', () => (loaded = true));
 
       await cdp.send('Page.enable');
-      await cdp.send('Runtime.enable');
-      await cdp.send('Network.enable');
-      await cdp.send('Fetch.enable', { patterns: [{ urlPattern: '*', requestStage: 'Request' }] });
+      mainFrame = (await cdp.send<{ frameTree: { frame: { id: string } } }>('Page.getFrameTree')).frameTree.frame.id;
+      await watch();
       await cdp.send('Emulation.setDeviceMetricsOverride', { width: o.width, height: o.height, deviceScaleFactor: SCALE, mobile: phone });
       if (phone) await cdp.send('Emulation.setTouchEmulationEnabled', { enabled: true, maxTouchPoints: 5 });
       if (o.theme) await cdp.send('Emulation.setEmulatedMedia', { features: [{ name: 'prefers-color-scheme', value: o.theme }] });
@@ -425,7 +445,9 @@ export async function takeScreenshot(
   } catch (e) {
     if (ctx.signal.aborted) throw e;
     if (timeout.signal.aborted) {
-      const extra = seen.errors.length ? `\nPage errors so far:\n  ${[...new Set(seen.errors)].join('\n  ')}` : '';
+      const pend = waiting.endsWith('to load') || waiting.startsWith('the page to settle') ? pendingNow() : [];
+      const still = pend.length ? `\nStill loading: ${pend.slice(0, 8).join(', ')}` : '';
+      const extra = still + (seen.errors.length ? `\nPage errors so far:\n  ${[...new Set(seen.errors)].join('\n  ')}` : '');
       throw new Error(`screenshot timed out after ${TIMEOUT_MS / 1000} s waiting for ${waiting}; no picture taken${extra}`);
     }
     throw e;
