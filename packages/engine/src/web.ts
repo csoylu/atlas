@@ -9,6 +9,8 @@ export interface Page {
   contentType: string;
   title: string | null;
   text: string;
+  /** The bytes, when the URL is a picture (content-type image/png|jpeg|gif|webp); `text` is then empty. */
+  image?: Buffer;
 }
 
 export async function fetchPage(url: string, signal: AbortSignal, fetchFn: typeof fetch = fetch): Promise<Page> {
@@ -33,6 +35,11 @@ export async function fetchPage(url: string, signal: AbortSignal, fetchFn: typeo
   }
   const contentType = res.headers.get('content-type') ?? '';
   const buf = await readCapped(res);
+  if (/^image\/(png|jpeg|gif|webp)\b/i.test(contentType)) {
+    if (!res.ok) throw new Error(`HTTP ${res.status} from ${url}`);
+    if (buf.truncated) throw new Error(`${url} is an image over ${MAX_BYTES / 1_000_000} MB: images that big are refused`);
+    return { url: res.url || url, status: res.status, contentType, title: null, text: '', image: buf };
+  }
   const textual = !contentType || /^text\/|json|xml|javascript|markdown|yaml|csv/i.test(contentType);
   if (!textual) throw new Error(`${url} is not text (content-type ${contentType}, ${buf.length} bytes)`);
   const raw = buf.toString('utf8');
@@ -42,7 +49,7 @@ export async function fetchPage(url: string, signal: AbortSignal, fetchFn: typeo
   return { url: res.url || url, status: res.status, contentType, ...page };
 }
 
-async function readCapped(res: Response): Promise<Buffer> {
+async function readCapped(res: Response): Promise<Buffer & { truncated?: boolean }> {
   if (!res.body) return Buffer.alloc(0);
   const chunks: Buffer[] = [];
   let n = 0;
@@ -52,7 +59,9 @@ async function readCapped(res: Response): Promise<Buffer> {
     n += b.length;
     if (n > MAX_BYTES) break;
   }
-  return Buffer.concat(chunks).subarray(0, MAX_BYTES);
+  const out: Buffer & { truncated?: boolean } = Buffer.concat(chunks).subarray(0, MAX_BYTES);
+  if (n > MAX_BYTES) out.truncated = true;
+  return out;
 }
 
 const ENTITIES: Record<string, string> = {

@@ -1,10 +1,10 @@
 import express, { type ErrorRequestHandler } from 'express';
 import { createServer, type IncomingMessage, type Server } from 'node:http';
 import { existsSync } from 'node:fs';
-import { join } from 'node:path';
+import { join, relative } from 'node:path';
 import { WebSocketServer } from 'ws';
 import { ZodError } from 'zod';
-import { isTimeZone, PostMessage, RewindRequest, ScheduleWhen, SlashCommand, UpdateVoice } from '@atlas/shared';
+import { IMAGE_MAX_BYTES, isTimeZone, PostMessage, RewindRequest, ScheduleWhen, SlashCommand, UpdateVoice } from '@atlas/shared';
 import type { Agents } from './agents.ts';
 import type { Models } from './models.ts';
 import type { Runner } from './runner.ts';
@@ -38,6 +38,7 @@ import { DEFAULT_CONTEXT_WINDOW, MEMORY_BUDGET, type About, type Timeline } from
 const USER = 'user';
 
 import { Auth, SESSION_COOKIE } from './auth.ts';
+import { Uploads } from './uploads.ts';
 
 export function createApi(deps: {
   kanban: Kanban;
@@ -73,6 +74,12 @@ export function createApi(deps: {
 }): Server {
   const { kanban, agents, models, runner, rewinds, slash, dispatcher, settings, canvases, documents, memories, cleanup, schedules, local, accounts, chatgpt, claude, plans, notifications, usage, bus, auth } = deps;
   const app = express();
+  const uploads = new Uploads(deps.dataDir);
+  try {
+    uploads.prune();
+  } catch (e) {
+    console.error('pruning staged uploads failed', e);
+  }
   // Behind Caddy on the same machine: trust its X-Forwarded-Proto so session cookies get the Secure flag over HTTPS.
   app.set('trust proxy', 'loopback');
   app.disable('x-powered-by');
@@ -140,8 +147,9 @@ export function createApi(deps: {
     res.json(kanban.messages(req.params.id));
   });
   app.post('/api/cards/:id/messages', async (req, res) => {
-    const { text, ref } = PostMessage.parse(req.body);
-    kanban.get(req.params.id);
+    const { text, ref, uploads: ids } = PostMessage.parse(req.body);
+    const card = kanban.get(req.params.id);
+    if (ids.length && !card.assignee) throw new InvalidError('assign an agent before sending images: they go into its workspace');
     // The card's state before this message: « Rewind to here » / Stop go back to it (rewind.ts).
     const snapshot = rewinds.beforeUserMessage(req.params.id);
     // « Ask about this »: the quoted document part goes first, so the agent knows exactly what is meant.
@@ -153,11 +161,40 @@ export function createApi(deps: {
       const section = ref.section !== null && doc.kind === 'markdown' ? (findSection(splitSections(content), ref.section) ?? null) : null;
       quote = formatDocRef(doc, ref.version, section);
     }
-    const message = kanban.appendMessage(req.params.id, 'user', USER, [...(quote ? [{ type: 'text' as const, text: quote }] : []), { type: 'text', text }]);
+    // Pasted/dropped images: copied into the agent's workspace, then the message row written with their blocks (uploads.ts).
+    const workdir = ids.length ? workdirOf(agents.get(card.assignee!), deps.dataDir) : '';
+    const message = await uploads.send(ids, workdir, (images) =>
+      kanban.appendMessage(req.params.id, 'user', USER, [
+        ...(quote ? [{ type: 'text' as const, text: quote }] : []),
+        ...(text ? [{ type: 'text' as const, text }] : []),
+        ...images.flatMap((im) => [im, { type: 'text' as const, text: `[attached: ${relative(workdir, im.path)}]` }]),
+      ]),
+    );
     rewinds.record(req.params.id, message.seq, snapshot);
     dispatcher.onUserMessage(req.params.id); // unblocks, resumes review, or gets a chat reply
     runner.nameChat(req.params.id); // direct chats: the user's 3rd message has the model title the chat
     res.status(201).json(message);
+  });
+  /** Stage a pasted/dropped image (raw body, the file name in ?name=): checked now, sent with the next message. */
+  app.post('/api/cards/:id/uploads', express.raw({ type: () => true, limit: IMAGE_MAX_BYTES + 1024 }), async (req, res) => {
+    kanban.get(req.params.id);
+    const name = String(req.query.name ?? 'image');
+    if (!Buffer.isBuffer(req.body)) throw new InvalidError('send the image bytes as the request body');
+    res.status(201).json(await uploads.stage(name, req.body));
+  });
+  /** A picture of this conversation (a thumbnail in the chat): only a path one of its messages references. */
+  app.get('/api/cards/:id/image', (req, res, next) => {
+    const path = String(req.query.path ?? '');
+    const known = kanban
+      .messages(req.params.id)
+      .some((m) => m.content.some((b) => (b.type === 'image' && b.path === path) || (b.type === 'tool_result' && b.images?.some((i) => i.path === path))));
+    if (!known) throw new NotFoundError(`no image ${path} in this conversation`);
+    res.setHeader('Content-Security-Policy', "default-src 'none'");
+    res.setHeader('Cache-Control', 'private, max-age=86400');
+    res.sendFile(path, { dotfiles: 'allow' }, (err) => {
+      if (err && !res.headersSent) res.status(404).json({ error: `the file ${path} no longer exists` });
+      else if (err) next(err);
+    });
   });
   app.get('/api/cards/:id/runs', (req, res) => {
     kanban.get(req.params.id);
@@ -671,6 +708,8 @@ export function createApi(deps: {
     else if (err instanceof NotFoundError) res.status(404).json({ error: err.message });
     else if (err instanceof ConflictError) res.status(409).json({ error: err.message });
     else if (err instanceof InvalidError) res.status(400).json({ error: err.message });
+    else if ((err as { type?: string }).type === 'entity.too.large')
+      res.status(413).json({ error: `the request is over ${((err as { limit: number }).limit / 1024 / 1024).toFixed(1)} MB: images over 10.0 MB are refused` });
     else {
       console.error(err);
       res.status(500).json({ error: err instanceof Error ? err.message : String(err) });

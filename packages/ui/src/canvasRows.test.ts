@@ -54,8 +54,8 @@ describe('canvas rows', () => {
   });
 
   it('makes times readable', () => {
-    expect(whenText('2026-11-12T00:35:00+01:00')).toMatch(/^Thu 12 Nov \d\d:35$/);
+    expect(whenText('2026-11-12T12:35:00Z')).toMatch(/^Thu 12 Nov \d\d:35$/);
     expect(whenText('tomorrow')).toBe('tomorrow');
-    expect(humanTimes('once at 2026-11-12T00:35:00.000Z, ok')).toMatch(/^once at Thu 12 Nov \d\d:35, ok$/);
+    expect(humanTimes('once at 2026-11-12T12:35:00.000Z, ok')).toMatch(/^once at Thu 12 Nov \d\d:35, ok$/);
   });
 });

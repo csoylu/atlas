@@ -2,7 +2,7 @@ import { randomUUID } from 'node:crypto';
 import { mkdirSync, readdirSync, readFileSync, rmSync, statSync } from 'node:fs';
 import { join } from 'node:path';
 import { RESUME_KICK, USER, VOICE_MARK } from '@atlas/shared';
-import type { Agent, Card, CompactResult, ContentBlock, EndedRun, Model, Run, RunKind, RunStatus, TodoItem, ToolCallDetail, ToolCallTiming } from '@atlas/shared';
+import type { Agent, Card, CompactResult, ContentBlock, EndedRun, ImageBlock, Model, Run, RunKind, RunStatus, TodoItem, ToolCallDetail, ToolCallTiming } from '@atlas/shared';
 import type { Db } from './store/db.ts';
 import type { Bus } from './events.ts';
 import { chatTitle, ConflictError, InvalidError, RENAME_AT, type Kanban } from './kanban.ts';
@@ -28,6 +28,7 @@ import {
   type Reading,
 } from './context.ts';
 import { runTool, toolSpecs } from './tools.ts';
+import { withPictures } from './images.ts';
 import { cardToolSpecs, describeCard, isCardTool, runCardTool, type Terminal } from './cardTools.ts';
 import { canvasToolSpecs, isCanvasTool, runCanvasTool } from './canvasTools.ts';
 import { docToolSpecs, isDocTool, runDocTool } from './docTools.ts';
@@ -484,13 +485,15 @@ export class Runner {
         const seen = upto(transcript);
         const system = this.systemPrompt(agent, card, kind, workdir);
         const { view, exact } = await this.contextFor(card, transcript, model, provider, system.text, tools, signal);
+        // The newest pictures carry their bytes (read from their files now); older ones go as a text line.
+        const wire = await withPictures(view);
 
         const res = await this.call(model.id, () => provider.complete(
           {
             model: model.name,
             maxTokens: model.maxTokens,
             system: system.text,
-            messages: view,
+            messages: wire,
             tools,
             webSearch: true,
             cache: { systemStable: system.stable },
@@ -523,7 +526,7 @@ export class Runner {
               .prepare("INSERT INTO tool_calls (run_id, tool_use_id, name, input, status, started_at) VALUES (?, ?, ?, ?, 'running', ?)")
               .run(runId, u.id, u.name, JSON.stringify(u.input), new Date().toISOString());
             this.emitCalls([Number(lastInsertRowid)]);
-            let r: { output: string; isError: boolean };
+            let r: { output: string; isError: boolean; images?: ImageBlock[] };
             let detail: ToolCallDetail | null = null;
             const live = this.liveTail(Number(lastInsertRowid), cardId);
             const invalid = invalidToolInput(u.input);
@@ -574,7 +577,7 @@ export class Runner {
               .prepare('UPDATE tool_calls SET status = ?, output = ?, ended_at = ?, detail = ? WHERE id = ?')
               .run(r.isError ? 'error' : 'done', r.output, new Date().toISOString(), detail ? JSON.stringify(detail) : null, lastInsertRowid);
             this.emitCalls([Number(lastInsertRowid)]);
-            return { type: 'tool_result' as const, tool_use_id: u.id, content: r.output, ...(r.isError ? { is_error: true } : {}) };
+            return { type: 'tool_result' as const, tool_use_id: u.id, content: r.output, ...(r.isError ? { is_error: true } : {}), ...(r.images?.length ? { images: r.images } : {}) };
           }),
         );
         signal.throwIfAborted();

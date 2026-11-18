@@ -14,6 +14,8 @@ export interface TurnCards {
 export interface DetailContext {
   renderText(text: string, key: string): ReactNode;
   cards?: TurnCards;
+  /** The chat's card: pictures a tool returned are served through it. */
+  cardId?: string;
 }
 
 const known = (ref: string, cards?: TurnCards): cards is TurnCards => !!cards && (!cards.card || !!cards.card(ref));

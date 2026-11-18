@@ -1,4 +1,5 @@
-import type { ContentBlock, Message, TodoItem } from '@atlas/shared';
+import { IMAGE_KEEP, type ContentBlock, type Message, type TodoItem } from '@atlas/shared';
+import { IMAGE_TOKENS, imageLine } from './images.ts';
 import type { ModelRequest } from './providers/types.ts';
 
 export const INTERRUPTED = 'interrupted by a restart or a stop before this tool finished; re-run it if still needed';
@@ -74,8 +75,16 @@ const BIG_INPUT = 600;
 /** Identical tool outputs at least this long are deduplicated when pruned. */
 const DEDUPE_MIN = 80;
 
-/** Rough token count (~4 characters per token), on the JSON the provider sends. Errs high for prose, fine here. */
-export const estimateTokens = (x: unknown): number => Math.ceil((typeof x === 'string' ? x.length : JSON.stringify(x).length) / 4);
+/**
+ * Rough token count (~4 characters per token), on the JSON the provider sends. Errs high for prose, fine here. A
+ * picture is a short reference in the JSON but costs the model ~IMAGE_TOKENS: counted as such, at most IMAGE_KEEP per
+ * call (older ones go as a text line, withPictures).
+ */
+export const estimateTokens = (x: unknown): number => {
+  const json = typeof x === 'string' ? x : JSON.stringify(x);
+  const pictures = typeof x === 'string' ? 0 : Math.min(IMAGE_KEEP, json.match(/"type":"image"/g)?.length ?? 0);
+  return Math.ceil(json.length / 4) + pictures * IMAGE_TOKENS;
+};
 
 /** The last real prompt size the provider reported for the conversation, and the seq of the last message it included. */
 export interface Reading {
@@ -177,7 +186,8 @@ export function renderForSummary(messages: Msg[]): string {
       const parts = m.content.flatMap((b) => {
         if (b.type === 'text') return [b.text];
         if (b.type === 'tool_use') return [`→ ${b.name} ${cap(JSON.stringify(b.input), 400)}`];
-        if (b.type === 'tool_result') return [`← ${b.is_error ? 'error: ' : ''}${cap(b.content, 1200)}`];
+        if (b.type === 'tool_result') return [`← ${b.is_error ? 'error: ' : ''}${cap(b.content, 1200)}`, ...(b.images ?? []).map(imageLine)];
+        if (b.type === 'image') return [imageLine(b)];
         if (b.type === 'server_tool_use') return [`→ ${b.name} (run by the provider) ${cap(JSON.stringify(b.input), 400)}`];
         if (b.type === 'web_search_tool_result') return [`← ${searchSummary(b.content)}`];
         return []; // thinking: the model's private notes, not part of the record

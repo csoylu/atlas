@@ -506,7 +506,7 @@ button.artifact:hover .art-open { color: var(--accent); }
 }
 .composer:focus-within { border-color: var(--accent); box-shadow: var(--composer-shadow), 0 0 0 3px var(--accent-soft); }
 .composer textarea {
-  flex: 1; resize: none; height: 48px; background: none; border: 0; outline: none; padding: 2px 0; line-height: 1.5; font-size: 13.5px;
+  flex: none; resize: none; min-height: calc(4 * 1.5em + 4px); max-height: 40vh; max-height: 40dvh; overflow-y: hidden; background: none; border: 0; outline: none; padding: 2px 0; line-height: 1.5; font-size: 13.5px;
 }
 .send-btn {
   flex: none; width: 26px; height: 26px; border-radius: 6px; border: 0; padding: 0; display: grid; place-items: center;
@@ -514,6 +514,33 @@ button.artifact:hover .art-open { color: var(--accent); }
 }
 .send-btn:hover { background: var(--accent-hi); }
 .send-btn:disabled { opacity: 0.4; cursor: default; background: var(--accent); }
+
+/* images (#103): composer attachments, thumbnails in messages, the full-size view */
+.composer.dropping { border-color: var(--accent); border-style: dashed; background: var(--accent-soft); }
+.attach-btn {
+  flex: none; width: 26px; height: 26px; border-radius: 6px; border: 0; padding: 0; display: grid; place-items: center;
+  background: none; color: var(--muted); transition: background 0.12s, color 0.12s;
+}
+.attach-btn:hover { background: var(--sheet); color: var(--text); }
+.attach-strip { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; }
+.attach-thumb { position: relative; width: 56px; height: 56px; border-radius: 6px; overflow: hidden; border: 1px solid var(--line-2); background: var(--sheet); flex: none; }
+.attach-thumb img { width: 100%; height: 100%; object-fit: cover; display: block; }
+.attach-thumb.busy img { opacity: 0.5; }
+.attach-thumb.bad { border-color: var(--bad, #d33); }
+.attach-thumb .attach-err { position: absolute; left: 4px; bottom: 3px; font-weight: 700; color: var(--bad, #d33); font-size: 13px; }
+.attach-thumb button {
+  position: absolute; top: 2px; right: 2px; width: 20px; height: 20px; padding: 0; border: 0; border-radius: 50%;
+  background: rgba(0, 0, 0, 0.6); color: #fff; font-size: 14px; line-height: 1; display: grid; place-items: center;
+}
+.attach-note { font-size: 12px; color: var(--bad, #d33); min-width: 0; flex: 1 1 160px; }
+.msg-images { display: flex; flex-wrap: wrap; gap: 6px; margin: 2px 0 4px; }
+.msg-image { padding: 0; border: 1px solid var(--line-2); border-radius: 8px; overflow: hidden; background: var(--sheet); cursor: zoom-in; max-width: 100%; }
+.msg-image img { display: block; max-width: min(240px, 100%); max-height: 180px; width: auto; height: auto; object-fit: contain; }
+.lightbox { position: fixed; inset: 0; z-index: 1000; background: rgba(0, 0, 0, 0.82); display: flex; flex-direction: column; align-items: center; justify-content: center; padding: 16px; gap: 10px; cursor: zoom-out; }
+.lightbox img { max-width: 100%; max-height: calc(100% - 48px); object-fit: contain; border-radius: 4px; cursor: default; }
+.lightbox-bar { display: flex; align-items: center; gap: 14px; color: #eee; font-size: 13px; cursor: default; flex-wrap: wrap; justify-content: center; }
+.lightbox-bar a { color: #9cf; }
+.lightbox-bar .icon-btn { color: #eee; font-size: 20px; }
 
 /* markdown in messages and notes */
 .msg .text.md { white-space: normal; }
@@ -1058,21 +1085,29 @@ button.tool .icon { color: var(--muted); font-family: var(--mono); }
 .cm-origin { background: none; border: 0; padding: 0 4px; color: var(--accent); font-size: 12px; }
 .cm-origin:hover { text-decoration: underline; }
 .cm-faint { color: var(--faint); padding: 0 4px; }
-.cm-title { width: 100%; background: none; border: 0; outline: none; font-size: 20px; font-weight: 600; letter-spacing: -0.015em; padding: 10px 0 0; }
+.cm-title {
+  display: block; width: 100%; background: none; border: 0; outline: none; font: inherit; font-size: 20px; font-weight: 600; letter-spacing: -0.015em;
+  line-height: 1.3; padding: 10px 0 0; resize: none; field-sizing: content; min-height: 0; overflow: hidden; color: var(--text);
+}
 .cm-body { flex: 1; overflow-y: auto; min-height: 0; padding: 12px 20px 8px; display: flex; flex-direction: column; }
 .cm-desc { background: none; border: 0; outline: none; resize: vertical; min-height: 72px; field-sizing: content; max-height: 40vh; color: var(--muted); line-height: 1.55; font-size: 13.5px; padding: 0; flex: none; }
 div.cm-desc { resize: none; field-sizing: initial; max-height: none; cursor: text; color: var(--text); border-radius: 6px; margin: 0 -8px; padding: 4px 8px; }
 div.cm-desc:hover { background: var(--hover); }
 div.cm-desc h1, div.cm-desc h2, div.cm-desc h3 { font-size: 14px; margin: 0.8em 0 0.3em; }
+/* Thread panel (#107): a long description shows its first lines, « Show more » opens the rest. */
+div.cm-desc.clamped { max-height: calc(6 * 1.55em + 8px); overflow: hidden; }
+div.cm-desc.cut { -webkit-mask-image: linear-gradient(to bottom, #000 65%, transparent); mask-image: linear-gradient(to bottom, #000 65%, transparent); }
+.cm-more { align-self: flex-start; background: none; border: 0; padding: 4px 0 0; color: var(--accent); font-size: 12px; font-weight: 500; }
+.cm-more:hover { text-decoration: underline; }
 .cm-body .relations { padding: 8px 0; border-bottom: 0; }
 .cm-body .relations .chip .status-icon { margin-right: 2px; }
 .cm-h { font-size: 12px; color: var(--muted); margin: 14px 0 4px; font-weight: 500; padding-top: 12px; border-top: 1px solid var(--line); }
-.card-modal .chat.cm-activity { flex: none; overflow: visible; padding: 4px 0 8px; gap: 14px; }
+.card-view .chat.cm-activity { flex: none; overflow: visible; padding: 4px 0 8px; gap: 14px; }
 .cm-notices { flex: none; max-height: 34vh; overflow-y: auto; }
 .cm-notices .waiting-line { border-bottom: 0; padding: 6px 20px; }
 .cm-notices .run-status { padding: 6px 20px; }
-.card-modal .composer { margin: 8px 20px 10px; flex: none; }
-.card-modal .composer textarea { height: 44px; }
+.card-view .composer { margin: 8px 20px 10px; flex: none; }
+.card-view .composer textarea { min-height: calc(3 * 1.5em + 4px); }
 .cm-foot { display: flex; align-items: center; gap: 6px; padding: 8px 12px 8px 20px; border-top: 1px solid var(--line); flex: none; }
 .cm-btn {
   height: 26px; padding: 0 9px; border-radius: 6px; border: 1px solid var(--line-2); background: var(--raised); color: var(--text);
@@ -1094,7 +1129,7 @@ div.cm-desc h1, div.cm-desc h2, div.cm-desc h3 { font-size: 14px; margin: 0.8em 
 .status-icon { flex: none; display: inline-block; vertical-align: middle; }
 @media (max-width: 760px) {
   .card-modal { width: 100vw; height: 100%; border-radius: 0; border: 0; }
-  .card-modal .composer textarea { font-size: 16px; }
+  .card-view .composer textarea { font-size: 16px; }
 }
 
 /* ── Chat pins: cards this chat created, top-left (mockup workflow.html, scenarios 1–3) ── */
@@ -1824,11 +1859,6 @@ button.msg-quote:hover { color: var(--text); }
 .mem-review .hint { display: block; margin-top: 4px; }
 
 /* v3: a task's thread beside the main chat (ThreadPanel). */
-.thread-panel .tp-head { display: flex; align-items: center; gap: 6px; padding: 8px 10px 8px 16px; border-bottom: 1px solid var(--line); flex: none; font-size: 12px; color: var(--muted); min-width: 0; }
-.thread-panel .tp-title { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--text); font-size: 13px; font-weight: 500; }
-.thread-panel .tp-activity { flex: 1; min-height: 0; overflow-y: auto; }
-.thread-panel .composer { margin: 8px 16px 10px; flex: none; }
-.thread-panel .composer textarea { height: 44px; }
 /* Sidebar: running tasks. */
 .side-running { margin-top: 12px; }
 .running-item { gap: 8px; }

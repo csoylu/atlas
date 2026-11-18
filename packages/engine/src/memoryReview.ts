@@ -25,7 +25,7 @@ const Change = z.discriminatedUnion('action', [
   z.object({ action: z.literal('update'), id: z.union([z.string(), z.number()]), text: z.string().trim().min(1) }),
   z.object({ action: z.literal('forget'), id: z.union([z.string(), z.number()]) }),
 ]);
-const Reply = z.object({ changes: z.array(Change).max(10) });
+const Reply = z.object({ language: z.string().optional(), changes: z.array(Change).max(10) });
 export type ReviewChange = z.infer<typeof Change>;
 
 /** Text that looks like a credential: never stored in memory. */
@@ -38,18 +38,28 @@ export function looksSecret(text: string): boolean {
   );
 }
 
-const SYSTEM = (user: string, agent: string) =>
+/**
+ * The language rule (#108). "The language the user writes in" alone was not enough: a task's transcript is mostly the
+ * agent's and tools' text, often with no message of the user at all, so the model copied the language of the memories
+ * it was shown (one French memory begot more, updates kept the old text's language). So the prompt now carries the
+ * user's own latest words, from any conversation, says plainly that adds and updates use their language, and has the
+ * model name that language first in its reply (`"language"`), before it writes any text.
+ */
+const SYSTEM = (user: string, agent: string, voice: string[]) =>
   [
     `You review a conversation between ${user} and the AI agent @${agent}, to keep @${agent}'s long-term memory useful.`,
-    'Most conversations need no change: then reply {"changes":[]}.',
+    'Most conversations need no change: then reply {"language":"...","changes":[]}.',
     `Keep only what stays true and useful in later conversations: ${user}'s lasting rules and preferences, facts about their`,
     'setup and projects, where things are, how things work. Never: progress or logs of the work, one-off details, secrets',
     '(keys, passwords, tokens), anything the memory below already says.',
-    `One idea per memory, at most ${MEMORY_TEXT_MAX} characters, declarative, in the language ${user} writes in.`,
+    `One idea per memory, at most ${MEMORY_TEXT_MAX} characters, declarative.`,
+    `Language: write every memory text (add and update) in the language of ${user}'s own messages, never in the language of`,
+    `the agent, the tools or the existing memories; an update of a memory written in another language is rewritten in ${user}'s.`,
+    ...(voice.length ? [`${user}'s latest messages, to tell their language:`, ...voice.map((v) => `- "${v}"`)] : []),
     `kind: rule (how the agent must work, as ${user} asked), preference (${user}'s taste), fact, project (about current`,
     'work; it goes stale). scope: agent (only this agent) or shared (true for every agent).',
-    `You may update or forget a memory the conversation shows is wrong or outdated, except those marked « by ${user} ».`,
-    `Reply with JSON only, no prose: {"changes":[...]} with at most ${MAX_CHANGES} items, each one of`,
+    `You may update or forget a memory the conversation shows is wrong or outdated, except those marked "by ${user}".`,
+    `Reply with JSON only, no prose: {"language":"<${user}'s language>","changes":[...]} with at most ${MAX_CHANGES} items, each one of`,
     '{"action":"add","kind":"fact","scope":"agent","text":"..."} {"action":"update","id":"m12","text":"..."} {"action":"forget","id":"m12"}',
   ].join('\n');
 
@@ -127,8 +137,13 @@ export class MemoryReview {
         {
           model: model.name,
           maxTokens: Math.min(model.maxTokens, 2000),
-          system: SYSTEM(user, agentId),
-          messages: [{ role: 'user', content: [{ type: 'text', text: `Memory of @${agentId} now:\n${memo}\n\nConversation (new part):\n\n${convo}\n\nYour JSON:` }] }],
+          system: SYSTEM(user, agentId, this.userVoice()),
+          messages: [
+            {
+              role: 'user',
+              content: [{ type: 'text', text: `Memory of @${agentId} now:\n${memo}\n\nConversation (new part):\n\n${convo}\n\nYour JSON ("language" first: the language of ${user}'s own messages; every text in it):` }],
+            },
+          ],
           tools: [],
         },
         () => {},
@@ -151,6 +166,19 @@ export class MemoryReview {
     return [...this.memories.alwaysOn(agentId), ...this.memories.search(agentId, convo.slice(-8000), { limit: 20, recall: true })].filter(
       (m) => !seen.has(m.id) && seen.add(m.id),
     );
+  }
+
+  /** The user's 3 latest typed (or spoken) messages, any conversation, each cut to 200 chars: their language, shown. */
+  private userVoice(): string[] {
+    const rows = this.db.prepare("SELECT content FROM messages WHERE author = 'user' ORDER BY at DESC LIMIT 20").all() as { content: string }[];
+    const out: string[] = [];
+    for (const r of rows) {
+      const blocks = JSON.parse(r.content) as { type: string; text?: string }[];
+      const t = blocks.flatMap((b) => (b.type === 'text' && b.text ? [b.text] : [])).join(' ').replace(/\s+/g, ' ').trim();
+      if (t.length >= 8) out.push(t.length > 200 ? t.slice(0, 200) + '…' : t);
+      if (out.length === 3) break;
+    }
+    return out;
   }
 
   /** The user wrote or edited this memory: the review leaves it alone. */

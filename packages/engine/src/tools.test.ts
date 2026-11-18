@@ -98,8 +98,11 @@ describe('read_file paging', () => {
 
   it('refuses binary files and directories clearly', async () => {
     const c = ctx();
-    writeFileSync(join(c.workdir, 'img.png'), Buffer.from([0x89, 0x50, 0x4e, 0x47, 0, 0, 1, 2]));
-    expect(await err('read_file', { path: 'img.png' }, c)).toMatch(/binary file \(8 bytes\)/);
+    writeFileSync(join(c.workdir, 'blob.bin'), Buffer.from([0x7f, 0x45, 0, 0, 1, 2, 0, 3]));
+    expect(await err('read_file', { path: 'blob.bin' }, c)).toMatch(/binary file \(8 bytes\)/);
+    // A broken picture: refused with why, not sent as one.
+    writeFileSync(join(c.workdir, 'img.png'), Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a, 0, 1]));
+    expect(await err('read_file', { path: 'img.png' }, c)).toMatch(/could not be decoded as image\/png/);
     mkdirSync(join(c.workdir, 'd'));
     expect(await err('read_file', { path: 'd' }, c)).toMatch(/is a directory/);
   });

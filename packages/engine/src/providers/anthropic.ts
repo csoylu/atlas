@@ -1,5 +1,6 @@
 import Anthropic from '@anthropic-ai/sdk';
-import type { ContentBlock } from '@atlas/shared';
+import type { ContentBlock, ImageBlock } from '@atlas/shared';
+import { hasImage, imageLine } from '../images.ts';
 import { ModelError, toolInput, type ModelRequest, type ModelResponse, type OnDelta, type Provider } from './types.ts';
 
 /** An Anthropic HTTP error with what account failover needs (status, the response headers). */
@@ -69,7 +70,7 @@ export class AnthropicProvider implements Provider {
           // Stable prefix is cached (design §5).
           system: [...(this.systemPrefix ? [{ type: 'text' as const, text: this.systemPrefix }] : []), ...systemBlocks(req)],
           // The history too: breakpoints at its end (withCacheBreakpoints).
-          messages: (req.cache ? withCacheBreakpoints(req.messages) : req.messages) as Anthropic.MessageParam[],
+          messages: (req.cache ? withCacheBreakpoints(anthropicMessages(req.messages)) : anthropicMessages(req.messages)) as Anthropic.MessageParam[],
           tools: [...(req.tools as Anthropic.ToolUnion[]), ...(req.webSearch && this.webSearch ? [WEB_SEARCH] : [])],
           ...(req.effort ? { output_config: { effort: req.effort } } : {}),
           // Newer models think adaptively but omit the thinking text by default: ask for the summary so the user sees it.
@@ -143,6 +144,27 @@ export class AnthropicProvider implements Provider {
   }
 }
 
+/**
+ * Pictures in Anthropic's shape (#103): an image block becomes a base64 source; a tool result with pictures gets a
+ * content array (its text, then the images). A picture without bytes (not prepared by withPictures) goes as its text line.
+ */
+export function anthropicMessages(messages: ModelRequest['messages']): ModelRequest['messages'] {
+  const image = (b: ImageBlock) =>
+    b.data ? { type: 'image', source: { type: 'base64', media_type: b.media_type, data: b.data } } : { type: 'text', text: imageLine(b) };
+  return messages.map((m) => {
+    if (!m.content.some(hasImage)) return m;
+    const content = m.content.map((b) => {
+      if (b.type === 'image') return image(b);
+      if (b.type === 'tool_result' && b.images?.length) {
+        const { images, ...rest } = b;
+        return { ...rest, content: [{ type: 'text', text: b.content }, ...images.map(image)] };
+      }
+      return b;
+    });
+    return { role: m.role, content: content as ContentBlock[] };
+  });
+}
+
 function isAnthropicApi(baseURL: string | undefined): boolean {
   if (!baseURL) return true;
   try {
@@ -194,11 +216,11 @@ export function withCacheBreakpoints(messages: ModelRequest['messages']): unknow
 }
 
 /**
- * Models that take `thinking: { type: 'adaptive' }`: Claude 4.6 and later (opus/sonnet/haiku-<major>[-<minor>]).
+ * Models that take `thinking: { type: 'adaptive' }`: Claude 4.6 and later, any family (claude-<family>-<major>[-<minor>]).
  * Older or unrecognised names get no thinking parameter, as before (sending it to them is a 400).
  */
 export function adaptiveThinking(model: string): boolean {
-  const m = /claude-(?:opus|sonnet|haiku)-(\d+)(?:-(\d{1,2}))?(?:-|$)/.exec(model);
+  const m = /claude-[a-z]+-(\d+)(?:-(\d{1,2}))?(?:-|$)/.exec(model);
   if (!m) return false;
   const major = Number(m[1]), minor = Number(m[2] ?? 0);
   return major > 4 || (major === 4 && minor >= 6);

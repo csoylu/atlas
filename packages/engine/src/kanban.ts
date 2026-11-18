@@ -17,6 +17,7 @@ import type { Bus } from './events.ts';
 import { insertNotification, type NewNotification } from './notifications.ts';
 import { MEMORY_SELECT, staleCardMemories, toMemory } from './memory.ts';
 import { isCleanupCard } from './cleanup.ts';
+import { stripData } from './images.ts';
 
 interface CardRow {
   id: string;
@@ -518,7 +519,7 @@ export class Kanban {
       .get(card.conversationId) as { next: number };
     this.db
       .prepare('INSERT INTO messages (id, conversation_id, seq, role, author, content, at, context_upto) VALUES (?, ?, ?, ?, ?, ?, ?, ?)')
-      .run(id, card.conversationId, next, role, author, JSON.stringify(content), new Date().toISOString(), contextUpto);
+      .run(id, card.conversationId, next, role, author, JSON.stringify(stripData(content)), new Date().toISOString(), contextUpto);
     if (card.board === 'direct') {
       // Chat history: the latest chat goes first, and the user's first message names a new chat.
       const text = content.map((b) => (b.type === 'text' ? b.text : '')).join(' ').replace(/\s+/g, ' ').trim();
