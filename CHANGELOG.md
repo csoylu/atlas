@@ -6,6 +6,10 @@ computed by `scripts/release/changelog.mjs` from the oldest entry to the newest,
 `Fixed` → patch, `Added` or `Changed` → minor, `Breaking` (data or settings stop working without action) → major.
 Never type a version number.
 
+## Changed · #126 · A task is done only once its code is on main
+
+CLAUDE.md's Releases section now says it: before finishing a task, check that none of its branches (`<type>/<N>-…`) has commits that are not on origin/main. If one does, merge it first, or block and name the branch. Tasks with no code finish as before. This is a project rule in CLAUDE.md, not an engine check (Master, 18 Nov 2026). No code change, no migration.
+
 ## Changed · #141 · A pull request can only merge into main once the QA agent has validated it
 
 GitHub cannot make an account approve its own pull request, and every agent uses Master's account, so the validation is a commit status, `qa/validated`, set on the PR's head commit by `scripts/pr/validate.mjs`. main requires it and the CI job `test`; a new commit on the PR clears it. The script refuses a PR not based on main, a head that moved since the review, red CI and a PR without exactly one changelog entry. CLAUDE.md's Releases section describes the flow. No code change in the app, no migration.

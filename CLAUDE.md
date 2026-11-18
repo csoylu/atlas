@@ -108,6 +108,10 @@ fails after 15 s naming what never appeared, and returns page errors + refused w
   other open PRs then conflict there: the validator merges the oldest PR first, and an author whose PR conflicts rebases
   (new entry back on top) and sends the new head. The gate guards against accidents, not misuse: `--as` is a name
   anyone can type.
+- **Done means on main** (#126): before `task_complete` or `task_request_review`, run `git fetch` and then
+  `git log --oneline origin/main..origin/<branch>` for every branch of the task (`git branch -r | grep '/<N>-'`).
+  If any branch has commits not on main, the task isn't done: merge the PR first, or `task_block` and say which branch
+  is still open and how many commits it is ahead of main. A task with no code (mockup, audit, report) finishes as usual.
 - **Agents never install the app.** No `install:mac`: Master's Atlas shows "Update available" and installs on
   Master's click (it restarts; running tasks resume). `install:mac` stays for a manual build from source.
 - **Testing without installing:**
