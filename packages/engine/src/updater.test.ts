@@ -119,7 +119,14 @@ function setup(version: string, extra: Partial<UpdaterOptions> = {}, dbFile = ':
   const u = new Updater(db, bus, opts);
   return { u, db, bus, dataDir, installed, opts, quits: () => quits };
 }
-const installedVersion = (app: string) => execFileSync('plutil', ['-extract', 'CFBundleShortVersionString', 'raw', '-o', '-', join(app, 'Contents/Info.plist')]).toString().trim();
+/** The app's version, or null while the helper has moved it aside and not yet put the new one in place. */
+const installedVersion = (app: string): string | null => {
+  try {
+    return execFileSync('plutil', ['-extract', 'CFBundleShortVersionString', 'raw', '-o', '-', join(app, 'Contents/Info.plist')], { stdio: ['ignore', 'pipe', 'ignore'] }).toString().trim();
+  } catch {
+    return null;
+  }
+};
 
 describe('versions', () => {
   it('compares x.y.z and reads shasum output', () => {
