@@ -6,6 +6,10 @@ computed by `scripts/release/changelog.mjs` from the oldest entry to the newest,
 `Fixed` → patch, `Added` or `Changed` → minor, `Breaking` (data or settings stop working without action) → major.
 Never type a version number.
 
+## Fixed · #123 · The Windows installer is attached to releases again
+
+The installer is now named Atlas-<version>-setup.exe, which the release step uploads (it was "Atlas Setup <version>.exe", so the upload found nothing).
+
 ## Changed · Every change now reaches main through a pull request, and main refuses force-pushes and deletion
 
 CLAUDE.md's Releases section says it: no direct push to main, for anyone; a branch, then a PR based on main; one merged PR = one changelog entry = one release. The GitHub branch protection on main (no force-push, no deletion, admins included) was set on 18 Nov 2026. Requiring a validation by the QA agent before a merge is a separate task. No code change, no migration.
