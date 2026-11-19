@@ -1,7 +1,7 @@
 import { useEffect, useRef, useState } from 'react';
 import type { Agent, Workflow, WorkflowEdge, WorkflowNode, WorkflowNodeKind } from '@atlas/shared';
 import { api } from './api.ts';
-import { BROWSER_TZ, DAYS, KIND_LABEL, cronOf, eventText, exitTarget, exitsOf, freeSpot, newNodeId, nodeTitle, timeDraftOf, triggerOf, when, wire, withoutNode, type Repeat, type TimeDraft } from './workflowView.ts';
+import { BROWSER_TZ, DAYS, KIND_LABEL, cronOf, eventText, exitTarget, exitsOf, freeSpot, newNodeId, nodeMeta, nodeTitle, timeDraftOf, triggerOf, when, wire, withoutNode, type Repeat, type TimeDraft } from './workflowView.ts';
 
 /** The canvas's right panel in Edit mode: the selected step's settings and exits (#171). */
 
@@ -24,6 +24,13 @@ const ICON: Record<WorkflowNodeKind, React.ReactNode> = {
     </>
   ),
   condition: <path d="M8 1.8 14.2 8 8 14.2 1.8 8z" />,
+  action: <path d="M3 8h8M8 4.5 11.5 8 8 11.5" />,
+  wait: (
+    <>
+      <circle cx="8" cy="8" r="6" />
+      <path d="M8 4.5V8l2.5 1.5" />
+    </>
+  ),
 };
 export function KindIcon({ kind }: { kind: WorkflowNodeKind }) {
   return (
@@ -54,6 +61,7 @@ export function StepPanel(props: { n: WorkflowNode; g: Graph; w: Workflow; agent
         {n.kind === 'agent' && <AgentFields n={n} agents={props.agents} set={set} />}
         {n.kind === 'approval' && <ApprovalFields n={n} set={set} />}
         {n.kind === 'condition' && <ConditionFields n={n} g={g} set={set} />}
+        {(n.kind === 'action' || n.kind === 'wait') && <p className="wf-sum">{nodeMeta(n, g.nodes)}</p>}
         <Exits n={n} g={g} change={props.change} />
       </div>
       <div className="wf-side-foot">
@@ -187,6 +195,8 @@ function ApprovalFields({ n, set }: { n: Extract<WorkflowNode, { kind: 'approval
 function ConditionFields({ n, g, set }: { n: Extract<WorkflowNode, { kind: 'condition' }>; g: Graph; set: SetConfig }) {
   const c = n.config;
   const steps = g.nodes.filter((x) => x.kind !== 'trigger' && x.id !== n.id);
+  // Tests on fields (#261): edited in the stage 2 editor (5/6); shown read-only here.
+  if (c.test === 'fields') return <p className="wf-sum">{nodeTitle({ ...n, config: { ...c, title: '' } }, g.nodes)}</p>;
   return (
     <>
       <label className="field">

@@ -433,17 +433,20 @@ A workflow is a small graph: one **trigger** wired to **steps**. Mockup: paris's
   as an ordered list with « exit → target », runs, Run now, on/off; no editing. `lastRun` (list) is the latest run
   that ran (not a skipped firing), with its steps; every run change re-emits `workflow.updated`.
 - **Tables** (migration 0044): `workflows` (name, enabled, origin `'schedules'` when migrated, revision, next_run_at,
-  last_fired_at, last_error), `workflow_nodes` (kind trigger | agent | approval | condition, x, y, config JSON,
+  last_fired_at, last_error), `workflow_nodes` (kind trigger | agent | approval | condition | action | wait (0060), x, y, config JSON,
   `own_card_id` = an agent step's kept task, runtime state outside the revision), `workflow_edges` (from node + named
   exit → to node, one edge per exit), `workflow_runs` (number, state running | waiting | done | failed | stopped |
   skipped, trigger time | manual | task | pr, reason, times; since 0059 its subject task and PR, the event, its
   context JSON), `workflow_run_steps` (node, kind, round, state, exit, task, summary,
-  times). Every change is one transaction; `workflow.updated` / `workflow.deleted` / `workflow.run` go on the WebSocket
+  times; since 0060 `deadline_at` (a Wait's limit), `data` (a merge's pinned PR and head), and the couldn't-run state
+  `couldnt`, `couldnt_since`, `retry_at`, `tries`, `notified_at`). Every change is one transaction; `workflow.updated` / `workflow.deleted` / `workflow.run` go on the WebSocket
   after commit.
 - **Graph rules** (checked on every save, refused with the reason): exactly one trigger, which can't be deleted; every
   edge leaves from an existing node by one of its exits and goes to an existing node; each exit wired at most once;
   agent steps name an existing agent; a cron and a time zone that parse; a one-shot date not in the past. Exits: trigger
-  `start`; agent `done` / `failed`; approval `approved` / `rejected`; condition `yes` / `no`. A graph save carries the
+  `start`; agent `done` / `failed`; approval `approved` / `rejected`; condition `yes` / `no`; action `done` (validate +
+  merge: `merged` / `refused`); wait `event` / `timed out`. A condition on fields names fields a run can have (task.*,
+  pr.*, project.*, event.*, run.*, payload.*, steps.<an existing node>.*), gt / lt a number. A graph save carries the
   revision it was read at: a stale one is refused (409).
 - **Triggers**: *time*, a cron in a time zone or once at a date (what schedules were), *manual*, and since #258
   (Workflows v2 stage 1) *task* and *pr* events. Run now works on any workflow, even off, and can take a task (#12)
@@ -487,10 +490,44 @@ A workflow is a small graph: one **trigger** wired to **steps**. Mockup: paris's
   review: the run is *waiting*.
 - **Approval**: a task blocked on Master (needs_input, options Approve / Reject) in the Inbox. The answer picks the
   exit; anything else asks again. Closing the task rejects.
-- **Condition**, two tests, nothing judged by a model: « step X ran fewer than N times in this run » (a loop guard)
-  and « the previous step's summary contains <text> ».
-- **Ends**: an unwired exit ends the run. done / approved / yes / no end it Done; failed / rejected end it Failed with
-  the reason. A run reaching a deleted agent or a missing node fails with the reason (it never crashes the tick).
+- **Condition**, nothing judged by a model: « step X ran fewer than N times in this run » (a loop guard), « the
+  previous step's summary contains <text> », and since #261 **tests on fields**: `{field, op, value}` with op is / is
+  not / contains / does not contain / is empty / is not empty (text, case-sensitive) or > / < (numbers; a value that
+  isn't one is false), yes when all (or any) pass. A field the run doesn't have reads as missing, never as a match
+  (only is not / does not contain / is empty pass). The fields are the run's context with its task and PR **as they
+  are now** (`pr.ci`, `pr.conflict` yes/no, `pr.qa`, `pr.head`… from Atlas's last GitHub read; a task run's PR is its
+  latest linked one), `payload.*` (webhooks, stage 3), and `steps.<node>.exit | summary | task`. The step's summary
+  says what each test read (« pr.ci = « success » ✓ »). `POST /api/workflows/:id/try-condition {run, config}` runs a
+  draft condition on a past run of that workflow and returns each test with the value it read; nothing is stored.
+  `{{field}}` in texts reads the same live values.
+- **Action** (#261, no model, no task of its own): on the run's task, `setStatus` (triage, todo, ready, done, closed)
+  and `setAssignee` (an agent or nobody), each with an optional note posted in the task's thread first (author
+  `workflow`, so an agent woken by the change reads why), exit `done`; `notify`: one Inbox item (`workflow.notify`,
+  linked to the task), exit `done`; `mergePr`: validate + merge the run's PR (its subject, else the task's latest PR
+  of the project's repo) with the gate of `pr_validate` (`scripts/pr/validate.mjs`: base = the repo's default branch,
+  not a draft, no conflict, the project's CI job green, head = the head **pinned when the step started**, i.e. what CI
+  and the review saw), merge pinned to that sha; the status says `workflow: « name » run N`. Exits `merged` (also
+  when it was already merged) / `refused` with GitHub's reason (CI red, head moved, conflict, GitHub's own 405/409/422).
+  The GitHub call runs outside the transaction; the pinned PR is stored first, so a kill mid-call retries it (merging is
+  idempotent). An action on a run with no task, a PR not linked, a refused status change: the step fails with the
+  reason (rule 3). Actions are `workflow:<id>`: they never fire their own workflow. « Run a command »: #273.
+- **Wait** (#261): until an event about the run's task or PR, at most `limitMin` (1 min – 30 days): CI finished
+  (success or failure on the head), CI green, a conflict, the PR merged, the task unblocked (out of Blocked), the task
+  in a given status. Read from the stored task and PR, so already true at the start goes on at once; no model, no
+  process: each tick (15 s and after every card event) checks it. Its deadline is an instant stored on the step
+  (`deadline_at`): a restart past it takes `timed out` at once. While it waits the run is *running* (waiting for an
+  event, not for Master). The crash test has a waiting run.
+- **Couldn't run** (#261) is not an exit: the step got no answer (gh logged out or offline, GitHub still computing
+  mergeability, no head read yet, the step's agent or an action's assignee deleted since the save). The step stays
+  open (*waiting*, `couldntRun` on it: reason, since, next try, tries), the run is *waiting*; Atlas tries it again every
+  minute (`COULDNT_RETRY_MS`), and after 15 min (`COULDNT_NOTIFY_MS`) Master gets one Inbox item
+  (`workflow.couldnt_run`) for that step, never more. `POST /api/workflow-runs/:id/retry` tries it now;
+  `POST /api/workflow-runs/:id/follow` takes the step's negative exit (agent `failed`, approval `rejected`, merge
+  `refused`, wait `timed out`; none for the other actions: Retry or Stop run), the summary says Master chose it. An
+  answer arriving after Follow or Stop changes nothing. Never silent: the reason is on the step and in the run.
+- **Ends**: an unwired exit ends the run. done / approved / yes / no / merged / event end it Done; failed / rejected /
+  refused / timed out end it Failed with the reason. A missing node fails the run with the reason (it never crashes the
+  tick).
 - **One run at a time** (per subject for task, PR and manual runs on a task): a trigger firing while a run is open
   records a *skipped* run with the reason.
   Stop run closes the run's open tasks and ends it Stopped. Deleting a workflow stops its open run; tasks stay.
@@ -507,7 +544,8 @@ A workflow is a small graph: one **trigger** wired to **steps**. Mockup: paris's
   `PUT /api/workflows/:id/graph` (revision check), `POST /api/workflows/:id/run` (`{task?, pr?}`),
   `GET /api/workflows/:id/runs`, `GET /api/workflows/:id/fields?node=`, `GET /api/workflow-runs/:id` (with steps),
   `GET /api/workflow-runs/:id/context`, `POST /api/workflow-runs/:id/stop`, `GET /api/cards/:id/workflows`, `POST /api/workflows/preview` (next
-  firings of a draft time trigger).
+  firings of a draft time trigger), since #261 `POST /api/workflow-runs/:id/retry`, `POST /api/workflow-runs/:id/follow`
+  and `POST /api/workflows/:id/try-condition`.
 
 ## 10. Tools (v1)
 | Tool | Notes |

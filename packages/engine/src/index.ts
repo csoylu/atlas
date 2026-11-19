@@ -19,6 +19,7 @@ import { MemoryCleanup } from './cleanup.ts';
 import { MemoryReview } from './memoryReview.ts';
 import { envWithSecrets, Secrets, type SecretStore } from './secrets.ts';
 import { createApi } from './api.ts';
+import { ghBinary, ghClient } from '../../../scripts/pr/validate.mjs';
 import { Workflows } from './workflows.ts';
 import { Auth, isLoopbackHost } from './auth.ts';
 import { screenshotAnswer } from './screenshot.ts';
@@ -159,7 +160,10 @@ export async function startEngine(opts: EngineOptions): Promise<Engine> {
   models.setClaude(claude);
   const usage = new Usage(db, bus);
   const memories = new Memories(db, bus);
-  const workflows = new Workflows(db, bus, kanban);
+  // Merge steps (#261) use the user's own gh login, with the login shell's PATH (shellEnv is made below, read when a step runs).
+  const workflows = new Workflows(db, bus, kanban, undefined, {
+    gh: opts.prs?.validate?.gh ? () => opts.prs!.validate!.gh! : async () => ghClient({ bin: ghBinary(), env: await shellEnv.engineEnv() }),
+  });
   const cleanup = new MemoryCleanup(db, bus, memories);
   const settings = new Settings(db);
   const secrets = new Secrets(db, bus, opts.secrets, env, opts.env ?? process.env, kanban);

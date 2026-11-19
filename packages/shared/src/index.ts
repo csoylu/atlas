@@ -732,17 +732,34 @@ export function isTimeZone(tz: string): boolean {
 
 /* ── Workflows (#170, design §9): a trigger wired to agent steps, approvals and conditions. They replaced schedules. ── */
 
-export const WORKFLOW_NODE_KINDS = ['trigger', 'agent', 'approval', 'condition'] as const;
+export const WORKFLOW_NODE_KINDS = ['trigger', 'agent', 'approval', 'condition', 'action', 'wait'] as const;
 export type WorkflowNodeKind = (typeof WORKFLOW_NODE_KINDS)[number];
-/** The named exits of each kind of node: one edge per exit at most. */
+/**
+ * The named exits each kind of node can have: one edge per exit at most. An action's exits depend on what it does
+ * (`workflowExits` gives a node's own): done; merged / refused (validate + merge).
+ */
 export const WORKFLOW_EXITS = {
   trigger: ['start'],
   agent: ['done', 'failed'],
   approval: ['approved', 'rejected'],
   condition: ['yes', 'no'],
+  action: ['done', 'merged', 'refused'],
+  wait: ['event', 'timed out'],
 } as const satisfies Record<WorkflowNodeKind, readonly string[]>;
 /** Exits that end a run as Failed when nothing is wired to them; every other unwired exit ends it Done. */
-export const WORKFLOW_FAILING_EXITS = ['failed', 'rejected'] as const;
+export const WORKFLOW_FAILING_EXITS = ['failed', 'rejected', 'refused', 'timed out'] as const;
+/**
+ * The exit « Follow the negative exit » takes when a step couldn't run (#261): the outcome that sends the work back.
+ * None: the step has no negative outcome (Retry now or Stop run).
+ */
+export function negativeExit(n: { kind: WorkflowNodeKind; config: unknown }): string | null {
+  if (n.kind === 'agent') return 'failed';
+  if (n.kind === 'approval') return 'rejected';
+  if (n.kind === 'condition') return 'no';
+  if (n.kind === 'wait') return 'timed out';
+  if (n.kind === 'action') return (n.config as { do?: string }).do === 'mergePr' ? 'refused' : null;
+  return null;
+}
 
 /** At set times (a cron in a time zone, or once at an instant: what schedules had) or only by hand (Run now). */
 export const TimeTrigger = z.object({
@@ -803,20 +820,75 @@ export const AgentStepConfig = z.object({
 });
 /** A task blocked on Master in the Inbox, with Approve / Reject. */
 export const ApprovalConfig = z.object({ title: z.string().trim().max(200).default(''), question: z.string().max(5_000).default('') });
-/** Two tests only, nothing judged by a model. `node`: the step counted. */
+/** Exact tests on a field (#261), nothing judged by a model. gt / lt compare numbers (a value that isn't one: false). */
+export const FIELD_TEST_OPS = ['is', 'isNot', 'contains', 'notContains', 'isEmpty', 'isNotEmpty', 'gt', 'lt'] as const;
+export type FieldTestOp = (typeof FIELD_TEST_OPS)[number];
+export const FieldTest = z.object({
+  /** A run field: task.status, pr.ci, payload.after, event.result, steps.<node>.exit… (GET /api/workflows/:id/fields). */
+  field: z.string().trim().min(1).max(200),
+  op: z.enum(FIELD_TEST_OPS),
+  /** Compared as text, case-sensitive (is, isNot, contains) or as a number (gt, lt); unused by isEmpty / isNotEmpty. */
+  value: z.string().max(1_000).default(''),
+});
+export type FieldTest = z.infer<typeof FieldTest>;
+/**
+ * Nothing judged by a model. ranFewer: « step `node` ran fewer than N times » (a loop guard); summaryContains: the
+ * previous summary; fields (#261): tests on the run's fields, all or any of them true → yes.
+ */
 export const ConditionConfig = z.discriminatedUnion('test', [
   z.object({ test: z.literal('ranFewer'), title: z.string().trim().max(200).default(''), node: z.string().min(1), times: z.number().int().min(1).max(100) }),
   z.object({ test: z.literal('summaryContains'), title: z.string().trim().max(200).default(''), text: z.string().min(1).max(500) }),
+  z.object({ test: z.literal('fields'), title: z.string().trim().max(200).default(''), match: z.enum(['all', 'any']).default('all'), tests: z.array(FieldTest).min(1).max(20) }),
 ]);
+export type ConditionConfig = z.infer<typeof ConditionConfig>;
+/** Statuses an action may set (running is the dispatcher's, review comes with a PR, blocked needs a question). */
+export const ACTION_STATUSES = ['triage', 'todo', 'ready', 'done', 'closed'] as const;
+/**
+ * Action (#261): Atlas does it, no model. setStatus / setAssignee (with an optional note in the task's thread) and
+ * notify: exit done; mergePr: validate + merge the run's PR with the project's gate (pr_validate's), exits merged /
+ * refused. Texts take {{field}}. « Run a command » comes in #273.
+ */
+export const ActionConfig = z.discriminatedUnion('do', [
+  z.object({ do: z.literal('setStatus'), title: z.string().trim().max(200).default(''), status: z.enum(ACTION_STATUSES), note: z.string().max(5_000).default('') }),
+  z.object({ do: z.literal('setAssignee'), title: z.string().trim().max(200).default(''), assignee: z.string().min(1).nullable(), note: z.string().max(5_000).default('') }),
+  z.object({ do: z.literal('mergePr'), title: z.string().trim().max(200).default('') }),
+  z.object({ do: z.literal('notify'), title: z.string().trim().max(200).default(''), text: z.string().trim().min(1).max(5_000) }),
+]);
+export type ActionConfig = z.infer<typeof ActionConfig>;
+/**
+ * What a Wait step waits for (#261), read from the stored task and its PR (what Atlas last read from GitHub):
+ * ciFinished (CI success or failure on the head), ciGreen, conflict, merged (the PR), unblocked (the task leaves
+ * Blocked), status (the task is in `status`). Already true when the step starts: it goes on at once.
+ */
+export const WAIT_FOR = ['ciFinished', 'ciGreen', 'conflict', 'merged', 'unblocked', 'status'] as const;
+export type WaitFor = (typeof WAIT_FOR)[number];
+export const WaitConfig = z
+  .object({
+    title: z.string().trim().max(200).default(''),
+    for: z.enum(WAIT_FOR),
+    /** for: status only. */
+    status: CardStatus.nullable().default(null),
+    /** The time limit, in minutes (at most 30 days): then the « timed out » exit. */
+    limitMin: z.number().int().min(1).max(43_200),
+  })
+  .refine((c) => c.for !== 'status' || c.status, { message: 'waiting for a status: say which one', path: ['status'] });
+export type WaitConfig = z.infer<typeof WaitConfig>;
 const nodeBase = { id: z.string().trim().min(1).max(40), x: z.number().finite(), y: z.number().finite() };
 export const WorkflowNode = z.discriminatedUnion('kind', [
   z.object({ ...nodeBase, kind: z.literal('trigger'), config: TriggerConfig }),
   z.object({ ...nodeBase, kind: z.literal('agent'), config: AgentStepConfig }),
   z.object({ ...nodeBase, kind: z.literal('approval'), config: ApprovalConfig }),
   z.object({ ...nodeBase, kind: z.literal('condition'), config: ConditionConfig }),
+  z.object({ ...nodeBase, kind: z.literal('action'), config: ActionConfig }),
+  z.object({ ...nodeBase, kind: z.literal('wait'), config: WaitConfig }),
 ]);
 export type WorkflowNode = z.infer<typeof WorkflowNode>;
 export type WorkflowNodeInput = z.input<typeof WorkflowNode>;
+/** The exits of this node (an action's depend on what it does). */
+export function workflowExits(n: WorkflowNode | { kind: WorkflowNodeKind; config: unknown }): readonly string[] {
+  if (n.kind === 'action') return (n.config as { do?: string }).do === 'mergePr' ? ['merged', 'refused'] : ['done'];
+  return WORKFLOW_EXITS[n.kind];
+}
 export const WorkflowEdge = z.object({ from: z.string().min(1), exit: z.string().min(1), to: z.string().min(1) });
 export type WorkflowEdge = z.infer<typeof WorkflowEdge>;
 export const WorkflowGraph = z.object({ nodes: z.array(WorkflowNode).max(100), edges: z.array(WorkflowEdge).max(300) });
@@ -840,6 +912,13 @@ export interface WorkflowRunStep {
   summary: string | null;
   startedAt: string;
   endedAt: string | null;
+  /** A Wait step: when it times out. */
+  deadlineAt: string | null;
+  /**
+   * The step couldn't run (#261): no answer (gh logged out, agent missing…), not an outcome. The run waits on it;
+   * Atlas retries every minute and tells Master after 15 min. In the run: Retry now, or Follow `negativeExit`.
+   */
+  couldntRun: { reason: string; since: string; nextTryAt: string; tries: number; notified: boolean; negativeExit: string | null } | null;
 }
 export interface WorkflowRun {
   id: string;
@@ -872,6 +951,17 @@ export interface WorkflowRunContext {
   runId: string;
   /** Field → value, as stored when the run started, plus the exit, summary and task of the steps that ended. */
   fields: Record<string, string>;
+}
+/** POST /api/workflows/:id/try-condition (#261): a condition's tests on a past run's fields, before saving. */
+export const TryCondition = z.object({ run: z.string().min(1), config: ConditionConfig });
+export type TryCondition = z.input<typeof TryCondition>;
+export interface ConditionTryResult {
+  runId: string;
+  runNumber: number;
+  exit: 'yes' | 'no';
+  /** Each test with the value it read (null: the run has no such field). */
+  tests: { field: string; op: FieldTestOp; value: string; actual: string | null; pass: boolean }[];
+  summary: string;
 }
 /** GET /api/workflows/:id/fields?node=…: the fields a step can use, with the value from the last run when known. */
 export interface WorkflowField {
@@ -1127,7 +1217,7 @@ export type UpdatePlanAccount = z.infer<typeof UpdatePlanAccount>;
  * Kinds of notification the engine writes. card.blocked / card.review rows are for the system notification and history;
  * the Inbox shows those cards from their live state (InboxNeed). plan.* rows are « system ».
  */
-export const NOTIFICATION_KINDS = ['card.blocked', 'card.review', 'card.done', 'run.failed', 'schedule.ran', 'memory.cleanup', 'plan.switched', 'plan.exhausted', 'github.unreadable', 'review.stalled', 'card.stalled', 'workflow.stopped'] as const;
+export const NOTIFICATION_KINDS = ['card.blocked', 'card.review', 'card.done', 'run.failed', 'schedule.ran', 'memory.cleanup', 'plan.switched', 'plan.exhausted', 'github.unreadable', 'review.stalled', 'card.stalled', 'workflow.stopped', 'workflow.couldnt_run', 'workflow.notify'] as const;
 export type NotificationKind = (typeof NOTIFICATION_KINDS)[number];
 
 /** Something the user is told about (also shown as a system notification by the app). */

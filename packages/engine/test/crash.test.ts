@@ -37,7 +37,7 @@ describe('durability (design §6)', () => {
       expect(cards).toHaveLength(3);
       // The event-started workflow (#258): every created task fired exactly one run, with exactly one step task.
       engine.workflows.tick();
-      const [w] = engine.workflows.list();
+      const w = engine.workflows.list().find((x) => x.name === 'On created');
       const runs = engine.workflows.runs(w!.id);
       expect(runs.map((r) => r.subject!.cardId).sort()).toEqual(cards.map((c) => c.id).sort());
       expect(engine.db.prepare('SELECT COUNT(*) AS n FROM workflow_events').get()).toEqual({ n: 0 });
@@ -73,6 +73,21 @@ describe('durability (design §6)', () => {
         expect(statuses.filter((s) => s === 'failed' || s === 'stopped')).toEqual([]); // interruption is never a failure
         expect(statuses.filter((s) => s === 'done')).toHaveLength(1);
       }
+      // The waiting run (#261): still on its one Wait step, deadline as stored; it goes on once its event comes.
+      const wait = engine.workflows.list().find((x) => x.name === 'Wait')!;
+      const [wr] = engine.workflows.runs(wait.id);
+      const before = engine.workflows.run(wr!.id);
+      expect(before.state).toBe('running');
+      expect(before.steps!.map((s) => [s.nodeId, s.state])).toEqual([
+        ['trigger', 'done'],
+        ['w', 'waiting'],
+      ]);
+      engine.kanban.update(cards.find((c) => c.title === 'crash 0')!.id, { status: 'closed' }, 'user');
+      engine.workflows.tick();
+      const after = engine.workflows.run(wr!.id);
+      expect(after).toMatchObject({ state: 'done' });
+      expect(after.steps!.map((s) => s.exit)).toEqual(['start', 'event', 'done']);
+      expect(after.steps![1]!.deadlineAt).toBe(before.steps![1]!.deadlineAt);
     } finally {
       await engine.stop();
     }

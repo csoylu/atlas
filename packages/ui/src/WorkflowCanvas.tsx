@@ -47,7 +47,7 @@ type Save = { state: 'saved'; at: number } | { state: 'saving' } | { state: 'err
 /** A node's ports, relative to its top-left corner (px at 100 %), measured from the DOM. */
 type Ports = { h: number; input: Pt; exits: Record<string, Pt> };
 
-const ADD: { kind: Exclude<WorkflowNodeKind, 'trigger'>; label: string; help: string }[] = [
+const ADD: { kind: 'agent' | 'approval' | 'condition'; label: string; help: string }[] = [
   { kind: 'agent', label: 'Agent step', help: 'An agent runs a prompt as a task. Exits: done, failed.' },
   { kind: 'approval', label: 'Approval', help: 'A task blocked on you, in the Inbox. Exits: approved, rejected.' },
   { kind: 'condition', label: 'Condition', help: 'An exact test picks yes or no.' },
@@ -55,7 +55,7 @@ const ADD: { kind: Exclude<WorkflowNodeKind, 'trigger'>; label: string; help: st
 const ZOOMS = [0.5, 0.67, 0.8, 0.9, 1, 1.1, 1.25, 1.5];
 const ordinal = (n: number) => (n === 1 ? '1st' : n === 2 ? '2nd' : n === 3 ? '3rd' : `${n}th`);
 
-function blank(kind: Exclude<WorkflowNodeKind, 'trigger'>, id: string, at: { x: number; y: number }, g: Graph): WorkflowNode {
+function blank(kind: 'agent' | 'approval' | 'condition', id: string, at: { x: number; y: number }, g: Graph): WorkflowNode {
   if (kind === 'agent') return { id, kind, ...at, config: { title: '', agentId: null, prompt: '', newTaskEachRun: true } };
   if (kind === 'approval') return { id, kind, ...at, config: { title: '', question: '' } };
   const counted = g.nodes.find((n) => n.kind === 'agent')?.id ?? 'trigger';

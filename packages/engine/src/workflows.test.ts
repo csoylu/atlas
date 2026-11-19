@@ -275,12 +275,15 @@ describe('workflows (#170, design §9)', () => {
     expect(third.wf.get(t.id).nextRunAt).toBe('2026-11-11T08:00:00.000Z');
   });
 
-  it('a run that reaches a deleted agent or a missing step fails with the reason; saving a stale revision is refused', async () => {
+  it("a run that reaches a deleted agent couldn't run (#261), a missing step fails with the reason; saving a stale revision is refused", async () => {
     const { engine, wf } = await setup();
     engine.agents.create({ id: 'temp', modelId: engine.agents.get('atlas').modelId });
     const w = wf.create({ name: 'Temp', nodes: [trigger({ kind: 'manual' }), agent('a', 'go', { agentId: 'temp' })], edges: [edge('trigger', 'start', 'a')] }, 'user');
     engine.agents.remove('temp');
-    expect(wf.runNow(w.id)).toMatchObject({ state: 'failed', reason: '« go »: agent @temp does not exist' });
+    const r = wf.runNow(w.id);
+    expect(r).toMatchObject({ state: 'waiting' });
+    expect(r.steps![1]).toMatchObject({ state: 'waiting', couldntRun: { reason: 'agent @temp does not exist', tries: 1, negativeExit: 'failed' } });
+    expect(wf.followNegative(r.id)).toMatchObject({ state: 'failed', reason: expect.stringContaining("couldn't run (agent @temp does not exist)") });
 
     const g = wf.get(w.id);
     const saved = wf.saveGraph(w.id, { revision: g.revision, nodes: [trigger({ kind: 'manual' }), agent('a', 'again')], edges: [edge('trigger', 'start', 'a')] });
