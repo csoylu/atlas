@@ -5,7 +5,12 @@ import RetryReporter from './scripts/test/retryReporter.ts';
 //  - fast: everything except the slow suites. This is `npm test`; it runs in seconds and is what tasks should run.
 //  - slow: real voice models (real-time audio, CPU-timing sensitive) and the 50-SIGKILL crash test. They run
 //          one file at a time so they do not starve each other (parallel runs made the voice timing asserts flaky).
-//          `npm run test:full` runs both; CI / before a release / when you touched voice or the store.
+//          `npm run test:full` runs both. Where they run (#254):
+//            - CI (job `test`, every PR and push to main): the fast project, then the crash test with CRASH_KILLS=30 and
+//              the real-Chrome screenshot test (after a UI build).
+//            - Local only: the voice suites. They need the local models, which CI does not download (they skip without
+//              them). Anyone touching voice runs `npm run test:full` before asking for review and states the result in
+//              the review request.
 const include = ['packages/*/src/**/*.test.ts', 'packages/*/test/**/*.test.ts', 'apps/*/src/**/*.test.ts', 'scripts/**/*.test.ts'];
 const slow = [
   'packages/engine/test/crash.test.ts',
