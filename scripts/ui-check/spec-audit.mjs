@@ -105,12 +105,12 @@ export const SPEC_AUDIT = (W, scale, exceptions, minContrast) => `((W, SCALE, EX
   want('.msg .who .dot-avatar', 'w', 20, 'message avatar');
   want('.card-m .dot-avatar', 'w', 20, 'card avatar');
   want('.chat-row.steps > .chat-row-line, .chat-row.nested > .chat-row-line', 'h', matchMedia('(pointer: coarse)').matches ? 44 : 36, 'step row height', 1.5);
-  want('.chat-pin', 'h', matchMedia('(pointer: coarse)').matches ? 44 : 40, 'pinned task height');
+  want('.chat-pin', 'h', 28, 'task chip height (#271)');
   if (!phone) want('.column:not(.folded)', 'w', 228, 'board lane width'); // empty lanes are a 40 px rail (#266)
   if (!phone) for (const e of document.querySelectorAll('.chat-pane .composer')) { if (shown(e) && e.getBoundingClientRect().width > 781) { issues.push('composer wider than the 780 px column: ' + Math.round(e.getBoundingClientRect().width)); break; } }
 
   // ── 5: status words are chips
-  for (const e of document.querySelectorAll('.chat-row.card-report')) if (shown(e) && /finished/i.test(e.textContent) && !e.querySelector('.st-chip')) issues.push('finished report without Done chip: "' + txt(e) + '"');
+  for (const e of document.querySelectorAll('.chat-row.card-report')) if (shown(e) && e.getBoundingClientRect().height > 50) issues.push('task update on more than one line (#271): "' + txt(e) + '"');
   for (const e of document.querySelectorAll('.st-chip')) if (shown(e) && /^running$/i.test(txt(e))) issues.push('chip says "running", should say Working');
   for (const e of document.querySelectorAll('.st-chip')) if (shown(e)) { const a = getComputedStyle(e, '::before'); if (a.animationName !== 'none') issues.push('chip dot pulses (' + a.animationName + ')'); }
 

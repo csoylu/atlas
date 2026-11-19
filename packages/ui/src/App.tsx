@@ -437,7 +437,8 @@ export function App() {
   const mainChats = new Set([...agents.flatMap((a) => (a.mainChat ? [a.mainChat] : [])), ...projects.flatMap((p) => p.members.flatMap((m) => (m.mainChat ? [m.mainChat] : [])))]);
   /** With two active projects or more, the sidebar has one agent group per project. */
   const groups = pinfo.active.length >= 2 ? pinfo.active : null;
-  const chatProject = openChat && pinfo.multi ? pinfo.byId(openChat.projectId) : undefined;
+  // « Project › agent » (redesign #271): the project is named even with one project, as the mockup draws it.
+  const chatProject = openChat ? pinfo.byId(openChat.projectId) : undefined;
   const projCrumb = chatProject ? (
     <span key="p" className="crumb-part proj-crumb">
       <ProjDot hue={chatProject.colour} />
@@ -448,13 +449,20 @@ export function App() {
   const runningTasks = cards.filter((c) => c.status === 'running');
   /** The header's breadcrumb (parts before the title), its title and a faint note after it. */
   const openIsMain = !!openChat && mainChats.has(openChat.id);
+  /** « team lead · idle »: the role's first line and whether the agent is working, after its name in a main chat. */
+  const agentSub = (chat: Card) => {
+    const a = agents.find((x) => x.id === chat.assignee);
+    if (!a) return undefined;
+    const role = a.rolePrompt.split('\n')[0]?.trim();
+    return [role, busy(a.id) ? 'working' : 'idle'].filter(Boolean).join(' · ');
+  };
   const agentDot = (id: string) => (
     <AgentFace id={id} />
   );
   const crumb: { parts: ReactNode[]; title: string; titleIcon?: ReactNode; sub?: string; tag?: ReactNode } =
     route.view === 'chat'
       ? openChat && openIsMain
-        ? { parts: projCrumb ? [projCrumb] : [], title: openChat.assignee ?? openChat.title, titleIcon: agentDot(openChat.assignee ?? '') }
+        ? { parts: projCrumb ? [projCrumb] : [], title: openChat.assignee ?? openChat.title, titleIcon: agentDot(openChat.assignee ?? ''), sub: agentSub(openChat) }
         : openChat
         ? {
             parts: [

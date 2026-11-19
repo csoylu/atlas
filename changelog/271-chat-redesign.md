@@ -1,0 +1,5 @@
+## Changed · #271 · A chat has one header row with its project, agent and tasks, task updates take one line, and the composer shows friendly model names and a context ring
+- Header: « Atlas › atlas · team lead · idle », then « From this chat » with the tasks the chat created as chips (state, #N, title; a « +N » menu past three, one « N tasks » chip on a narrow screen), then ⋯ with Clear context and Delete chat (with a confirm). The pins floating over the chat are gone.
+- Task updates in a chat take one line each: state, number, title, outcome and time. A click opens the task beside the chat.
+- Composer: one line to start, then « Fable 5.2 · Medium ▾ » (friendly names everywhere, never a raw model id), the context ring (tokens and the plan behind it, on hover or click; the plan meter shows in the row only past 80 %), then attach, the voice mode toggle and send.
+- The voice toggle shows only in the desktop app and only in the chat voice talks to (atlas's main chat). It turns voice mode on or off, the same switch as Settings → Voice, and opens Settings → Voice when voice can't listen yet.

@@ -6,6 +6,8 @@ import type { MessageStream } from './useMessages.ts';
 
 import { axisTicks, dayTotal, tok, usageHeadline } from './usageStats.ts';
 import { Skeleton } from './Kit.tsx';
+import { PopButton } from './HeadMenu.tsx';
+import { friendlyModel } from './modelNames.ts';
 
 export { tok };
 
@@ -21,56 +23,66 @@ export function useChatUsage(cardId: string, stream: MessageStream, onError: (e:
 }
 
 /**
- * The status strip at the bottom of the composer (design option C, 11 Nov 2026). Left: always-visible gauges —
- * context fill at the latest answer (amber past 50 %, red past the 70 % compaction point) and this chat's tokens;
- * OpenAI's « Using ChatGPT plan · Manage usage » when on that plan. Right: one pill « model · effort » that opens
- * the picker.
+ * The row under the composer's text (redesign #271, mockup « Chat »): the model pill « Fable 5.2 · Medium ▾ » that
+ * opens the picker, then the context ring (amber past 50 %, red past the 70 % compaction point); this chat's tokens and
+ * the plan meter are behind the ring (hover, or a click / tap for the card). The plan meter joins the row only past
+ * QUOTA_WARN. OpenAI's « Using ChatGPT plan · Manage usage » stays visible when on that plan. Right: attach, the voice
+ * toggle (desktop, the voice chat only), send.
  */
-/** `send`: the composer's teal send button (a submit button of the form around it), after the model pill. */
-export function ComposerMeta(props: { usage: ChatUsage | null; plan: boolean; pick?: PickProps; send?: { disabled: boolean }; attach?: ReactNode }) {
+/** `send`: the composer's teal send button (a submit button of the form around it), at the right end. */
+export function ComposerMeta(props: { usage: ChatUsage | null; plan: boolean; models?: Model[]; pick?: PickProps; send?: { disabled: boolean }; attach?: ReactNode; voice?: ReactNode }) {
   const u = props.usage;
   const pct = contextPct(u);
   const level = pct === null ? '' : pct >= 70 ? ' full' : pct >= 50 ? ' warm' : '';
   const hasUsage = !!u && u.calls > 0;
+  // A friendly name or nothing: never a raw model id (a deleted model just isn't named).
+  const lastM = u?.lastModelId ? (props.models ?? props.pick?.models ?? []).find((m) => m.id === u.lastModelId) : undefined;
+  const lastModel = lastM ? friendlyModel(lastM.name) : null;
+  const q = u?.plan?.quota;
+  const planHot = !!q && Math.max(q.fiveHour?.usedPct ?? 0, q.week?.usedPct ?? 0) >= QUOTA_WARN;
+  const lines = hasUsage
+    ? [
+        pct !== null ? `Context ${pct === 0 && u!.lastInput ? '<1' : pct}% used: ${tok(u!.lastInput!)} of ${tok(u!.contextWindow!)} at the last answer. Past 70 % the oldest messages are folded into a summary.` : null,
+        `${tok(u!.input)} tokens in (${tok(u!.cached)} from cache) · ${tok(u!.output)} out`,
+        `${u!.calls} model call${u!.calls === 1 ? '' : 's'}${lastModel ? ` · last answer by ${lastModel}` : ''}`,
+        u!.plan ? planLine(u!.plan) : null,
+      ].filter((x): x is string => !!x)
+    : [];
   return (
     <div className="composer-strip">
-      <span className="strip-gauges">
-        {hasUsage && (
-          <span
-            className={'strip-ctx' + level}
-            title={[
-              pct !== null ? `Context ${tok(u!.lastInput!)} of ${tok(u!.contextWindow!)} at the last answer (past 70 % the oldest messages are folded into a summary)` : null,
-              `${u!.input.toLocaleString()} tokens in (${u!.cached.toLocaleString()} from cache) · ${u!.output.toLocaleString()} out`,
-              `${u!.calls} model call${u!.calls === 1 ? '' : 's'}${u!.lastModelId ? ` · last answer by ${u!.lastModelId}` : ''}`,
-            ].filter(Boolean).join('\n')}
-          >
-            {pct !== null && (
-              <>
-                <Ring pct={pct} />
-                <span>{pct === 0 && u!.lastInput ? '<1' : pct}%<span className="strip-word"> context</span></span>
-                <span className="strip-dot">·</span>
-              </>
-            )}
-            <span className="num">
-              {tok(u!.input)} in · {tok(u!.output)} out
-            </span>
-          </span>
-        )}
-        {u?.plan && <PlanGauge plan={u.plan} />}
-        {props.plan && !u?.plan?.quota?.fiveHour && (
-          <span className="plan-inline">
-            Using ChatGPT plan
-            <a href={CHATGPT_USAGE_URL} target="_blank" rel="noreferrer">
-              Manage usage
-            </a>
-          </span>
-        )}
-      </span>
       {props.pick && <PickMenu {...props.pick} />}
+      {hasUsage && (
+        <PopButton
+          className={'ctx-ring' + level}
+          label={<Ring pct={pct ?? 0} />}
+          title={lines.join('\n')}
+          ariaLabel={pct !== null ? `Context ${pct}% used: usage details` : 'Usage details'}
+          width={300}
+        >
+          {() => (
+            <div className="ring-pop">
+              {lines.map((l) => (
+                <p key={l}>{l}</p>
+              ))}
+            </div>
+          )}
+        </PopButton>
+      )}
+      {u?.plan && planHot && <PlanGauge plan={u.plan} />}
+      {props.plan && !u?.plan?.quota?.fiveHour && (
+        <span className="plan-inline">
+          Using ChatGPT plan
+          <a href={CHATGPT_USAGE_URL} target="_blank" rel="noreferrer">
+            Manage usage
+          </a>
+        </span>
+      )}
+      <span className="strip-sp" />
       {props.attach}
+      {props.voice}
       {props.send && (
         <button type="submit" className="send-btn" aria-label="Send" title="Send (Enter)" disabled={props.send.disabled}>
-          <svg viewBox="0 0 16 16" width="14" height="14" fill="none" stroke="currentColor" strokeWidth="1.7" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+          <svg viewBox="0 0 16 16" width="16" height="16" fill="none" stroke="currentColor" strokeWidth="1.7" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
             <path d="M8 13V3M4 7l4-4 4 4" />
           </svg>
         </button>
@@ -79,39 +91,41 @@ export function ComposerMeta(props: { usage: ChatUsage | null; plan: boolean; pi
   );
 }
 
-/**
- * « ▮ 62% of 5h »: the plan subscription that answered this chat, its 5-hour window (amber past 80 %); the weekly
- * window joins it when that one is past 80 % too. Without usage numbers: just which subscription answered.
- */
-function PlanGauge({ plan }: { plan: NonNullable<ChatUsage['plan']> }) {
+/** « Claude · Max: 5-hour window 44 % used, resets 16:00 », for the ring's card. */
+function planLine(plan: NonNullable<ChatUsage['plan']>): string {
   const q = plan.quota;
   const name = `${plan.provider === 'chatgpt' ? 'ChatGPT' : 'Claude'} · ${plan.label}`;
-  if (!q?.fiveHour && !q?.week) return <span className="strip-plan" title={`${name}: no usage numbers reported`}>{name}</span>;
+  const part = (k: string, w: { usedPct: number; resetsAt?: string | null } | null | undefined) =>
+    w ? `${k} ${Math.round(w.usedPct)}% used${w.resetsAt ? `, resets ${resetLabel(w.resetsAt)}` : ''}` : null;
+  const parts = [part('5-hour window', q?.fiveHour), part('week', q?.week)].filter(Boolean);
+  return parts.length ? `${name}: ${parts.join(' · ')}` : `${name}: no usage numbers reported`;
+}
+
+/**
+ * « ▮ 82% of 5h »: the plan window that answered this chat, shown beside the ring only past QUOTA_WARN (amber); the
+ * weekly window joins it when that one is past it too.
+ */
+function PlanGauge({ plan }: { plan: NonNullable<ChatUsage['plan']> }) {
+  const q = plan.quota!;
   const five = q.fiveHour ? Math.round(q.fiveHour.usedPct) : null;
   const week = q.week ? Math.round(q.week.usedPct) : null;
-  const warm = (five ?? 0) >= QUOTA_WARN || (week ?? 0) >= QUOTA_WARN;
-  const title = [
-    name,
-    five !== null ? `5-hour window: ${five}% used${q.fiveHour!.resetsAt ? `, resets ${resetLabel(q.fiveHour!.resetsAt)}` : ''}` : null,
-    week !== null ? `Weekly: ${week}% used${q.week!.resetsAt ? `, resets ${resetLabel(q.week!.resetsAt)}` : ''}` : null,
-    `updated ${ago(q.at)}`,
-  ].filter(Boolean).join('\n');
-  const main = five ?? week!;
+  const main = five !== null && five >= QUOTA_WARN ? five : (week ?? five!);
+  const which = five !== null && five >= QUOTA_WARN ? '5h' : 'week';
   return (
-    <span className={'strip-plan' + (warm ? ' warm' : '')} title={title}>
+    <span className="strip-plan warm" title={`${planLine(plan)}\nupdated ${ago(q.at)}`}>
       <span className="plan-cell" aria-hidden="true"><i style={{ height: `${Math.max(main, 8)}%` }} /></span>
-      <span className="num">{main}% of {five !== null ? '5h' : 'week'}</span>
-      {five !== null && week !== null && week >= QUOTA_WARN && <span className="num">· week {week}%</span>}
+      <span className="num">{main}% of {which}</span>
+      {which === '5h' && week !== null && week >= QUOTA_WARN && <span className="num">· week {week}%</span>}
     </span>
   );
 }
 
 function Ring({ pct }: { pct: number }) {
-  const r = 5.5, c = 2 * Math.PI * r;
+  const r = 8, c = 2 * Math.PI * r;
   return (
-    <svg className="ring" viewBox="0 0 14 14" width="14" height="14" aria-hidden="true">
-      <circle cx="7" cy="7" r={r} className="ring-track" />
-      <circle cx="7" cy="7" r={r} className="ring-fill" strokeDasharray={`${(Math.max(pct, 3) / 100) * c} ${c}`} transform="rotate(-90 7 7)" />
+    <svg className="ring" viewBox="0 0 20 20" width="18" height="18" aria-hidden="true">
+      <circle cx="10" cy="10" r={r} className="ring-track" />
+      <circle cx="10" cy="10" r={r} className="ring-fill" strokeDasharray={`${(Math.min(pct, 100) / 100) * c} ${c}`} transform="rotate(-90 10 10)" />
     </svg>
   );
 }
@@ -124,13 +138,14 @@ export interface PickProps {
   effort: Effort | null;
   onChange(patch: { modelId?: string | null; effort?: Effort | null }): void;
 }
-const EFFORTS: { value: Effort | null; label: string }[] = [
-  { value: null, label: 'Auto' },
-  { value: 'low', label: 'Low' },
-  { value: 'medium', label: 'Med' },
-  { value: 'high', label: 'High' },
-  { value: 'xhigh', label: 'XHigh' },
-  { value: 'max', label: 'Max' },
+/** `label` in the menu's segments, `long` in the pill (« Fable 5.2 · Medium »). */
+const EFFORTS: { value: Effort | null; label: string; long: string }[] = [
+  { value: null, label: 'Auto', long: 'Auto' },
+  { value: 'low', label: 'Low', long: 'Low' },
+  { value: 'medium', label: 'Med', long: 'Medium' },
+  { value: 'high', label: 'High', long: 'High' },
+  { value: 'xhigh', label: 'XHigh', long: 'XHigh' },
+  { value: 'max', label: 'Max', long: 'Max' },
 ];
 const SOURCE: Record<string, string> = {
   anthropic: 'Anthropic API',
@@ -171,10 +186,12 @@ function PickMenu(p: PickProps) {
   }, [open]);
 
   const own = p.models.find((m) => m.id === p.agentModelId);
-  const current = p.modelId ?? own?.id ?? "Agent's model";
+  // Friendly names only (« Fable 5.2 », never plan-claude-fable-5-2): the exact id is on the agent's settings page.
+  const picked = p.models.find((m) => m.id === p.modelId);
+  const current = picked ? friendlyModel(picked.name) : p.modelId ? 'Deleted model' : own ? friendlyModel(own.name) : "Agent's model";
   // An effort the menu doesn't know (or undefined from an older payload) must not crash the chat: show it as is.
   const effort = p.effort ?? null;
-  const effortLabel = EFFORTS.find((x) => x.value === effort)?.label ?? String(effort);
+  const effortLabel = EFFORTS.find((x) => x.value === effort)?.long ?? String(effort);
   const missing = p.modelId && !p.models.some((m) => m.id === p.modelId);
   const models = [...p.models].sort((a, b) => ORDER.indexOf(a.provider) - ORDER.indexOf(b.provider));
 
@@ -197,10 +214,10 @@ function PickMenu(p: PickProps) {
         <div className="pick-pop" role="dialog" aria-label="Model and effort">
           <div className="pick-k">Model</div>
           <div className="pick-list" role="radiogroup" aria-label="Model">
-            <PickRow on={!p.modelId} label="Agent's model" sub={own?.id ?? 'not set'} onPick={() => p.onChange({ modelId: null })} />
-            {missing && <PickRow on label={p.modelId!} sub="deleted" onPick={() => {}} />}
+            <PickRow on={!p.modelId} label="Agent's model" sub={own ? friendlyModel(own.name) : 'not set'} onPick={() => p.onChange({ modelId: null })} />
+            {missing && <PickRow on label="Deleted model" sub="pick another" onPick={() => {}} />}
             {models.map((m) => (
-              <PickRow key={m.id} on={p.modelId === m.id} label={m.id} sub={SOURCE[m.provider] ?? m.provider} onPick={() => p.onChange({ modelId: m.id })} />
+              <PickRow key={m.id} on={p.modelId === m.id} label={friendlyModel(m.name)} sub={SOURCE[m.provider] ?? m.provider} onPick={() => p.onChange({ modelId: m.id })} />
             ))}
           </div>
           <div className="pick-k">Effort</div>

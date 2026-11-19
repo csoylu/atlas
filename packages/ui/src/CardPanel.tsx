@@ -18,10 +18,11 @@ import type { ToolOutcome } from './toolRows.ts';
 import { sysLine } from './chatPins.ts';
 import { webSearchResult } from './webRows.ts';
 import { ChatPins } from './ChatPins.tsx';
+import { VoiceToggle } from './VoiceToggle.tsx';
+import { PopButton, PopItem } from './HeadMenu.tsx';
 import { useKeepBottom } from './useKeepBottom.ts';
 import { ChatRow } from './ChatRow.tsx';
 import { parseReport, rowTime } from './chatRow.ts';
-import { taskKey } from './inboxView.ts';
 import { deleteChatQuestion } from './chatHistoryMenu.ts';
 import { HeaderActions, Icon } from './ScreenHeader.tsx';
 import { StatusIcon, STATUS_LABEL } from './StatusIcon.tsx';
@@ -154,6 +155,7 @@ export function CardPanel(props: {
   return (
     <aside className={'panel chat-pane' + (props.hiddenDocs ? ' has-docs' : '')}>
       <HeaderActions>
+        <ChatPins chatId={card.id} cards={props.cards} stream={stream} onOpen={props.onOpen} onError={onError} />
         {!!props.hiddenDocs && (
           <button type="button" className="btn doc-reopen" onClick={props.onShowDocs} title="Show the documents panel (⌘\)">
             <Icon.doc /> Documents · {props.hiddenDocs}
@@ -164,20 +166,33 @@ export function CardPanel(props: {
             <Icon.panel />
           </button>
         )}
-        <button
-          type="button"
-          className="icon-btn danger chat-delete"
-          aria-label="Delete chat"
-          title="Delete chat"
-          onClick={() => {
-            const isMain = props.agents.some((a) => a.mainChat === card.id);
-            if (confirm(deleteChatQuestion(card, isMain))) api.deleteCard(card.id).then(props.onClose, onError);
-          }}
-        >
-          <Icon.trash />
-        </button>
+        <PopButton className="icon-btn chat-menu" label={<Icon.dots />} title="Chat menu" ariaLabel="Chat menu: clear context, delete chat" width={220}>
+          {(close) => (
+            <>
+              <PopItem
+                icon={<Icon.restore />}
+                onClick={() => {
+                  close();
+                  api.command(card.id, 'clear').catch(onError);
+                }}
+              >
+                Clear context
+              </PopItem>
+              <PopItem
+                icon={<Icon.trash />}
+                danger
+                onClick={() => {
+                  close();
+                  const isMain = props.agents.some((a) => a.mainChat === card.id);
+                  if (confirm(deleteChatQuestion(card, isMain))) api.deleteCard(card.id).then(props.onClose, onError);
+                }}
+              >
+                Delete chat
+              </PopItem>
+            </>
+          )}
+        </PopButton>
       </HeaderActions>
-      <ChatPins chatId={card.id} cards={props.cards} stream={stream} onOpen={props.onOpen} onError={onError} />
       <CardNotices card={card} onError={onError} />
       <div className="chat" ref={chatBox}>
         <Activity
@@ -485,61 +500,50 @@ function DraftView({ segments, cardLinks }: { segments: Segment[]; cardLinks?: C
 }
 
 /**
- * A system message: a task note (card report-back) is one compact row (#143), a link to the task's Inbox entry (closed
- * and stopped tasks have none: the task itself); a finished one shows its summary's first line. Anything else a note.
+ * A system message: a task note (card report-back) is one line (redesign #271, mockup « Chat »): state, #N, title,
+ * outcome · time; a click opens the task beside the chat. The outcome is a finished task's first summary line (« PR #70
+ * merged »), else what it waits for (« needs your OK »). Anything else is a plain note.
  */
 function SystemMessage({ message: m, landed, cards, onOpenCard }: { message: Message; landed?: boolean; cards?: CardLinks; onOpenCard?(id: string): void }) {
   const text = m.content.map((b) => (b.type === 'text' ? b.text : '')).join(' ');
   const r = parseReport(text);
   if (!r) return <SysNote text={text} onOpenCard={onOpenCard} />;
-  // A finished task reads « #99 [Done] » (#104); the other reports keep their verb.
   const done = r.verb === 'finished';
   const id = cards?.card?.(r.card)?.id;
+  const outcome = done ? r.summary || 'done' : r.verb;
   const line = (
     <span className="chat-row-line">
       <span className="chat-row-icon">
         <StatusIcon status={r.icon} />
       </span>
-      <span className="chat-row-verb">
-        <span className="chat-row-ref">{r.card}</span>{' '}
-        {done ? <span className="st-chip done">Done</span> : r.verb}
-      </span>
+      <span className="chat-row-ref">{r.card}</span>
       <span className="chat-row-obj">{r.title}</span>
-      <span className="chat-row-rest" />
-      <span className="chat-row-time">{rowTime(m.at)}</span>
-      {id && (
-        <span className="tn-go">
-          <span className="tn-word">{r.inbox ? 'Inbox' : 'Task'}</span>
-          <span className="tn-arr" aria-hidden="true">
-            ›
-          </span>
-        </span>
-      )}
+      <span className="tn-sum">
+        {outcome} · {rowTime(m.at)}
+      </span>
     </span>
   );
   const cls = 'chat-row tone-' + r.tone + ' card-report task-note' + (done ? ' done' : '') + (landed ? ' landed' : '');
-  const sum = r.summary && <span className="tn-sum">{r.summary}</span>;
+  const tip = `${r.card} ${r.title}: ${outcome} · ${rowTime(m.at)}`;
   // The task is gone from the board: nothing to open.
   if (!id)
     return (
-      <div className={cls}>
+      <div className={cls} title={tip}>
         {line}
-        {sum}
       </div>
     );
   return (
     <a
       className={cls}
-      href={r.inbox ? '#/inbox/' + encodeURIComponent(taskKey(id)) : withCard(typeof location === 'undefined' ? '#/' : location.hash, id)}
-      title={r.inbox ? 'Open in the Inbox' : 'Open the task'}
+      href={withCard(typeof location === 'undefined' ? '#/' : location.hash, id)}
+      title={tip + ' · open the task'}
       onClick={(e) => {
-        if (r.inbox || !onOpenCard) return;
+        if (!onOpenCard) return;
         e.preventDefault();
         onOpenCard(id);
       }}
     >
       {line}
-      {sum}
     </a>
   );
 }
@@ -741,8 +745,10 @@ export const CardComposer = forwardRef<
             if (typeof ref === 'function') ref(el);
             else if (ref) ref.current = el;
           }}
+          rows={1}
           value={text}
-          placeholder={card.assignee ? `Message @${card.assignee}…  (Enter to send · Shift+Enter for newline)` : 'Assign an agent, then write to it here…'}
+          placeholder={card.assignee ? `Message @${card.assignee}` : 'Assign an agent, then write to it here…'}
+          title="Enter to send · Shift+Enter for a new line"
           onChange={(e) => setText(e.target.value)}
           onPaste={(e) => {
             const files = pastedImages(e.clipboardData);
@@ -768,6 +774,7 @@ export const CardComposer = forwardRef<
           usage={usage}
           plan={plan}
           attach={canAttach ? <AttachButton onFiles={addFiles} /> : undefined}
+          voice={card.board === 'direct' ? <VoiceToggle chatId={card.id} agents={agents} stream={stream} onError={onError} /> : undefined}
           send={{ disabled: !text.trim() && !att.sendable }}
           pick={{
             models,
