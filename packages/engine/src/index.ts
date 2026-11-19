@@ -173,6 +173,9 @@ export async function startEngine(opts: EngineOptions): Promise<Engine> {
     clone: opts.projects?.clone ?? ghClone(),
     env: () => shellEnv.engineEnv(),
   });
+  // #245: clones made inside an agent's own workdir move out of it, before any run, rewind or clone touches them.
+  const relocated = projects.relocateClones();
+  if (relocated) console.log(`moved ${relocated} project workspace(s) to data/projects/`);
   const voice = opts.voice ? new Voice(db, bus, opts.voice) : null;
   let url = '';
   const voiceChat = opts.voice ? new VoiceChat(db, bus, kanban, agents, () => url) : null;

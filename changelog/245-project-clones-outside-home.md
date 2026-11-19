@@ -1,0 +1,3 @@
+## Fixed · #245 · An agent working in its home project can no longer read or write its clone of another project: clones now live in data/projects/<project>/<agent>, and existing ones move there at the next start.
+
+Clones of non-home projects used to sit inside the agent's own workdir (`data/workspaces/<agent>/<project>`), so read_file, write_file, edit_file, grep, list_files and glob in the home project reached them. They now go to `data/projects/<project>/<agent>`. At start, before any run, Atlas moves the old folders (one rename, then the stored paths and the rewind log in one transaction, restart-safe) and repairs linked git worktrees. A clone folder that would overlap an agent's workdir is refused with that reason. No screen changes.
