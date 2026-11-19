@@ -12,14 +12,14 @@ const json = { 'content-type': 'application/json' };
 /** A throwaway Atlas: real engine + SQLite file + the built UI, with a scripted model. */
 export class TestAtlas {
   /** What start() was given beyond the data dir and model: a restart reuses it unless overridden. */
-  opts: { version?: string; updates?: EngineOptions['updates']; prs?: EngineOptions['prs']; secrets?: EngineOptions['secrets']; env?: EngineOptions['env'] } = {};
+  opts: { version?: string; updates?: EngineOptions['updates']; prs?: EngineOptions['prs']; secrets?: EngineOptions['secrets']; env?: EngineOptions['env']; projects?: EngineOptions['projects'] } = {};
   private constructor(
     public engine: Engine,
     public model: Scripted,
     public dataDir: string,
   ) {}
 
-  static async start(o: { dataDir?: string; model?: Scripted; version?: string; updates?: EngineOptions['updates']; prs?: EngineOptions['prs']; secrets?: EngineOptions['secrets']; env?: EngineOptions['env'] } = {}): Promise<TestAtlas> {
+  static async start(o: { dataDir?: string; model?: Scripted; version?: string; updates?: EngineOptions['updates']; prs?: EngineOptions['prs']; secrets?: EngineOptions['secrets']; env?: EngineOptions['env']; projects?: EngineOptions['projects'] } = {}): Promise<TestAtlas> {
     const model = o.model ?? new Scripted();
     const dataDir = o.dataDir ?? mkdtempSync(join(tmpdir(), 'atlas-e2e-'));
     mkdirSync(join(dataDir, 'workspaces', 'atlas'), { recursive: true });
@@ -36,6 +36,8 @@ export class TestAtlas {
       // A secret store (desktop keychain stand-in, or the server's secrets.enc) and the engine's own environment (#210).
       ...(o.secrets ? { secrets: o.secrets } : {}),
       ...(o.env ? { env: o.env } : {}),
+      // Projects (#218): a fake gh for the repo check and a clone from local bare repos (harness/projects.ts).
+      ...(o.projects ? { projects: o.projects } : {}),
       // Never the real GitHub: a test that links PRs passes its own reader (#189).
       // The merge queue's rebase (#236): every PR up to date with main, no git.
       prs: { sync: async () => ({ kind: 'current' as const }), ...(o.prs ?? { read: async () => { throw new Error('no GitHub in e2e'); }, intervalMs: false }) },
@@ -43,7 +45,7 @@ export class TestAtlas {
     // Past the first-run welcome sheet (it would cover the UI).
     await fetch(engine.url + '/api/settings', { method: 'PATCH', headers: json, body: JSON.stringify({ userName: 'Tester', userAbout: 'QA engineer running the Atlas end-to-end tests.' }) });
     const a = new TestAtlas(engine, model, dataDir);
-    a.opts = { version: o.version, updates: o.updates, prs: o.prs, secrets: o.secrets, env: o.env };
+    a.opts = { version: o.version, updates: o.updates, prs: o.prs, secrets: o.secrets, env: o.env, projects: o.projects };
     return a;
   }
 
@@ -55,7 +57,7 @@ export class TestAtlas {
   }
 
   /** Stop the engine and start a new one on the same data (a crash-safe restart). The port changes. */
-  async restart(o: { version?: string; updates?: EngineOptions['updates']; prs?: EngineOptions['prs']; secrets?: EngineOptions['secrets']; env?: EngineOptions['env'] } = {}): Promise<void> {
+  async restart(o: { version?: string; updates?: EngineOptions['updates']; prs?: EngineOptions['prs']; secrets?: EngineOptions['secrets']; env?: EngineOptions['env']; projects?: EngineOptions['projects'] } = {}): Promise<void> {
     await this.engine.stop().catch(() => {});
     const opts = { ...this.opts, ...o };
     this.engine = (await TestAtlas.start({ dataDir: this.dataDir, model: this.model, ...opts })).engine;
