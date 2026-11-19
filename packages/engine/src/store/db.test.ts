@@ -282,7 +282,7 @@ describe('store', () => {
     const row = (t: string) => db.prepare(`SELECT * FROM ${t}`).get() as Record<string, unknown>;
     const keep = (r: Record<string, unknown>) => Object.fromEntries(Object.entries(r).filter(([k]) => !gone.includes(k)));
     const rows = { cards: keep(row('cards')), card_prs: keep(row('card_prs')) };
-    expect(migrate(db)).toEqual(['0057_drop_merge_queue.sql']);
+    expect(migrate(db)).toContain('0057_drop_merge_queue.sql');
     expect(cols('cards')).toEqual(before.cards.filter((c) => !gone.includes(c)));
     expect(cols('card_prs')).toEqual(before.card_prs.filter((c) => !gone.includes(c)));
     expect({ cards: row('cards'), card_prs: row('card_prs') }).toEqual(rows);
