@@ -289,25 +289,7 @@ function BoardSettings(props: { settings: Settings | null; agents: Agent[]; onSe
         <p className="hint">Waiting for engine settings…</p>
       )}
       <p className="hint">Nobody leaves triage tasks for you to organize manually.</p>
-      {props.settings && (
-        <label className="field settings-field">
-          Review agent
-          <select
-            value={props.settings.reviewAgent ?? ''}
-            onChange={(e) => {
-              api.updateSettings({ reviewAgent: e.target.value || null }).then(props.onSettings, props.onError);
-            }}
-          >
-            <option value="">Nobody</option>
-            {props.agents.map((a) => (
-              <option key={a.id} value={a.id}>
-                @{a.id}
-              </option>
-            ))}
-          </select>
-        </label>
-      )}
-      <p className="hint">Checks and merges the pull requests of tasks In review. Its own pull requests go to the triage agent.</p>
+      <p className="hint">Each project's review agent (it checks and merges the pull requests of tasks In review) is set in <a href="#/settings/projects">Projects</a>.</p>
     </section>
   );
 }

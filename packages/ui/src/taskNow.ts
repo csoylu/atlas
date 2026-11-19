@@ -26,7 +26,7 @@ export interface NowView {
 }
 
 export function taskNow(
-  card: Pick<Card, 'status' | 'block' | 'waiting' | 'stall' | 'statusSince' | 'prs' | 'assignee'>,
+  card: Pick<Card, 'status' | 'block' | 'waiting' | 'stall' | 'statusSince' | 'prs' | 'assignee'> & { reviewOff?: Card['reviewOff'] },
   run: Pick<Run, 'status' | 'agentId'> | null,
   now = Date.now(),
 ): NowView {
@@ -47,7 +47,7 @@ export function taskNow(
   } else if (!card.block) {
     if (card.waiting) {
       view.line = card.waiting;
-      if (prUnreadable(card)) view.tone = 'warn';
+      if (prUnreadable(card) || (card.status === 'review' && card.reviewOff)) view.tone = 'warn';
     } else if (run?.status === 'running') view.line = `@${run.agentId || card.assignee} is working.`;
   }
   const open = card.prs.find((p) => p.state === 'open');

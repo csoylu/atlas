@@ -226,6 +226,12 @@ export const api = {
   retryWorkflowRun: (id: string) => call<WorkflowRun>('POST', `/workflow-runs/${id}/retry`),
   followWorkflowRun: (id: string) => call<WorkflowRun>('POST', `/workflow-runs/${id}/follow`),
   /** Master approves the command steps of that revision, or rejects them (the workflow turns off), #273. */
+  /** « Reset to default » of a project's Review workflow (#263). */
+  resetWorkflow: (id: string) => call<Workflow>('POST', `/workflows/${id}/reset`),
+  /** « Turn it on » (#263): the project's Review workflow on, or made again if deleted. */
+  turnOnReview: (projectId: string) => call<Workflow>('POST', `/projects/${projectId}/review-workflow`),
+  /** « Validate by hand » (#263): Master validates and merges the task's PR at `sha`, same gate as the terminal. */
+  validateByHand: (cardId: string, sha: string) => call<{ result: string[]; card: Card }>('POST', `/cards/${cardId}/validate`, { sha }),
   approveWorkflow: (id: string, revision: number) => call<Workflow>('POST', `/workflows/${id}/approve`, { revision }),
   rejectWorkflow: (id: string) => call<Workflow>('POST', `/workflows/${id}/reject`),
   tryCondition: (id: string, t: TryCondition) => call<ConditionTryResult>('POST', `/workflows/${id}/try-condition`, t),

@@ -221,6 +221,18 @@ export function WorkflowCanvas(props: {
           {save.state === 'saving' ? 'saving…' : save.state === 'error' ? 'not saved' : `saved · edited ${relative(new Date(save.at).toISOString())}`}
         </span>
       )}
+      {mode === 'edit' && w.origin === 'review' && (
+        <button
+          className="btn ghost"
+          title="Bring back the default Review workflow's seven steps, their links and layout"
+          onClick={() => {
+            if (!window.confirm(`Reset « ${w.name} » to the default? Its seven steps, their links and layout come back; your changes to them are lost. On/off and its runs stay.`)) return;
+            api.resetWorkflow(w.id).catch(onError);
+          }}
+        >
+          Reset to default
+        </button>
+      )}
       {(
         <div className="segmented wf-seg">
           <button className={mode === 'edit' ? 'on' : ''} aria-pressed={mode === 'edit'} onClick={() => props.go(base)}>
@@ -267,7 +279,11 @@ export function WorkflowCanvas(props: {
       onError={onError}
     />
   ) : !w.enabled && !w.commandSteps.some((c) => !c.approved) ? (
-    <div className="wf-off">Off: the trigger doesn't fire. Run now still works; runs already started finish.</div>
+    <div className="wf-off">
+      {w.origin === 'review'
+        ? "Off: no pull request of this project is reviewed or merged. Its tasks In review say so, with Turn it on and Validate by hand."
+        : "Off: the trigger doesn't fire. Run now still works; runs already started finish."}
+    </div>
   ) : null;
 
   if (phone)

@@ -89,7 +89,7 @@ function AgentList(props: {
       ) : (
         <div className="set-list agl" role="list" aria-label="Agents">
           {props.agents.map((a) => {
-            const roles = [a.rolePrompt.split('\n')[0]?.trim() || 'no role', props.settings?.triageAgent === a.id && 'triage', props.settings?.reviewAgent === a.id && 'reviewer'].filter(Boolean).join(' · ');
+            const roles = [a.rolePrompt.split('\n')[0]?.trim() || 'no role', props.settings?.triageAgent === a.id && 'triage', pinfo.active.some((p) => p.reviewAgent === a.id) && 'reviewer'].filter(Boolean).join(' · ');
             const projects = pinfo.active.filter((p) => p.members.some((m) => m.agentId === a.id)).map((p) => p.name);
             const mem = props.memories?.filter((m) => m.scope === 'agent:' + a.id).length;
             const model = props.models.find((m) => m.id === a.modelId);
@@ -152,14 +152,14 @@ function AgentPage(props: { agent: Agent; models: Model[]; settings: Settings | 
   const model = props.models.find((m) => m.id === draft.modelId);
   const projects = pinfo.active.filter((p) => p.members.some((m) => m.agentId === a.id));
   const triage = props.settings?.triageAgent === a.id;
-  const reviewer = props.settings?.reviewAgent === a.id;
+  const reviewer = pinfo.active.filter((p) => p.reviewAgent === a.id).map((p) => p.name);
   return (
     <section className={'set-page agent-page' + (a.enabled ? '' : ' off')}>
       <div className="set-head">
         <AgentFace id={a.id} />
         <h2>@{a.id}</h2>
         {triage && <span className="badge">triage</span>}
-        {reviewer && <span className="badge">reviewer</span>}
+        {reviewer.length > 0 && <span className="badge">reviewer</span>}
         {model?.lastError ? <span className="badge bad">model failing</span> : model?.provider === 'chatgpt' && !model.credentialPresent ? <span className="badge bad">ChatGPT not signed in</span> : model?.provider === 'claude_plan' && !model.credentialPresent ? <span className="badge bad">Claude not signed in</span> : model && !model.credentialPresent && (model.credentialEnv || model.provider === 'anthropic') ? <span className="badge bad">key missing</span> : null}
         <span className="head-sp" />
         <label className="switch" title="Enabled">
@@ -169,7 +169,8 @@ function AgentPage(props: { agent: Agent; models: Model[]; settings: Settings | 
       </div>
       <p className="set-lead">
         {projects.length ? <>Member of {projects.map((p) => p.name).join(', ')}. </> : 'Member of no project. '}
-        Triage and review roles are set in <a href="#/settings/board">Board &amp; triage</a>.
+        {reviewer.length ? <>Reviews the pull requests of {reviewer.join(', ')}. </> : null}
+        The triage role is set in <a href="#/settings/board">Board &amp; triage</a>, each project's review agent in <a href="#/settings/projects">Projects</a>.
       </p>
       <div className="set-card">
         <label className="field">

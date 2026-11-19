@@ -38,10 +38,11 @@ import {
 import type { Db } from './store/db.ts';
 import type { Bus } from './events.ts';
 import { ConflictError, InvalidError, NotFoundError, type Kanban } from './kanban.ts';
-import { assertActive, defaultProjectId, leadOf, projectRow, resolveProject } from './projects.ts';
+import { assertActive, defaultProjectId, projectRow, resolveProject, reviewerFor } from './projects.ts';
 import { insertNotification, type NewNotification } from './notifications.ts';
 import { parsePrUrl } from './prs.ts';
 import type { EventData } from './workflowEvents.ts';
+import { REVIEW_NAME, reviewGraph } from './reviewFlow.ts';
 import { payloadFields, type HookBody, type HookTokens } from './webhooks.ts';
 import { validate, type Gh } from '../../../scripts/pr/validate.mjs';
 import { SecretsUnavailable, type Secrets } from './secrets.ts';
@@ -164,7 +165,12 @@ interface ThreadData {
   /** card_events id and message seq when the agent was woken: its verdict and its words come after them. */
   eventsBefore: number;
   seqBefore: number;
+  /** A review (#221): agent runs woken for this step; one that ends without a verdict is woken once more by itself. */
+  tries?: number;
 }
+/** A review run that ended without a verdict is started once more by itself, then waits for Master (#221). */
+export const REVIEW_TRIES = 2;
+const AGAIN = 'Your last review run of this head ended without a verdict: nothing was validated or failed on GitHub. ';
 const dataOf = (s: StepRow): Partial<CommandData & ThreadData> => (s.data ? JSON.parse(s.data) : {});
 /** What a merge step acts on (workflow_run_steps.data): the PR, and the head it pins (the one CI and the review saw). */
 interface MergeData {
@@ -184,6 +190,9 @@ interface PrRow {
   ci: string | null;
   mergeable: number | null;
   qa: string | null;
+  checked_at: string | null;
+  ci_failed_name: string | null;
+  ci_failed_url: string | null;
 }
 /** The step got no answer (gh logged out, agent missing…): not an outcome. The run waits on it and Atlas retries (#261). */
 class CouldntRun extends Error {}
@@ -276,6 +285,7 @@ const FIELDS = {
     'pr.ci': 'PR CI result',
     'pr.conflict': 'PR conflicts with its base (yes / no)',
     'pr.qa': 'PR validation (qa/validated)',
+    'pr.ci_check': 'The failing CI check: its name and link',
   },
   project: { 'project.id': 'Project id', 'project.name': 'Project name', 'project.repo': 'Project repo' },
   event: {
@@ -287,6 +297,7 @@ const FIELDS = {
     'event.text': 'Block reason or review handoff',
   },
   previous: { 'previous.summary': 'Handoff of the last agent step', 'previous.task': 'Task of the last agent step' },
+  last: { 'last.title': 'Title of the step that ended last', 'last.exit': 'Exit it took', 'last.summary': 'Its summary' },
   payload: { payload: 'The whole JSON body of the webhook call' },
 } as const;
 type FieldGroup = keyof typeof FIELDS;
@@ -441,7 +452,7 @@ export class Workflows {
     if (t.kind === 'manual') groups.push(['task', true], ['pr', true], ['project', !w.project_id]);
     if (t.kind === 'time' && w.project_id) groups.push(['project', false]);
     if (t.kind === 'webhook') groups.push(['payload', false], ...(w.project_id ? [['project', false] as [FieldGroup, boolean]] : []));
-    groups.push(['previous', true]);
+    groups.push(['previous', true], ['last', true]);
     const last = this.db.prepare("SELECT id FROM workflow_runs WHERE workflow_id = ? AND state != 'skipped' ORDER BY number DESC LIMIT 20").all(workflowId) as { id: string }[];
     const known = last.map((r) => this.context(r.id).fields);
     const example = (f: string) => known.find((k) => f in k)?.[f] ?? null;
@@ -638,6 +649,66 @@ export class Workflows {
     this.opts.hooks?.sweep();
   }
   private deleted: string[] = [];
+
+  /* ── The default Review workflow (#263) ── */
+
+  /** Create the project's default Review workflow (on), with its approved layout; its id. */
+  createReview(projectId: string): string {
+    const g = reviewGraph();
+    const id = 'wf_' + randomUUID().slice(0, 8);
+    this.tx(() => {
+      this.create({ name: REVIEW_NAME, enabled: true, projectId, ...g }, 'atlas', id);
+      this.db.prepare("UPDATE workflows SET origin = 'review' WHERE id = ?").run(id);
+    });
+    return id;
+  }
+
+  /** « Reset to default »: the seven steps, their links and the layout come back (a new revision; on/off and runs stay). */
+  resetReview(id: string, by = 'user'): Workflow {
+    this.tx(() => {
+      const w = this.row(id);
+      if (w.origin !== 'review') throw new InvalidError(`workflow « ${w.name} » is not a default Review workflow: nothing to reset it to`);
+      this.saveGraph(id, { revision: w.revision, ...reviewGraph() }, by);
+    });
+    return this.get(id);
+  }
+
+  /**
+   * A Review run on a task already In review (#263): at the update, or once its project's Review is on again. `how`
+   * says so on the trigger step. Null: one is going, or the loop guard turned the workflow off.
+   */
+  startReview(id: string, cardId: string, how: string): string | null {
+    let runId: string | null = null;
+    this.tx(() => {
+      const w = this.row(id);
+      if (!w.enabled) throw new ConflictError(`workflow « ${w.name} » is off`);
+      runId = this.fire(w, 'task', { subject: { cardId, prUrl: null }, eventName: 'review_requested', how });
+      if (runId && this.runRow(runId).state === 'skipped') runId = null;
+    });
+    return runId;
+  }
+
+  /** Where the task's open Review run is (#263), in words for the task's « Now » line, or null (none open). */
+  reviewNow(cardId: string): string | null {
+    const r = this.db
+      .prepare(`SELECT r.* FROM workflow_runs r JOIN workflows w ON w.id = r.workflow_id WHERE w.origin = 'review' AND r.subject_card = ? AND r.${OPEN_RUN} ORDER BY r.started_at DESC LIMIT 1`)
+      .get(cardId) as RunRow | undefined;
+    if (!r) return null;
+    const step = this.steps(r.id).filter((s) => !s.ended_at).at(-1);
+    const run = `Review run ${r.number}`;
+    if (!step) return `${run}: moving on…`;
+    const n = this.node(r.workflow_id, step.node_id);
+    const title = n ? stepTitle(n) : step.node_id;
+    if (step.couldnt) return `${run} couldn't run « ${title} »: ${step.couldnt}. Retry now in the run${step.manual_retry ? '' : ' (Atlas retries every minute)'}`;
+    if (step.kind === 'wait') return `${run} · ${title}: waiting${step.deadline_at ? ` until ${stamp(new Date(step.deadline_at), localTimeZone())}` : ''}`;
+    if (step.kind === 'agent') {
+      const d = dataOf(step);
+      if (!d.agent) return `${run} · ${title}: starting the review…`;
+      const r2 = d.runId ? (this.db.prepare('SELECT status FROM runs WHERE id = ?').get(d.runId) as { status: string } | undefined) : undefined;
+      return r2?.status === 'running' || r2?.status === 'interrupted' ? `@${d.agent} is reviewing (${run})` : `${run} · ${title}: waiting for @${d.agent}`;
+    }
+    return `${run} · ${title}…`;
+  }
 
   /* ── Running ── */
 
@@ -1019,6 +1090,16 @@ export class Workflows {
     const r = this.db.prepare('UPDATE workflows SET enabled = 0, next_run_at = NULL, last_error = ?, updated_at = ? WHERE id = ? AND enabled = 1').run(reason, now, w.id);
     this.touched.workflows.add(w.id);
     if (!r.changes) return;
+    if (w.origin === 'review') {
+      // The default Review (#263, atlas 2): its loop guard turns the whole project's review off; said exactly so.
+      const name = w.project_id ? projectRow(this.db, w.project_id).name : 'its project';
+      return this.notify({
+        kind: 'workflow.stopped',
+        title: `Review is off in ${name}: its loop guard turned the Review workflow off`,
+        body: `${reason}. No pull request of ${name} is reviewed or merged until you turn it back on: every task In review there shows « No Review workflow is on in ${name} », with Turn it on and Validate by hand.`,
+        cardId,
+      });
+    }
     this.notify({ kind: 'workflow.stopped', title: `Workflow « ${w.name} » turned off`, body: `${reason}. Turn it back on in Workflows once its trigger or steps can't loop.`, cardId });
   }
 
@@ -1026,7 +1107,11 @@ export class Workflows {
    * Start a run (inside a transaction). Returns its id, or null if another tick already claimed this time slot or the
    * loop guard turned the workflow off. `on`: the run's task or PR, and the event that started it.
    */
-  private fire(w: WfRow, trigger: WorkflowRunTrigger, on: { subject?: WorkflowRunSubject | null; event?: EventRow; data?: EventData; depth?: number; payload?: Record<string, string> } = {}): string | null {
+  private fire(
+    w: WfRow,
+    trigger: WorkflowRunTrigger,
+    on: { subject?: WorkflowRunSubject | null; event?: EventRow; data?: EventData; depth?: number; payload?: Record<string, string>; eventName?: string; how?: string } = {},
+  ): string | null {
     if (w.project_id) assertActive(this.db, w.project_id, `workflow « ${w.name} »`);
     const now = this.now();
     const iso = now.toISOString();
@@ -1079,7 +1164,7 @@ export class Workflows {
         ? this.db.prepare(`SELECT number FROM workflow_runs WHERE workflow_id = ? AND ${OPEN_RUN} AND subject_card = ? AND COALESCE(subject_pr, '') = ? ORDER BY number LIMIT 1`).get(w.id, subject.cardId, subject.prUrl ?? '')
         : this.db.prepare(`SELECT number FROM workflow_runs WHERE workflow_id = ? AND ${OPEN_RUN} AND subject_card IS NULL ORDER BY number LIMIT 1`).get(w.id)
     ) as { number: number } | undefined;
-    const about = [subject?.cardId ?? null, subject?.prUrl ?? null, on.event?.name ?? (trigger === 'webhook' ? 'call' : null)] as const;
+    const about = [subject?.cardId ?? null, subject?.prUrl ?? null, on.event?.name ?? on.eventName ?? (trigger === 'webhook' ? 'call' : null)] as const;
     // A command step Master has not approved (#273): no run starts; the firing is recorded, Master asked once.
     const unapproved = this.commandNodes(w.id).filter((n) => !this.approval(w.id, n));
     if (unapproved.length) {
@@ -1106,8 +1191,9 @@ export class Workflows {
     const late = trigger === 'time' && now.getTime() - due.getTime() > LATE_MS ? `, due ${stamp(due, zone)}: Atlas was not running then` : '';
     const on_ = subject ? ` on ${this.subjectText(subject)}` : '';
     const change = on.data?.from && on.data.to ? ` (${on.data.from} → ${on.data.to})` : on.data?.result ? ` (${on.data.result})` : '';
-    const how =
-      trigger === 'manual'
+    const how = on.how
+      ? `${on.how}${on_}`
+      : trigger === 'manual'
         ? `run by hand${on_}`
         : trigger === 'task' || trigger === 'pr'
           ? `${trigger === 'task' ? 'task' : 'PR'} event « ${on.event?.name ?? '?'} »${on_}${change}`
@@ -1183,6 +1269,9 @@ export class Workflows {
         if (!c.reviewAgent && !c.agentId) return this.endRun(runId, 'failed', `${name} has no agent chosen`);
         const id = this.insertStep(runId, node.id, 'agent', 'running', { card: card.id });
         const data: ThreadData = { thread: true, prompt: fill(c.prompt) + why, posted: false, runsBefore: 0, agent: null, runId: null, eventsBefore: 0, seqBefore: 0 };
+        // A review the hardcoded flow started before the update (#263): adopted, not started a second time.
+        const old = c.reviewAgent ? this.oldReview(card.id) : null;
+        if (old) Object.assign(data, { posted: true, agent: old.by, runId: old.runId, eventsBefore: old.eventId });
         this.db.prepare('UPDATE workflow_run_steps SET data = ? WHERE id = ?').run(JSON.stringify(data), id);
         this.setRunState(runId, 'running');
         return;
@@ -1390,6 +1479,7 @@ export class Workflows {
       if (this.runRow(runId).state === 'running' || this.runRow(runId).state === 'waiting') this.endRun(runId, 'failed', 'the run has no current step');
       return;
     }
+    if (this.row(this.runRow(runId).workflow_id).origin === 'review' && this.reviewGone(this.runRow(runId), step)) return;
     if (step.couldnt) return; // retryDue tries it again
     if (step.kind === 'action') return; // a merge: driveMerges
     if (step.kind === 'wait') return this.checkWait(this.runRow(runId), step);
@@ -1429,6 +1519,28 @@ export class Workflows {
       return;
     }
     this.endRun(runId, 'failed', `a ${step.kind} step cannot wait`);
+  }
+
+  /**
+   * A Review run (#263) whose task moved on without it: the task left In review (Master moved it, the builder asked
+   * again…), or its PR was merged or closed on GitHub (Master's terminal, by hand) while the run waited for CI or for a
+   * reviewer. The run stops and says why; the task is then GitHub's (prs.ts: merged → Done, closed → Ready). A step
+   * acting on the PR now (a review going, the merge) carries on: it reads the merge itself.
+   */
+  private reviewGone(run: RunRow, step: StepRow): boolean {
+    const card = run.subject_card ? this.cardOrNull(run.subject_card) : null;
+    if (!card) return false; // the steps say so themselves
+    // Blocked: the reviewer asked Master something mid-review; the run waits for the answer like the task does.
+    if (card.status !== 'review' && card.status !== 'blocked') {
+      this.endRun(run.id, 'stopped', `${this.kanban.ref(card.id)} left In review (now ${card.status})`);
+      return true;
+    }
+    const pr = this.prOf(run, null);
+    if (!pr || pr.state === 'open') return false;
+    const acting = step.kind === 'action' || (step.kind === 'agent' && !step.couldnt && !!dataOf(step).runId);
+    if (acting) return false;
+    this.endRun(run.id, 'stopped', `PR #${pr.number} was ${pr.state} on GitHub outside the workflow`);
+    return true;
   }
 
   private finishStep(runId: string, step: StepRow, exit: string, summary: string | null): void {
@@ -1486,6 +1598,10 @@ export class Workflows {
       const pr = this.prOf(run, null);
       const head = pr?.head_sha ? ` on ${pr.head_sha.slice(0, 7)}` : '';
       if (pr && c.for === 'ciFinished' && (pr.ci === 'success' || pr.ci === 'failure')) hit = `CI ${pr.ci === 'success' ? 'green' : 'red'}${head}`;
+      // GitHub runs no CI on a PR that conflicts with its base: the conflict is the answer (#263).
+      else if (pr && c.for === 'ciFinished' && pr.state === 'open' && pr.mergeable === 0) hit = `PR #${pr.number} conflicts with ${pr.base ?? 'its base'}: no CI runs on it`;
+      // A project with no required CI job whose PR has no check at all (#263, Datinel): nothing to wait for.
+      else if (pr && c.for === 'ciFinished' && pr.checked_at && pr.ci === null && !projectRow(this.db, card.projectId).ci_job) hit = `no CI check on PR #${pr.number}${head} and project ${projectRow(this.db, card.projectId).name} requires none`;
       if (pr && c.for === 'ciGreen' && pr.ci === 'success') hit = `CI green${head}`;
       if (pr && c.for === 'conflict' && pr.mergeable === 0) hit = `PR #${pr.number} conflicts with ${pr.base ?? 'its base'}`;
       if (pr && c.for === 'merged' && pr.state === 'merged') hit = `PR #${pr.number} merged`;
@@ -1502,7 +1618,7 @@ export class Workflows {
   /** The run's PR: its subject's, else the latest one linked to its task (of `repo` when given). */
   private prOf(run: RunRow, repo: string | null): PrRow | null {
     if (!run.subject_card) return null;
-    const cols = 'repo, number, url, branch, base, head_sha, state, ci, mergeable, qa';
+    const cols = 'repo, number, url, branch, base, head_sha, state, ci, mergeable, qa, checked_at, ci_failed_name, ci_failed_url';
     if (run.subject_pr) {
       const r = this.db.prepare(`SELECT ${cols} FROM card_prs WHERE card_id = ? AND url = ?`).get(run.subject_card, run.subject_pr) as PrRow | undefined;
       if (r && (!repo || r.repo.toLowerCase() === repo.toLowerCase())) return r;
@@ -1531,6 +1647,14 @@ export class Workflows {
       f['previous.summary'] = prev.summary ?? '';
       f['previous.task'] = prev.card_id ? this.kanban.ref(prev.card_id) : '';
     }
+    // The step that ended just before (#263): one « Back to the builder » note serves every exit wired to it.
+    const last = steps.filter((s) => s.ended_at && s.kind !== 'trigger').at(-1);
+    if (last) {
+      const n = this.node(run.workflow_id, last.node_id);
+      f['last.title'] = n ? stepTitle(n) : last.node_id;
+      f['last.exit'] = last.exit ?? '';
+      f['last.summary'] = last.summary ?? '';
+    }
     return f;
   }
 
@@ -1558,6 +1682,7 @@ export class Workflows {
       'pr.ci': pr.ci ?? '',
       'pr.conflict': pr.mergeable === 0 ? 'yes' : pr.mergeable === 1 ? 'no' : '',
       'pr.qa': pr.qa ?? '',
+      'pr.ci_check': pr.ci === 'failure' && pr.ci_failed_name ? `${pr.ci_failed_name}${pr.ci_failed_url ? ` (${pr.ci_failed_url})` : ''}` : '',
     };
   }
 
@@ -1579,7 +1704,9 @@ export class Workflows {
       return { field: t.field, op: t.op, value: t.value, actual, pass: fieldTest(t, actual) };
     });
     const yes = c.match === 'all' ? tests.every((t) => t.pass) : tests.some((t) => t.pass);
-    const summary = tests.map((t) => `${t.field} = ${t.actual === null ? '(none)' : `« ${cut(t.actual, 60)} »`} ${t.pass ? '✓' : '✗'}`).join(' · ');
+    let summary = tests.map((t) => `${t.field} = ${t.actual === null ? '(none)' : `« ${cut(t.actual, 60)} »`} ${t.pass ? '✓' : '✗'}`).join(' · ');
+    // A red CI says which check failed and where its log is (#238): what the builder opens first.
+    if (tests.some((t) => t.field === 'pr.ci' && !t.pass) && fields['pr.ci_check']) summary += ` · failing check: ${fields['pr.ci_check']}`;
     return { yes, summary, tests };
   }
 
@@ -1848,12 +1975,16 @@ export class Workflows {
   /** The agent of a thread step: the chosen one, or the task's reviewer (the project's review agent, the lead on its own PRs). */
   private threadAgent(node: AgentNode, card: Card): { id: string } | { couldnt: string } {
     if (!node.config.reviewAgent) return node.config.agentId ? { id: node.config.agentId } : { couldnt: 'no agent chosen' };
-    if (card.reviewer) return { id: card.reviewer }; // In review: the reviewer the task was handed to
-    // Today's rule (#213): the review agent; on its own task, the project's lead.
-    const review = (this.db.prepare("SELECT value FROM settings WHERE key = 'review_agent'").get() as { value: string } | undefined)?.value || null;
-    if (!review) return { couldnt: 'no review agent is set (Settings → Board & triage)' };
-    const id = review === card.assignee ? leadOf(this.db, card.projectId) : review;
-    return id ? { id } : { couldnt: `@${review} built this task and project ${projectRow(this.db, card.projectId).name} has no lead to review it` };
+    // The project's review agent; on its own task, the project's lead (#213, #263). Never another agent: unset,
+    // disabled or no longer a member is the reason the step couldn't run, with where to fix it.
+    const who = reviewerFor(this.db, card.projectId, card.assignee);
+    if ('problem' in who) return { couldnt: who.problem };
+    // pr_validate answers only the task's reviewer: it follows the project's choice made since the request.
+    if (card.reviewer !== who.id) {
+      this.db.prepare('UPDATE cards SET reviewer = ? WHERE id = ?').run(who.id, card.id);
+      this.kanban.emit(card.id);
+    }
+    return who;
   }
 
   /** Thread steps whose agent is not woken yet: the prompt goes in the thread and the agent starts there, once the thread is free. */
@@ -1938,6 +2069,14 @@ export class Workflows {
         .prepare("SELECT payload FROM card_events WHERE card_id = ? AND kind = 'pr_verdict' AND id > ? ORDER BY id DESC LIMIT 1")
         .get(step.card_id, d.eventsBefore ?? 0) as { payload: string } | undefined;
       if (!v) {
+        const tries = d.tries ?? 1;
+        if (tries < REVIEW_TRIES) {
+          // Once more by itself (#221), told why; the next try without a verdict waits for Master.
+          const again: ThreadData = { ...d, prompt: d.prompt.startsWith(AGAIN) ? d.prompt : AGAIN + d.prompt, posted: false, runId: null, agent: null, tries: tries + 1 };
+          this.storeThreadRun(step.id, again);
+          this.setStepState(step, 'running');
+          return this.setRunState(run.id, 'running');
+        }
         this.db.prepare('UPDATE workflow_run_steps SET manual_retry = 1 WHERE id = ?').run(step.id);
         this.markCouldnt(run.id, step.id, `the review by @${d.agent} ended without a verdict (pr_validate)${r.status === 'failed' ? `: ${r.error ?? 'the run failed'}` : ''}`);
         const w = this.row(run.workflow_id);
@@ -1950,6 +2089,21 @@ export class Workflows {
     }
     if (r.status === 'done') return this.finishStep(run.id, step, 'done', said ?? 'done');
     this.finishStep(run.id, step, 'not done', `@${d.agent}'s run ${r.status}${r.error ? `: ${r.error}` : ''}${said ? ` (last words: ${cut(said, 300)})` : ''}`);
+  }
+
+  /**
+   * The review the flow of prs.ts (before #263) started on the task's current request, if any: its review_started
+   * event (after the last review_requested) with the reviewer's run. Ended or not, the step adopts it.
+   */
+  private oldReview(cardId: string): { by: string; runId: string; eventId: number } | null {
+    const req = this.db.prepare("SELECT COALESCE(MAX(id), 0) AS id FROM card_events WHERE card_id = ? AND kind = 'review_requested'").get(cardId) as { id: number };
+    const ev = this.db.prepare("SELECT id, payload FROM card_events WHERE card_id = ? AND kind = 'review_started' AND id > ? ORDER BY id DESC LIMIT 1").get(cardId, req.id) as
+      | { id: number; payload: string }
+      | undefined;
+    if (!ev) return null;
+    const p = JSON.parse(ev.payload) as { by?: string; runId?: string };
+    if (!p.by || !p.runId || !this.db.prepare('SELECT 1 FROM runs WHERE id = ?').get(p.runId)) return null;
+    return { by: p.by, runId: p.runId, eventId: ev.id };
   }
 
   /** What the agent last wrote in the thread during its run. */

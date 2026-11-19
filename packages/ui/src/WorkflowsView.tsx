@@ -237,6 +237,11 @@ function WorkflowRow(props: { w: Workflow; cards: Card[]; onOpen(): void; onOpen
         <div className="wfl-mtext">
         <div className="wfl-name" title={w.name}>
           {w.name}
+          {w.origin === 'review' && (
+            <span className="badge wfl-def" title="Made by Atlas for this project: Reset to default brings its steps and layout back">
+              default
+            </span>
+          )}
         </div>
         <div className="wfl-sub">
           <TriggerText t={t} bare />

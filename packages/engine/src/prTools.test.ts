@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import { mkdirSync } from 'node:fs';
-import { launch, until } from '../test/kit/index.ts';
+import { launch, setReviewAgent, until } from '../test/kit/index.ts';
 import { prToolSpecs, runPrTool } from './prTools.ts';
 
 const SHA = 'a'.repeat(40);
@@ -26,8 +26,9 @@ async function setup() {
   const t = await launch({ script: [], dispatch: false, prs: { read: async () => Promise.reject(new Error('no poll here')), intervalMs: false } });
   const e = t.engine;
   for (const id of ['zurich', 'munih']) if (!e.agents.list().some((a) => a.id === id)) e.agents.create({ id, modelId: e.agents.get('atlas').modelId });
-  e.settings.update({ reviewAgent: 'zurich', triageAgent: 'atlas' });
-  e.projects.create({ name: 'Datinel', repo: 'datinel/datinel', lead: 'munih', members: ['zurich'] });
+  e.settings.update({ triageAgent: 'atlas' });
+  e.projects.create({ name: 'Datinel', repo: 'datinel/datinel', lead: 'munih', members: ['zurich'], reviewAgent: 'zurich' });
+  setReviewAgent(e, 'atlas', 'zurich');
   const inReview = (projectId: string, url: string, assignee = 'munih') => {
     const c = e.kanban.create({ title: 'x', status: 'running', assignee, projectId }, 'user');
     e.kanban.requestReview(c.id, [url], assignee, 'built');
@@ -157,8 +158,8 @@ describe('pr_validate in a reviewer run (#216)', () => {
     const t = await launch({ script: [[call], [{ type: 'text', text: 'validated' }]], dispatch: false, prs: { read: async () => Promise.reject(new Error('no poll')), intervalMs: false, validate: { gh: f.gh } }, projects: { clone: async (_r, dir) => void mkdirSync(dir, { recursive: true }) } });
     const e = t.engine;
     for (const id of ['zurich', 'munih']) if (!e.agents.list().some((a) => a.id === id)) e.agents.create({ id, modelId: e.agents.get('atlas').modelId });
-    e.settings.update({ reviewAgent: 'zurich', triageAgent: 'atlas' });
-    e.projects.create({ name: 'Datinel', repo: 'datinel/datinel', lead: 'munih', members: ['zurich'] });
+    e.settings.update({ triageAgent: 'atlas' });
+    e.projects.create({ name: 'Datinel', repo: 'datinel/datinel', lead: 'munih', members: ['zurich'], reviewAgent: 'zurich' });
     await until(() => e.projects.get('datinel').members.every((m) => m.cloneState === 'ready'), 'Datinel workspaces ready');
     const c = e.kanban.create({ title: 'x', status: 'running', assignee: 'munih', projectId: 'datinel' }, 'user');
     e.kanban.requestReview(c.id, ['https://github.com/datinel/datinel/pull/3'], 'munih', 'built');

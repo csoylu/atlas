@@ -1206,6 +1206,7 @@ button.artifact:hover .art-open { color: var(--accent); }
 .now-l2 .mono { font-family: var(--mono); }
 .now-l2 a { color: var(--accent); }
 .now-act { margin-left: 8px; vertical-align: middle; }
+.now-acts { display: inline-flex; flex-wrap: wrap; gap: 6px; margin-left: 8px; vertical-align: middle; }
 .now-ask { display: flex; flex-direction: column; gap: 12px; padding-top: 6px; }
 .now-q { font-size: var(--fs-large); line-height: var(--lh-long); overflow-wrap: anywhere; }
 .now-q p { margin: 0 0 8px; }
@@ -2263,6 +2264,7 @@ button.wfl-ghead:hover { color: var(--text); background: var(--hover); }
 .wfl-row:has(.wfl-alert.bad) { box-shadow: inset 3px 0 0 var(--negative); }
 .wfl-row:has(.wfl-alert.need) { box-shadow: inset 3px 0 0 var(--bk-dot); }
 .wfl-name { font-size: var(--fs-base); font-weight: var(--fw-medium); line-height: var(--lh-tight); color: var(--text); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.wfl-name .wfl-def { margin-left: 8px; vertical-align: 1px; }
 .wfl-row.past .wfl-name { color: var(--muted); }
 .wfl-sub { display: flex; align-items: center; flex-wrap: wrap; gap: 4px 6px; font-size: var(--fs-small); line-height: var(--lh-tight); color: var(--muted); min-width: 0; }
 .wfl-sub .part { display: inline-flex; align-items: center; flex-wrap: wrap; gap: 4px 6px; }

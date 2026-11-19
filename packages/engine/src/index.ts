@@ -39,6 +39,7 @@ import type { CheckoutOptions } from './workflowCommand.ts';
 import { Prs, ghReader, type GhRead } from './prs.ts';
 import { Projects, ghClone, ghRunner, type CloneRun, type GhRun } from './projects.ts';
 import { Stalls } from './stalls.ts';
+import { ReviewFlow, openReviewRun } from './reviewFlow.ts';
 
 export interface EngineOptions {
   /** SQLite file, or ':memory:'. */
@@ -133,6 +134,7 @@ export interface Engine {
   updater: Updater;
   prs: Prs;
   stalls: Stalls;
+  reviewFlow: ReviewFlow;
   secrets: Secrets;
   projects: Projects;
   url: string;
@@ -169,10 +171,12 @@ export async function startEngine(opts: EngineOptions): Promise<Engine> {
   let listening: number | null = null;
   const hookTokens = new HookTokens(db, opts.secrets);
   hookTokens.sweep();
+  // The GitHub client of merge steps and « Validate by hand » (#263): the user's gh login, the login shell's PATH.
+  const ghFor = opts.prs?.validate?.gh ? () => opts.prs!.validate!.gh! : async () => ghClient({ bin: ghBinary(), env: await shellEnv.engineEnv() });
   const workflows = new Workflows(db, bus, kanban, undefined, {
     hooks: hookTokens,
     port: () => listening,
-    gh: opts.prs?.validate?.gh ? () => opts.prs!.validate!.gh! : async () => ghClient({ bin: ghBinary(), env: await shellEnv.engineEnv() }),
+    gh: ghFor,
     // Command steps (#273): the engine's login-shell env is the base, scrubbed by Secrets.envForStep.
     command: { dataDir: opts.dataDir, secrets: () => secrets, env: () => shellEnv.engineEnv(), clone: opts.workflowCommand?.clone, minuteMs: opts.workflowCommand?.minuteMs },
   });
@@ -217,16 +221,20 @@ export async function startEngine(opts: EngineOptions): Promise<Engine> {
   const rewinds = new Rewinds(db, bus, kanban, agents, runner, opts.dataDir, fileLog, effects);
   const dispatcher = new Dispatcher(bus, kanban, agents, models, settings, runner);
   const slash = new Slash(db, bus, kanban, runner);
-  const prs = new Prs(db, bus, kanban, agents, runner, {
+  const prs = new Prs(db, bus, kanban, runner, {
     read: opts.prs?.read ?? ghReader(() => shellEnv.engineEnv()),
     intervalMs: opts.prs?.intervalMs,
   });
+  // The review is each project's Review workflow (#263): prs.ts reads GitHub, reviewFlow.ts seeds and watches it.
+  const reviewFlow = new ReviewFlow(db, bus, kanban, workflows, { gh: ghFor });
+  reviewFlow.poll = () => void prs.poll();
+  prs.reviewNow = (id) => workflows.reviewNow(id);
   dispatcher.reviewReason = (c) => prs.reason(c);
-  dispatcher.recheck = (id) => prs.recheck(id);
+  dispatcher.recheck = (id) => reviewFlow.retry(id);
   // Stuck tasks (#237): looked at on the dispatcher's tick.
   const stalls = new Stalls(db, bus, kanban, runner, opts.stallsNow);
   stalls.startProblem = (c) => dispatcher.startProblem(c);
-  stalls.reviewStall = (c) => prs.reviewStall(c);
+  stalls.reviewRun = (c) => !!openReviewRun(db, c.id);
   stalls.deliver = (id) => dispatcher.onAgentMessage(id);
   dispatcher.stalls = stalls;
   const updater = new Updater(db, bus, {
@@ -272,6 +280,7 @@ export async function startEngine(opts: EngineOptions): Promise<Engine> {
     env,
     auth,
     projects,
+    reviewFlow,
   });
   await new Promise<void>((resolve, reject) => {
     server.once('error', reject);
@@ -299,6 +308,7 @@ export async function startEngine(opts: EngineOptions): Promise<Engine> {
     // Built-in workflows come with the trigger clock (tests without a dispatcher start from an empty list).
     cleanup.ensureSchedule(workflows, agents);
     workflows.start();
+    reviewFlow.start();
     prs.start();
   }
   voice?.start();
@@ -335,10 +345,12 @@ export async function startEngine(opts: EngineOptions): Promise<Engine> {
     voiceChat,
     updater,
     prs,
+    reviewFlow,
     stalls,
     url,
     stop: async () => {
       prs.stop();
+      reviewFlow.stop();
       updater.stop();
       workflows.stop();
       await workflows.commandsIdle();

@@ -4,7 +4,7 @@ import { existsSync, mkdtempSync, readdirSync, readFileSync, writeFileSync } fro
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import type { ContentBlock, SecretStoreStatus, Workflow, WorkflowNodeInput, WorkflowRun } from '@atlas/shared';
-import { eventually, launch, type LaunchOptions } from '../test/kit/index.ts';
+import { eventually, launch, setReviewAgent, type LaunchOptions } from '../test/kit/index.ts';
 import type { SecretStore } from './secrets.ts';
 import { fieldsEnv, FIELD_VALUE_MAX, processStart } from './workflowCommand.ts';
 import { otherLead } from './context.ts';
@@ -446,8 +446,8 @@ describe('Agent step in the task thread (#273)', { timeout: 30_000 }, () => {
       return text('verdict given');
     };
     // After each review the builder answers in the thread (#221: new messages since its turn): its own replies.
-    t = await setup({ script: [verdict('fail', 'tests missing for the limit'), text('builder: on it'), verdict('ok', 'tests and build checked'), text('builder: thanks'), text('no verdict this time'), text('builder: ok')] });
-    t.e.settings.update({ reviewAgent: 'zurich' });
+    t = await setup({ script: [verdict('fail', 'tests missing for the limit'), text('builder: on it'), verdict('ok', 'tests and build checked'), text('builder: thanks'), text('no verdict this time'), text('no verdict again'), text('builder: ok')] });
+    setReviewAgent(t.e, 'atlas', 'zurich');
     const card = t.e.kanban.create({ title: 'Feature', assignee: 'munih', status: 'ready' }, 'user');
     cardId = card.id;
     const w = t.wf.create(
@@ -469,7 +469,7 @@ describe('Agent step in the task thread (#273)', { timeout: 30_000 }, () => {
     const b = await done(rb.id);
     expect(b).toMatchObject({ exit: 'approved', summary: '@zurich on PR #41: tests and build checked' });
     await t.idle(card.id);
-    // No verdict: couldn't run, not retried by itself (each try is a model run), Master told.
+    // No verdict: started once more by itself, told why (#221); no verdict again: couldn't run, Master told.
     const c = await done(t.wf.runNow(w.id, { task: card.id }).id);
     expect(c.couldntRun).toMatchObject({ reason: 'the review by @zurich ended without a verdict (pr_validate)', autoRetry: false, notified: true, negativeExit: 'changes asked' });
     // The review agent works in the thread only.

@@ -67,3 +67,13 @@ export async function launch(o: LaunchOptions = {}) {
   };
 }
 export type Launched = Awaited<ReturnType<typeof launch>>;
+
+/**
+ * Make `agentId` the review agent of `projectId` (#263, Settings → Projects), adding it as a member if needed. In the
+ * default project a new member works in its own workspace: no clone.
+ */
+export function setReviewAgent(engine: Engine, projectId: string, agentId: string): void {
+  const p = engine.projects.get(projectId);
+  const members = p.members.map((m) => m.agentId);
+  engine.projects.update(p.id, { ...(members.includes(agentId) ? {} : { members: [...members, agentId] }), reviewAgent: agentId });
+}
