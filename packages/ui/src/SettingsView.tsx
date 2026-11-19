@@ -18,6 +18,7 @@ import { useProjects } from './projects.tsx';
 import { THEMES, type ThemeChoice } from './theme.ts';
 import type { MessageStream } from './useMessages.ts';
 import { UpdateAbout } from './UpdateDialog.tsx';
+import { Skeleton } from './Kit.tsx';
 
 /**
  * Settings (design §12): a second navigation inside the sheet, grouped (Team, Models, Insight, App), and the page on
@@ -268,7 +269,7 @@ function ShellPath({ info }: { info: ShellPathInfo | null }) {
       : "The engine's own PATH. Commits are made under the agent's name.";
   return (
     <>
-      <p className={info.error ? 'error-text' : 'about-note'}>{what}</p>
+      <p className={info.error ? 'state-err inline' : 'about-note'}>{what}</p>
       <details className="about-path">
         <summary>{info.path.split(':').filter(Boolean).length} folders</summary>
         <code>{info.path.split(':').filter(Boolean).join('\n')}</code>
@@ -308,7 +309,7 @@ function AboutData({ update, onOpenUpdate, onError }: { update: UpdateStatus | n
           </dd>
         </dl>
       ) : (
-        <div className="model-row skeleton" />
+        <Skeleton />
       )}
     </section>
   );

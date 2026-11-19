@@ -22,7 +22,7 @@ export function Menu(props: { open: boolean; onOpen(open: boolean): void; label:
   }, [open, onOpen]);
   return (
     <div className={'head-menu' + (props.className ? ' ' + props.className : '')} ref={box}>
-      <button type="button" className={'head-btn' + (props.btnClass ? ' ' + props.btnClass : '') + (open ? ' open' : '')} aria-expanded={open} aria-haspopup="menu" title={props.title} onClick={() => onOpen(!open)}>
+      <button type="button" className={'btn' + (props.btnClass ? ' ' + props.btnClass : '') + (open ? ' open' : '')} aria-expanded={open} aria-haspopup="menu" title={props.title} onClick={() => onOpen(!open)}>
         {props.label}
       </button>
       {open && (

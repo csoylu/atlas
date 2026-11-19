@@ -285,10 +285,10 @@ export function DeleteArtifactDialog(props: { doc: Doc; onCancel(): void; onDele
           Its file <code>{doc.path}</code> in {who(doc.agentId)}'s workspace is deleted too. Its cards in chats will read “Deleted artifact”.
         </p>
         <div className="modal-actions">
-          <button type="button" className="ghost" onClick={onCancel}>
+          <button type="button" className="btn ghost" onClick={onCancel}>
             Cancel
           </button>
-          <button type="button" className="primary danger" autoFocus disabled={busy} onClick={del}>
+          <button type="button" className="btn primary danger" autoFocus disabled={busy} onClick={del}>
             {busy ? 'Deleting…' : 'Delete'}
           </button>
         </div>
@@ -481,7 +481,7 @@ const MarkdownText = ({ text }: { text: string }) => (
 
 /** A link: the running app or page in a frame, an image fit to the box. */
 function LinkView({ url, title, preview }: { url: string; title: string; preview?: boolean }) {
-  if (!url) return <p className="muted doc-empty">This link has no address.</p>;
+  if (!url) return <p className="state-empty inline doc-empty">This link has no address.</p>;
   if (isImageUrl(url)) return <img className={preview ? 'lib-pv-img' : 'doc-link-img'} src={url} alt={preview ? '' : title} />;
   return <iframe className={preview ? undefined : 'doc-frame'} title={title} sandbox={sandboxFor(url)} src={url} tabIndex={preview ? -1 : undefined} aria-hidden={preview || undefined} loading="lazy" />;
 }

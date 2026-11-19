@@ -206,7 +206,7 @@ test('library: folders with counts, tabs, tiles, search, empty state', async ({ 
   await expect(res.locator('.lib-snip')).toContainText('zebra');
   await expect(res.locator('.lib-fold')).toContainText('Design');
   await search.fill('qqqnothing');
-  await expect(page.locator('.lib-empty')).toBeVisible();
+  await expect(page.locator('.library .state-empty')).toBeVisible();
   await search.fill('');
   await expect(page.locator('.lib-row').first()).toBeVisible();
 });

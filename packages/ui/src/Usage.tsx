@@ -5,6 +5,7 @@ import { ago, QUOTA_WARN, resetLabel } from './PlanAccounts.tsx';
 import type { MessageStream } from './useMessages.ts';
 
 import { axisTicks, dayTotal, tok, usageHeadline } from './usageStats.ts';
+import { Skeleton } from './Kit.tsx';
 
 export { tok };
 
@@ -288,7 +289,7 @@ export function UsageSection(props: { stream: MessageStream; onError(e: unknown)
   if (!s)
     return (
       <section>
-        <div className="model-row skeleton" />
+        <Skeleton />
       </section>
     );
 
@@ -310,7 +311,7 @@ export function UsageSection(props: { stream: MessageStream; onError(e: unknown)
         </p>
       </header>
       {s.total.calls === 0 ? (
-        <div className="empty-note">No model calls in the last {s.days} days yet.</div>
+        <div className="state-empty">No model calls in the last {s.days} days yet.</div>
       ) : (
         <div className="usage-card">
           <div className="usage-stats">

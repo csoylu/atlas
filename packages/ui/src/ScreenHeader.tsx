@@ -56,6 +56,7 @@ export const Icon = {
   undo: svg(<path d="M5.5 3.5 2.5 6.5l3 3M2.5 6.5h7a3.5 3.5 0 0 1 0 7H7" />, 14),
   memory: svg(<><path d="M8 2.5a3.5 3.5 0 0 0-3.5 3.5c0 1.3.6 2.1 1.4 2.8.6.5.9 1.1.9 1.7h2.4c0-.6.3-1.2.9-1.7.8-.7 1.4-1.5 1.4-2.8A3.5 3.5 0 0 0 8 2.5z" /><path d="M6.5 12.5h3M7 14h2" /></>),
   panel: svg(<><rect x="2" y="2.5" width="12" height="11" rx="1.5" /><path d="M9.5 2.5v11" /></>, 14),
+  globe: svg(<><circle cx="8" cy="8" r="5.5" /><path d="M2.5 8h11M8 2.5c1.6 1.7 2.3 3.5 2.3 5.5S9.6 11.8 8 13.5C6.4 11.8 5.7 10 5.7 8S6.4 4.2 8 2.5z" /></>, 12),
   logout: svg(<path d="M6 2.5H3v11h3M10.5 5l3 3-3 3M13.5 8H6.5" />, 14),
   up: () => (
     <svg className="icon" viewBox="0 0 16 16" width="14" height="14" fill="none" stroke="currentColor" strokeWidth="1.7" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">

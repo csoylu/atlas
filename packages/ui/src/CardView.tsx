@@ -7,11 +7,12 @@ import { CARD_STATUSES, cardRef, type Doc, type Agent, type Card, type Model } f
 import { api } from './api.ts';
 import type { MessageStream } from './useMessages.ts';
 import { Activity, CardComposer, CardNotices, RunLine, useCardConversation, type MessageRef } from './CardPanel.tsx';
-import { pillStatus, statusChip } from './cardModal.ts';
+import { pillStatus } from './cardModal.ts';
 import { CardDocs, TaskDocReader, type DocToRead } from './DocPanel.tsx';
 import { RewindConfirm, RewindNote, useRewind } from './Rewind.tsx';
 import { StatusIcon, STATUS_LABEL } from './StatusIcon.tsx';
 import { PrRows } from './PrChips.tsx';
+import { StatusChip } from './Kit.tsx';
 import { ProjTag } from './projects.tsx';
 import { timeInState } from './boardView.ts';
 import { useMinute } from './useMinute.ts';
@@ -104,7 +105,6 @@ export const CardView = forwardRef<HTMLTextAreaElement, CardViewProps & { close:
       att.add(files);
     };
     const status = pillStatus(card, convo.run);
-    const chip = statusChip(status);
     const running = card.status === 'running' || convo.run?.status === 'running';
     const byId = new Map(props.cards.map((c) => [c.id, c]));
     const children = props.cards.filter((c) => c.parents.includes(card.id));
@@ -123,16 +123,7 @@ export const CardView = forwardRef<HTMLTextAreaElement, CardViewProps & { close:
           <div className="cm-row">
             <span className="id cm-id" title={card.id}>{cardRef(card)}</span>
             <ProjTag id={card.projectId} title="Project (set when the task was made)" />
-            {chip ? (
-              <span className={'cm-pill st-chip ' + chip.kind} title="Status (live)">
-                {chip.label}
-              </span>
-            ) : (
-              <span className={'cm-pill ' + status} title="Status (live)">
-                <StatusIcon status={status === 'stopped' ? 'failed' : status} />
-                {status === 'stopped' ? 'Stopped by you' : STATUS_LABEL[status]}
-              </span>
-            )}
+            {status === 'stopped' ? <StatusChip status="failed" label="Stopped by you" title="Status (live)" /> : <StatusChip status={status} title="Status (live)" />}
             {since && (
               <span className={'st-since' + (card.stall ? ' stuck' : '')} title={`${STATUS_LABEL[card.status]} for ${since}, since ${new Date(card.statusSince!).toLocaleString()}`}>
                 {since}
@@ -313,7 +304,7 @@ export const CardView = forwardRef<HTMLTextAreaElement, CardViewProps & { close:
           <span className="cm-sp" />
           <button
             type="button"
-            className="ghost danger cm-delete"
+            className="btn ghost danger cm-delete"
             onClick={() => {
               if (confirm(`Delete ${cardRef(card)} and its chat?`)) api.deleteCard(card.id).then(onClose, onError);
             }}

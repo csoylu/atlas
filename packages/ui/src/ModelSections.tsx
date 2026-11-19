@@ -149,7 +149,7 @@ function AvailableToAdd(props: {
                 {r.added ? (
                   <span className="muted">Added: pick it on an agent</span>
                 ) : (
-                  <button className="tool" disabled={busy === r.key} onClick={() => void add(r)}>
+                  <button className="btn" disabled={busy === r.key} onClick={() => void add(r)}>
                     Give to agents
                   </button>
                 )}
@@ -236,17 +236,17 @@ function ModelRow(props: { model: Model; keyStore: string | null; stored: boolea
             }}
           >
             <input type="password" autoFocus autoComplete="off" value={keyDraft} onChange={(e) => setKeyDraft(e.target.value)} placeholder={`Paste ${m.credentialEnv}`} />
-            <button type="button" className="ghost" onClick={() => setKeyDraft(null)}>
+            <button type="button" className="btn ghost" onClick={() => setKeyDraft(null)}>
               Cancel
             </button>
-            <button className="primary small" disabled={!keyDraft.trim()}>
+            <button className="btn primary small" disabled={!keyDraft.trim()}>
               Save to {props.keyStore}
             </button>
           </form>
         )}
-        {m.lastError && <div className="model-error">{m.lastError}</div>}
+        {m.lastError && <div className="state-err">{m.lastError}</div>}
         {test && test !== 'running' && (test.ok || test.error !== m.lastError) && (
-          <div className={test.ok ? 'model-ok' : 'model-error'}>
+          <div className={test.ok ? 'model-ok' : 'state-err'}>
             {test.ok
               ? `Answered in ${(test.ms / 1000).toFixed(1)} s` + (test.detectedContextWindow ? ` · server runs it with ${tokens(test.detectedContextWindow)} context` : '')
               : test.error}
@@ -256,11 +256,11 @@ function ModelRow(props: { model: Model; keyStore: string | null; stored: boolea
       <div className="model-actions">
         {edit ? (
           <>
-            <button className="ghost" onClick={() => setEdit(false)}>
+            <button className="btn ghost" onClick={() => setEdit(false)}>
               Cancel
             </button>
             <button
-              className="primary small"
+              className="btn primary small"
               disabled={!ctxValid}
               onClick={() =>
                 api
@@ -282,7 +282,7 @@ function ModelRow(props: { model: Model; keyStore: string | null; stored: boolea
         ) : (
           <>
             <button
-              className="tool"
+              className="btn"
               disabled={test === 'running'}
               onClick={() => {
                 setTest('running');
@@ -295,17 +295,17 @@ function ModelRow(props: { model: Model; keyStore: string | null; stored: boolea
               {test === 'running' ? 'Testing…' : 'Test'}
             </button>
             {props.keyStore && m.credentialEnv && keyDraft === null && (
-              <button className="ghost" onClick={() => setKeyDraft('')}>
+              <button className="btn ghost" onClick={() => setKeyDraft('')}>
                 {m.credentialPresent ? 'Replace key' : 'Set key'}
               </button>
             )}
             {props.stored && (
-              <button className="ghost" onClick={() => confirm(`Remove ${m.credentialEnv} from the ${props.keyStore}?`) && api.deleteSecret(m.credentialEnv!).then(props.onChanged, onError)}>
+              <button className="btn ghost" onClick={() => confirm(`Remove ${m.credentialEnv} from the ${props.keyStore}?`) && api.deleteSecret(m.credentialEnv!).then(props.onChanged, onError)}>
                 Remove key
               </button>
             )}
             <button
-              className="ghost"
+              className="btn ghost"
               onClick={() => {
                 setDraft(fromModel());
                 setEdit(true);
@@ -314,7 +314,7 @@ function ModelRow(props: { model: Model; keyStore: string | null; stored: boolea
               Edit
             </button>
             {props.usedBy.length === 0 && (
-              <button className="ghost danger" onClick={() => confirm(`Delete model ${m.id}?`) && api.deleteModel(m.id).then(props.onChanged, onError)}>
+              <button className="btn ghost danger" onClick={() => confirm(`Delete model ${m.id}?`) && api.deleteModel(m.id).then(props.onChanged, onError)}>
                 Delete
               </button>
             )}
@@ -361,10 +361,10 @@ function NewModel(props: { onCreated(): void; onError(e: unknown): void }) {
       <input value={f.name} onChange={(e) => setF({ ...f, name: e.target.value })} placeholder={f.provider === 'anthropic' ? 'claude-sonnet-5-5' : 'model name on the server'} required />
       {f.provider === 'openai_compat' && <input value={f.baseUrl} onChange={(e) => setF({ ...f, baseUrl: e.target.value })} placeholder="base URL" required />}
       <input value={f.credentialEnv} onChange={(e) => setF({ ...f, credentialEnv: e.target.value.toUpperCase() })} placeholder={f.provider === 'anthropic' ? 'own key env var (optional; default: the accounts)' : 'key env var (optional)'} />
-      <button type="button" className="ghost" onClick={() => setOpen(false)}>
+      <button type="button" className="btn ghost" onClick={() => setOpen(false)}>
         Cancel
       </button>
-      <button className="primary small">Add</button>
+      <button className="btn primary small">Add</button>
     </form>
   );
 }

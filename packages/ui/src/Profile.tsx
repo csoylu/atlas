@@ -45,9 +45,9 @@ function ProfileForm(props: { settings: Settings; submit: string; autoFocus?: bo
           placeholder="e.g. I'm an engineer, 29, working as a software developer. / I'm 12 and learning to code."
         />
       </label>
-      {error && <p className="error-text">{error}</p>}
+      {error && <p className="state-err inline">{error}</p>}
       <div className="profile-actions">
-        <button type="submit" className="primary" disabled={!ready || !changed || saving}>
+        <button type="submit" className="btn primary" disabled={!ready || !changed || saving}>
           {props.submit}
         </button>
       </div>

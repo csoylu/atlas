@@ -152,7 +152,7 @@ export function CardPanel(props: {
     <aside className={'panel chat-pane' + (props.hiddenDocs ? ' has-docs' : '')}>
       <HeaderActions>
         {!!props.hiddenDocs && (
-          <button type="button" className="head-btn doc-reopen" onClick={props.onShowDocs} title="Show the documents panel (⌘\)">
+          <button type="button" className="btn doc-reopen" onClick={props.onShowDocs} title="Show the documents panel (⌘\)">
             <Icon.doc /> Documents · {props.hiddenDocs}
           </button>
         )}
@@ -209,7 +209,7 @@ export function CardNotices({ card, onError }: { card: Card; onError(e: unknown)
       <div className="waiting-line stuck">
         {stallText(card.stall, card.statusSince, now)}
         {act && (
-          <button className="ghost retry" onClick={() => act.run(card.id).catch(onError)}>
+          <button className="btn ghost retry" onClick={() => act.run(card.id).catch(onError)}>
             {act.label}
           </button>
         )}
@@ -222,7 +222,7 @@ export function CardNotices({ card, onError }: { card: Card; onError(e: unknown)
     <div className="waiting-line">
       {card.waiting}
       {card.waiting.includes('Retry') && (
-        <button className="ghost retry" onClick={() => api.retry(card.id).catch(onError)}>
+        <button className="btn ghost retry" onClick={() => api.retry(card.id).catch(onError)}>
           Retry
         </button>
       )}
@@ -383,8 +383,8 @@ export function Activity(props: {
   return (
     <>
       <span ref={listBox} hidden />
-      {messages.length === 0 && !asking && <p className="empty">{props.empty}</p>}
-      {fold > 0 && shown.length === 0 && !draft && !asking && <p className="empty">Context cleared. The agent starts fresh from your next message.</p>}
+      {messages.length === 0 && !asking && <p className="state-empty center">{props.empty}</p>}
+      {fold > 0 && shown.length === 0 && !draft && !asking && <p className="state-empty center">Context cleared. The agent starts fresh from your next message.</p>}
       {placed.before.map(sysRow)}
       {groups.map((ms, i) => {
         const m = ms[0]!;
@@ -581,7 +581,7 @@ export function RunLine({ run, onStop, stop = true }: { run: Run | null; onStop(
     <div className="run-status running">
       <span className="pulse" /> @{run.agentId} is working…
       {stop && (
-        <button className="ghost" onClick={onStop}>
+        <button className="btn ghost" onClick={onStop}>
           Stop
         </button>
       )}

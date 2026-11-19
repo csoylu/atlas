@@ -4,6 +4,7 @@ import remarkGfm from 'remark-gfm';
 import type { UpdateStatus } from '@atlas/shared';
 import { api, ApiError } from './api.ts';
 import { aboutLine, badgeLabel, busy, latestOf, noteHeading, percent, workingLine } from './update.ts';
+import { Skeleton } from './Kit.tsx';
 
 /**
  * App updates (#123, docs/updater.md): the sidebar badge, the dialog (what changed since your version, who is working,
@@ -94,7 +95,7 @@ export function UpdateDialog({ status, onClose, onError }: { status: UpdateStatu
             )}
           </div>
         )}
-        {status.phase === 'failed' && status.error && <p className="update-error" role="alert">{status.error}</p>}
+        {status.phase === 'failed' && status.error && <p className="state-err" role="alert">{status.error}</p>}
         {status.cannotInstall && latest && <p className="update-fine">{status.cannotInstall}</p>}
         {going && (
           <div className="update-progress" role="status">
@@ -105,11 +106,11 @@ export function UpdateDialog({ status, onClose, onError }: { status: UpdateStatu
           </div>
         )}
         <div className="update-actions">
-          <button type="button" className="ghost" onClick={onClose} disabled={going}>
+          <button type="button" className="btn ghost" onClick={onClose} disabled={going}>
             {latest ? 'Later' : 'Close'}
           </button>
           {latest && (
-            <button type="button" className="primary" autoFocus disabled={going || !!status.cannotInstall} onClick={update}>
+            <button type="button" className="btn primary" autoFocus disabled={going || !!status.cannotInstall} onClick={update}>
               {status.phase === 'failed' ? 'Try again' : 'Update and restart'}
             </button>
           )}
@@ -126,17 +127,17 @@ export function UpdateAbout({ status, onOpen, onError }: { status: UpdateStatus 
     const t = setInterval(() => tick((n) => n + 1), 30_000);
     return () => clearInterval(t);
   }, []);
-  if (!status) return <div className="model-row skeleton" />;
+  if (!status) return <Skeleton />;
   return (
     <div className="update-about">
       <span className={status.checkError ? 'update-about-line bad' : 'update-about-line'}>{aboutLine(status)}</span>
       <span className="update-about-acts">
         {latestOf(status) && (
-          <button type="button" className="primary small" onClick={onOpen}>
+          <button type="button" className="btn primary small" onClick={onOpen}>
             See what's new
           </button>
         )}
-        <button type="button" className="ghost small" disabled={status.checking} onClick={() => api.checkUpdate().catch(onError)}>
+        <button type="button" className="btn ghost small" disabled={status.checking} onClick={() => api.checkUpdate().catch(onError)}>
           Check now
         </button>
       </span>

@@ -55,12 +55,12 @@ export function AccountsSection(props: { keyStore: string | null; onChanged(): v
           return (
             <div key={a.id} className={'model-row account-row ' + state}>
               <div className="order">
-                <button className="ghost" aria-label={`Move ${a.label} up`} disabled={i === 0 || busy === 'order'} onClick={() => move(i, -1)}>
+                <button className="btn ghost" aria-label={`Move ${a.label} up`} disabled={i === 0 || busy === 'order'} onClick={() => move(i, -1)}>
                   <Chevron up />
                 </button>
                 <span className="num rank">{i + 1}</span>
                 <button
-                  className="ghost"
+                  className="btn ghost"
                   aria-label={`Move ${a.label} down`}
                   disabled={i === accounts.length - 1 || busy === 'order'}
                   onClick={() => move(i, 1)}
@@ -71,14 +71,14 @@ export function AccountsSection(props: { keyStore: string | null; onChanged(): v
               <div className="model-main">
                 <div className="model-title">
                   <span className="model-name">{a.label}</span>
-                  {a.id === next && <span className="pill ok-pill">In use</span>}
-                  {a.cooldownUntil && <span className="pill">Waiting until {time(a.cooldownUntil)}</span>}
+                  {a.id === next && <span className="badge ok">In use</span>}
+                  {a.cooldownUntil && <span className="badge warn">Waiting until {time(a.cooldownUntil)}</span>}
                   {!a.enabled && <span className="badge">Off</span>}
                   {!a.keyPresent && <span className="badge bad">Key missing</span>}
                 </div>
                 <Limits a={a} />
-                {a.lastError && a.enabled && <div className="model-error">{a.lastError}</div>}
-                {tests[a.id] && <div className={tests[a.id] === 'Key works' ? 'model-ok' : 'model-error'}>{tests[a.id]}</div>}
+                {a.lastError && a.enabled && <div className="state-err">{a.lastError}</div>}
+                {tests[a.id] && <div className={tests[a.id] === 'Key works' ? 'model-ok' : 'state-err'}>{tests[a.id]}</div>}
               </div>
               <div className="model-actions">
                 <label className="switch" title={a.enabled ? 'On: used in its turn' : 'Off: skipped'}>
@@ -86,7 +86,7 @@ export function AccountsSection(props: { keyStore: string | null; onChanged(): v
                   <span />
                 </label>
                 <button
-                  className="tool"
+                  className="btn"
                   disabled={busy === 'test:' + a.id}
                   onClick={() =>
                     act('test:' + a.id, () =>
@@ -98,7 +98,7 @@ export function AccountsSection(props: { keyStore: string | null; onChanged(): v
                 </button>
                 {props.keyStore && (
                   <button
-                    className="ghost"
+                    className="btn ghost"
                     onClick={() => {
                       const key = prompt(`New API key for ${a.label}`);
                       if (key?.trim()) void act('key:' + a.id, () => api.updateAccount(a.id, { key: key.trim() }));
@@ -107,14 +107,14 @@ export function AccountsSection(props: { keyStore: string | null; onChanged(): v
                     Replace key
                   </button>
                 )}
-                <button className="ghost danger" onClick={() => confirm(`Remove the account ${a.label}?`) && act('del:' + a.id, () => api.deleteAccount(a.id))}>
+                <button className="btn ghost danger" onClick={() => confirm(`Remove the account ${a.label}?`) && act('del:' + a.id, () => api.deleteAccount(a.id))}>
                   Remove
                 </button>
               </div>
             </div>
           );
         })}
-        {accounts?.length === 0 && <div className="empty-note">No account yet. Claude models can't run until you add one.</div>}
+        {accounts?.length === 0 && <div className="state-empty">No account yet. Claude models can't run until you add one.</div>}
         <NewAccount keyStore={props.keyStore} onCreated={() => act('new', async () => {})} onError={onError} />
       </div>
     </section>
@@ -201,10 +201,10 @@ function NewAccount(props: { keyStore: string | null; onCreated(): void; onError
         />
       </label>
       <div className="actions">
-        <button type="button" className="ghost" onClick={() => setOpen(false)}>
+        <button type="button" className="btn ghost" onClick={() => setOpen(false)}>
           Cancel
         </button>
-        <button className="primary small" disabled={!label.trim() || !value.trim()}>
+        <button className="btn primary small" disabled={!label.trim() || !value.trim()}>
           Add
         </button>
       </div>

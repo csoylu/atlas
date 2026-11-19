@@ -132,10 +132,10 @@ export function PlanAccountList(props: {
           if (e.key === 'Escape') (setRenaming(null), setAdding(false));
         }}
       />
-      <button className="primary small" disabled={!name.trim()} onClick={() => saveName(id)}>
+      <button className="btn primary small" disabled={!name.trim()} onClick={() => saveName(id)}>
         {id ? 'Save' : 'Add'}
       </button>
-      <button className="ghost small" onClick={() => (setRenaming(null), setAdding(false))}>
+      <button className="btn ghost small" onClick={() => (setRenaming(null), setAdding(false))}>
         Cancel
       </button>
     </span>
@@ -202,36 +202,36 @@ export function PlanAccountList(props: {
                   ) : a.paused ? (
                     <span className="badge bad">Limit reached{a.pausedUntil ? ` · back ${resetLabel(a.pausedUntil)}` : ''}</span>
                   ) : (
-                    (props.badge?.(a) ?? <span className="pill ok-pill">Signed in</span>)
+                    (props.badge?.(a) ?? <span className="badge ok">Signed in</span>)
                   )}
                 </>
               )}
             </div>
             {a.signedIn && <QuotaBars quota={a.quota} none={props.quotaNone} />}
             {a.paused && !a.pausedUntil && <p className="plan-text">Paused until you resume it ({word} gave no reset time).</p>}
-            {a.lastError && <div className="model-error">{a.lastError}</div>}
+            {a.lastError && <div className="state-err">{a.lastError}</div>}
             {props.extra?.(a)}
           </div>
           <div className="model-actions">
             {!a.signedIn && props.signIn(a)}
             {a.paused && (
-              <button className="ghost" onClick={() => void act(() => api.updatePlanAccount(a.id, { resume: true }))}>
+              <button className="btn ghost" onClick={() => void act(() => api.updatePlanAccount(a.id, { resume: true }))}>
                 Resume
               </button>
             )}
             {renaming !== a.id && (
-              <button className="ghost" onClick={() => (setRenaming(a.id), setName(a.label))}>
+              <button className="btn ghost" onClick={() => (setRenaming(a.id), setName(a.label))}>
                 Rename
               </button>
             )}
             {a.signedIn && (
-              <button className="ghost danger" onClick={() => confirm(`Sign out of ${word} « ${a.label} »?`) && void act(() => props.signOut(a))}>
+              <button className="btn ghost danger" onClick={() => confirm(`Sign out of ${word} « ${a.label} »?`) && void act(() => props.signOut(a))}>
                 Sign out
               </button>
             )}
             {(!a.signedIn || accounts.length > 1) && (
               <button
-                className="ghost danger"
+                className="btn ghost danger"
                 onClick={() => confirm(`Remove the ${word} subscription « ${a.label} »${a.signedIn ? ' (signs it out)' : ''}?`) && void act(() => api.deletePlanAccount(a.id))}
               >
                 Remove
@@ -240,7 +240,7 @@ export function PlanAccountList(props: {
           </div>
         </div>
       ))}
-      <div className="plan-add">{adding ? nameInput(null) : <button className="tool" onClick={() => (setAdding(true), setName(''))}>+ Add {word} subscription</button>}</div>
+      <div className="plan-add">{adding ? nameInput(null) : <button className="btn" onClick={() => (setAdding(true), setName(''))}>+ Add {word} subscription</button>}</div>
     </>
   );
 }

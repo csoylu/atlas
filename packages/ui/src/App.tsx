@@ -33,6 +33,8 @@ import { groupCount } from './workflowView.ts';
 import { effectiveFilter, inFilter, ProjDot, ProjTag, ProjectsCtx, projectsInfo, useProjectFilter } from './projects.tsx';
 import { backOf, groupCollapsed, NARROW, setGroupCollapsed, tabOf, type Tab } from './shell.ts';
 import { useMedia } from './Inbox.tsx';
+import { ErrorState, Toast } from './Kit.tsx';
+import { StatusMemory, type ToastMsg } from './toast.ts';
 
 /**
  * Route in the URL hash, so reloads and the Electron window keep the place: #/inbox/<item>, #/board, #/library/<docId>,
@@ -103,7 +105,7 @@ function LoginScreen() {
       <div className="login-card">
         <h1 className="login-title"><Mark size={28} /> Atlas</h1>
         <p className="login-sub">This Atlas server needs its password (ATLAS_PASSWORD).</p>
-        {error && <div className="login-error">{error}</div>}
+        {error && <div className="state-err">{error}</div>}
         {msg && <div className="login-msg">{msg}</div>}
         <form className="login-form" onSubmit={(e) => { e.preventDefault(); submit(); }}>
           <input
@@ -114,7 +116,7 @@ function LoginScreen() {
             onChange={(e) => setPassword(e.target.value)}
             placeholder="Password"
           />
-          <button className="primary" disabled={!password}>Continue</button>
+          <button className="btn primary" disabled={!password}>Continue</button>
         </form>
       </div>
     </div>
@@ -142,6 +144,10 @@ export function App() {
   const [secretStatus, setSecretStatus] = useState<SecretStoreStatus | null>(null);
   const [updateOpen, setUpdateOpen] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  // The merged toast (#265): live card moves only, compared with what the app knew (toast.ts).
+  const [toast, setToast] = useState<ToastMsg | null>(null);
+  const statuses = useRef(new StatusMemory());
+  const endToast = useCallback(() => setToast(null), []);
   const [agents, setAgents] = useState<Agent[]>([]);
   const [workflows, setWorkflows] = useState<Workflow[]>([]);
   const [settings, setSettings] = useState<Settings | null>(null);
@@ -171,7 +177,11 @@ export function App() {
   useEffect(() => {
     if (!auth) return;
     if (!auth.authenticated && auth.enabled) return;
-    const reload = () => api.cards().then(setCards, (e: Error) => setError(e.message));
+    const reload = () =>
+      api.cards().then((cs) => {
+        statuses.current.load(cs);
+        setCards(cs);
+      }, (e: Error) => setError(e.message));
     // The Inbox follows the board and the notifications; bursts of events reload it once.
     let inboxTimer: ReturnType<typeof setTimeout> | undefined;
     const reloadInbox = () => {
@@ -189,6 +199,8 @@ export function App() {
           );
         else if (e.type === 'card.updated') {
           reloadInbox();
+          const t = statuses.current.update(e.card);
+          if (t) setToast(t);
           setCards((cs) => {
             const i = cs.findIndex((c) => c.id === e.card.id);
             if (e.card.status === 'archived') return cs.filter((c) => c.id !== e.card.id);
@@ -251,6 +263,7 @@ export function App() {
       },
       (up) => {
         setOnline(up);
+        if (!up) statuses.current.forget();
         if (up) {
           void reload();
           reloadInbox();
@@ -679,13 +692,11 @@ export function App() {
             <div className="head-actions" ref={setHeadSlot} />
           </header>}
           {error && (
-            <div className="error" role="alert">
+            <ErrorState className="app-error" action={<button className="btn small" onClick={() => setError(null)}>Dismiss</button>}>
               <span>{error}</span>
-              <button className="ghost small" onClick={() => setError(null)}>
-                Dismiss
-              </button>
-            </div>
+            </ErrorState>
           )}
+          <Toast toast={toast} onOpen={setOpenId} onDone={endToast} />
       <HeaderSlot.Provider value={headSlot}>
       <main>
         {route.view === 'chat' ? (

@@ -98,7 +98,7 @@ async function contrast(page: Page, selector: string): Promise<{ sel: string; ra
   }, selector);
 }
 
-const TEXT = ['.update-badge-label', '.update-badge-v', '.update-dialog h2', '.update-dialog p', '.update-v', '.update-kind', '.update-task', '.update-note-title', '.update-note-body p', '.update-note-body td', '.update-note-body th', '.update-agent', '.update-work-title', '.update-error', '.update-fine', '.update-progress span', '.update-actions button', '.update-about-line', '.update-about-acts button'];
+const TEXT = ['.update-badge-label', '.update-badge-v', '.update-dialog h2', '.update-dialog p', '.update-v', '.update-kind', '.update-task', '.update-note-title', '.update-note-body p', '.update-note-body td', '.update-note-body th', '.update-agent', '.update-work-title', '.update-dialog .state-err', '.update-fine', '.update-progress span', '.update-actions button', '.update-about-line', '.update-about-acts button'];
 
 async function layoutOk(page: Page, dialog: boolean) {
   const m = await page.evaluate(() => {
@@ -227,7 +227,7 @@ for (const theme of THEMES)
         r.gh.stallAfter = null;
         r.gh.server.closeAllConnections();
         await expect.poll(async () => (await fetch(r.atlas.url + '/api/update').then((x) => x.json())).phase, { timeout: 30_000 }).toBe('failed');
-        await expect(page.locator('.update-error')).toContainText(/The download of 0\.7\.0 failed/);
+        await expect(page.locator('.modal .state-err')).toContainText(/The download of 0\.7\.0 failed/);
         await expect(page.getByRole('button', { name: 'Try again' })).toBeEnabled();
         await expect(page.getByRole('button', { name: 'Later' })).toBeEnabled();
         await layoutOk(page, true);

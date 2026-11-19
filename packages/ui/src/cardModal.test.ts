@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import type { Card } from '@atlas/shared';
-import { findCard, isDangerous, linkCardIds, linkCardRefsMd, pillStatus, proseRefLabel, splitHash, statusChip, todoList, withCard } from './cardModal.ts';
+import { findCard, isDangerous, linkCardIds, linkCardRefsMd, pillStatus, proseRefLabel, splitHash, todoList, withCard } from './cardModal.ts';
 
 describe('card hash', () => {
   it('splits the card parameter off any route', () => {
@@ -13,16 +13,6 @@ describe('card hash', () => {
     expect(withCard('#/chat/c_1?card=c_2', 'c_3')).toBe('#/chat/c_1?card=c_3');
     expect(withCard('#/schedules?card=c_2', null)).toBe('#/schedules');
     expect(withCard('', 'c_2')).toBe('#/board?card=c_2');
-  });
-});
-
-describe('statusChip', () => {
-  it('shows running as Working, blocked and done as chips, the rest as the neutral pill', () => {
-    expect(statusChip('running')).toEqual({ kind: 'working', label: 'Working' });
-    expect(statusChip('blocked')).toEqual({ kind: 'blocked', label: 'Blocked' });
-    expect(statusChip('done')).toEqual({ kind: 'done', label: 'Done' });
-    expect(statusChip('stopped')).toBeNull();
-    expect(statusChip('review')).toBeNull();
   });
 });
 

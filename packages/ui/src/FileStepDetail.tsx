@@ -20,7 +20,7 @@ export function fileDetail(step: Step, timing?: ToolCallTiming): ReactNode | nul
     case 'read_file': {
       if (out === null) return null;
       const { lines, note } = parseNumbered(out);
-      if (!lines.length) return <p className="step-empty">{out.trim() === '(empty file)' ? 'Empty file.' : out}</p>;
+      if (!lines.length) return <p className="state-empty inline">{out.trim() === '(empty file)' ? 'Empty file.' : out}</p>;
       return (
         <View head={<FileHead path={path} label={`lines ${lines[0]!.n}–${lines.at(-1)!.n}`} />} copy={lines.map((l) => l.text).join('\n')} note={note}>
           <Code lines={lines} />
@@ -35,7 +35,7 @@ export function fileDetail(step: Step, timing?: ToolCallTiming): ReactNode | nul
         const { add, del } = diffCount(d);
         return (
           <View head={<FileHead path={path} label={<Delta add={add} del={del} />} />} copy={content}>
-            {add + del ? <Diff items={hunks(d)} /> : <p className="fv-empty">Same text as before.</p>}
+            {add + del ? <Diff items={hunks(d)} /> : <p className="state-empty inline fv-empty">Same text as before.</p>}
           </View>
         );
       }
@@ -60,7 +60,7 @@ export function fileDetail(step: Step, timing?: ToolCallTiming): ReactNode | nul
     case 'grep': {
       if (out === null) return null;
       const { files, note } = grepGroups(out, o.mode);
-      if (!files.length) return <p className="step-empty">No matches.</p>;
+      if (!files.length) return <p className="state-empty inline">No matches.</p>;
       const pattern = str(o.pattern);
       if (o.mode === 'files') return <Files paths={files.map((f) => f.path)} note={note} />;
       return (
@@ -90,7 +90,7 @@ export function fileDetail(step: Step, timing?: ToolCallTiming): ReactNode | nul
     case 'list_files': {
       if (out === null) return null;
       const { paths, note } = fileList(out);
-      if (!paths.length) return <p className="step-empty">{step.name === 'glob' ? 'No files.' : 'Empty folder.'}</p>;
+      if (!paths.length) return <p className="state-empty inline">{step.name === 'glob' ? 'No files.' : 'Empty folder.'}</p>;
       return <Files paths={paths} note={note} />;
     }
     case 'shell': {
@@ -115,7 +115,7 @@ export function fileDetail(step: Step, timing?: ToolCallTiming): ReactNode | nul
           foot={
             r.exit && (
               <span className="fv-exit">
-                <span className={'chat-pill ' + (good ? 'ok' : 'bad')}>exit {r.exit}</span>
+                <span className={'badge ' + (good ? 'ok' : 'bad')}>exit {r.exit}</span>
                 {r.killed && <span>{r.killed}</span>}
                 {time && <span>{time}</span>}
               </span>
@@ -130,7 +130,7 @@ export function fileDetail(step: Step, timing?: ToolCallTiming): ReactNode | nul
       return <Terminal text={r.text} head={r.head} note={r.note} />;
     }
     case 'shell_kill':
-      return out === null ? null : <p className="step-empty">{out}</p>;
+      return out === null ? null : <p className="state-empty inline">{out}</p>;
   }
   return null;
 }

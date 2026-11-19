@@ -4,6 +4,7 @@ import { diffCount, diffLines } from './fileRows.ts';
 import type { RowTone } from './chatRow.ts';
 import { whenText } from './teamRows.ts';
 import { charsText, domainOf, fetchedPage, searchHits, shortUrl, webError } from './webRows.ts';
+import { priorityName } from './priority.ts';
 
 /**
  * Tool call → compact chat row (#59, docs/chat-activity.md §1–2): icon · verb · object · rest · meta. Pure: the same
@@ -95,7 +96,7 @@ export function splitPath(p: string): { dir: string; name: string } {
 export function cardChanges(o: Record<string, unknown>): string {
   return Object.entries(o)
     .filter(([k, v]) => k !== 'id' && v !== undefined)
-    .map(([k, v]) => ((k === 'status' || k === 'priority' || k === 'assignee') && (typeof v === 'string' || typeof v === 'number') ? `${k} → ${k === 'priority' ? 'P' + v : k === 'assignee' ? '@' + v : v}` : k === 'assignee' && v === null ? 'unassigned' : k))
+    .map(([k, v]) => ((k === 'status' || k === 'priority' || k === 'assignee') && (typeof v === 'string' || typeof v === 'number') ? `${k} → ${k === 'priority' ? priorityName(Number(v)) : k === 'assignee' ? '@' + v : v}` : k === 'assignee' && v === null ? 'unassigned' : k))
     .join(', ');
 }
 export const cardRef = (v: unknown) => (typeof v === 'number' ? `#${v}` : typeof v === 'string' && v ? (/^\d+$/.test(v) ? `#${v}` : v) : undefined);
@@ -287,7 +288,7 @@ function describe(name: string, o: Input, out: string, ok: boolean, detail?: Too
     /* ── cards & team ── */
     case 'task_create': {
       const c = cardLine(out);
-      return { icon: 'cardp', tone: 'acc', verb: 'Created', running: 'Creating', ref: c?.ref, object: c?.title ?? str(o.title) ?? '', meta: c ? [{ text: [c.who, c.prio].filter(Boolean).join(' · ') }] : [], detail: 'card', weight: 'write', short: { verb: 'created', obj: c?.ref ?? 'a task' } };
+      return { icon: 'cardp', tone: 'acc', verb: 'Created', running: 'Creating', ref: c?.ref, object: c?.title ?? str(o.title) ?? '', meta: c ? [{ text: [c.who, c.prio ? priorityName(c.prio) : null].filter(Boolean).join(' · ') }] : [], detail: 'card', weight: 'write', short: { verb: 'created', obj: c?.ref ?? 'a task' } };
     }
     case 'task_update': {
       const c = cardLine(out);

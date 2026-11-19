@@ -17,7 +17,7 @@ export function webDetail(step: Step): ReactNode | null | undefined {
   const out = step.result.content;
   if (step.name === 'web_search') {
     const hits = searchHits(out);
-    return hits.length ? <SearchResults hits={hits} /> : <p className="step-empty">No results.</p>;
+    return hits.length ? <SearchResults hits={hits} /> : <p className="state-empty inline">No results.</p>;
   }
   const input = (step.input && typeof step.input === 'object' ? step.input : {}) as { url?: unknown };
   const page = fetchedPage(out, typeof input.url === 'string' ? input.url : '');

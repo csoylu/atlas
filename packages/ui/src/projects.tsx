@@ -37,7 +37,13 @@ export function ProjTag({ id, title, global }: { id: string | null | undefined; 
   const { multi, byId } = useProjects();
   if (!multi) return null;
   const p = byId(id);
-  if (!p) return global ? <span className="proj-tag" title={title ?? 'Project'}>Global</span> : null;
+  if (!p)
+    return global ? (
+      <span className="proj-tag" title={title ?? 'Project'}>
+        <Icon.globe />
+        Global
+      </span>
+    ) : null;
   return (
     <span className="proj-tag" title={title ?? 'Project'}>
       <ProjDot hue={p.colour} />

@@ -33,7 +33,7 @@ export function WorkflowsView(props: {
   const open = target ? workflows.find((w) => w.id === target) : undefined;
 
   if (target) {
-    if (!open) return <div className="agents-view"><div className="empty-note">{workflows.length ? 'This workflow does not exist (deleted?).' : 'Loading…'} <a href="#/workflows">All workflows</a></div></div>;
+    if (!open) return <div className="agents-view"><div className="state-empty">{workflows.length ? 'This workflow does not exist (deleted?).' : 'Loading…'} <a href="#/workflows">All workflows</a></div></div>;
     const [mode, runId] = props.rest.split('/');
     return (
       <WorkflowCanvas
@@ -107,7 +107,7 @@ function WorkflowList(props: {
         <HeaderActions>
           <ProjectFilterButton value={pf} onChange={setPf} count={(f) => (f === 'archived' ? archived.length : props.workflows.filter((w) => inFilter(f, w.projectId, pinfo, true)).length)} />
           {pinfo.multi && <span className="head-sp" />}
-          <button className="primary small" onClick={() => props.setCreating(true)}>
+          <button className="btn primary small" onClick={() => props.setCreating(true)}>
             New workflow
           </button>
         </HeaderActions>
@@ -115,7 +115,7 @@ function WorkflowList(props: {
       <div className="wfl-inner">
         {props.creating && <NewWorkflow project={projectForNew(pf, pinfo)?.id ?? null} agents={props.agents} onCancel={() => props.setCreating(false)} onCreated={props.onCreated} onError={props.onError} />}
         {!props.workflows.length && !props.creating && <EmptyWorkflows agents={props.agents} onCreated={props.onCreated} onScratch={() => props.setCreating(true)} onError={props.onError} />}
-        {props.workflows.length > 0 && !shown.length && !props.creating && <div className="empty-note">No workflow in this project yet.</div>}
+        {props.workflows.length > 0 && !shown.length && !props.creating && <div className="state-empty">No workflow in this project yet.</div>}
         {groups.on.length > 0 && (
           <section className="wfl-group">
             <div className="wfl-ghead">
@@ -412,7 +412,7 @@ function EmptyWorkflows(props: { agents: Agent[]; onCreated(w: Workflow): void; 
         })}
       </div>
       <div className="wfl-empty-foot">
-        <button className="tool" onClick={props.onScratch}>
+        <button className="btn" onClick={props.onScratch}>
           Start from scratch
         </button>
         <span>Runs missed while Atlas was off happen once when it starts.</span>
@@ -492,10 +492,10 @@ function NewWorkflow(props: { project: string | null; agents: Agent[]; onCancel(
       <div className="wf-form-foot">
         {trigger.kind !== 'manual' && <span className="wf-sum">It starts off: add its steps, then turn it on.</span>}
         <span className="sp" />
-        <button type="button" className="ghost" onClick={props.onCancel}>
+        <button type="button" className="btn ghost" onClick={props.onCancel}>
           Cancel
         </button>
-        <button className="primary small" disabled={!name.trim() || saving}>
+        <button className="btn primary small" disabled={!name.trim() || saving}>
           {saving ? 'Creating…' : 'Create and open'}
         </button>
       </div>

@@ -2,6 +2,7 @@ import { useCallback, useEffect, useRef, useState } from 'react';
 import { INPUT_MONITORING_SETTINGS, PTT_HOLD_OPTION, VOICE_NAMES, pttAction, pttShortcutLabel, pttShortcutProblem, type VoiceName, type VoiceStatus } from '@atlas/shared';
 import { api } from './api.ts';
 import type { MessageStream } from './useMessages.ts';
+import { Skeleton } from './Kit.tsx';
 
 const voiceLabel = (v: VoiceName) => `Voice ${v.slice('voice-'.length)}`;
 /** macOS: System Settings → Privacy & Security → Microphone (opens in the system, not in Atlas). */
@@ -80,12 +81,12 @@ function ShortcutField(props: { value: string; disabled: boolean; onChange(acc: 
               .map((k, i) => <kbd key={i}>{k}</kbd>)
           )}
         </span>
-        <button className={'ghost small ptt-change' + (recording ? ' rec' : '')} disabled={props.disabled} onClick={() => (setRecording(!recording), setProblem(null))}>
+        <button className={'btn ghost small ptt-change' + (recording ? ' rec' : '')} disabled={props.disabled} onClick={() => (setRecording(!recording), setProblem(null))}>
           {recording ? 'Press a shortcut, or ⌥ alone to hold… (Esc cancels)' : 'Change'}
         </button>
       </div>
       {problem && (
-        <div className="model-error" role="alert">
+        <div className="state-err" role="alert">
           {problem}
         </div>
       )}
@@ -138,7 +139,7 @@ export function VoiceSettings(props: { stream: MessageStream; onError(e: unknown
     }
   };
 
-  if (!s) return <div className="model-row skeleton" />;
+  if (!s) return <Skeleton />;
   const total = s.models.reduce((n, m) => n + m.bytes, 0);
   const missing = s.models.filter((m) => !m.installed);
   const ttsInstalled = s.models.find((m) => m.id === 'tts')?.installed ?? false;
@@ -191,9 +192,9 @@ export function VoiceSettings(props: { stream: MessageStream; onError(e: unknown
               </div>
             )}
             {s.error && (
-              <div className="model-error voice-error" role="alert">
+              <div className="state-err bar" role="alert">
                 <span>{s.error}</span>
-                <button className="ghost small" onClick={() => api.retryVoiceDownload().then(setS, onError)}>
+                <button className="btn ghost small" onClick={() => api.retryVoiceDownload().then(setS, onError)}>
                   Retry
                 </button>
               </div>
@@ -204,18 +205,18 @@ export function VoiceSettings(props: { stream: MessageStream; onError(e: unknown
                   Listening is paused{s.paused.until ? ` until ${new Date(s.paused.until).toLocaleString([], { weekday: 'short', hour: '2-digit', minute: '2-digit' })}` : ''}: the microphone is
                   closed (menu bar orb → Pause listening).
                 </span>
-                <button className="ghost small" onClick={() => void update({ pause: null })}>
+                <button className="btn ghost small" onClick={() => void update({ pause: null })}>
                   Resume
                 </button>
               </div>
             )}
             {s.enabled && (s.mic === 'denied' || s.mic === 'restricted') && (
-              <div className="model-error voice-error" role="alert">
+              <div className="state-err bar" role="alert">
                 <span>
                   Atlas may not use the microphone{s.mic === 'restricted' ? ' (restricted on this Mac)' : ''}. Allow it in System Settings → Privacy &amp; Security →
                   Microphone, then restart Atlas.
                 </span>
-                <a className="ghost small" href={MIC_SETTINGS} target="_blank" rel="noreferrer">
+                <a className="btn ghost small" href={MIC_SETTINGS} target="_blank" rel="noreferrer">
                   Open System Settings
                 </a>
               </div>
@@ -279,10 +280,10 @@ export function VoiceSettings(props: { stream: MessageStream; onError(e: unknown
             </p>
             <ShortcutField value={s.ptt.shortcut} disabled={!s.ptt.enabled} onChange={(acc) => void update({ pttShortcut: acc })} />
             {s.ptt.enabled && s.ptt.error && (
-              <div className="model-error voice-error" role="alert">
+              <div className="state-err bar" role="alert">
                 <span>{s.ptt.error}</span>
                 {s.ptt.permission && (
-                  <a className="ghost small" href={INPUT_MONITORING_SETTINGS} target="_blank" rel="noreferrer">
+                  <a className="btn ghost small" href={INPUT_MONITORING_SETTINGS} target="_blank" rel="noreferrer">
                     Open System Settings
                   </a>
                 )}
@@ -314,13 +315,13 @@ export function VoiceSettings(props: { stream: MessageStream; onError(e: unknown
                 </option>
               ))}
             </select>
-            <button className="ghost" disabled={!ttsInstalled || testing} title={ttsInstalled ? undefined : 'Turn voice on to download the voice first'} onClick={() => void test()}>
+            <button className="btn ghost" disabled={!ttsInstalled || testing} title={ttsInstalled ? undefined : 'Turn voice on to download the voice first'} onClick={() => void test()}>
               {testing ? 'Speaking…' : 'Test voice'}
             </button>
           </div>
         </label>
         {testError && (
-          <div className="model-error" role="alert">
+          <div className="state-err" role="alert">
             Test voice failed: {testError}
           </div>
         )}

@@ -91,7 +91,7 @@ export function RowMeta({ meta, time }: { meta: Meta[]; time?: string | null }) 
     <>
       {parts.map((m, i) =>
         'pill' in m ? (
-          <span key={i} className={'chat-pill ' + m.pill}>
+          <span key={i} className={'badge ' + m.pill}>
             {m.text}
           </span>
         ) : 'add' in m ? (

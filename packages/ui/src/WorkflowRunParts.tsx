@@ -91,7 +91,7 @@ export function RunKnows({ run, onError }: { run: WorkflowRun; onError(e: unknow
       )}
       <div className="wf-knows-acts">
         <button
-          className="ghost small"
+          className="btn ghost small"
           onClick={() =>
             navigator.clipboard.writeText(JSON.stringify(f, null, 2)).then(() => {
               setCopied(true);
@@ -101,7 +101,7 @@ export function RunKnows({ run, onError }: { run: WorkflowRun; onError(e: unknow
         >
           {copied ? 'Copied' : 'Copy as JSON'}
         </button>
-        <button className="ghost small" aria-pressed={all} onClick={() => setAll(!all)}>
+        <button className="btn ghost small" aria-pressed={all} onClick={() => setAll(!all)}>
           {all ? 'Fewer fields' : `All ${keys.length} fields`}
         </button>
       </div>
@@ -115,10 +115,10 @@ export function LoopGuardBanner({ w, onLimit, onError }: { w: Workflow; onLimit(
     <div className="wf-guard" role="alert">
       <b>Stopped by the loop guard.</b> {w.lastError?.replace(/^loop guard: /, '')}. It is off until you turn it back on.
       <div className="wf-guard-acts">
-        <button className="primary small" onClick={() => api.updateWorkflow(w.id, { enabled: true }).catch(onError)}>
+        <button className="btn primary small" onClick={() => api.updateWorkflow(w.id, { enabled: true }).catch(onError)}>
           Turn back on
         </button>
-        <button className="ghost small" onClick={onLimit}>
+        <button className="btn ghost small" onClick={onLimit}>
           Change the limit
         </button>
       </div>
@@ -163,7 +163,7 @@ export function RunOnPicker(props: { kind: 'task' | 'pr'; w: Workflow; cards: Ca
         ))}
         {!items.length && <p className="wf-sum">{kind === 'task' ? 'No task matches.' : 'No open pull request linked to a task here.'}</p>}
       </div>
-      <button className="ghost small" onClick={() => props.onRun({})}>
+      <button className="btn ghost small" onClick={() => props.onRun({})}>
         Run without a {kind === 'task' ? 'task' : 'PR'}
       </button>
     </div>
