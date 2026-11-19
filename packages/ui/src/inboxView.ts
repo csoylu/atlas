@@ -138,6 +138,52 @@ export function shortAgo(iso: string, now = Date.now()): string {
   return d.toLocaleDateString('en-GB', { month: 'short', day: 'numeric' }).replace(/^(\d+) (\w+)$/, '$2 $1');
 }
 
+const dayStart = (t: number) => {
+  const d = new Date(t);
+  d.setHours(0, 0, 0, 0);
+  return d.getTime();
+};
+
+/** The day group an update falls in (local time): Today, Yesterday, then « Monday 16 Nov » (the year when not this one). */
+export function dayLabel(iso: string, now = Date.now()): string {
+  const t = Date.parse(iso);
+  const days = Math.round((dayStart(now) - dayStart(t)) / 86_400_000);
+  if (days <= 0) return 'Today';
+  if (days === 1) return 'Yesterday';
+  const d = new Date(t);
+  const sameYear = d.getFullYear() === new Date(now).getFullYear();
+  return d.toLocaleDateString('en-GB', { weekday: 'long', day: 'numeric', month: 'short', ...(sameYear ? {} : { year: 'numeric' }) }).replace(',', '');
+}
+
+/**
+ * The list's groups, in list order: « Needs you » first (every need, whatever its day), then the updates by day. The
+ * updates come newest first from the engine, so a day is one run of rows.
+ */
+export function groupsOf(items: InboxItem[], now = Date.now()): { label: string; items: InboxItem[] }[] {
+  const out: { label: string; items: InboxItem[] }[] = [];
+  const needs = items.filter((i) => i.need);
+  if (needs.length) out.push({ label: 'Needs you', items: needs });
+  for (const i of items) {
+    if (!i.update) continue;
+    const label = dayLabel(i.update.at, now);
+    const last = out[out.length - 1];
+    if (last && last.label === label) last.items.push(i); // « Needs you » is never a day label
+    else out.push({ label, items: [i] });
+  }
+  return out;
+}
+
+/** The time on a row: how long a need has waited (« 4 min », « 3 h », « 2 d »), the clock time of an update (« 01:42 »). */
+export function rowTime(item: InboxItem, now = Date.now()): string {
+  const t = Date.parse(timeOf(item));
+  if (item.update) return new Date(t).toLocaleTimeString('en-GB', { hour: '2-digit', minute: '2-digit' });
+  const m = Math.max(0, Math.round((now - t) / 60_000));
+  if (m < 1) return 'now';
+  if (m < 60) return `${m} min`;
+  const h = Math.round(m / 60);
+  return h < 24 ? `${h} h` : `${Math.round(h / 24)} d`;
+}
+
 /** The macOS notification's title for a new row. */
 export function systemTitle(n: Pick<Notification, 'kind' | 'title'>): string {
   const lead: Record<string, string> = {
