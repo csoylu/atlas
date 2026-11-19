@@ -85,9 +85,30 @@ export function triggerOf(d: TimeDraft): TriggerConfig {
     : { kind: 'time', repeat: 'at', cron: null, at: d.at ? new Date(d.at).toISOString() : null, timezone: d.timezone };
 }
 
+const EVENT_WORDS: Record<string, string> = {
+  created: 'is created',
+  status_changed: 'changes status',
+  assignee_changed: 'changes assignee',
+  review_requested: 'asks for review',
+  blocked: 'is blocked',
+  done: 'is done',
+  opened: 'is opened',
+  pushed: 'gets a new commit',
+  ci_finished: 'finishes CI',
+  conflict: 'has a conflict',
+  validated: 'is validated or refused by QA',
+  merged: 'is merged',
+  closed: 'is closed',
+};
+/** « When a task is done », « When a PR is merged » (#258; the editor for these comes in 2/6). */
+export function eventText(t: Extract<TriggerConfig, { kind: 'task' | 'pr' }>): string {
+  return `When a ${t.kind === 'task' ? 'task' : 'PR'} ${EVENT_WORDS[t.event] ?? t.event}`;
+}
+
 /** « Weekdays at 09:00 », « Every Monday at 18:30 », « Once, … », « By hand only »… or the cron itself. */
 export function describeTrigger(t: TriggerConfig): string {
   if (t.kind === 'manual') return 'By hand only';
+  if (t.kind === 'task' || t.kind === 'pr') return eventText(t);
   if (t.repeat === 'at') return t.at ? 'Once, ' + when(t.at) : 'Once';
   const p = patternOf(t.cron ?? '');
   if (!p) return `cron ${t.cron ?? ''}`.trim();
@@ -151,7 +172,11 @@ function conditionText(c: Extract<WorkflowNode, { kind: 'condition' }>['config']
 export function nodeMeta(n: WorkflowNode, nodes: WorkflowNode[] = []): string {
   switch (n.kind) {
     case 'trigger':
-      return n.config.kind === 'time' ? `At set times · ${n.config.timezone}` : 'Run now, from here or a chat';
+      return n.config.kind === 'time'
+        ? `At set times · ${n.config.timezone}`
+        : n.config.kind === 'task' || n.config.kind === 'pr'
+          ? eventText(n.config)
+          : 'Run now, from here or a chat';
     case 'agent':
       return n.config.agentId ? `@${n.config.agentId} · ${n.config.newTaskEachRun ? 'new task' : 'one task'}` : 'Pick an agent and a prompt';
     case 'approval':

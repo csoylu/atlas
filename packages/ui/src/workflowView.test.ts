@@ -15,7 +15,7 @@ const edges: WorkflowEdge[] = [
   { from: 'c', exit: 'yes', to: 'v' },
 ];
 const step = (nodeId: string, kind: WorkflowRunStep['kind'], state: WorkflowRunStep['state'], exit: string | null, round = 1, cardId: string | null = null): WorkflowRunStep => ({ id: 0, nodeId, kind, round, state, exit, cardId, summary: null, startedAt: '2026-11-18T08:00:00Z', endedAt: null });
-const run = (state: WorkflowRun['state'], steps: WorkflowRunStep[]): WorkflowRun => ({ id: 'r', workflowId: 'w', number: 1, state, trigger: 'manual', reason: null, startedAt: '2026-11-18T08:00:00Z', endedAt: null, steps });
+const run = (state: WorkflowRun['state'], steps: WorkflowRunStep[]): WorkflowRun => ({ id: 'r', workflowId: 'w', number: 1, state, trigger: 'manual', subject: null, event: null, reason: null, startedAt: '2026-11-18T08:00:00Z', endedAt: null, steps });
 
 describe('workflow view helpers (#171)', () => {
   it('cron patterns round-trip through the trigger form', () => {

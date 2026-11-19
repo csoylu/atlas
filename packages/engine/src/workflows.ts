@@ -2,11 +2,18 @@ import { randomUUID } from 'node:crypto';
 import {
   cardRef,
   CreateWorkflow,
+  LOOP_GUARD_DEFAULT,
+  RunWorkflow,
   SaveWorkflowGraph,
   UpdateWorkflow,
   WORKFLOW_EXITS,
   WORKFLOW_FAILING_EXITS,
   type Card,
+  type TaskWorkflow,
+  type WorkflowField,
+  type WorkflowRunContext,
+  type WorkflowRunSubject,
+  type WorkflowRunTrigger,
   type ScheduleKind,
   type TriggerConfig,
   type Workflow,
@@ -22,7 +29,10 @@ import {
 import type { Db } from './store/db.ts';
 import type { Bus } from './events.ts';
 import { ConflictError, InvalidError, NotFoundError, type Kanban } from './kanban.ts';
-import { assertActive, defaultProjectId, resolveProject } from './projects.ts';
+import { assertActive, defaultProjectId, projectRow, resolveProject } from './projects.ts';
+import { insertNotification, type NewNotification } from './notifications.ts';
+import { parsePrUrl } from './prs.ts';
+import type { EventData } from './workflowEvents.ts';
 import { APPROVE, REJECT, cut, describeTrigger, firstLine, localTimeZone, stamp, stepTitle, triggerWhen, upcoming } from './workflowTime.ts';
 
 export { describeTrigger, describeWhen, localTimeZone, oneStep, upcoming } from './workflowTime.ts';
@@ -32,6 +42,9 @@ const LATE_MS = 2 * 60_000;
 /** Steps one run may take: a loop without a guard stops here, Failed. */
 export const MAX_STEPS = 200;
 const OPEN_RUN = "state IN ('running', 'waiting')";
+/** Event-started runs one after the other across workflows (A's step task fires B, whose fires A…): a deeper one turns the workflow off. */
+export const MAX_CHAIN = 5;
+const HOUR_MS = 3_600_000;
 
 interface WfRow {
   id: string;
@@ -61,11 +74,32 @@ interface RunRow {
   workflow_id: string;
   number: number;
   state: WorkflowRunState;
-  trigger: 'time' | 'manual';
+  trigger: WorkflowRunTrigger;
   reason: string | null;
   started_at: string;
   ended_at: string | null;
+  subject_card: string | null;
+  subject_pr: string | null;
+  event: string | null;
+  context: string;
 }
+interface EventRow {
+  id: number;
+  at: string;
+  source: 'task' | 'pr';
+  name: string;
+  card_id: string;
+  project_id: string;
+  pr_url: string | null;
+  data: string;
+}
+/** What a run knows (stored per run, workflow_runs.context): its fields, and how deep in a chain of event runs it is. */
+interface RunContext {
+  fields: Record<string, string>;
+  depth: number;
+}
+/** A field that can't be filled: the step fails with this (rule 3). */
+class FieldError extends Error {}
 interface StepRow {
   id: number;
   run_id: string;
@@ -87,6 +121,8 @@ const toRun = (r: RunRow): WorkflowRun => ({
   number: r.number,
   state: r.state,
   trigger: r.trigger,
+  subject: r.subject_card ? { cardId: r.subject_card, prUrl: r.subject_pr } : null,
+  event: r.event,
   reason: r.reason,
   startedAt: r.started_at,
   endedAt: r.ended_at,
@@ -104,6 +140,44 @@ const toStep = (r: StepRow): WorkflowRunStep => ({
   endedAt: r.ended_at,
 });
 const errText = (e: unknown) => (e instanceof Error ? e.message : String(e));
+
+/** The fields a step's text can use as {{field}} (#258), by group, with what they say. */
+const FIELDS = {
+  run: { 'run.id': 'Run id', 'run.number': 'Run number', 'workflow.id': 'Workflow id', 'workflow.name': 'Workflow name' },
+  task: {
+    'task.id': 'Task id',
+    'task.ref': 'Task number (#12)',
+    'task.title': 'Task title',
+    'task.body': 'Task description',
+    'task.status': 'Task status',
+    'task.assignee': 'Task assignee',
+    'task.priority': 'Task priority (0–3)',
+  },
+  pr: {
+    'pr.url': 'PR link',
+    'pr.number': 'PR number',
+    'pr.repo': 'PR repo',
+    'pr.branch': 'PR branch',
+    'pr.base': 'PR base branch',
+    'pr.head': 'PR head commit',
+    'pr.state': 'PR state',
+    'pr.ci': 'PR CI result',
+  },
+  project: { 'project.id': 'Project id', 'project.name': 'Project name', 'project.repo': 'Project repo' },
+  event: {
+    'event.name': 'Event',
+    'event.by': 'Who caused it',
+    'event.from': 'Status before',
+    'event.to': 'Status after',
+    'event.result': 'Result (CI, validation)',
+    'event.text': 'Block reason or review handoff',
+  },
+  previous: { 'previous.summary': 'Handoff of the last agent step', 'previous.task': 'Task of the last agent step' },
+} as const;
+type FieldGroup = keyof typeof FIELDS;
+const KNOWN_FIELDS = new Map<string, FieldGroup>(Object.entries(FIELDS).flatMap(([g, f]) => Object.keys(f).map((k) => [k, g as FieldGroup] as const)));
+const STEP_FIELD = /^steps\.([^.]+)\.(exit|summary|task)$/;
+const STEP_FIELD_LABEL = { exit: 'exit taken', summary: 'summary', task: 'task' } as const;
 
 /** A one-step workflow, as schedules and the schedule_* tools describe it. */
 export interface OneStep {
@@ -196,6 +270,74 @@ export class Workflows {
 
   run(runId: string): WorkflowRun {
     return { ...toRun(this.runRow(runId)), steps: this.steps(runId).map(toStep) };
+  }
+
+  /** What a run knows (#258): its stored fields (task, PR, project, event…) and the exit, summary and task of its ended steps. */
+  context(runId: string): WorkflowRunContext {
+    const run = this.runRow(runId);
+    const fields = { ...this.baseFields(run) };
+    const ended = this.steps(runId).filter((s) => s.ended_at && s.kind !== 'trigger');
+    for (const s of ended) {
+      fields[`steps.${s.node_id}.exit`] = s.exit ?? '';
+      fields[`steps.${s.node_id}.summary`] = s.summary ?? '';
+      fields[`steps.${s.node_id}.task`] = s.card_id ? this.kanban.ref(s.card_id) : '';
+    }
+    return { runId, fields };
+  }
+
+  /**
+   * The fields a step can use ({{field}}), for the editor's « Insert a field » (#258): what every run has, what the
+   * trigger brings (task, PR, event), and the steps that can come before `nodeId` (all steps when omitted). Each comes
+   * with its value in the latest run that knew it.
+   */
+  fields(workflowId: string, nodeId?: string): WorkflowField[] {
+    const w = this.row(workflowId);
+    const t = this.trigger(workflowId);
+    if (nodeId && !this.node(workflowId, nodeId)) throw new NotFoundError(`workflow ${workflowId} has no step ${nodeId}`);
+    const groups: [FieldGroup, boolean][] = [['run', false]];
+    if (t.kind === 'task' || t.kind === 'pr') groups.push(['event', false], ['task', false], ['project', false]);
+    if (t.kind === 'pr') groups.push(['pr', false]);
+    if (t.kind === 'manual') groups.push(['task', true], ['pr', true], ['project', !w.project_id]);
+    if (t.kind === 'time' && w.project_id) groups.push(['project', false]);
+    groups.push(['previous', true]);
+    const last = this.db.prepare("SELECT id FROM workflow_runs WHERE workflow_id = ? AND state != 'skipped' ORDER BY number DESC LIMIT 20").all(workflowId) as { id: string }[];
+    const known = last.map((r) => this.context(r.id).fields);
+    const example = (f: string) => known.find((k) => f in k)?.[f] ?? null;
+    const out: WorkflowField[] = [];
+    for (const [g, optional] of groups)
+      for (const [field, label] of Object.entries(FIELDS[g])) out.push({ field, label, optional: g === 'event' && field === 'event.result' ? true : optional, example: example(field) });
+    const before = nodeId ? this.upstream(workflowId, nodeId) : this.nodes(workflowId).filter((n) => n.kind !== 'trigger').map((n) => n.id);
+    for (const id of before) {
+      const n = this.node(workflowId, id)!;
+      for (const k of ['exit', 'summary', 'task'] as const) {
+        const field = `steps.${id}.${k}`;
+        out.push({ field, label: `« ${stepTitle(n)} »: ${STEP_FIELD_LABEL[k]}`, optional: true, example: example(field) });
+      }
+    }
+    return out;
+  }
+
+  /** Workflows acting on a task now (#258): open runs about it (their subject) or at a step whose task it is. */
+  onTask(cardId: string): TaskWorkflow[] {
+    const rows = this.db
+      .prepare(
+        `SELECT DISTINCT r.* FROM workflow_runs r WHERE r.state IN ('running', 'waiting') AND (r.subject_card = ? OR EXISTS (SELECT 1 FROM workflow_run_steps s WHERE s.run_id = r.id AND s.card_id = ? AND s.state IN ('running', 'waiting')))
+         ORDER BY r.started_at`,
+      )
+      .all(cardId, cardId) as RunRow[];
+    return rows.map((r) => {
+      const w = this.row(r.workflow_id);
+      const cur = this.steps(r.id).filter((s) => s.state === 'running' || s.state === 'waiting').at(-1);
+      const n = cur ? this.node(r.workflow_id, cur.node_id) : null;
+      return {
+        workflowId: w.id,
+        workflowName: w.name,
+        runId: r.id,
+        runNumber: r.number,
+        state: r.state,
+        step: cur ? { nodeId: cur.node_id, title: n ? stepTitle(n) : cur.node_id, state: cur.state, cardId: cur.card_id } : null,
+      };
+    });
   }
 
   /** The workflow a card belongs to (a step's task, or an agent step's own task), for notifications. */
@@ -305,11 +447,15 @@ export class Workflows {
 
   /* ── Running ── */
 
-  /** Run now, by hand: works even when the workflow is off. With a run still going, the new one is a skipped run. */
-  runNow(id: string): WorkflowRun {
+  /**
+   * Run now, by hand: works even when the workflow is off. With a run still going (on the same task or PR, if one is
+   * given), the new one is a skipped run. `on`: the task (#12 or id) or the linked PR (its url) the run is about (#258).
+   */
+  runNow(id: string, on: RunWorkflow = {}): WorkflowRun {
+    const o = RunWorkflow.parse(on);
     let runId: string | null = null;
     this.tx(() => {
-      runId = this.fire(this.row(id), 'manual');
+      runId = this.fire(this.row(id), 'manual', { subject: this.subjectOf(o) });
     });
     return this.run(runId!);
   }
@@ -335,6 +481,7 @@ export class Workflows {
       do {
         this.again = false;
         this.fireDue();
+        this.consumeEvents();
         for (const r of this.db.prepare(`SELECT id FROM workflow_runs WHERE ${OPEN_RUN} ORDER BY started_at`).all() as { id: string }[]) {
           try {
             this.tx(() => this.reconcile(r.id));
@@ -375,12 +522,142 @@ export class Workflows {
     }
   }
 
-  /** Start a run (inside a transaction). Returns its id, or null if another tick already claimed this time slot. */
-  private fire(w: WfRow, trigger: 'time' | 'manual'): string | null {
+  /**
+   * Fire the workflows waiting for each stored task or PR event (#258), oldest first. Each event is deleted in the
+   * transaction that starts its runs: a kill before leaves it for the next start, a kill after leaves nothing to redo.
+   */
+  private consumeEvents(): void {
+    for (;;) {
+      const batch = this.db.prepare('SELECT * FROM workflow_events ORDER BY id LIMIT 50').all() as EventRow[];
+      if (!batch.length) return;
+      for (const ev of batch) {
+        try {
+          this.tx(() => {
+            this.onEvent(ev);
+            this.db.prepare('DELETE FROM workflow_events WHERE id = ?').run(ev.id);
+          });
+        } catch (e) {
+          // Only a broken store gets here (each workflow's own failure is caught in onEvent): say so, drop the event.
+          console.error(`workflow event ${ev.id} (${ev.source} ${ev.name}) failed`, errText(e));
+          this.tx(() => void this.db.prepare('DELETE FROM workflow_events WHERE id = ?').run(ev.id));
+        }
+      }
+    }
+  }
+
+  /** The workflows an event starts: on, of its project (or global), its trigger's event and filters, not caused by itself. */
+  private onEvent(ev: EventRow): void {
+    const data = JSON.parse(ev.data) as EventData;
+    const ws = this.db
+      .prepare(
+        `SELECT * FROM workflows WHERE enabled = 1 AND (project_id IS NULL OR project_id = ?)
+         AND (project_id IS NULL OR project_id IN (SELECT id FROM projects WHERE status = 'active')) ORDER BY created_at`,
+      )
+      .all(ev.project_id) as WfRow[];
+    for (const w of ws) {
+      const t = this.trigger(w.id);
+      if ((t.kind !== 'task' && t.kind !== 'pr') || t.kind !== ev.source || t.event !== ev.name || !this.matches(t, data)) continue;
+      // Its own doing (an action of its run, or one of its steps' tasks): never fires itself.
+      if (data.by === 'workflow:' + w.id || this.isStepCard(w.id, ev.card_id)) continue;
+      try {
+        this.tx(() => {
+          const parent = this.parentRun(ev.card_id);
+          this.fire(w, ev.source, { subject: { cardId: ev.card_id, prUrl: ev.pr_url }, event: ev, data, depth: parent ? parent.depth + 1 : 0 });
+        });
+      } catch (e) {
+        const error = errText(e);
+        console.error(`workflow ${w.id} failed to start on ${ev.source} event ${ev.name}`, error);
+        this.db.prepare('UPDATE workflows SET last_error = ?, updated_at = ? WHERE id = ?').run(error, this.now().toISOString(), w.id);
+        this.touched.workflows.add(w.id);
+      }
+    }
+  }
+
+  private matches(t: Extract<TriggerConfig, { kind: 'task' | 'pr' }>, d: EventData): boolean {
+    if (t.status.length && !(t.status as string[]).includes(d.status)) return false;
+    if (t.assignee.length && !(d.assignee && t.assignee.includes(d.assignee))) return false;
+    if (t.kind === 'task') return !t.from.length || (!!d.from && (t.from as string[]).includes(d.from));
+    if (t.repo && t.repo.toLowerCase() !== (d.pr?.repo ?? '').toLowerCase()) return false;
+    if (t.base && t.base !== d.pr?.base) return false;
+    return !t.result || t.result === d.result;
+  }
+
+  /** A task made by this workflow's runs (a step's task, or an agent step's own task). */
+  private isStepCard(workflowId: string, cardId: string): boolean {
+    return !!this.db
+      .prepare(
+        `SELECT 1 FROM workflow_run_steps s JOIN workflow_runs r ON r.id = s.run_id WHERE r.workflow_id = ? AND s.card_id = ?
+         UNION ALL SELECT 1 FROM workflow_nodes WHERE workflow_id = ? AND own_card_id = ? LIMIT 1`,
+      )
+      .get(workflowId, cardId, workflowId, cardId);
+  }
+
+  /** The run whose step made this task, if any (its chain depth carries on into the runs the task's events start). */
+  private parentRun(cardId: string): RunContext | null {
+    const r = this.db
+      .prepare('SELECT r.context FROM workflow_run_steps s JOIN workflow_runs r ON r.id = s.run_id WHERE s.card_id = ? ORDER BY s.id DESC LIMIT 1')
+      .get(cardId) as { context: string } | undefined;
+    return r ? this.ctxOf(r.context) : null;
+  }
+
+  /** A manual run's task or PR (#258): a task reference, or the url of a PR linked to a task. */
+  private subjectOf(o: RunWorkflow): WorkflowRunSubject | null {
+    if (o.task) {
+      let id: string;
+      try {
+        id = this.kanban.resolve(o.task);
+      } catch {
+        throw new InvalidError(`task ${o.task} does not exist`);
+      }
+      if (this.kanban.get(id).board !== 'main') throw new InvalidError(`${o.task} is a direct chat, not a task`);
+      return { cardId: id, prUrl: null };
+    }
+    if (o.pr) {
+      const pr = parsePrUrl(o.pr);
+      const row = this.db.prepare('SELECT card_id FROM card_prs WHERE lower(repo) = lower(?) AND number = ? ORDER BY linked_at DESC LIMIT 1').get(pr.repo, pr.number) as { card_id: string } | undefined;
+      if (!row) throw new InvalidError(`${pr.url} is not linked to a task: a task links its PR with task_request_review`);
+      return { cardId: row.card_id, prUrl: pr.url };
+    }
+    return null;
+  }
+
+  /** The loop guard (#258) hit: the workflow turns off, the reason stays on it, and Master gets one Inbox item. */
+  private turnOff(w: WfRow, reason: string, cardId: string | null): void {
+    const now = this.now().toISOString();
+    const r = this.db.prepare('UPDATE workflows SET enabled = 0, next_run_at = NULL, last_error = ?, updated_at = ? WHERE id = ? AND enabled = 1').run(reason, now, w.id);
+    this.touched.workflows.add(w.id);
+    if (!r.changes) return;
+    this.notify({ kind: 'workflow.stopped', title: `Workflow « ${w.name} » turned off`, body: `${reason}. Turn it back on in Workflows once its trigger or steps can't loop.`, cardId });
+  }
+
+  /**
+   * Start a run (inside a transaction). Returns its id, or null if another tick already claimed this time slot or the
+   * loop guard turned the workflow off. `on`: the run's task or PR, and the event that started it.
+   */
+  private fire(w: WfRow, trigger: WorkflowRunTrigger, on: { subject?: WorkflowRunSubject | null; event?: EventRow; data?: EventData; depth?: number } = {}): string | null {
     if (w.project_id) assertActive(this.db, w.project_id, `workflow « ${w.name} »`);
     const now = this.now();
     const iso = now.toISOString();
     const t = this.trigger(w.id);
+    const subject = on.subject ?? null;
+    if (subject && (trigger === 'task' || trigger === 'pr')) {
+      const max = t.kind === 'task' || t.kind === 'pr' ? t.maxRunsPerHour : LOOP_GUARD_DEFAULT;
+      const what = trigger === 'pr' && subject.prUrl ? `PR ${subject.prUrl.replace(/^https:\/\/github\.com\//, '')}` : this.kanban.ref(subject.cardId);
+      const { n } = this.db
+        .prepare(
+          `SELECT COUNT(*) AS n FROM workflow_runs WHERE workflow_id = ? AND trigger IN ('task', 'pr') AND state != 'skipped' AND started_at >= ?
+           AND ${trigger === 'pr' ? 'subject_pr' : 'subject_card'} = ?`,
+        )
+        .get(w.id, new Date(now.getTime() - HOUR_MS).toISOString(), trigger === 'pr' ? subject.prUrl : subject.cardId) as { n: number };
+      if (n >= max) {
+        this.turnOff(w, `loop guard: ${n} runs on ${what} in the last hour (at most ${max})`, subject.cardId);
+        return null;
+      }
+      if ((on.depth ?? 0) > MAX_CHAIN) {
+        this.turnOff(w, `loop guard: started by a chain of ${on.depth} workflow runs, each on a task the one before made (at most ${MAX_CHAIN})`, subject.cardId);
+        return null;
+      }
+    }
     if (trigger === 'time') {
       const when = triggerWhen(t);
       const next = when?.kind === 'cron' ? upcoming(when, now)[0]! : null;
@@ -395,18 +672,34 @@ export class Workflows {
     const { n } = this.db.prepare('SELECT COALESCE(MAX(number), 0) + 1 AS n FROM workflow_runs WHERE workflow_id = ?').get(w.id) as { n: number };
     const id = 'wr_' + randomUUID().slice(0, 8);
     this.touched.runs.add(id);
-    const open = this.db.prepare(`SELECT number FROM workflow_runs WHERE workflow_id = ? AND ${OPEN_RUN} ORDER BY number LIMIT 1`).get(w.id) as { number: number } | undefined;
+    // One run at a time per task or PR (#258; several tasks: one each), one at a time for runs about nothing.
+    const open = (
+      subject
+        ? this.db.prepare(`SELECT number FROM workflow_runs WHERE workflow_id = ? AND ${OPEN_RUN} AND subject_card = ? AND COALESCE(subject_pr, '') = ? ORDER BY number LIMIT 1`).get(w.id, subject.cardId, subject.prUrl ?? '')
+        : this.db.prepare(`SELECT number FROM workflow_runs WHERE workflow_id = ? AND ${OPEN_RUN} AND subject_card IS NULL ORDER BY number LIMIT 1`).get(w.id)
+    ) as { number: number } | undefined;
+    const about = [subject?.cardId ?? null, subject?.prUrl ?? null, on.event?.name ?? null] as const;
     if (open) {
       this.db
-        .prepare("INSERT INTO workflow_runs (id, workflow_id, number, state, trigger, reason, started_at, ended_at) VALUES (?, ?, ?, 'skipped', ?, ?, ?, ?)")
-        .run(id, w.id, n, trigger, `skipped: run ${open.number} was still going`, iso, iso);
+        .prepare("INSERT INTO workflow_runs (id, workflow_id, number, state, trigger, reason, started_at, ended_at, subject_card, subject_pr, event) VALUES (?, ?, ?, 'skipped', ?, ?, ?, ?, ?, ?, ?)")
+        .run(id, w.id, n, trigger, `skipped: run ${open.number} was still going${subject ? ` on ${this.subjectText(subject)}` : ''}`, iso, iso, ...about);
       return id;
     }
-    this.db.prepare("INSERT INTO workflow_runs (id, workflow_id, number, state, trigger, started_at) VALUES (?, ?, ?, 'running', ?, ?)").run(id, w.id, n, trigger, iso);
+    const ctx: RunContext = { fields: this.contextFields(subject, on.event, on.data, w), depth: on.depth ?? 0 };
+    this.db
+      .prepare("INSERT INTO workflow_runs (id, workflow_id, number, state, trigger, started_at, subject_card, subject_pr, event, context) VALUES (?, ?, ?, 'running', ?, ?, ?, ?, ?, ?)")
+      .run(id, w.id, n, trigger, iso, ...about, JSON.stringify(ctx));
     const due = w.next_run_at ? new Date(w.next_run_at) : now;
     const zone = t.kind === 'time' ? t.timezone : localTimeZone();
     const late = trigger === 'time' && now.getTime() - due.getTime() > LATE_MS ? `, due ${stamp(due, zone)}: Atlas was not running then` : '';
-    const how = `${trigger === 'manual' ? 'run by hand' : describeTrigger(t)}${late}`;
+    const on_ = subject ? ` on ${this.subjectText(subject)}` : '';
+    const change = on.data?.from && on.data.to ? ` (${on.data.from} → ${on.data.to})` : on.data?.result ? ` (${on.data.result})` : '';
+    const how =
+      trigger === 'manual'
+        ? `run by hand${on_}`
+        : trigger === 'task' || trigger === 'pr'
+          ? `${trigger === 'task' ? 'task' : 'PR'} event « ${on.event?.name ?? '?'} »${on_}${change}`
+          : `${describeTrigger(t)}${late}`;
     const node = this.nodes(w.id).find((x) => x.kind === 'trigger')!;
     this.insertStep(id, node.id, 'trigger', 'done', { exit: 'start', summary: how, ended: true });
     this.follow(id, node.id, 'start');
@@ -439,13 +732,18 @@ export class Workflows {
     if (all.length >= MAX_STEPS) return this.endRun(runId, 'failed', `more than ${MAX_STEPS} steps: a loop with no condition to end it?`);
     const name = `« ${stepTitle(node)} »`;
     const by = 'workflow:' + w.id;
-    // « previous »: the last agent step that finished (approvals and conditions pass it on).
     const prev = all.filter((s) => s.kind === 'agent' && (s.state === 'done' || s.state === 'failed')).at(-1);
-    const fill = (text: string) =>
-      text
-        .replaceAll('{{run.id}}', runId)
-        .replaceAll('{{previous.summary}}', prev?.summary ?? '(no previous step)')
-        .replaceAll('{{previous.task}}', prev?.card_id ? this.kanban.ref(prev.card_id) : '(no previous task)');
+    // {{field}} from what the run knows (#258); one it can't fill fails the step, with the reason (rule 3).
+    let fill: (text: string) => string = (text) => text;
+    try {
+      const filled = new Map<string, string>();
+      for (const text of node.kind === 'agent' ? [node.config.prompt] : node.kind === 'approval' ? [node.config.question] : []) filled.set(text, this.fill(run, text));
+      fill = (text) => filled.get(text) ?? text;
+    } catch (e) {
+      if (!(e instanceof FieldError)) throw e;
+      this.insertStep(runId, node.id, node.kind, 'failed', { exit: 'failed', summary: e.message, ended: true });
+      return this.endRun(runId, 'failed', `${name}: ${e.message}`);
+    }
     const how = all.find((s) => s.kind === 'trigger')?.summary ?? 'started';
     const why = `\n\n— from workflow ${w.id}, « ${w.name} » run ${run.number}, ${how}.`;
 
@@ -571,6 +869,116 @@ export class Workflows {
 
   /* ── Helpers ── */
 
+  /** Replace every {{field}} of `text` from the run's context; throws FieldError for one it can't fill. */
+  private fill(run: RunRow, text: string): string {
+    const fields = this.baseFields(run);
+    const all = this.steps(run.id);
+    // « previous »: the last agent step that finished (approvals and conditions pass it on).
+    const prev = all.filter((s) => s.kind === 'agent' && (s.state === 'done' || s.state === 'failed')).at(-1);
+    return text.replace(/\{\{([^{}]*)\}\}/g, (_m, raw: string) => {
+      const f = raw.trim();
+      if (f === 'previous.summary') return prev?.summary ?? '(no previous step)';
+      if (f === 'previous.task') return prev?.card_id ? this.kanban.ref(prev.card_id) : '(no previous task)';
+      const step = f.match(STEP_FIELD);
+      if (step) {
+        const [, nodeId, part] = step as unknown as [string, string, 'exit' | 'summary' | 'task'];
+        if (!this.node(run.workflow_id, nodeId)) throw new FieldError(`{{${f}}}: this workflow has no step ${nodeId}`);
+        const s = all.filter((x) => x.node_id === nodeId && x.ended_at).at(-1);
+        if (!s) throw new FieldError(`{{${f}}}: step ${nodeId} has not ended in this run yet`);
+        return part === 'exit' ? (s.exit ?? '') : part === 'summary' ? (s.summary ?? '') : s.card_id ? this.kanban.ref(s.card_id) : '';
+      }
+      if (f in fields) return fields[f]!;
+      const group = KNOWN_FIELDS.get(f);
+      if (group) throw new FieldError(`{{${f}}}: this run has no ${group === 'pr' ? 'pull request' : group} (started ${this.startedHow(run)})`);
+      throw new FieldError(`unknown field {{${f}}} (the fields a step can use: GET /api/workflows/${run.workflow_id}/fields)`);
+    });
+  }
+
+  private startedHow(run: RunRow): string {
+    if (run.trigger === 'time') return 'by its time trigger';
+    if (run.trigger === 'manual') return run.subject_card ? `by hand on ${this.subjectText({ cardId: run.subject_card, prUrl: run.subject_pr })}` : 'by hand, on no task';
+    return `by the ${run.trigger === 'pr' ? 'PR' : 'task'} event « ${run.event} »`;
+  }
+
+  /** The run's stored fields, with run.* and workflow.* (always known, also for runs from before #258). */
+  private baseFields(run: RunRow): Record<string, string> {
+    const w = this.row(run.workflow_id);
+    return { ...this.ctxOf(run.context).fields, 'run.id': run.id, 'run.number': String(run.number), 'workflow.id': w.id, 'workflow.name': w.name };
+  }
+
+  private ctxOf(json: string): RunContext {
+    const c = JSON.parse(json || '{}') as Partial<RunContext>;
+    return { fields: c.fields ?? {}, depth: c.depth ?? 0 };
+  }
+
+  /** What a run knows of its task, PR, project and event, as stored when it starts (#258). */
+  private contextFields(subject: WorkflowRunSubject | null, ev: EventRow | undefined, data: EventData | undefined, w: WfRow): Record<string, string> {
+    const f: Record<string, string> = {};
+    const card = subject ? this.cardOrNull(subject.cardId) : null;
+    if (card)
+      Object.assign(f, {
+        'task.id': card.id,
+        'task.ref': cardRef(card),
+        'task.title': card.title,
+        'task.body': card.body,
+        'task.status': card.status,
+        'task.assignee': card.assignee ?? '',
+        'task.priority': String(card.priority),
+      });
+    const projectId = card?.projectId ?? w.project_id;
+    if (projectId) {
+      const p = projectRow(this.db, projectId);
+      Object.assign(f, { 'project.id': p.id, 'project.name': p.name, 'project.repo': p.repo ?? '' });
+    }
+    if (subject?.prUrl) {
+      const row = this.db.prepare('SELECT * FROM card_prs WHERE card_id = ? AND url = ?').get(subject.cardId, subject.prUrl) as
+        | { repo: string; number: number; url: string; branch: string | null; base: string | null; head_sha: string | null; state: string; ci: string | null }
+        | undefined;
+      const pr = data?.pr ?? (row ? { url: row.url, repo: row.repo, number: row.number, branch: row.branch, base: row.base, head: row.head_sha, state: row.state, ci: row.ci } : null);
+      if (pr)
+        Object.assign(f, {
+          'pr.url': pr.url,
+          'pr.number': String(pr.number),
+          'pr.repo': pr.repo,
+          'pr.branch': pr.branch ?? '',
+          'pr.base': pr.base ?? '',
+          'pr.head': pr.head ?? '',
+          'pr.state': pr.state,
+          'pr.ci': pr.ci ?? '',
+        });
+    }
+    if (ev && data) {
+      Object.assign(f, { 'event.name': ev.name, 'event.by': data.by ?? '', 'event.from': data.from ?? '', 'event.to': data.to ?? '', 'event.text': data.text ?? '' });
+      if (data.result) f['event.result'] = data.result;
+    }
+    return f;
+  }
+
+  private subjectText(s: WorkflowRunSubject): string {
+    const ref = this.cardOrNull(s.cardId) ? this.kanban.ref(s.cardId) : s.cardId;
+    return s.prUrl ? `PR #${s.prUrl.split('/').pop()} of ${ref}` : ref;
+  }
+
+  /** The steps that can run before `nodeId`: every node it can be reached from (loops included), the trigger left out. */
+  private upstream(workflowId: string, nodeId: string): string[] {
+    const edges = this.db.prepare('SELECT from_node, to_node FROM workflow_edges WHERE workflow_id = ?').all(workflowId) as { from_node: string; to_node: string }[];
+    const seen = new Set<string>();
+    const stack = [nodeId];
+    while (stack.length) {
+      const x = stack.pop()!;
+      for (const e of edges) if (e.to_node === x && !seen.has(e.from_node)) (seen.add(e.from_node), stack.push(e.from_node));
+    }
+    return this.nodes(workflowId)
+      .filter((n) => n.kind !== 'trigger' && seen.has(n.id))
+      .map((n) => n.id);
+  }
+
+  /** An Inbox item in the current transaction, announced once it commits. */
+  private notify(n: NewNotification): void {
+    this.notified.push(insertNotification(this.db, n));
+  }
+  private notified: ReturnType<typeof insertNotification>[] = [];
+
   /** Validate a graph; returns its trigger. Every reason is one the user can act on. */
   private check(g: WorkflowGraph): TriggerConfig {
     const byId = new Map<string, WorkflowNode>();
@@ -600,6 +1008,8 @@ export class Workflows {
         throw new InvalidError(`« ${stepTitle(n)} » counts step ${n.config.node}, which does not exist`);
     }
     const t = triggers[0]!.config as TriggerConfig;
+    if (t.kind === 'task' || t.kind === 'pr')
+      for (const a of t.assignee) if (!this.db.prepare('SELECT 1 FROM agents WHERE id = ?').get(a)) throw new InvalidError(`the trigger filters on @${a}, which does not exist`);
     if (t.kind === 'time') {
       if (t.repeat === 'cron' && !t.cron) throw new InvalidError('the trigger repeats on a cron: give the cron expression');
       if (t.repeat === 'at' && !t.at) throw new InvalidError('the trigger runs once: give the date and time');
@@ -767,7 +1177,9 @@ export class Workflows {
       if (r) workflows.add(r.workflow_id);
     }
     const deleted = this.deleted;
+    const notified = this.notified;
     this.reset();
+    for (const n of notified) this.bus.emit({ type: 'notification.created', notification: n });
     for (const id of deleted) this.bus.emit({ type: 'workflow.deleted', id });
     for (const id of runs) if (this.db.prepare('SELECT 1 FROM workflow_runs WHERE id = ?').get(id)) this.bus.emit({ type: 'workflow.run', run: this.run(id) });
     for (const id of workflows) if (this.db.prepare('SELECT 1 FROM workflows WHERE id = ?').get(id)) this.bus.emit({ type: 'workflow.updated', workflow: this.get(id) });
@@ -776,5 +1188,6 @@ export class Workflows {
   private reset(): void {
     this.touched = { runs: new Set(), workflows: new Set() };
     this.deleted = [];
+    this.notified = [];
   }
 }

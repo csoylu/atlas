@@ -8,6 +8,7 @@ import type { Agents } from './agents.ts';
 import type { Runner } from './runner.ts';
 import { insertNotification } from './notifications.ts';
 import { isMember, projectRow } from './projects.ts';
+import { recordPrEvent, type PrSnapshot } from './workflowEvents.ts';
 
 /**
  * Tasks linked to their pull requests (#189, design §7.1). A task In review has open PRs; this module reads them from
@@ -45,6 +46,22 @@ export function parsePrUrl(url: string): { repo: string; number: number; url: st
   const m = url.trim().match(/^https:\/\/github\.com\/([\w.-]+\/[\w.-]+)\/pull\/(\d+)(?:[/?#].*)?$/);
   if (!m) throw new InvalidError(`not a GitHub pull request url: ${url} (expected https://github.com/owner/repo/pull/N)`);
   return { repo: m[1]!, number: Number(m[2]), url: `https://github.com/${m[1]}/pull/${m[2]}` };
+}
+
+/**
+ * The PR events between two reads (#258): a new head (pushed), CI done (ci_finished, with its result), a new conflict,
+ * a qa/validated verdict (validated), merged, closed. The first read has no « before »: what it finds already done counts.
+ */
+export function prEvents(before: CardPr, got: GhPr): { name: string; result?: string }[] {
+  const out: { name: string; result?: string }[] = [];
+  const newHead = !!before.headSha && before.headSha !== got.headSha;
+  if (newHead) out.push({ name: 'pushed' });
+  const final = (x: string | null) => x === 'success' || x === 'failure';
+  if (final(got.ci) && (newHead || before.ci !== got.ci)) out.push({ name: 'ci_finished', result: got.ci! });
+  if (got.mergeable === false && (newHead || before.mergeable !== false)) out.push({ name: 'conflict' });
+  if (final(got.qa) && (newHead || before.qa !== got.qa)) out.push({ name: 'validated', result: got.qa! });
+  if (got.state !== before.state && got.state !== 'open') out.push({ name: got.state });
+  return out;
 }
 
 interface PrRow {
@@ -223,6 +240,9 @@ export class Prs {
           got.ci === 'failure' ? (got.ciFailed?.name ?? null) : null, got.ci === 'failure' ? (got.ciFailed?.url ?? null) : null,
           got.qa, got.qaDescription, at, cardId, pr.repo, pr.number,
         );
+      // What changed since the last read, as PR events for workflows (#258), in this same transaction.
+      const snap: PrSnapshot = { url: pr.url, repo: pr.repo, number: pr.number, branch: got.branch, base: got.base, head: got.headSha, state: got.state, ci: got.ci };
+      for (const e of prEvents(pr, got)) recordPrEvent(this.db, cardId, e.name, snap, { result: e.result ?? null });
       // GitHub reads again: its « can't read » item leaves the Inbox.
       const { changes } = this.db
         .prepare("UPDATE notifications SET archived_at = ?, read_at = COALESCE(read_at, ?) WHERE kind = 'github.unreadable' AND card_id = ? AND archived_at IS NULL")

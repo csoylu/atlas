@@ -299,6 +299,8 @@ describe('store', () => {
       db.exec(readFileSync(join(dir, f), 'utf8'));
       db.prepare('INSERT INTO schema_migrations (name, applied_at) VALUES (?, ?)').run(f, 'x');
     }
+    // Their conversations too: a later migration that rebuilds a table checks every foreign key (0059).
+    for (const k of ['k1', 'k2', 'k3']) db.prepare("INSERT INTO conversations (id, kind) VALUES (?, 'card')").run(k);
     const card = db.prepare("INSERT INTO cards (id, title, status, conversation_id, created_by, created_at, updated_at) VALUES (?, 't', ?, ?, 'user', '2026-11-01T00:00:00Z', ?)");
     card.run('c_1', 'review', 'k1', '2026-11-19T09:00:00Z');
     card.run('c_2', 'blocked', 'k2', '2026-11-19T09:00:00Z');

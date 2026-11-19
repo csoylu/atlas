@@ -754,14 +754,50 @@ export const TimeTrigger = z.object({
   at: z.iso.datetime({ offset: true }).nullable().default(null),
   timezone: z.string().refine(isTimeZone, 'unknown time zone (use an IANA name like Europe/Paris)'),
 });
-export const TriggerConfig = z.discriminatedUnion('kind', [TimeTrigger, z.object({ kind: z.literal('manual') })]);
+/** Task events a workflow can start on (#258), written with the change that caused them. */
+export const TASK_EVENTS = ['created', 'status_changed', 'assignee_changed', 'review_requested', 'blocked', 'done'] as const;
+export type TaskEvent = (typeof TASK_EVENTS)[number];
+/** Pull request events (#258), seen when Atlas reads a linked PR from GitHub (opened = linked to a task). */
+export const PR_EVENTS = ['opened', 'pushed', 'ci_finished', 'conflict', 'validated', 'merged', 'closed'] as const;
+export type PrEvent = (typeof PR_EVENTS)[number];
+/** Runs on the same task or PR per hour before the workflow turns itself off (the loop guard, #258). */
+export const LOOP_GUARD_DEFAULT = 5;
+const eventTriggerBase = {
+  /** Only when the task (after the event) is in one of these statuses; status_changed: the new status. Empty = any. */
+  status: z.array(CardStatus).max(CARD_STATUSES.length).default([]),
+  /** Only when the task is assigned to one of these agents. Empty = anyone, or nobody. */
+  assignee: z.array(z.string().min(1)).max(50).default([]),
+  /** The loop guard: runs on the same task or PR in one hour; one more turns the workflow off. */
+  maxRunsPerHour: z.number().int().min(1).max(100).default(LOOP_GUARD_DEFAULT),
+};
+/** On a task event. A workflow with a project only sees its project's tasks; a global one sees every project's. */
+export const TaskTrigger = z.object({
+  kind: z.literal('task'),
+  event: z.enum(TASK_EVENTS),
+  /** status_changed only: the status it left. Empty = any. */
+  from: z.array(CardStatus).max(CARD_STATUSES.length).default([]),
+  ...eventTriggerBase,
+});
+/** On a pull request event of a task's linked PR. status / assignee filter the PR's task. */
+export const PrTrigger = z.object({
+  kind: z.literal('pr'),
+  event: z.enum(PR_EVENTS),
+  /** owner/name; empty = any repo. */
+  repo: z.string().trim().max(200).default(''),
+  /** The PR's base branch; empty = any. */
+  base: z.string().trim().max(200).default(''),
+  /** ci_finished and validated only: the result. Empty = either. */
+  result: z.enum(['', 'success', 'failure']).default(''),
+  ...eventTriggerBase,
+});
+export const TriggerConfig = z.discriminatedUnion('kind', [TimeTrigger, z.object({ kind: z.literal('manual') }), TaskTrigger, PrTrigger]);
 export type TriggerConfig = z.infer<typeof TriggerConfig>;
 /** An agent gets the prompt as a task: a new task each run, or one task reopened each run that keeps the history. */
 export const AgentStepConfig = z.object({
   title: z.string().trim().max(200).default(''),
   /** null: not chosen yet (a run reaching it fails and says so). */
   agentId: z.string().min(1).nullable().default(null),
-  /** Variables: {{run.id}}, {{previous.summary}}, {{previous.task}}. */
+  /** Fields: {{task.title}}, {{pr.url}}, {{steps.<id>.summary}}… (GET /api/workflows/:id/fields); an unknown one fails the step. */
   prompt: z.string().max(20_000).default(''),
   newTaskEachRun: z.boolean().default(false),
 });
@@ -811,7 +847,11 @@ export interface WorkflowRun {
   /** Run 1, 2, 3… within its workflow. */
   number: number;
   state: WorkflowRunState;
-  trigger: 'time' | 'manual';
+  trigger: WorkflowRunTrigger;
+  /** What the run is about (#258): the task or PR of its event, or the one chosen for a manual run. */
+  subject: WorkflowRunSubject | null;
+  /** The event that started it (task and pr runs), e.g. status_changed. */
+  event: string | null;
   /** Why it ended (failed, stopped, skipped) or how (the exit that ended it). */
   reason: string | null;
   startedAt: string;
@@ -819,6 +859,42 @@ export interface WorkflowRun {
   /** In GET /api/workflow-runs/:id, the workflow.run event and a workflow's lastRun. */
   steps?: WorkflowRunStep[];
 }
+
+export type WorkflowRunTrigger = 'time' | 'manual' | 'task' | 'pr';
+export interface WorkflowRunSubject {
+  /** The task (a PR's: the task it is linked to). */
+  cardId: string;
+  /** A PR run: its url. */
+  prUrl: string | null;
+}
+/** GET /api/workflow-runs/:id/context: what the run knows, as the fields a step can use ({{task.title}}…). */
+export interface WorkflowRunContext {
+  runId: string;
+  /** Field → value, as stored when the run started, plus the exit, summary and task of the steps that ended. */
+  fields: Record<string, string>;
+}
+/** GET /api/workflows/:id/fields?node=…: the fields a step can use, with the value from the last run when known. */
+export interface WorkflowField {
+  field: string;
+  label: string;
+  /** Not every run has it (a manual run without a task, a step that may not have run yet). */
+  optional: boolean;
+  /** From the latest run that knew it, or null. */
+  example: string | null;
+}
+/** GET /api/cards/:id/workflows: a workflow acting on a task now (its subject, or one of its steps' task). */
+export interface TaskWorkflow {
+  workflowId: string;
+  workflowName: string;
+  runId: string;
+  runNumber: number;
+  state: WorkflowRunState;
+  /** The step it is at, or null. */
+  step: { nodeId: string; title: string; state: WorkflowStepState; cardId: string | null } | null;
+}
+/** POST /api/workflows/:id/run: a manual run, optionally on a task (#12 or id) or a linked PR (its url). */
+export const RunWorkflow = z.object({ task: z.string().trim().min(1).optional(), pr: z.string().trim().min(1).optional() }).refine((x) => !(x.task && x.pr), 'give a task or a PR, not both');
+export type RunWorkflow = z.input<typeof RunWorkflow>;
 
 export interface Workflow extends WorkflowGraph {
   id: string;
@@ -831,7 +907,7 @@ export interface Workflow extends WorkflowGraph {
   revision: number;
   nextRunAt: string | null;
   lastFiredAt: string | null;
-  /** Why the trigger last failed to start a run; cleared by the next start. */
+  /** Why the trigger last failed to start a run, or why the loop guard turned it off (#258); cleared by the next start. */
   lastError: string | null;
   /** The latest run that ran (a skipped one only when none did), with its steps, for lists. */
   lastRun: WorkflowRun | null;
@@ -1051,7 +1127,7 @@ export type UpdatePlanAccount = z.infer<typeof UpdatePlanAccount>;
  * Kinds of notification the engine writes. card.blocked / card.review rows are for the system notification and history;
  * the Inbox shows those cards from their live state (InboxNeed). plan.* rows are « system ».
  */
-export const NOTIFICATION_KINDS = ['card.blocked', 'card.review', 'card.done', 'run.failed', 'schedule.ran', 'memory.cleanup', 'plan.switched', 'plan.exhausted', 'github.unreadable', 'review.stalled', 'card.stalled'] as const;
+export const NOTIFICATION_KINDS = ['card.blocked', 'card.review', 'card.done', 'run.failed', 'schedule.ran', 'memory.cleanup', 'plan.switched', 'plan.exhausted', 'github.unreadable', 'review.stalled', 'card.stalled', 'workflow.stopped'] as const;
 export type NotificationKind = (typeof NOTIFICATION_KINDS)[number];
 
 /** Something the user is told about (also shown as a system notification by the app). */

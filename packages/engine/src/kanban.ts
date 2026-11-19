@@ -22,6 +22,7 @@ import { isCleanupCard } from './cleanup.ts';
 import { stripData } from './images.ts';
 import { cardPrs, parsePrUrl } from './prs.ts';
 import { stallOf } from './stalls.ts';
+import { recordPrEvent, recordTaskEvent } from './workflowEvents.ts';
 import { assertActive, defaultProjectId, defaultProjectOrNull, isMember, leadOf, projectForNewCard, projectRow, resolveProject, scopeFor } from './projects.ts';
 
 interface CardRow {
@@ -569,18 +570,23 @@ export class Kanban {
     const now = new Date().toISOString();
     this.tx(() => {
       assertActive(this.db, before.projectId, cardRef(before));
-      for (const pr of prs)
+      const linked: typeof prs = [];
+      for (const pr of prs) {
+        if (!this.db.prepare('SELECT 1 FROM card_prs WHERE card_id = ? AND repo = ? AND number = ?').get(id, pr.repo, pr.number)) linked.push(pr);
         this.db
           .prepare(
             `INSERT INTO card_prs (card_id, repo, number, url, linked_at) VALUES (?, ?, ?, ?, ?)
              ON CONFLICT (card_id, repo, number) DO UPDATE SET reviewed_sha = NULL, failed_sha = NULL`,
           )
           .run(id, pr.repo, pr.number, pr.url, now);
+      }
       this.db.prepare('UPDATE card_prs SET reviewed_sha = NULL, failed_sha = NULL WHERE card_id = ?').run(id);
       this.db.prepare("UPDATE cards SET status = 'review', reviewer = ?, updated_at = ? WHERE id = ?").run(reviewer, now, id);
       this.clearBlock(id);
       this.event(id, 'status', { from: before.status, to: 'review', by });
       this.event(id, 'review_requested', { by, summary, prs: prs.map((p) => p.url), reviewer });
+      // « opened » for workflows (#258): a PR becomes known to Atlas when a task links it.
+      for (const pr of linked) recordPrEvent(this.db, id, 'opened', { url: pr.url, repo: pr.repo, number: pr.number, branch: null, base: null, head: null, state: 'open', ci: null }, { by });
     });
     return this.emit(id);
   }
@@ -926,6 +932,8 @@ export class Kanban {
     this.db
       .prepare('INSERT INTO card_events (card_id, at, kind, payload) VALUES (?, ?, ?, ?)')
       .run(cardId, new Date().toISOString(), kind, JSON.stringify(payload));
+    // The task events workflows start on (#258), in the same transaction as the change.
+    recordTaskEvent(this.db, cardId, kind, payload);
   }
 
   /** `project`: the agent must also be one of its members (#213). */

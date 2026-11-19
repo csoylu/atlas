@@ -187,7 +187,7 @@ const PLAY = (
 /** The trigger in plain words with its icon. */
 function TriggerText({ t }: { t: TriggerConfig | null }) {
   if (!t) return <span className="part trig">no trigger</span>;
-  const icon = t.kind === 'manual' ? TRIG_ICON.hand : t.repeat === 'at' ? TRIG_ICON.once : TRIG_ICON.clock;
+  const icon = t.kind !== 'time' ? TRIG_ICON.hand : t.repeat === 'at' ? TRIG_ICON.once : TRIG_ICON.clock;
   return (
     <span className="part trig">
       {icon}
@@ -302,6 +302,8 @@ function WorkflowRow(props: { w: Workflow; cards: Card[]; onOpen(): void; onOpen
           </>
         ) : t?.kind === 'manual' ? (
           <span>Only when you click ▶</span>
+        ) : t?.kind === 'task' || t?.kind === 'pr' ? (
+          <span>On each matching {t.kind === 'task' ? 'task' : 'PR'} event</span>
         ) : null}
       </div>
       <div className="wfl-acts">
