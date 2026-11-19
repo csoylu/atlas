@@ -505,6 +505,8 @@ export class Kanban {
       const after = this.get(id);
       if (after.status !== before.status) {
         this.event(id, 'status', { from: before.status, to: after.status, by });
+        // Out of review = out of the merge queue (#236): back in, it is at the end.
+        if (before.status === 'review') this.db.prepare('UPDATE cards SET review_queued_at = NULL, review_head_at = NULL WHERE id = ?').run(id);
         // In review waits for QA, not the user (#189): no report, no Inbox item.
         if (after.status === 'done' || after.status === 'closed') this.reportBack(after, after.status, { by, text: summary });
         // Its project memories are history now: out of recall (design §8).
@@ -573,7 +575,12 @@ export class Kanban {
           )
           .run(id, pr.repo, pr.number, pr.url, now);
       this.db.prepare('UPDATE card_prs SET reviewed_sha = NULL, failed_sha = NULL WHERE card_id = ?').run(id);
-      this.db.prepare("UPDATE cards SET status = 'review', reviewer = ?, updated_at = ? WHERE id = ?").run(reviewer, now, id);
+      // The merge queue (#236): at the end of the project's queue, again after a send-back.
+      // Strictly after the last one queued, so two asks in the same millisecond keep their order.
+      const last = (this.db.prepare("SELECT MAX(review_queued_at) AS at FROM cards WHERE project_id = ? AND status = 'review'").get(before.projectId) as { at: string | null }).at;
+      const queued = last && last >= now ? new Date(Date.parse(last) + 1).toISOString() : now;
+      this.db.prepare("UPDATE cards SET status = 'review', reviewer = ?, review_queued_at = ?, review_head_at = NULL, updated_at = ? WHERE id = ?").run(reviewer, queued, now, id);
+      this.db.prepare('UPDATE card_prs SET synced_sha = NULL, sync_error = NULL WHERE card_id = ?').run(id);
       this.clearBlock(id);
       this.event(id, 'status', { from: before.status, to: 'review', by });
       this.event(id, 'review_requested', { by, summary, prs: prs.map((p) => p.url), reviewer });

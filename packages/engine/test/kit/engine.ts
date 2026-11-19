@@ -24,6 +24,9 @@ const noClone = async () => {
   throw new Error('no clone in this test: pass projects.clone');
 };
 
+/** The merge queue's rebase (#236) in tests: every PR already up to date with main (no git), unless a test passes its own. */
+const upToDate = async () => ({ kind: 'current' as const });
+
 /**
  * A throwaway engine, every dependency injectable: the model (`script` or `provider`), and anything startEngine takes
  * (`updates.fetch`, `dispatch`, `leaseMs`, a `dbFile` to restart on…). Defaults make a test fast and isolated: in-memory
@@ -36,7 +39,7 @@ export async function launch(o: LaunchOptions = {}) {
   const ownDir = !rest.dataDir;
   const dataDir = rest.dataDir ?? mkdtempSync(join(tmpdir(), 'atlas-t-'));
   mkdirSync(join(dataDir, 'workspaces', 'atlas'), { recursive: true });
-  const engine: Engine = await startEngine({ dbFile: ':memory:', port: 0, manageLocal: false, memoryReview: false, providers: () => fake, ...rest, projects: { clone: noClone, ...rest.projects }, dataDir } as EngineOptions);
+  const engine: Engine = await startEngine({ dbFile: ':memory:', port: 0, manageLocal: false, memoryReview: false, providers: () => fake, ...rest, projects: { clone: noClone, ...rest.projects }, prs: { sync: upToDate, ...rest.prs }, dataDir } as EngineOptions);
   onTestFinished(async () => {
     await engine.stop().catch(() => {});
     if (ownDir) rmSync(dataDir, { recursive: true, force: true });

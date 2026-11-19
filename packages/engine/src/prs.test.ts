@@ -72,7 +72,7 @@ describe('pull requests linked to tasks (#189)', () => {
     // CI still running: nobody runs, the card says why.
     await e.prs.poll();
     expect(gh.reads).toBe(1);
-    expect(e.kanban.get(c.id)).toMatchObject({ status: 'review', waiting: 'QA starts when CI is green', prs: [{ ci: 'pending', headSha: 'aaaaaaa1111', branch: 'feat/170-x' }] });
+    expect(e.kanban.get(c.id)).toMatchObject({ status: 'review', waiting: '1st in the queue for 0 min · QA starts when CI is green', prs: [{ ci: 'pending', headSha: 'aaaaaaa1111', branch: 'feat/170-x' }] });
     expect(e.runner.current(c.id)).toBe(null);
   });
 
@@ -93,7 +93,7 @@ describe('pull requests linked to tasks (#189)', () => {
     // The same head again: no second run.
     await e.prs.poll();
     expect(e.runner.runs(c.id)).toHaveLength(1);
-    expect(e.kanban.get(c.id).waiting).toBe('validated: waiting for the merge');
+    expect(e.kanban.get(c.id).waiting).toBe('1st in the queue for 0 min · validated: waiting for the merge');
 
     gh.pr = { ...gh.pr, state: 'merged', mergeSha: 'e96a8e2ffff' };
     await e.prs.poll();
@@ -255,7 +255,7 @@ describe('pull requests linked to tasks (#189)', () => {
     await e.prs.poll();
     await e.prs.poll();
     expect(e.runner.runs(c.id)).toHaveLength(2);
-    expect(e.kanban.get(c.id)).toMatchObject({ status: 'review', waiting: 'review by @zurich ended without a verdict on aaaaaaa (2 runs): Retry starts it again' });
+    expect(e.kanban.get(c.id)).toMatchObject({ status: 'review', waiting: '1st in the queue for 0 min · review by @zurich ended without a verdict on aaaaaaa (2 runs): Retry starts it again' });
     const stalled = () => e.notifications.inbox().updates.filter((u) => u.kind === 'review.stalled');
     expect(stalled()).toMatchObject([
       { title: 'Review by @zurich ended without a verdict', cardId: c.id, body: expect.stringContaining('PR #41 (aaaaaaa) of “Workflows”: 2 review runs ended without validating or failing it') },
@@ -273,7 +273,7 @@ describe('pull requests linked to tasks (#189)', () => {
     await eventually(() => e.runner.runs(c.id).length === 4, { what: 'the review of the new head' });
     await idle(c.id);
     await e.prs.poll();
-    expect(e.kanban.get(c.id).waiting).toBe('validated: waiting for the merge');
+    expect(e.kanban.get(c.id).waiting).toBe('1st in the queue for 0 min · validated: waiting for the merge');
   });
 
   it("the reviewer's model sees the builder's turns as the builder's, not as its own (#221)", async () => {
@@ -389,6 +389,6 @@ describe('pull requests of another project (#216)', () => {
     gh.pr.ci = 'success';
     await e.prs.poll();
     expect(e.runner.runs(d.id)).toEqual([]);
-    expect(e.kanban.get(d.id)).toMatchObject({ status: 'review', waiting: 'review agent @zurich is not a member of project Datinel: add it in Settings → Projects' });
+    expect(e.kanban.get(d.id)).toMatchObject({ status: 'review', waiting: '1st in the queue for 0 min · review agent @zurich is not a member of project Datinel: add it in Settings → Projects' });
   });
 });

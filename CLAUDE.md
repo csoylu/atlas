@@ -154,10 +154,23 @@ with `process.env` directly: take `ctx.env()`.
   `PATCH /api/projects/:id {"ciJob": "…"}`. Nothing in the gate is Atlas-specific: a project's rules live in its CI.
   `task_request_review` refuses a PR of another repo than the task's project's (and a project without a repo). The
   reviewer must be a member of the project (its review runs in its workspace for that project); otherwise nothing
-  starts and the card says « review agent @X is not a member of project Y ». The auto-rebase uses the reviewer's clone of
-  the repo in its workspace (the workspace or a folder right in it whose origin is the repo). On the GitHub side Master
+  starts and the card says « review agent @X is not a member of project Y ». On the GitHub side Master
   sets, per repo, branch protection on main: required status `qa/validated`, plus the required CI check if there is one
   (agents never change a repo's settings).
+- **Merge queue (#236): one PR at a time per project.** The tasks In review of a project are reviewed and merged in the
+  order they called `task_request_review`; a task sent back leaves the queue and re-enters at the end when it asks
+  again. Only the head gets a reviewer run; the others wait In review and their card says « 3rd in the queue, behind
+  #214 and #215 », the head « 1st in the queue for 25 min · … ». Before the head is reviewed, Atlas brings each of its
+  PRs up to date with main in the reviewer's clone of the repo (its workspace for the project, or a folder right in it
+  whose origin is the repo; a throwaway worktree, the clone's branches untouched): a rebase that applies cleanly is
+  pushed (`--force-with-lease` on the head GitHub showed) and the review waits for CI on the new head; a real conflict
+  sends the task back with the files named and the queue moves on. **Migration numbers:** a migration the PR adds whose
+  number main already took is renamed to the next free one in that same push, with every reference to its file stem in
+  the files the PR changes (thread note « migration 0051_x renamed 0052_x »); only migrations new in the PR move. CI (the
+  job `test` on the PR: `node scripts/pr/migrations.mjs check HEAD^1 HEAD`) fails a new migration not above every
+  number on main, so a clash never merges (the review gate reads only CI, #238). After the queue rebased your branch, `git fetch` and reset to `origin/<branch>`
+  before pushing again (a plain push is refused). Master's terminal `--merge` may jump the queue: the next read sees it,
+  and every queued PR is brought up to date again.
 - **Done means on main** (#126, #189): a task with a PR ends with `task_request_review` and becomes Done when the PR
   merges, by itself. A task with several branches links every PR. A task with no code (mockup, audit, report)
   finishes with `task_complete` as usual.
