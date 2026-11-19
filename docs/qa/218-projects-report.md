@@ -41,11 +41,19 @@ database, 264 screens vs 264 (+32 new `-2` and projects screens): both « no iss
   bottom « Interrupted » row is in one shot and not in the other; same content, a scroll race, not a layout change).
 Nothing else moved. The single-project app looks as before.
 
+**Safety (found in review, fixed):** a `.backup` of the live database carries the pids of the shells running at that moment, and an engine
+started on the copy kills them as orphans once their copied lease expires. The tool now sets `pid = NULL` on every running tool call and
+background process of the copy before the first start, and ends with a check: a live process planted in the copy (a tool call and a background
+process) must survive both engines. Without the neutralising lines the check fails (the planted process is killed); with them it passes. The
+runs of this report made before the fix used the same copies, so they may have signalled the pids of shells that were running in the live app then;
+I can't tell which. Canvases the live app made after the last conversion are converted at start (one document and one version each): the tool
+expects exactly those new rows.
+
 ## 4. Crash
 - `projects-crash.test.ts` (slow project): random SIGKILL during a clone (partial folder on disk): the last engine clones each member once,
   whole, no `partial.txt`, no `.cloning` leftovers, state ready. Random SIGKILL around a member's removal: either still a member (nothing
   of the removal happened) or removed with the tasks in the lead's triage, chat archived, workspace kept; never in between. Default 20 kills per
   test (`CRASH_KILLS=n`), 4 and 20 run green.
-- `npm run test:full`: fast project green except #247's test (fails on main too); slow project: `crash.test.ts` (50 kills), `projects-crash`,
+- `npm run test:full`: fast project green (#247's test is fixed on main); slow project: `crash.test.ts` (50 kills), `projects-crash`,
   `screenshot.chrome` green; `voiceLoop.test.ts` « #52 a card report during a spoken turn… » fails, and it fails identically on main without
   these changes (stash test), so it is not from this PR (timing under load).

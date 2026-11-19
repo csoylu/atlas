@@ -113,8 +113,7 @@ describe('projects survive a kill (#218)', () => {
       const chat = engine.db.prepare("SELECT status FROM cards WHERE project_id = 'datinel' AND board = 'direct' AND assignee = 'zurich'").all() as { status: string }[];
       const member = p.members.some((m) => m.agentId === 'zurich');
       const kept = engine.db.prepare("SELECT path FROM kept_workspaces WHERE project_id = 'datinel' AND agent_id = 'zurich'").all() as { path: string }[];
-      if (works.length === 0) return; // killed before the child could create its work: nothing to audit in this run (very rare)
-      expect(works).toHaveLength(3);
+      expect(works).toHaveLength(3); // the child prints « ready » only after creating them: a kill never comes before
       if (member) {
         // Killed before the transaction committed: nothing of the removal happened.
         expect(kept).toEqual([]);
@@ -133,7 +132,8 @@ describe('projects survive a kill (#218)', () => {
       }
       // Either way: no card was lost, task numbers are unique, and munih (the lead) is untouched.
       expect(p.members.some((m) => m.agentId === 'munih' && m.cloneState === 'ready')).toBe(true);
-      expect(engine.db.prepare('SELECT COUNT(*) n, COUNT(DISTINCT number) d FROM cards').get()).toMatchObject({});
+      const nums = engine.db.prepare('SELECT COUNT(number) n, COUNT(DISTINCT number) d FROM cards').get() as { n: number; d: number };
+      expect(nums.d).toBe(nums.n);
     } finally {
       await engine.stop();
     }

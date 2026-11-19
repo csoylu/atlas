@@ -10,11 +10,18 @@
  *   - a workflow and a schedule that are due fire: a second engine with a dispatcher and a scripted model, the due time
  *     set in the past on the copy, starts a run, creates its task, and moves `next_run_at` on.
  *
+ * SAFETY: a `.backup` of a live database carries the real pids of the shell tool calls and background processes that
+ * were running at that moment. An engine started on it treats them as orphans once their (copied) lease has expired
+ * and SIGKILLs their process groups: they would be the live app's shells. So the copy is neutralised before the first
+ * start (`pid = NULL` on every running tool call and background process; both kill paths return on a null pid), and a
+ * check proves it: a live process planted in the copy survives the whole run.
+ *
  * Run (macOS, from the repo root, after `npm ci` and `npm run build`):
  *   sqlite3 "<data>/atlas.db" ".backup /tmp/reg/live.db"
  *   npx tsx e2e/tools/single-project-regression.ts /tmp/reg/live.db
  * Exit 1 on any problem; prints one line per check.
  */
+import { spawn } from 'node:child_process';
 import { copyFileSync, existsSync, mkdirSync, mkdtempSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
@@ -39,6 +46,45 @@ copyFileSync(src, dbFile);
 for (const ext of ['-wal', '-shm']) if (existsSync(src + ext)) copyFileSync(src + ext, dbFile + ext);
 mkdirSync(join(dir, 'workspaces', 'atlas'), { recursive: true });
 
+// Never let this engine signal a process of the real app: forget every pid the copy holds for a running row, then
+// plant a live process of our own (its own process group) on a tool call and on a background process to prove it.
+const sleeper = spawn('sleep', ['900'], { detached: true, stdio: 'ignore' });
+sleeper.unref();
+const alive = (pid: number) => {
+  try {
+    process.kill(pid, 0);
+    return true;
+  } catch {
+    return false;
+  }
+};
+process.on('exit', () => {
+  try {
+    process.kill(-sleeper.pid!, 'SIGKILL');
+  } catch {
+    // already gone
+  }
+});
+let planted = '';
+{
+  const w = new Database(dbFile);
+  const call = w.prepare("SELECT t.id FROM tool_calls t JOIN runs r ON r.id = t.run_id WHERE r.status != 'running' LIMIT 1").get() as { id: number } | undefined;
+  if (call) {
+    w.prepare("UPDATE tool_calls SET status = 'running', pid = ? WHERE id = ?").run(sleeper.pid, call.id);
+    planted = `tool call ${call.id}`;
+  }
+  const card = w.prepare('SELECT id FROM cards LIMIT 1').get() as { id: string } | undefined;
+  if (card) {
+    w.prepare("INSERT INTO background_processes (id, agent_id, card_id, command, pid, log_path, status, owner, lease_until, started_at) VALUES ('bg_regression', 'x', ?, 'sleep', ?, '/dev/null', 'running', 'regression', ?, ?)").run(card.id, sleeper.pid, new Date(Date.now() - 60_000).toISOString(), new Date(Date.now() - 120_000).toISOString());
+    planted += `${planted ? ' and ' : ''}background process`;
+  }
+  // The neutralising itself, after the plants: they are running rows with a pid like the live app's.
+  const cut = w.prepare("UPDATE tool_calls SET pid = NULL WHERE status = 'running'").run().changes;
+  const bg = w.prepare("UPDATE background_processes SET pid = NULL WHERE status = 'running'").run().changes;
+  w.close();
+  console.log(`neutralised ${cut} running tool call(s) and ${bg} background process(es) of the copy (planted ones included); planted a live process on ${planted || 'nothing'}`);
+}
+
 const raw = <T>(sql: string, ...a: unknown[]): T[] => {
   const db = new Database(dbFile, { readonly: true });
   try {
@@ -57,6 +103,9 @@ const TABLES = ['cards', 'messages', 'conversations', 'runs', 'tool_calls', 'mem
   .filter((t) => has(t));
 const countOf = (t: string) => raw<{ n: number }>(`SELECT COUNT(*) n FROM ${t}`)[0]!.n;
 const before = Object.fromEntries(TABLES.map((t) => [t, countOf(t)]));
+// Canvases the live app made after the last conversion: this build converts each one to an html page at start (#120), one
+// document with one version each; they are the only documents a start may add.
+const pending = has('canvases') && has('documents', 'from_canvas') ? raw<{ n: number }>('SELECT COUNT(*) n FROM canvases c WHERE NOT EXISTS (SELECT 1 FROM documents d WHERE d.from_canvas = c.id)')[0]!.n : 0;
 const migBefore = raw<{ name: string }>('SELECT name FROM schema_migrations ORDER BY name DESC LIMIT 1')[0]!.name;
 // The messages the API shows: every row that no rewind hid (a rewound message stays in the file, out of the chat).
 const seqs = new Map<string, number[]>();
@@ -91,6 +140,10 @@ try {
   for (const t of TABLES) {
     if (['settings', 'workflows'].includes(t)) continue; // a build may add a built-in row (checked below)
     // Starting an engine closes what a stop left open (a run cut by the last stop gets its note): rows may be added, never lost.
+    if (t === 'documents' || t === 'document_versions') {
+      ok(`${t}: ${before[t]} rows before, ${pending} canvas(es) converted, nothing else changed`, countOf(t) === before[t]! + pending, `now ${countOf(t)}`);
+      continue;
+    }
     if (['messages', 'runs', 'tool_calls', 'notifications', 'checkpoints'].includes(t)) {
       ok(`${t}: ${before[t]} rows before, none lost`, countOf(t) >= before[t]!, `now ${countOf(t)}`);
       continue;
@@ -189,6 +242,7 @@ try {
   }
 }
 
+ok('the live process planted in the copy survived both engines (no pid of a copy is ever signalled)', alive(sleeper.pid!), planted || 'nothing planted');
 rmSync(dir, { recursive: true, force: true });
 if (problems.length) {
   console.error(`\n${problems.length} problem(s):\n- ${problems.join('\n- ')}`);
