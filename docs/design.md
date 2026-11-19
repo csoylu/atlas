@@ -516,6 +516,15 @@ A workflow is a small graph: one **trigger** wired to **steps**. Mockup: paris's
 | `memory_add`, `memory_update`, `memory_forget`, `memory_search` | Memory v2 (§8). add(kind, scope self/shared, text, update?/new?): refused with the similar ones listed unless `update: id` or `new: true`; over the always-on budget → refused, asking to merge. update(id, text, kind?) and forget(id) on own and shared memories only; forget archives. search(query): own + shared, stale included. Replaced `memory_edit` (old transcripts still render it) |
 | `ask_user` | in chat runs only; on cards use `card_block(needs_input)` |
 
+**The shell is not confined (#248, decided 19 Nov 2026 on #218 finding 2).** `shell` starts in the workdir, but a
+command can `cd` or name any absolute path the user's account can reach: a run in project B can read and write project
+A's workspace, and the reverse. Enforced by the engine: the file tools (read/write rule above, by resolved path), the
+env and secrets (§10b: only the run's grants, never a model key), the instructions (the run's workspace only), memory,
+artifacts and task tools (the run's project; another one only through `project`, for a lead: §17). Only a rule the
+agent follows: the shell. Every run's « # Workspace » says so: shell commands stay in the working directory and the
+temp folders, never another project's workspace; a lead crosses projects through the tools' `project` parameter, not
+by path. Confining the shell (a sandbox profile per project) would be its own designed task.
+
 ### 10a. Images (#103)
 - Block `image` (packages/shared): `path` (absolute), `media_type`, `width`, `height`, `bytes`, `sha256`; a tool
   result may carry `images: ImageBlock[]`. The bytes stay in the file, never in SQLite: `data` (base64) is only filled
@@ -992,6 +1001,10 @@ A project is a repo the team works on: a name, a GitHub repo `owner/name` (fixed
 - **A run's workdir** is the member workspace of (agent, card's project), `workspaceOf()`: file tools, shell,
   background processes, screenshots, uploads, artifacts and the project instructions (CLAUDE.md / AGENTS.md at its
   root only). Not a member, not ready or failed: the run fails with that reason on the card. Never another project's.
+- **Isolation limit (#248)**: the engine isolates file tools, env and secrets, instructions, memory, artifacts and task
+  tools per project. The shell is not: a command can reach another project's workspace by absolute path. Agents are
+  told not to (a line in every run's « # Workspace »), and a lead crosses projects through the tools' `project`
+  parameter only. A rule the agent follows, not a guarantee (§10).
 - **Served files**: `/api/files/<agent>/…` stays the home workspace (every link made before stays valid);
   `/api/files/<agent>@<project>/…` is the agent's workspace in another project (agent ids have no `@`). Documents
   carry `filesRoot`; the system prompt gives the run's own root.

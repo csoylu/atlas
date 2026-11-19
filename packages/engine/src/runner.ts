@@ -1244,6 +1244,7 @@ export class Runner {
       '',
       '# Workspace',
       `Working directory: ${workdir}. File tools and shell run there. File tools read the workdir and the temp folders (/tmp, $TMPDIR) and write only in the workdir.`,
+      "Shell commands stay inside this working directory and the temp folders: the engine doesn't confine the shell, so never read or write another project's workspace by path. A lead crossing projects does it through the tools' explicit `project` parameter, not by path.",
       `Files there are served at /api/files/${filesRoot(this.db, agent.id, project.id)}/<path> (built apps in dist/, images).`,
       ...(this.opts.documents
         ? [

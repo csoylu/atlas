@@ -395,10 +395,11 @@ describe('context management (design §8)', () => {
     const whole = fake.calls.find((c) => JSON.stringify(c.messages).includes('web_search_tool_result'))!;
     const withResult = whole.messages.find((x) => x.content.some((b) => b.type === 'web_search_tool_result'))!;
     expect(withResult.content.slice(0, 2)).toEqual([search, found]);
-    // After it, both halves are text.
-    const last = JSON.stringify(fake.calls.at(-1)!.messages);
-    expect(last).not.toContain('srv_1');
-    expect(last).toContain('(searched the web: {\\"query\\":\\"atlas\\"})');
+    // After it, both halves are text (in the requests between trimming and a compaction, which may summarise them away:
+    // where that happens depends on the system prompt's size, so no fixed request is checked).
+    expect(JSON.stringify(fake.calls.at(-1)!.messages)).not.toContain('srv_1');
+    const trimmed = fake.calls.map((c) => JSON.stringify(c.messages)).filter((m) => !m.includes('srv_1') && !m.includes('Summary of the earlier part'));
+    expect(trimmed.some((m) => m.includes('(searched the web: {\\"query\\":\\"atlas\\"})'))).toBe(true);
   }, 15_000);
 
   it('a conversation stored pruned between the two halves of a search (#142) is sent valid', async () => {

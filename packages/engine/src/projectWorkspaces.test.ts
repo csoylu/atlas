@@ -157,6 +157,28 @@ describe('project workspaces (#214)', () => {
     expect(existsSync(join(l.dataDir, 'workspaces', 'zurich', doc.path))).toBe(false);
   });
 
+  it('every run is told the shell is not confined: stay in this project, cross only through the project parameter (#248)', async () => {
+    const l = await setup({ script: [text('a'), text('b')], clone: async (_r, dir) => void mkdirSync(dir, { recursive: true }) });
+    l.engine.projects.create({ name: 'Datinel', repo: 'datinel/datinel', lead: 'dina', members: ['zurich'] });
+    await ready(l, 'datinel', 'zurich');
+    for (const projectId of ['atlas', 'datinel']) {
+      const c = l.engine.kanban.create({ title: projectId, projectId, assignee: 'zurich', status: 'done' }, 'user');
+      l.engine.kanban.appendMessage(c.id, 'user', 'user', text('go'));
+      l.engine.runner.wake(c.id);
+      await l.engine.runner.settled(c.id);
+    }
+    expect(l.fake.calls).toHaveLength(2);
+    for (const call of l.fake.calls) {
+      expect(call.system).toContain('Shell commands stay inside this working directory and the temp folders');
+      expect(call.system).toContain("never read or write another project's workspace by path");
+      expect(call.system).toContain("through the tools' explicit `project` parameter, not by path");
+      // In the cached prefix: it is part of the workspace block, not of the volatile tail.
+      expect(call.system.slice(0, call.cache!.systemStable)).toContain('Shell commands stay inside this working directory');
+    }
+    expect(l.fake.calls[0]!.system).toContain('Project: Atlas');
+    expect(l.fake.calls[1]!.system).toContain('Project: Datinel');
+  });
+
   it('the system prompt keeps a stable cached prefix per agent and project', async () => {
     const l = await setup({ script: [text('a'), text('b'), text('c')], clone: async (_r, dir) => void mkdirSync(dir, { recursive: true }) });
     l.engine.projects.create({ name: 'Datinel', repo: 'datinel/datinel', lead: 'dina', members: ['zurich'] });
