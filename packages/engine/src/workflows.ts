@@ -6,9 +6,14 @@ import {
   RunWorkflow,
   SaveWorkflowGraph,
   UpdateWorkflow,
-  WORKFLOW_EXITS,
+  TryCondition,
   WORKFLOW_FAILING_EXITS,
+  negativeExit,
+  workflowExits,
   type Card,
+  type ConditionConfig,
+  type ConditionTryResult,
+  type FieldTest,
   type TaskWorkflow,
   type WorkflowField,
   type WorkflowRunContext,
@@ -33,6 +38,7 @@ import { assertActive, defaultProjectId, projectRow, resolveProject } from './pr
 import { insertNotification, type NewNotification } from './notifications.ts';
 import { parsePrUrl } from './prs.ts';
 import type { EventData } from './workflowEvents.ts';
+import { validate, type Gh } from '../../../scripts/pr/validate.mjs';
 import { APPROVE, REJECT, cut, describeTrigger, firstLine, localTimeZone, stamp, stepTitle, triggerWhen, upcoming } from './workflowTime.ts';
 
 export { describeTrigger, describeWhen, localTimeZone, oneStep, upcoming } from './workflowTime.ts';
@@ -45,6 +51,9 @@ const OPEN_RUN = "state IN ('running', 'waiting')";
 /** Event-started runs one after the other across workflows (A's step task fires B, whose fires A…): a deeper one turns the workflow off. */
 export const MAX_CHAIN = 5;
 const HOUR_MS = 3_600_000;
+/** A step that couldn't run (#261) is tried again this often, and Master hears of it once after COULDNT_NOTIFY_MS. */
+export const COULDNT_RETRY_MS = 60_000;
+export const COULDNT_NOTIFY_MS = 15 * 60_000;
 
 interface WfRow {
   id: string;
@@ -112,6 +121,38 @@ interface StepRow {
   summary: string | null;
   started_at: string;
   ended_at: string | null;
+  deadline_at: string | null;
+  data: string | null;
+  couldnt: string | null;
+  couldnt_since: string | null;
+  retry_at: string | null;
+  tries: number;
+  notified_at: string | null;
+}
+/** What a merge step acts on (workflow_run_steps.data): the PR, and the head it pins (the one CI and the review saw). */
+interface MergeData {
+  repo: string;
+  number: number;
+  url: string;
+  sha: string | null;
+}
+interface PrRow {
+  repo: string;
+  number: number;
+  url: string;
+  branch: string | null;
+  base: string | null;
+  head_sha: string | null;
+  state: string;
+  ci: string | null;
+  mergeable: number | null;
+  qa: string | null;
+}
+/** The step got no answer (gh logged out, agent missing…): not an outcome. The run waits on it and Atlas retries (#261). */
+class CouldntRun extends Error {}
+/** Options for tests and the engine: the GitHub client a merge step uses (the user's gh login, login-shell PATH). */
+export interface WorkflowOptions {
+  gh?: () => Gh | Promise<Gh>;
 }
 
 const toNode = (r: NodeRow): WorkflowNode => ({ id: r.id, kind: r.kind, x: r.x, y: r.y, config: JSON.parse(r.config) }) as WorkflowNode;
@@ -127,7 +168,7 @@ const toRun = (r: RunRow): WorkflowRun => ({
   startedAt: r.started_at,
   endedAt: r.ended_at,
 });
-const toStep = (r: StepRow): WorkflowRunStep => ({
+const toStep = (r: StepRow, node: WorkflowNode | null): WorkflowRunStep => ({
   id: r.id,
   nodeId: r.node_id,
   kind: r.kind,
@@ -138,6 +179,10 @@ const toStep = (r: StepRow): WorkflowRunStep => ({
   summary: r.summary,
   startedAt: r.started_at,
   endedAt: r.ended_at,
+  deadlineAt: r.deadline_at,
+  couldntRun: r.couldnt
+    ? { reason: r.couldnt, since: r.couldnt_since ?? r.started_at, nextTryAt: r.retry_at ?? r.started_at, tries: r.tries, notified: !!r.notified_at, negativeExit: node ? negativeExit(node) : null }
+    : null,
 });
 const errText = (e: unknown) => (e instanceof Error ? e.message : String(e));
 
@@ -162,6 +207,8 @@ const FIELDS = {
     'pr.head': 'PR head commit',
     'pr.state': 'PR state',
     'pr.ci': 'PR CI result',
+    'pr.conflict': 'PR conflicts with its base (yes / no)',
+    'pr.qa': 'PR validation (qa/validated)',
   },
   project: { 'project.id': 'Project id', 'project.name': 'Project name', 'project.repo': 'Project repo' },
   event: {
@@ -214,7 +261,10 @@ export class Workflows {
     private bus: Bus,
     private kanban: Kanban,
     private now: () => Date = () => new Date(),
+    private opts: WorkflowOptions = {},
   ) {}
+  /** Merge steps talking to GitHub now, by step id (one at a time each). */
+  private inflight = new Map<number, Promise<void>>();
 
   start(intervalMs = 15_000): void {
     this.stop();
@@ -269,7 +319,13 @@ export class Workflows {
   }
 
   run(runId: string): WorkflowRun {
-    return { ...toRun(this.runRow(runId)), steps: this.steps(runId).map(toStep) };
+    const r = this.runRow(runId);
+    return { ...toRun(r), steps: this.stepsOut(r.workflow_id, runId) };
+  }
+
+  /** Every GitHub call a merge step has going: tests await it. */
+  async idle(): Promise<void> {
+    while (this.inflight.size) await Promise.all([...this.inflight.values()]);
   }
 
   /** What a run knows (#258): its stored fields (task, PR, project, event…) and the exit, summary and task of its ended steps. */
@@ -296,6 +352,7 @@ export class Workflows {
     if (nodeId && !this.node(workflowId, nodeId)) throw new NotFoundError(`workflow ${workflowId} has no step ${nodeId}`);
     const groups: [FieldGroup, boolean][] = [['run', false]];
     if (t.kind === 'task' || t.kind === 'pr') groups.push(['event', false], ['task', false], ['project', false]);
+    if (t.kind === 'task') groups.push(['pr', true]); // the task's latest linked PR, read when a step uses it (#261)
     if (t.kind === 'pr') groups.push(['pr', false]);
     if (t.kind === 'manual') groups.push(['task', true], ['pr', true], ['project', !w.project_id]);
     if (t.kind === 'time' && w.project_id) groups.push(['project', false]);
@@ -470,6 +527,47 @@ export class Workflows {
     return this.run(runId);
   }
 
+  /**
+   * Retry now (#261): the step that couldn't run is tried again at once (a merge: its GitHub call starts now).
+   * Refused when the run's current step can run.
+   */
+  retryNow(runId: string): WorkflowRun {
+    this.tx(() => {
+      const step = this.couldntStep(runId);
+      this.db.prepare('UPDATE workflow_run_steps SET retry_at = ? WHERE id = ?').run(this.now().toISOString(), step.id);
+      this.touched.runs.add(runId);
+    });
+    this.tick();
+    return this.run(runId);
+  }
+
+  /**
+   * Follow the negative exit (#261): Master gives up on a step that couldn't run and the run takes its negative
+   * outcome (« refused », « failed », « timed out »…), as if the step had answered so. Refused for a step without one.
+   */
+  followNegative(runId: string, by = 'user'): WorkflowRun {
+    this.tx(() => {
+      const step = this.couldntStep(runId);
+      const node = this.node(this.runRow(runId).workflow_id, step.node_id);
+      const exit = node ? negativeExit(node) : null;
+      if (!exit) throw new ConflictError(`« ${node ? stepTitle(node) : step.node_id} » has no negative exit: Retry now, or stop the run`);
+      this.finishStep(runId, step, exit, `couldn't run (${step.couldnt}): ${by === 'user' ? 'you' : by} chose to follow « ${exit} »`);
+    });
+    return this.run(runId);
+  }
+
+  /**
+   * Try a condition on a past run (#261), before saving it: its tests on that run's fields (task and PR as they are
+   * now, payload and steps as the run left them), with the value each one read.
+   */
+  tryCondition(workflowId: string, input: TryCondition): ConditionTryResult {
+    const t = TryCondition.parse(input);
+    const run = this.runRow(t.run);
+    if (run.workflow_id !== workflowId) throw new InvalidError(`run ${t.run} is not a run of workflow ${workflowId}`);
+    const r = this.evalCondition(run, t.config, this.steps(run.id));
+    return { runId: run.id, runNumber: run.number, exit: r.yes ? 'yes' : 'no', tests: r.tests, summary: r.summary };
+  }
+
   /** Fire due triggers, then move every open run on from its task's state. One failure is recorded where it happened. */
   tick(): void {
     if (this.ticking) {
@@ -490,9 +588,49 @@ export class Workflows {
             this.tx(() => this.endRun(r.id, 'failed', errText(e)));
           }
         }
+        this.retryDue();
       } while (this.again);
     } finally {
       this.ticking = false;
+    }
+    this.driveMerges();
+  }
+
+  /**
+   * Steps that couldn't run (#261): each is tried again once its retry time has come (every minute), and Master gets
+   * one Inbox item once one has failed for 15 minutes. Merges are tried by driveMerges (GitHub is asynchronous).
+   */
+  private retryDue(): void {
+    const now = this.now();
+    const iso = now.toISOString();
+    const rows = this.db
+      .prepare(`SELECT s.* FROM workflow_run_steps s JOIN workflow_runs r ON r.id = s.run_id WHERE r.${OPEN_RUN} AND s.ended_at IS NULL AND s.couldnt IS NOT NULL ORDER BY s.id`)
+      .all() as StepRow[];
+    for (const step of rows) {
+      try {
+        this.tx(() => {
+          const run = this.runRow(step.run_id);
+          const node = this.node(run.workflow_id, step.node_id);
+          if (step.notified_at === null && step.couldnt_since && now.getTime() - Date.parse(step.couldnt_since) >= COULDNT_NOTIFY_MS) {
+            const w = this.row(run.workflow_id);
+            const neg = node ? negativeExit(node) : null;
+            this.notify({
+              kind: 'workflow.couldnt_run',
+              title: `Workflow « ${w.name} » is stuck on « ${node ? stepTitle(node) : step.node_id} »`,
+              body: `Run ${run.number}: the step couldn't run for ${Math.round((now.getTime() - Date.parse(step.couldnt_since)) / 60_000)} min (${step.couldnt}). Atlas retries it every minute and goes on by itself once it can. In the run: Retry now${neg ? `, or Follow « ${neg} »` : ''}.`,
+              cardId: run.subject_card,
+            });
+            this.db.prepare('UPDATE workflow_run_steps SET notified_at = ? WHERE id = ?').run(iso, step.id);
+            this.touched.runs.add(run.id);
+          }
+          if (!node || (step.retry_at && step.retry_at > iso)) return;
+          if (node.kind === 'action' && node.config.do === 'mergePr') return; // driveMerges
+          this.attempt(run, step, node);
+        });
+      } catch (e) {
+        console.error(`workflow step ${step.id} retry failed`, errText(e));
+        this.tx(() => this.endRun(step.run_id, 'failed', errText(e)));
+      }
     }
   }
 
@@ -737,7 +875,17 @@ export class Workflows {
     let fill: (text: string) => string = (text) => text;
     try {
       const filled = new Map<string, string>();
-      for (const text of node.kind === 'agent' ? [node.config.prompt] : node.kind === 'approval' ? [node.config.question] : []) filled.set(text, this.fill(run, text));
+      const texts =
+        node.kind === 'agent'
+          ? [node.config.prompt]
+          : node.kind === 'approval'
+            ? [node.config.question]
+            : node.kind === 'action' && (node.config.do === 'setStatus' || node.config.do === 'setAssignee')
+              ? [node.config.note]
+              : node.kind === 'action' && node.config.do === 'notify'
+                ? [node.config.text]
+                : [];
+      for (const text of texts) filled.set(text, this.fill(run, text));
       fill = (text) => filled.get(text) ?? text;
     } catch (e) {
       if (!(e instanceof FieldError)) throw e;
@@ -750,27 +898,34 @@ export class Workflows {
     if (node.kind === 'agent') {
       const c = node.config;
       if (!c.agentId) return this.endRun(runId, 'failed', `${name} has no agent chosen`);
-      if (!this.db.prepare('SELECT 1 FROM agents WHERE id = ?').get(c.agentId)) return this.endRun(runId, 'failed', `${name}: agent @${c.agentId} does not exist`);
       if (!c.prompt.trim()) return this.endRun(runId, 'failed', `${name} has no prompt`);
-      const prompt = fill(c.prompt) + why;
-      let card: Card;
-      if (c.newTaskEachRun) {
-        const title = `${stepTitle(node)} · ${stamp(this.now(), this.zone(w.id), true)}`.slice(0, 200);
-        card = this.kanban.create({ title, body: prompt, assignee: c.agentId, status: 'ready', projectId: this.projectOf(w.id) }, by);
-      } else {
-        card = this.ownCard(w.id, node, by);
-        if (card.assignee !== c.agentId) card = this.kanban.update(card.id, { assignee: c.agentId }, by);
-        this.kanban.appendMessage(card.id, 'user', 'workflow', [{ type: 'text', text: prompt }]);
-        // Reopen a finished card. Running: the agent reads it at its next turn. Blocked or in review: it waits for the user.
-        if (card.status === 'done' || card.status === 'todo' || card.status === 'closed') this.kanban.update(card.id, { status: 'ready' }, by);
+      // Its agent was deleted since the save: no answer, not an outcome (#261). The run waits; Atlas retries.
+      if (!this.db.prepare('SELECT 1 FROM agents WHERE id = ?').get(c.agentId)) {
+        const id = this.insertStep(runId, node.id, 'agent', 'waiting', {});
+        return this.markCouldnt(runId, id, `agent @${c.agentId} does not exist`);
       }
-      this.insertStep(runId, node.id, 'agent', 'running', { card: card.id });
-      this.setRunState(runId, 'running');
-      // Already blocked or in review (own task): the step waits for the user from the start.
-      this.reconcile(runId);
+      return this.startAgent(runId, node, fill(c.prompt) + why, null);
+    }
+    if (node.kind === 'action' || node.kind === 'wait') {
+      const id = this.insertStep(runId, node.id, node.kind, node.kind === 'wait' ? 'waiting' : 'running', {});
+      if (node.kind === 'wait') {
+        const deadline = new Date(this.now().getTime() + node.config.limitMin * 60_000).toISOString();
+        this.db.prepare('UPDATE workflow_run_steps SET deadline_at = ? WHERE id = ?').run(deadline, id);
+        this.reconcile(runId); // already true: it goes on at once
+        return;
+      }
+      this.attempt(run, this.stepRow(id), node, fill);
+      return;
+    }
+    if (node.kind === 'condition') {
+      const r = this.evalCondition(run, node.config, all);
+      const exit = r.yes ? 'yes' : 'no';
+      this.insertStep(runId, node.id, 'condition', 'done', { exit, summary: r.summary, ended: true });
+      this.follow(runId, node.id, exit);
       return;
     }
     if (node.kind === 'approval') {
+
       const q = fill(node.config.question).trim() || `Continue workflow « ${w.name} »?`;
       const card = this.kanban.create({ title: stepTitle(node).slice(0, 200), body: q + why, assignee: null, status: 'todo', projectId: this.projectOf(w.id) }, by);
       this.kanban.block(card.id, { kind: 'needs_input', reason: q, options: ['Approve', 'Reject'] }, by);
@@ -778,24 +933,150 @@ export class Workflows {
       this.setRunState(runId, 'waiting');
       return;
     }
-    if (node.kind === 'condition') {
-      const c = node.config;
-      let yes: boolean;
-      let summary: string;
-      if (c.test === 'ranFewer') {
-        const n = all.filter((s) => s.node_id === c.node).length;
-        yes = n < c.times;
-        summary = `step ${c.node} ran ${n} time${n === 1 ? '' : 's'}: ${yes ? 'fewer than' : 'not fewer than'} ${c.times}`;
-      } else {
-        yes = (prev?.summary ?? '').toLowerCase().includes(c.text.toLowerCase());
-        summary = `the previous summary ${yes ? 'contains' : 'does not contain'} « ${c.text} »`;
-      }
-      const exit = yes ? 'yes' : 'no';
-      this.insertStep(runId, node.id, 'condition', 'done', { exit, summary, ended: true });
-      this.follow(runId, node.id, exit);
-      return;
-    }
     this.endRun(runId, 'failed', `${name}: a trigger cannot be a step`);
+  }
+
+  /**
+   * Give an agent step its task (a new one, or its own reopened) and the prompt. `stepId`: the step that couldn't run
+   * until now (its agent was missing), else a new step.
+   */
+  private startAgent(runId: string, node: Extract<WorkflowNode, { kind: 'agent' }>, prompt: string, stepId: number | null): void {
+    const w = this.row(this.runRow(runId).workflow_id);
+    const by = 'workflow:' + w.id;
+    const c = node.config;
+    let card: Card;
+    if (c.newTaskEachRun) {
+      const title = `${stepTitle(node)} · ${stamp(this.now(), this.zone(w.id), true)}`.slice(0, 200);
+      card = this.kanban.create({ title, body: prompt, assignee: c.agentId, status: 'ready', projectId: this.projectOf(w.id) }, by);
+    } else {
+      card = this.ownCard(w.id, node, by);
+      if (card.assignee !== c.agentId) card = this.kanban.update(card.id, { assignee: c.agentId }, by);
+      this.kanban.appendMessage(card.id, 'user', 'workflow', [{ type: 'text', text: prompt }]);
+      // Reopen a finished card. Running: the agent reads it at its next turn. Blocked or in review: it waits for the user.
+      if (card.status === 'done' || card.status === 'todo' || card.status === 'closed') this.kanban.update(card.id, { status: 'ready' }, by);
+    }
+    if (stepId === null) this.insertStep(runId, node.id, 'agent', 'running', { card: card.id });
+    else {
+      this.db.prepare("UPDATE workflow_run_steps SET card_id = ?, state = 'running' WHERE id = ?").run(card.id, stepId);
+      this.clearCouldnt(stepId);
+    }
+    this.setRunState(runId, 'running');
+    // Already blocked or in review (own task): the step waits for the user from the start.
+    this.reconcile(runId);
+  }
+
+  /**
+   * Do a step that has no model and no task of its own (#261): an action, or an agent step whose agent was missing.
+   * Inside the run's transaction. An answer is an exit; no answer (CouldntRun) leaves the step waiting, retried.
+   */
+  private attempt(run: RunRow, step: StepRow, node: WorkflowNode, fill: (text: string) => string = (t) => this.fill(run, t)): void {
+    const name = `« ${stepTitle(node)} »`;
+    const w = this.row(run.workflow_id);
+    const by = 'workflow:' + w.id;
+    try {
+      if (node.kind === 'agent') {
+        if (!this.db.prepare('SELECT 1 FROM agents WHERE id = ?').get(node.config.agentId)) throw new CouldntRun(`agent @${node.config.agentId} does not exist`);
+        const how = this.steps(run.id).find((s) => s.kind === 'trigger')?.summary ?? 'started';
+        return this.startAgent(run.id, node, fill(node.config.prompt) + `\n\n— from workflow ${w.id}, « ${w.name} » run ${run.number}, ${how}.`, step.id);
+      }
+      if (node.kind !== 'action') return;
+      const c = node.config;
+      if (c.do === 'notify') {
+        const text = fill(c.text).trim();
+        this.notify({ kind: 'workflow.notify', title: cut(c.title ? `${w.name}: ${c.title}` : `Workflow « ${w.name} »`, 200), body: text, cardId: run.subject_card });
+        return this.finishStep(run.id, step, 'done', `told you: ${cut(text, 200)}`);
+      }
+      const card = run.subject_card ? this.cardOrNull(run.subject_card) : null;
+      if (!card) return this.failStep(run.id, step, `${name} acts on the run's task, and ${run.subject_card ? `task ${run.subject_card} was deleted` : `this run has none (started ${this.startedHow(run)})`}`);
+      if (c.do === 'setStatus' || c.do === 'setAssignee') {
+        if (c.do === 'setAssignee' && c.assignee && !this.db.prepare('SELECT 1 FROM agents WHERE id = ?').get(c.assignee)) throw new CouldntRun(`agent @${c.assignee} does not exist`);
+        const note = fill(c.note).trim();
+        // The note first: an agent woken by the change reads it.
+        if (note) this.kanban.appendMessage(card.id, 'user', 'workflow', [{ type: 'text', text: note }]);
+        try {
+          if (c.do === 'setStatus') this.kanban.update(card.id, { status: c.status }, by);
+          else this.kanban.update(card.id, { assignee: c.assignee }, by);
+        } catch (e) {
+          if (e instanceof InvalidError || e instanceof ConflictError) return this.failStep(run.id, step, `${name}: ${e.message}`);
+          throw e;
+        }
+        const what = c.do === 'setStatus' ? `${this.kanban.ref(card.id)} → ${c.status}` : `${this.kanban.ref(card.id)} assigned to ${c.assignee ? '@' + c.assignee : 'nobody'}`;
+        return this.finishStep(run.id, step, 'done', note ? `${what}, with a note: ${cut(note, 200)}` : what);
+      }
+      // mergePr: pin the PR and its head now; driveMerges talks to GitHub (outside the transaction).
+      if (!step.data) {
+        const project = projectRow(this.db, card.projectId);
+        if (!project.repo) return this.failStep(run.id, step, `${name}: project ${project.name} has no GitHub repo (Settings → Projects)`);
+        const pr = this.prOf(run, project.repo);
+        if (!pr) return this.failStep(run.id, step, `${name}: ${this.kanban.ref(card.id)} has no pull request of ${project.repo} linked`);
+        const data: MergeData = { repo: pr.repo, number: pr.number, url: pr.url, sha: pr.head_sha };
+        this.db.prepare('UPDATE workflow_run_steps SET data = ? WHERE id = ?').run(JSON.stringify(data), step.id);
+        this.touched.runs.add(run.id);
+      }
+    } catch (e) {
+      if (e instanceof CouldntRun) return this.markCouldnt(run.id, step.id, e.message);
+      if (e instanceof FieldError) return this.failStep(run.id, step, `${name}: ${e.message}`);
+      throw e;
+    }
+  }
+
+  /** Merge steps whose turn it is: a new one, or one that couldn't run whose retry time came. One GitHub call each at a time. */
+  private driveMerges(): void {
+    const iso = this.now().toISOString();
+    const rows = this.db
+      .prepare(
+        `SELECT s.* FROM workflow_run_steps s JOIN workflow_runs r ON r.id = s.run_id
+         WHERE r.${OPEN_RUN} AND s.kind = 'action' AND s.ended_at IS NULL AND s.data IS NOT NULL AND (s.couldnt IS NULL OR s.retry_at <= ?) ORDER BY s.id`,
+      )
+      .all(iso) as StepRow[];
+    for (const step of rows) {
+      if (this.inflight.has(step.id)) continue;
+      const p = this.merge(step)
+        .catch((e) => console.error(`workflow merge step ${step.id} failed`, errText(e)))
+        .finally(() => this.inflight.delete(step.id));
+      this.inflight.set(step.id, p);
+    }
+  }
+
+  /**
+   * Validate + merge (#261): the gate of pr_validate (scripts/pr/validate.mjs: base = default branch, head = the pinned
+   * sha, no conflict, the project's required check green), merge pinned to that sha. GitHub's answer is an exit:
+   * merged, or refused with its reason. No answer (gh logged out, offline, GitHub still computing) is « couldn't run ».
+   */
+  private async merge(step: StepRow): Promise<void> {
+    await Promise.resolve(); // never synchronous: driveMerges records the call before its answer can come back
+    const d = JSON.parse(step.data!) as MergeData;
+    const run = this.runRow(step.run_id);
+    const w = this.row(run.workflow_id);
+    const card = run.subject_card ? this.cardOrNull(run.subject_card) : null;
+    const ciJob = card ? projectRow(this.db, card.projectId).ci_job : null;
+    const reviewed = this.steps(run.id).filter((s) => s.kind === 'agent' && s.ended_at && s.summary).at(-1)?.summary;
+    let outcome: { exit: 'merged' | 'refused'; summary: string } | { couldnt: string };
+    try {
+      if (!this.opts.gh) throw new CouldntRun('this engine has no GitHub client');
+      if (!d.sha) throw new CouldntRun(`Atlas has not read the head of PR #${d.number} from GitHub yet`);
+      const gh = await this.opts.gh();
+      const out = await validate(
+        { pr: d.number, verdict: 'success', sha: d.sha, as: 'workflow', reason: cut(`« ${w.name} » run ${run.number}${reviewed ? `: ${firstLine(reviewed)}` : ''}`, 120), merge: true, base: null, repo: d.repo, ciJob },
+        gh,
+      );
+      outcome = { exit: 'merged', summary: out.join('; ') };
+    } catch (e) {
+      const msg = errText(e);
+      if (e instanceof CouldntRun) outcome = { couldnt: msg };
+      else if (/^refused: PR #\d+ is already merged/.test(msg)) outcome = { exit: 'merged', summary: `PR #${d.number} was already merged` };
+      else if (/^refused: GitHub is still working out/.test(msg)) outcome = { couldnt: msg.replace(/^refused: /, '') };
+      else if (msg.startsWith('refused: ')) outcome = { exit: 'refused', summary: msg.slice('refused: '.length) };
+      // GitHub said no to the merge itself (405 not mergeable, 409 head moved, 422): an answer.
+      else if (/HTTP (405|409|422)/.test(msg)) outcome = { exit: 'refused', summary: `GitHub refused the merge: ${cut(msg, 300)}` };
+      else outcome = { couldnt: `GitHub can't be read: ${cut(msg, 300)}` };
+    }
+    this.tx(() => {
+      const now = this.stepRow(step.id);
+      if (now.ended_at) return; // stopped, or Master followed the negative exit meanwhile
+      if ('couldnt' in outcome) return this.markCouldnt(run.id, step.id, outcome.couldnt);
+      this.finishStep(run.id, now, outcome.exit, outcome.summary);
+    });
   }
 
   /** Move an open run on from its current step's task (inside a transaction). */
@@ -805,6 +1086,9 @@ export class Workflows {
       if (this.runRow(runId).state === 'running' || this.runRow(runId).state === 'waiting') this.endRun(runId, 'failed', 'the run has no current step');
       return;
     }
+    if (step.couldnt) return; // retryDue tries it again
+    if (step.kind === 'action') return; // a merge: driveMerges
+    if (step.kind === 'wait') return this.checkWait(this.runRow(runId), step);
     const card = step.card_id ? this.cardOrNull(step.card_id) : null;
     if (!card) return this.finishStep(runId, step, step.kind === 'approval' ? 'rejected' : 'failed', 'its task was deleted');
     const by = 'workflow:' + this.runRow(runId).workflow_id;
@@ -843,10 +1127,155 @@ export class Workflows {
   }
 
   private finishStep(runId: string, step: StepRow, exit: string, summary: string | null): void {
-    const state: WorkflowStepState = exit === 'failed' || exit === 'rejected' ? 'failed' : 'done';
-    this.db.prepare('UPDATE workflow_run_steps SET state = ?, exit = ?, summary = ?, ended_at = ? WHERE id = ?').run(state, exit, summary, this.now().toISOString(), step.id);
+    const state: WorkflowStepState = (WORKFLOW_FAILING_EXITS as readonly string[]).includes(exit) ? 'failed' : 'done';
+    this.db
+      .prepare('UPDATE workflow_run_steps SET state = ?, exit = ?, summary = ?, ended_at = ?, couldnt = NULL, retry_at = NULL WHERE id = ?')
+      .run(state, exit, summary, this.now().toISOString(), step.id);
     this.touched.runs.add(runId);
     this.follow(runId, step.node_id, exit);
+  }
+
+  /** A step that can't be done as configured (no task, no PR, a refused change): it fails and the run ends Failed (rule 3). */
+  private failStep(runId: string, step: StepRow, reason: string): void {
+    this.db.prepare("UPDATE workflow_run_steps SET state = 'failed', summary = ?, ended_at = ?, couldnt = NULL WHERE id = ?").run(reason, this.now().toISOString(), step.id);
+    this.endRun(runId, 'failed', reason);
+  }
+
+  /** No answer (#261): the step waits, tried again in a minute; `couldnt_since` keeps the first failure for the 15 min rule. */
+  private markCouldnt(runId: string, stepId: number, reason: string): void {
+    const now = this.now();
+    this.db
+      .prepare("UPDATE workflow_run_steps SET state = 'waiting', couldnt = ?, couldnt_since = COALESCE(couldnt_since, ?), retry_at = ?, tries = tries + 1 WHERE id = ?")
+      .run(reason, now.toISOString(), new Date(now.getTime() + COULDNT_RETRY_MS).toISOString(), stepId);
+    this.touched.runs.add(runId);
+    this.setRunState(runId, 'waiting');
+  }
+
+  private clearCouldnt(stepId: number): void {
+    this.db.prepare('UPDATE workflow_run_steps SET couldnt = NULL, couldnt_since = NULL, retry_at = NULL, notified_at = NULL WHERE id = ?').run(stepId);
+  }
+
+  /** The current step of an open run, if it couldn't run; else a ConflictError (Retry now / Follow need one). */
+  private couldntStep(runId: string): StepRow {
+    const r = this.runRow(runId);
+    if (r.state !== 'running' && r.state !== 'waiting') throw new ConflictError(`run ${r.number} already ended (${r.state})`);
+    const step = this.steps(runId).filter((s) => !s.ended_at && s.kind !== 'trigger').at(-1);
+    if (!step?.couldnt) throw new ConflictError(`run ${r.number} has no step that couldn't run`);
+    return step;
+  }
+
+  /**
+   * A Wait step (#261): its event, read from the stored task and PR (what Atlas last read from GitHub), or its time
+   * limit (a stored instant: a restart past it takes « timed out »). It costs nothing while it waits.
+   */
+  private checkWait(run: RunRow, step: StepRow): void {
+    const node = this.node(run.workflow_id, step.node_id);
+    if (!node || node.kind !== 'wait') return this.failStep(run.id, step, `step ${step.node_id} is no longer a Wait step`);
+    const c = node.config;
+    const card = run.subject_card ? this.cardOrNull(run.subject_card) : null;
+    if (!card) return this.failStep(run.id, step, `« ${stepTitle(node)} » waits on the run's task, and ${run.subject_card ? `task ${run.subject_card} was deleted` : `this run has none (started ${this.startedHow(run)})`}`);
+    let hit: string | null = null;
+    if (c.for === 'unblocked') hit = card.status !== 'blocked' ? `${this.kanban.ref(card.id)} is ${card.status}` : null;
+    else if (c.for === 'status') hit = card.status === c.status ? `${this.kanban.ref(card.id)} is ${card.status}` : null;
+    else {
+      const pr = this.prOf(run, null);
+      const head = pr?.head_sha ? ` on ${pr.head_sha.slice(0, 7)}` : '';
+      if (pr && c.for === 'ciFinished' && (pr.ci === 'success' || pr.ci === 'failure')) hit = `CI ${pr.ci === 'success' ? 'green' : 'red'}${head}`;
+      if (pr && c.for === 'ciGreen' && pr.ci === 'success') hit = `CI green${head}`;
+      if (pr && c.for === 'conflict' && pr.mergeable === 0) hit = `PR #${pr.number} conflicts with ${pr.base ?? 'its base'}`;
+      if (pr && c.for === 'merged' && pr.state === 'merged') hit = `PR #${pr.number} merged`;
+    }
+    if (hit) return this.finishStep(run.id, step, 'event', hit);
+    if (step.deadline_at && this.now().toISOString() >= step.deadline_at) {
+      const mins = c.limitMin;
+      return this.finishStep(run.id, step, 'timed out', `no event in ${mins % 60 === 0 ? `${mins / 60} h` : `${mins} min`}`);
+    }
+    this.setStepState(step, 'waiting');
+    this.setRunState(run.id, 'running'); // Atlas waits, not Master
+  }
+
+  /** The run's PR: its subject's, else the latest one linked to its task (of `repo` when given). */
+  private prOf(run: RunRow, repo: string | null): PrRow | null {
+    if (!run.subject_card) return null;
+    const cols = 'repo, number, url, branch, base, head_sha, state, ci, mergeable, qa';
+    if (run.subject_pr) {
+      const r = this.db.prepare(`SELECT ${cols} FROM card_prs WHERE card_id = ? AND url = ?`).get(run.subject_card, run.subject_pr) as PrRow | undefined;
+      if (r && (!repo || r.repo.toLowerCase() === repo.toLowerCase())) return r;
+    }
+    const rows = this.db.prepare(`SELECT ${cols} FROM card_prs WHERE card_id = ? ORDER BY linked_at DESC, number DESC`).all(run.subject_card) as PrRow[];
+    return rows.find((r) => !repo || r.repo.toLowerCase() === repo.toLowerCase()) ?? null;
+  }
+
+  /**
+   * The fields a condition tests (#261): what the run stored, its task and PR as they are now (a wait may have seen CI
+   * finish since the run started), and its ended steps' exit, summary and task.
+   */
+  private liveFields(run: RunRow, steps: StepRow[]): Record<string, string> {
+    const f = { ...this.baseFields(run) };
+    const card = run.subject_card ? this.cardOrNull(run.subject_card) : null;
+    if (card) Object.assign(f, this.taskFields(card));
+    const pr = this.prOf(run, null);
+    if (pr) Object.assign(f, this.prFields(pr));
+    for (const s of steps.filter((x) => x.ended_at && x.kind !== 'trigger')) {
+      f[`steps.${s.node_id}.exit`] = s.exit ?? '';
+      f[`steps.${s.node_id}.summary`] = s.summary ?? '';
+      f[`steps.${s.node_id}.task`] = s.card_id ? this.kanban.ref(s.card_id) : '';
+    }
+    const prev = steps.filter((s) => s.kind === 'agent' && (s.state === 'done' || s.state === 'failed')).at(-1);
+    if (prev) {
+      f['previous.summary'] = prev.summary ?? '';
+      f['previous.task'] = prev.card_id ? this.kanban.ref(prev.card_id) : '';
+    }
+    return f;
+  }
+
+  private taskFields(card: Card): Record<string, string> {
+    return {
+      'task.id': card.id,
+      'task.ref': cardRef(card),
+      'task.title': card.title,
+      'task.body': card.body,
+      'task.status': card.status,
+      'task.assignee': card.assignee ?? '',
+      'task.priority': String(card.priority),
+    };
+  }
+
+  private prFields(pr: PrRow): Record<string, string> {
+    return {
+      'pr.url': pr.url,
+      'pr.number': String(pr.number),
+      'pr.repo': pr.repo,
+      'pr.branch': pr.branch ?? '',
+      'pr.base': pr.base ?? '',
+      'pr.head': pr.head_sha ?? '',
+      'pr.state': pr.state,
+      'pr.ci': pr.ci ?? '',
+      'pr.conflict': pr.mergeable === 0 ? 'yes' : pr.mergeable === 1 ? 'no' : '',
+      'pr.qa': pr.qa ?? '',
+    };
+  }
+
+  /** A condition (inside a transaction, or for « try it on run N »): exact tests, nothing judged by a model. */
+  private evalCondition(run: RunRow, c: ConditionConfig, steps: StepRow[]): { yes: boolean; summary: string; tests: ConditionTryResult['tests'] } {
+    if (c.test === 'ranFewer') {
+      const n = steps.filter((s) => s.node_id === c.node).length;
+      const yes = n < c.times;
+      return { yes, summary: `step ${c.node} ran ${n} time${n === 1 ? '' : 's'}: ${yes ? 'fewer than' : 'not fewer than'} ${c.times}`, tests: [] };
+    }
+    if (c.test === 'summaryContains') {
+      const prev = steps.filter((s) => s.kind === 'agent' && (s.state === 'done' || s.state === 'failed')).at(-1);
+      const yes = (prev?.summary ?? '').toLowerCase().includes(c.text.toLowerCase());
+      return { yes, summary: `the previous summary ${yes ? 'contains' : 'does not contain'} « ${c.text} »`, tests: [] };
+    }
+    const fields = this.liveFields(run, steps);
+    const tests = c.tests.map((t) => {
+      const actual = t.field in fields ? fields[t.field]! : null;
+      return { field: t.field, op: t.op, value: t.value, actual, pass: fieldTest(t, actual) };
+    });
+    const yes = c.match === 'all' ? tests.every((t) => t.pass) : tests.some((t) => t.pass);
+    const summary = tests.map((t) => `${t.field} = ${t.actual === null ? '(none)' : `« ${cut(t.actual, 60)} »`} ${t.pass ? '✓' : '✗'}`).join(' · ');
+    return { yes, summary, tests };
   }
 
   private endRun(runId: string, state: 'done' | 'failed' | 'stopped', reason: string): void {
@@ -871,8 +1300,10 @@ export class Workflows {
 
   /** Replace every {{field}} of `text` from the run's context; throws FieldError for one it can't fill. */
   private fill(run: RunRow, text: string): string {
-    const fields = this.baseFields(run);
+    if (!text.includes('{{')) return text;
     const all = this.steps(run.id);
+    // The task and its PR as they are now (#261): a Wait may have seen CI finish since the run started.
+    const fields = this.liveFields(run, all);
     // « previous »: the last agent step that finished (approvals and conditions pass it on).
     const prev = all.filter((s) => s.kind === 'agent' && (s.state === 'done' || s.state === 'failed')).at(-1);
     return text.replace(/\{\{([^{}]*)\}\}/g, (_m, raw: string) => {
@@ -915,16 +1346,7 @@ export class Workflows {
   private contextFields(subject: WorkflowRunSubject | null, ev: EventRow | undefined, data: EventData | undefined, w: WfRow): Record<string, string> {
     const f: Record<string, string> = {};
     const card = subject ? this.cardOrNull(subject.cardId) : null;
-    if (card)
-      Object.assign(f, {
-        'task.id': card.id,
-        'task.ref': cardRef(card),
-        'task.title': card.title,
-        'task.body': card.body,
-        'task.status': card.status,
-        'task.assignee': card.assignee ?? '',
-        'task.priority': String(card.priority),
-      });
+    if (card) Object.assign(f, this.taskFields(card));
     const projectId = card?.projectId ?? w.project_id;
     if (projectId) {
       const p = projectRow(this.db, projectId);
@@ -992,8 +1414,7 @@ export class Workflows {
     for (const e of g.edges) {
       const from = byId.get(e.from);
       if (!from) throw new InvalidError(`a link starts at step ${e.from}, which does not exist`);
-      if (!(WORKFLOW_EXITS[from.kind] as readonly string[]).includes(e.exit))
-        throw new InvalidError(`« ${stepTitle(from)} » has no exit « ${e.exit} » (its exits: ${WORKFLOW_EXITS[from.kind].join(', ')})`);
+      if (!workflowExits(from).includes(e.exit)) throw new InvalidError(`« ${stepTitle(from)} » has no exit « ${e.exit} » (its exits: ${workflowExits(from).join(', ')})`);
       const to = byId.get(e.to);
       if (!to) throw new InvalidError(`exit « ${e.exit} » of « ${stepTitle(from)} » goes to step ${e.to}, which does not exist`);
       if (to.kind === 'trigger') throw new InvalidError(`exit « ${e.exit} » of « ${stepTitle(from)} » goes back to the trigger: link it to a step`);
@@ -1006,6 +1427,15 @@ export class Workflows {
         throw new InvalidError(`« ${stepTitle(n)} »: agent @${n.config.agentId} does not exist`);
       if (n.kind === 'condition' && n.config.test === 'ranFewer' && !byId.has(n.config.node))
         throw new InvalidError(`« ${stepTitle(n)} » counts step ${n.config.node}, which does not exist`);
+      if (n.kind === 'condition' && n.config.test === 'fields')
+        for (const t of n.config.tests) {
+          const step = t.field.match(STEP_FIELD);
+          const known = KNOWN_FIELDS.has(t.field) || /^payload\.[\w.-]+$/.test(t.field) || (step && byId.has(step[1]!));
+          if (!known) throw new InvalidError(`« ${stepTitle(n)} » tests ${t.field}, which no run has (the fields: GET /api/workflows/:id/fields)`);
+          if ((t.op === 'gt' || t.op === 'lt') && !Number.isFinite(Number(t.value)) ) throw new InvalidError(`« ${stepTitle(n)} »: ${t.field} ${t.op} needs a number, not « ${t.value} »`);
+        }
+      if (n.kind === 'action' && n.config.do === 'setAssignee' && n.config.assignee && !this.db.prepare('SELECT 1 FROM agents WHERE id = ?').get(n.config.assignee))
+        throw new InvalidError(`« ${stepTitle(n)} »: agent @${n.config.assignee} does not exist`);
     }
     const t = triggers[0]!.config as TriggerConfig;
     if (t.kind === 'task' || t.kind === 'pr')
@@ -1068,13 +1498,24 @@ export class Workflows {
     return m ? m.content.flatMap((b) => (b.type === 'text' ? [b.text] : [])).join('\n') : null;
   }
 
-  private insertStep(runId: string, nodeId: string, kind: WorkflowNodeKind, state: WorkflowStepState, o: { card?: string; exit?: string; summary?: string; ended?: boolean }): void {
+  private insertStep(runId: string, nodeId: string, kind: WorkflowNodeKind, state: WorkflowStepState, o: { card?: string; exit?: string; summary?: string; ended?: boolean }): number {
     const { n } = this.db.prepare('SELECT COUNT(*) AS n FROM workflow_run_steps WHERE run_id = ? AND node_id = ?').get(runId, nodeId) as { n: number };
     const now = this.now().toISOString();
-    this.db
+    const r = this.db
       .prepare('INSERT INTO workflow_run_steps (run_id, node_id, kind, round, state, exit, card_id, summary, started_at, ended_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)')
       .run(runId, nodeId, kind, n + 1, state, o.exit ?? null, o.card ?? null, o.summary ?? null, now, o.ended ? now : null);
     this.touched.runs.add(runId);
+    return Number(r.lastInsertRowid);
+  }
+
+  private stepRow(id: number): StepRow {
+    return this.db.prepare('SELECT * FROM workflow_run_steps WHERE id = ?').get(id) as StepRow;
+  }
+
+  /** A run's steps for the API, each with its couldn't-run state and negative exit (#261). */
+  private stepsOut(workflowId: string, runId: string): WorkflowRunStep[] {
+    const nodes = new Map(this.nodes(workflowId).map((n) => [n.id, toNode(n)]));
+    return this.steps(runId).map((s) => toStep(s, nodes.get(s.node_id) ?? null));
   }
 
   private setStepState(step: StepRow, state: WorkflowStepState): void {
@@ -1149,7 +1590,7 @@ export class Workflows {
       nextRunAt: r.next_run_at,
       lastFiredAt: r.last_fired_at,
       lastError: r.last_error,
-      lastRun: last ? { ...toRun(last), steps: this.steps(last.id).map(toStep) } : null,
+      lastRun: last ? { ...toRun(last), steps: this.stepsOut(r.id, last.id) } : null,
       recentRuns: (this.db.prepare("SELECT state FROM workflow_runs WHERE workflow_id = ? AND state != 'skipped' ORDER BY number DESC LIMIT 10").all(r.id) as { state: WorkflowRunState }[]).map((x) => x.state).reverse(),
       createdBy: r.created_by,
       createdAt: r.created_at,
@@ -1183,11 +1624,38 @@ export class Workflows {
     for (const id of deleted) this.bus.emit({ type: 'workflow.deleted', id });
     for (const id of runs) if (this.db.prepare('SELECT 1 FROM workflow_runs WHERE id = ?').get(id)) this.bus.emit({ type: 'workflow.run', run: this.run(id) });
     for (const id of workflows) if (this.db.prepare('SELECT 1 FROM workflows WHERE id = ?').get(id)) this.bus.emit({ type: 'workflow.updated', workflow: this.get(id) });
+    if (runs.size) this.driveMerges(); // a merge step pinned its PR: GitHub is called once that is stored
   }
 
   private reset(): void {
     this.touched = { runs: new Set(), workflows: new Set() };
     this.deleted = [];
     this.notified = [];
+  }
+}
+
+/** One exact test on a field (#261). A field the run doesn't have reads as null: only « is empty », « is not » and « does not contain » pass. */
+export function fieldTest(t: FieldTest, actual: string | null): boolean {
+  const v = actual ?? '';
+  switch (t.op) {
+    case 'is':
+      return actual !== null && v === t.value;
+    case 'isNot':
+      return actual === null || v !== t.value;
+    case 'contains':
+      return actual !== null && v.includes(t.value);
+    case 'notContains':
+      return actual === null || !v.includes(t.value);
+    case 'isEmpty':
+      return v.trim() === '';
+    case 'isNotEmpty':
+      return v.trim() !== '';
+    case 'gt':
+    case 'lt': {
+      const a = Number(v.trim() === '' ? NaN : v);
+      const b = Number(t.value);
+      if (!Number.isFinite(a) || !Number.isFinite(b)) return false;
+      return t.op === 'gt' ? a > b : a < b;
+    }
   }
 }

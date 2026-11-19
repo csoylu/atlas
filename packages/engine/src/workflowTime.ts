@@ -53,7 +53,22 @@ export function stepTitle(n: WorkflowNode): string {
   if (n.config.title) return n.config.title;
   if (n.kind === 'agent') return firstLine(n.config.prompt) || `@${n.config.agentId ?? '?'}`;
   if (n.kind === 'approval') return firstLine(n.config.question) || 'Approval';
-  return n.config.test === 'ranFewer' ? `${n.config.node} ran fewer than ${n.config.times} times?` : `Summary contains « ${n.config.text} »?`;
+  if (n.kind === 'action') {
+    const c = n.config;
+    if (c.do === 'setStatus') return `Task → ${c.status}`;
+    if (c.do === 'setAssignee') return c.assignee ? `Assign to @${c.assignee}` : 'Unassign the task';
+    if (c.do === 'mergePr') return 'Validate + merge the PR';
+    return firstLine(c.text) || 'Notify Master';
+  }
+  if (n.kind === 'wait') {
+    const c = n.config;
+    const what = { ciFinished: 'CI finished on the PR', ciGreen: 'CI green on the PR', conflict: 'A conflict on the PR', merged: 'The PR merged', unblocked: 'The task unblocked', status: `The task in ${c.status ?? '?'}` }[c.for];
+    return `Wait: ${what}`;
+  }
+  const c = n.config;
+  if (c.test === 'ranFewer') return `${c.node} ran fewer than ${c.times} times?`;
+  if (c.test === 'summaryContains') return `Summary contains « ${c.text} »?`;
+  return c.tests.map((t) => `${t.field} ${t.op}${t.op === 'isEmpty' || t.op === 'isNotEmpty' ? '' : ` ${t.value}`}`).join(c.match === 'all' ? ' and ' : ' or ') + '?';
 }
 
 /** The trigger and the single agent step of a « trigger → one agent step » workflow (what a schedule was), or null. */

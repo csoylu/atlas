@@ -131,7 +131,7 @@ describe('workflow task and PR events (#258, design §9)', () => {
     // Fields offered at a step, with the latest value seen.
     const fields = wf.fields(bad.id, 'look');
     expect(fields.find((f) => f.field === 'task.ref')).toMatchObject({ optional: false, example: k.ref(c.id) });
-    expect(fields.some((f) => f.field.startsWith('pr.'))).toBe(false);
+    expect(fields.filter((f) => f.field.startsWith('pr.')).every((f) => f.optional)).toBe(true); // the task's latest PR, if any (#261)
     expect(fields.some((f) => f.field.startsWith('steps.'))).toBe(false); // nothing comes before the first step
   });
 

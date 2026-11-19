@@ -894,6 +894,17 @@ export function createApi(deps: {
   app.get('/api/workflow-runs/:id/context', (req, res) => {
     res.json(workflows.context(req.params.id));
   });
+  /** A step that couldn't run (#261): try it again now, or take its negative exit (« refused », « failed »…). */
+  app.post('/api/workflow-runs/:id/retry', (req, res) => {
+    res.json(workflows.retryNow(req.params.id));
+  });
+  app.post('/api/workflow-runs/:id/follow', (req, res) => {
+    res.json(workflows.followNegative(req.params.id, 'user'));
+  });
+  /** A condition's tests on a past run, before saving (#261): body { run, config }. */
+  app.post('/api/workflows/:id/try-condition', (req, res) => {
+    res.json(workflows.tryCondition(req.params.id, req.body));
+  });
   app.post('/api/workflow-runs/:id/stop', (req, res) => {
     res.json(workflows.stopRun(req.params.id, 'user'));
   });

@@ -1,4 +1,4 @@
-import { cardRef, WORKFLOW_EXITS, type Card, WORKFLOW_FAILING_EXITS, type TriggerConfig, type Workflow, type WorkflowEdge, type WorkflowNode, type WorkflowNodeKind, type WorkflowRun, type WorkflowRunStep } from '@atlas/shared';
+import { cardRef, workflowExits, type Card, WORKFLOW_FAILING_EXITS, type TriggerConfig, type Workflow, type WorkflowEdge, type WorkflowNode, type WorkflowNodeKind, type WorkflowRun, type WorkflowRunStep } from '@atlas/shared';
 
 /**
  * Pure helpers of the Workflows page and canvas (#171, mockup /api/files/paris/pages/workflows-165.html): titles and
@@ -6,7 +6,7 @@ import { cardRef, WORKFLOW_EXITS, type Card, WORKFLOW_FAILING_EXITS, type Trigge
  * the SVG path of an edge, and the trigger form's cron patterns (moved from the Schedules page).
  */
 
-export const KIND_LABEL: Record<WorkflowNodeKind, string> = { trigger: 'Trigger', agent: 'Agent step', approval: 'Approval', condition: 'Condition' };
+export const KIND_LABEL: Record<WorkflowNodeKind, string> = { trigger: 'Trigger', agent: 'Agent step', approval: 'Approval', condition: 'Condition', action: 'Action', wait: 'Wait' };
 /** Width of a node on the canvas (px at 100 %), as in the mockup. */
 export const NODE_W = 176;
 
@@ -159,11 +159,26 @@ export function nodeTitle(n: WorkflowNode, nodes: WorkflowNode[] = []): string {
       return n.config.title || firstLine(n.config.question).slice(0, 80) || 'Approval';
     case 'condition':
       return n.config.title || conditionText(n.config, nodes);
+    case 'action':
+      return n.config.title || actionText(n.config);
+    case 'wait':
+      return n.config.title || `Wait: ${WAIT_TEXT[n.config.for]}${n.config.for === 'status' ? ` ${n.config.status ?? '?'}` : ''}`;
   }
+}
+
+const WAIT_TEXT = { ciFinished: 'CI finished', ciGreen: 'CI green', conflict: 'a conflict', merged: 'the PR merged', unblocked: 'the task unblocked', status: 'the task in' } as const;
+const OP_TEXT = { is: 'is', isNot: 'is not', contains: 'contains', notContains: 'does not contain', isEmpty: 'is empty', isNotEmpty: 'is not empty', gt: '>', lt: '<' } as const;
+
+function actionText(c: Extract<WorkflowNode, { kind: 'action' }>['config']): string {
+  if (c.do === 'setStatus') return `Task → ${c.status}`;
+  if (c.do === 'setAssignee') return c.assignee ? `Assign to @${c.assignee}` : 'Unassign the task';
+  if (c.do === 'mergePr') return 'Validate + merge the PR';
+  return firstLine(c.text).slice(0, 80) || 'Notify Master';
 }
 
 function conditionText(c: Extract<WorkflowNode, { kind: 'condition' }>['config'], nodes: WorkflowNode[]): string {
   if (c.test === 'summaryContains') return `Previous summary has « ${c.text} »`;
+  if (c.test === 'fields') return c.tests.map((t) => `${t.field} ${OP_TEXT[t.op]}${t.op === 'isEmpty' || t.op === 'isNotEmpty' ? '' : ` ${t.value}`}`).join(c.match === 'all' ? ' and ' : ' or ');
   const counted = nodes.find((x) => x.id === c.node);
   return `${counted ? nodeTitle(counted, []) : c.node} ran < ${c.times} times`;
 }
@@ -182,7 +197,11 @@ export function nodeMeta(n: WorkflowNode, nodes: WorkflowNode[] = []): string {
     case 'approval':
       return 'You, in the Inbox';
     case 'condition':
-      return n.config.title ? conditionText(n.config, nodes) : n.config.test === 'ranFewer' ? 'Counts the rounds' : 'Reads the previous summary';
+      return n.config.title ? conditionText(n.config, nodes) : n.config.test === 'ranFewer' ? 'Counts the rounds' : n.config.test === 'fields' ? 'Tests the run’s fields' : 'Reads the previous summary';
+    case 'action':
+      return n.config.title ? actionText(n.config) : 'Atlas does it, no model';
+    case 'wait':
+      return `At most ${n.config.limitMin % 60 === 0 ? `${n.config.limitMin / 60} h` : `${n.config.limitMin} min`}`;
   }
 }
 
@@ -195,7 +214,7 @@ export interface Exit {
 }
 
 export function exitsOf(n: WorkflowNode, edges: WorkflowEdge[]): Exit[] {
-  return (WORKFLOW_EXITS[n.kind] as readonly string[]).map((exit) => ({
+  return workflowExits(n).map((exit) => ({
     exit,
     to: edges.find((e) => e.from === n.id && e.exit === exit)?.to ?? null,
     failing: (WORKFLOW_FAILING_EXITS as readonly string[]).includes(exit),
