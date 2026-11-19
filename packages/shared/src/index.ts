@@ -882,6 +882,8 @@ export type ServerEvent =
   /** A tool call started or ended. */
   | { type: 'toolcall.updated'; cardId: string; call: ToolCallTiming }
   | { type: 'document.updated'; doc: Doc }
+  /** An artifact was deleted for good (#242): its versions and panel tabs are gone (open panels get panel.updated). */
+  | { type: 'document.deleted'; id: string }
   /** Library folders were created, renamed or deleted (a delete also sends its artifacts as document.updated). */
   | { type: 'folders.updated'; folders: Folder[] }
   | { type: 'memory.updated'; memory: Memory }

@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it } from 'vitest';
-import { mkdirSync, mkdtempSync, readFileSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { changedSections, findSection, formatDocRef, parseDocRef, splitSections, type ServerEvent } from '@atlas/shared';
@@ -396,5 +396,71 @@ describe('API: a message about a document part', () => {
     expect(((await panel.json()) as unknown[]).length).toBe(1);
     const content = (await (await fetch(`${engine.url}/api/documents/${d.id}?version=1`)).json()) as { content: string };
     expect(content.content).toBe(DESIGN);
+  });
+});
+
+describe('deleting an artifact (#242)', () => {
+  it('removes the file, every version and its panel tabs, for good; sync does not bring it back', async () => {
+    const { docs, put, engine, events, ws } = await setup();
+    const chat = engine.kanban.newChat('atlas');
+    put('docs/gone.md', '# Gone\nv1');
+    const d = docs.indexFile('atlas', 'docs/gone.md', 'atlas');
+    put('docs/gone.md', '# Gone\nv2');
+    docs.indexFile('atlas', 'docs/gone.md', 'atlas');
+    docs.open(chat.id, d.id, 'user');
+    put('docs/kept.md', '# Kept');
+    const kept = docs.indexFile('atlas', 'docs/kept.md', 'atlas');
+
+    const res = await fetch(`${engine.url}/api/documents/${d.id}`, { method: 'DELETE' });
+    expect(res.status).toBe(200);
+    expect(await res.json()).toEqual({ id: d.id, versions: 2, file: true });
+    expect(existsSync(join(ws, 'docs/gone.md'))).toBe(false);
+    expect(() => docs.get(d.id)).toThrow(/not found/);
+    expect(engine.db.prepare('SELECT COUNT(*) AS n FROM document_versions WHERE doc_id = ?').get(d.id)).toEqual({ n: 0 });
+    expect(docs.tabs(chat.id)).toEqual([]);
+    expect(events).toContainEqual({ type: 'document.deleted', id: d.id });
+    expect(events).toContainEqual(expect.objectContaining({ type: 'panel.updated', chatId: chat.id, tabs: [] }));
+    expect(docs.library().map((x) => x.id)).toEqual([kept.id]);
+    expect((await fetch(`${engine.url}/api/documents/${d.id}`)).status).toBe(404);
+    expect((await fetch(`${engine.url}/api/documents/${d.id}`, { method: 'DELETE' })).status).toBe(404);
+  });
+
+  it('deletes an artifact whose file is already gone', async () => {
+    const { docs, put, ws } = await setup();
+    put('docs/a.md', '# A');
+    const a = docs.indexFile('atlas', 'docs/a.md', 'atlas');
+    rmSync(join(ws, 'docs/a.md'));
+    expect(docs.remove(a.id)).toMatchObject({ versions: 1, file: false });
+    expect(docs.library()).toEqual([]);
+  });
+
+  it('a file that cannot be deleted stops it: nothing changes', async () => {
+    const { docs, put, ws } = await setup();
+    put('docs/dir.md/x', 'not a file'); // docs/dir.md is a folder: unlink fails with EISDIR/EPERM
+    put('docs/b.md', '# B');
+    const b = docs.indexFile('atlas', 'docs/b.md', 'atlas');
+    engines[0]!.db.prepare("UPDATE documents SET path = 'docs/dir.md' WHERE id = ?").run(b.id);
+    expect(() => docs.remove(b.id)).toThrow(/could not delete the file docs\/dir\.md.*the artifact is kept/);
+    expect(docs.get(b.id).version).toBe(1);
+    expect(existsSync(join(ws, 'docs/dir.md/x'))).toBe(true);
+  });
+
+  it('artifact_delete: own artifacts only, by id or path', async () => {
+    const { docs, put, engine } = await setup();
+    engine.agents.create({ id: 'paris', rolePrompt: 'designer', modelId: 'sonnet' });
+    const chat = engine.kanban.newChat('atlas');
+    put('pages/mock.html', '<h1>Mock</h1>');
+    const mine = docs.indexFile('atlas', 'pages/mock.html', 'atlas');
+    const ctx = (agentId: string) => ({ documents: docs, agentId, chatId: chat.id, cardId: null });
+
+    const refused = runDocTool('artifact_delete', { artifact: mine.id }, ctx('paris'));
+    expect(refused).toMatchObject({ isError: true });
+    expect(refused.output).toMatch(/@atlas's artifact: you can delete only your own/);
+    expect(docs.get(mine.id).id).toBe(mine.id);
+
+    expect(runDocTool('artifact_delete', { path: 'pages/mock.html' }, ctx('atlas')).output).toBe(`deleted Mock (${mine.id}, pages/mock.html): 1 version and the file removed`);
+    expect(() => docs.get(mine.id)).toThrow(/not found/);
+    expect(runDocTool('artifact_delete', { path: 'pages/mock.html' }, ctx('atlas')).output).toMatch(/no artifact pages\/mock\.html/);
+    expect(runDocTool('artifact_delete', {}, ctx('atlas')).output).toMatch(/give the artifact/);
   });
 });

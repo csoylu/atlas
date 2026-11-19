@@ -167,7 +167,9 @@ export function CardDocs({ cardId, stream, onOpenInPanel, onShow, onError }: {
   useEffect(() => {
     const load = () => api.documents(cardId).then(setDocs, onError);
     void load();
-    return stream.listen('docs', (e) => e.type === 'doc' && e.doc.cardId === cardId && void load());
+    return stream.listen('docs', (e) => {
+      if (e.type === 'doc' ? e.doc.cardId === cardId : e.type === 'docDeleted') void load();
+    });
   }, [cardId, stream, onError]);
   if (!docs.length) return null;
   const doc = docs.find((d) => d.id === shown) ?? null;
@@ -252,11 +254,15 @@ export function TaskDocReader(props: { read: DocToRead; stream: MessageStream; o
   useEffect(() => {
     let live = true;
     api.document(read.docId).then((c) => live && setDoc(c.doc), onError);
-    const off = stream.listen('docs', (e) => e.type === 'doc' && e.doc.id === read.docId && setDoc(e.doc));
+    const off = stream.listen('docs', (e) => {
+      if (e.type === 'doc' && e.doc.id === read.docId) setDoc(e.doc);
+      if (e.type === 'docDeleted' && e.id === read.docId) onBack(); // deleted (#242): back to the task
+    });
     return () => {
       live = false;
       off();
     };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [read.docId, stream, onError]);
   // Focus stays inside (Esc comes here): on ‹ Task once open and loaded; a click in the text focuses the reader itself.
   const loaded = doc !== null;

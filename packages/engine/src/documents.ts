@@ -1,5 +1,5 @@
 import { randomUUID } from 'node:crypto';
-import { mkdirSync, readFileSync, readdirSync, statSync, writeFileSync } from 'node:fs';
+import { mkdirSync, readFileSync, readdirSync, statSync, unlinkSync, writeFileSync } from 'node:fs';
 import { dirname, join, relative, sep } from 'node:path';
 import { DOC_FOLDERS, KIND_FILE, docKindOf, docTitle, type Doc, type DocContent, type DocHit, type DocKind, type DocVersion, type Folder, type PanelTab } from '@atlas/shared';
 import type { Db } from './store/db.ts';
@@ -181,6 +181,48 @@ export class Documents {
     if (folderId && this.folder(folderId).projectId !== doc.projectId) throw new InvalidError('that folder is in another project');
     this.db.prepare('UPDATE documents SET folder_id = ? WHERE id = ?').run(folderId, id);
     return this.emitDoc(id);
+  }
+
+  /**
+   * Delete an artifact for good (#242): its file in the author's workspace, then in one transaction its row, every
+   * version and its panel tabs. secure_delete is on (a version may have held a secret), and the WAL is checkpointed
+   * after, like redactStored. A file that can't be deleted stops everything before the database changes (a file
+   * left behind would be indexed again by the next sync). No workspace there any more, or no file: nothing to delete.
+   */
+  remove(id: string): { doc: Doc; versions: number; file: boolean } {
+    const doc = this.get(id);
+    assertActive(this.db, doc.projectId, 'its Library');
+    const space = workspacesOf(this.db, this.dataDir, doc.agentId).find((w) => w.projectId === doc.projectId);
+    let file = false;
+    if (space) {
+      const full = inside(space.dir, doc.path);
+      try {
+        unlinkSync(full);
+        file = true;
+      } catch (e) {
+        if ((e as NodeJS.ErrnoException).code !== 'ENOENT')
+          throw new ConflictError(`could not delete the file ${doc.path} in @${doc.agentId}'s workspace (${(e as Error).message}): the artifact is kept`);
+      }
+    }
+    const chats = (this.db.prepare('SELECT chat_id FROM panel_tabs WHERE doc_id = ?').all(id) as { chat_id: string }[]).map((r) => r.chat_id);
+    const was = this.db.pragma('secure_delete', { simple: true }) as number;
+    this.db.pragma('secure_delete = ON');
+    let versions = 0;
+    try {
+      this.db
+        .transaction(() => {
+          this.db.prepare('DELETE FROM panel_tabs WHERE doc_id = ?').run(id);
+          versions = this.db.prepare('DELETE FROM document_versions WHERE doc_id = ?').run(id).changes;
+          this.db.prepare('DELETE FROM documents WHERE id = ?').run(id);
+        })
+        .immediate();
+    } finally {
+      this.db.pragma(`secure_delete = ${was ? 'ON' : 'OFF'}`);
+    }
+    this.db.pragma('wal_checkpoint(TRUNCATE)');
+    this.bus.emit({ type: 'document.deleted', id });
+    for (const c of chats) this.emitPanel(c);
+    return { doc, versions, file };
   }
 
   /* ── Library folders (flat) ──────────────────────────────────────────── */

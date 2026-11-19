@@ -71,6 +71,7 @@ export const api = {
   docVersions: (id: string) => call<DocVersion[]>('GET', `/documents/${id}/versions`),
   restoreDoc: (id: string, version: number) => call<Doc>('POST', `/documents/${id}/restore/${version}`),
   pinDoc: (id: string, pinned: boolean) => call<Doc>('POST', `/documents/${id}/pin`, { pinned }),
+  deleteDoc: (id: string) => call<{ id: string; versions: number; file: boolean }>('DELETE', `/documents/${id}`),
   moveDoc: (id: string, folderId: string | null) => call<Doc>('POST', `/documents/${id}/move`, { folderId }),
   searchDocs: (q: string) => call<DocHit[]>('GET', `/documents/search?q=${encodeURIComponent(q)}`),
   folders: () => call<Folder[]>('GET', '/folders'),

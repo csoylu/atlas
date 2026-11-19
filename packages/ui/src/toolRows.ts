@@ -13,7 +13,7 @@ import { charsText, domainOf, fetchedPage, searchHits, shortUrl, webError } from
 export type RowIcon =
   | 'read' | 'write' | 'edit' | 'search' | 'folder' | 'term' | 'bg' | 'stop' | 'globe' | 'link' | 'card' | 'cardp' | 'msg'
   | 'board' | 'canvas' | 'panel' | 'mem' | 'todo' | 'clock' | 'think' | 'check' | 'x' | 'alert' | 'hand' | 'inbox'
-  | 'history' | 'wrench' | 'play' | 'rewind' | 'compress';
+  | 'history' | 'wrench' | 'play' | 'rewind' | 'compress' | 'trash';
 
 /** A piece of the faint, tabular meta slot: plain text, a status pill, or a +/− line count. */
 export type Meta = { text: string } | { pill: 'ok' | 'bad' | 'warn'; text: string } | { add: number; del: number };
@@ -133,7 +133,7 @@ const FAILED: Record<string, string> = {
   task_list: 'Couldn’t list tasks', task_block: 'Couldn’t ask you', task_request_review: 'Couldn’t send for review',
   task_complete: 'Couldn’t finish the task', history_search: 'Couldn’t search its history', canvas_create: 'Couldn’t create canvas',
   canvas_write: 'Couldn’t update canvas', canvas_read: 'Couldn’t read canvas', canvas_list: 'Couldn’t list canvases',
-  artifact_create: 'Couldn’t create the artifact', artifact_update: 'Couldn’t update the artifact', artifact_list: 'Couldn’t list artifacts', artifact_read: 'Couldn’t read the artifact',
+  artifact_create: 'Couldn’t create the artifact', artifact_update: 'Couldn’t update the artifact', artifact_list: 'Couldn’t list artifacts', artifact_read: 'Couldn’t read the artifact', artifact_delete: 'Couldn’t delete the artifact',
   panel_open: 'Couldn’t open', panel_close: 'Couldn’t close', memory_edit: 'Couldn’t save to memory', memory_add: 'Couldn’t save to memory', memory_update: 'Couldn’t update memory', memory_forget: 'Couldn’t forget', memory_search: 'Couldn’t search memory', todo_write: 'Couldn’t save the plan',
   schedule_create: 'Couldn’t schedule', schedule_list: 'Couldn’t list schedules', schedule_delete: 'Couldn’t delete schedule',
 };
@@ -334,6 +334,12 @@ function describe(name: string, o: Input, out: string, ok: boolean, detail?: Too
     case 'artifact_read': {
       const m = /^(.*) \((doc_[\w-]+), \w+, v(\d+) of \d+/.exec(out);
       return { icon: 'read', verb: 'Read', running: 'Reading', object: m?.[1] ?? str(o.artifact) ?? str(o.path) ?? '', meta: m ? [{ text: `v${m[3]}` }] : [], detail: 'generic' };
+    }
+    case 'artifact_delete': {
+      // « deleted Title (doc_x, path): N versions and the file removed » (#242)
+      const m = /^deleted (.*) \((doc_[\w-]+), [^()]+\): (\d+) versions?/.exec(out);
+      const title = m?.[1] ?? str(o.artifact) ?? str(o.path) ?? '';
+      return { icon: 'trash', tone: 'warn', verb: 'Deleted', running: 'Deleting', object: title, meta: m ? [{ text: plural(Number(m[3]), 'version') }] : [], detail: 'generic', weight: 'write', short: { verb: 'deleted', obj: title } };
     }
     /* ── canvas (old chats) ── */
     case 'canvas_create': {

@@ -470,6 +470,11 @@ export function createApi(deps: {
     const v = req.query.version;
     res.json(documents.content(req.params.id, typeof v === 'string' ? Number(v) : undefined));
   });
+  /** Delete an artifact for good (#242): file, row, every version, panel tabs. */
+  app.delete('/api/documents/:id', (req, res) => {
+    const r = documents.remove(req.params.id);
+    res.json({ id: r.doc.id, versions: r.versions, file: r.file });
+  });
   app.get('/api/documents/:id/versions', (req, res) => {
     res.json(documents.versions(req.params.id));
   });

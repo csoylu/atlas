@@ -1,6 +1,6 @@
 import { useEffect, useState } from 'react';
 import type { Doc, Folder } from '@atlas/shared';
-import { api } from './api.ts';
+import { api, ApiError } from './api.ts';
 import type { MessageStream } from './useMessages.ts';
 import type { Artifact } from './cardModal.ts';
 import type { CanvasPage } from './chatTurn.ts';
@@ -69,21 +69,47 @@ export function useFolders(stream: MessageStream, onError: (e: unknown) => void)
 
 /**
  * The latest version of an artifact, live: chat cards stay on the version they were posted with and say « · vN is the
- * latest » once it moved on. One Library fetch is shared by every card; document.updated events keep it current.
+ * latest » once it moved on. One Library fetch is shared by every card (archived projects' artifacts included);
+ * document.updated events keep it current. A card whose artifact is not in it is checked once (#242): a 404 means it
+ * was deleted, and document.deleted events mark the others.
  */
 const latest = new Map<string, number>();
+const deletedIds = new Set<string>();
 let latestLoad: Promise<void> | null = null;
 /** One Library fetch for the latest versions and the converted canvases (a failed fetch is retried by the next user). */
 function loadLatest(): Promise<void> {
-  latestLoad ??= api.documents().then(
+  latestLoad ??= api.documents(undefined, true).then(
     (ds) =>
       ds.forEach((d) => {
         latest.set(d.id, Math.max(d.version, latest.get(d.id) ?? 0));
         noteCanvas(d);
       }),
-    () => void (latestLoad = null),
+    (e: unknown) => {
+      latestLoad = null;
+      throw e;
+    },
   );
   return latestLoad;
+}
+
+/** Not in the Library fetch: deleted (404), or made since (its versions say its latest). */
+const probes = new Map<string, Promise<void>>();
+function probe(docId: string): Promise<void> {
+  let p = probes.get(docId);
+  if (!p) {
+    p = api.docVersions(docId).then(
+      (vs) => void (vs[0] && latest.set(docId, Math.max(vs[0].version, latest.get(docId) ?? 0))),
+      (e: unknown) => {
+        if (e instanceof ApiError && e.status === 404) deletedIds.add(docId);
+        else {
+          probes.delete(docId); // tried again by the next card
+          throw e;
+        }
+      },
+    );
+    probes.set(docId, p);
+  }
+  return p;
 }
 
 /** A converted canvas page as the chat's artifact chip (#174): its latest version, never « Updated to ». */
@@ -107,28 +133,50 @@ export function useCanvasPages(): CanvasPage {
   const [, setLoaded] = useState(latestLoad !== null && canvasPages.size > 0);
   useEffect(() => {
     let live = true;
-    void loadLatest().then(() => live && setLoaded(true));
+    loadLatest().then(
+      () => live && setLoaded(true),
+      (e: unknown) => console.error('Library fetch for canvas pages failed', e),
+    );
     return () => {
       live = false;
     };
   }, []);
   return (id) => canvasPages.get(id);
 }
-export function useLatestVersion(docId: string, stream: MessageStream): number | null {
-  const [v, setV] = useState<number | null>(latest.get(docId) ?? null);
+
+/** A chat card's artifact, live: its latest version, and whether it was deleted (#242). */
+export interface ArtifactState {
+  latest: number | null;
+  deleted: boolean;
+}
+/** An artifact deleted for good (document.deleted, #242): its chat cards say so. */
+export function noteDeleted(docId: string): void {
+  deletedIds.add(docId);
+  latest.delete(docId);
+}
+const stateOf = (docId: string): ArtifactState => ({ latest: latest.get(docId) ?? null, deleted: deletedIds.has(docId) });
+export function useArtifactState(docId: string, stream: MessageStream): ArtifactState {
+  const [st, setSt] = useState<ArtifactState>(() => stateOf(docId));
   useEffect(() => {
     let live = true;
-    void loadLatest().then(() => live && setV(latest.get(docId) ?? null));
+    const update = () => live && setSt(stateOf(docId));
+    loadLatest()
+      .then(() => (latest.has(docId) || deletedIds.has(docId) ? undefined : probe(docId)))
+      .then(update, (e: unknown) => console.error(`artifact ${docId}: could not read its latest version`, e));
     const off = stream.listen('docs', (e) => {
-      if (e.type !== 'doc') return;
-      latest.set(e.doc.id, e.doc.version);
-      noteCanvas(e.doc);
-      if (e.doc.id === docId && live) setV(e.doc.version);
+      if (e.type === 'doc') {
+        latest.set(e.doc.id, e.doc.version);
+        noteCanvas(e.doc);
+        if (e.doc.id === docId) update();
+      } else if (e.type === 'docDeleted') {
+        noteDeleted(e.id);
+        if (e.id === docId) update();
+      }
     });
     return () => {
       live = false;
       off();
     };
   }, [docId, stream]);
-  return v;
+  return st;
 }
