@@ -1030,7 +1030,8 @@ export interface TaskWorkflow {
   runNumber: number;
   state: WorkflowRunState;
   /** The step it is at, or null. */
-  step: { nodeId: string; title: string; state: WorkflowStepState; cardId: string | null } | null;
+  /** couldntRun: why the step couldn't run (#262), null when it runs: the task points to the run, where Retry now lives. */
+  step: { nodeId: string; title: string; state: WorkflowStepState; cardId: string | null; couldntRun: string | null } | null;
 }
 /** POST /api/workflows/:id/run: a manual run, optionally on a task (#12 or id) or a linked PR (its url). */
 export const RunWorkflow = z.object({ task: z.string().trim().min(1).optional(), pr: z.string().trim().min(1).optional() }).refine((x) => !(x.task && x.pr), 'give a task or a PR, not both');

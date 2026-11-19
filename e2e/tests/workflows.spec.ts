@@ -28,14 +28,14 @@ test('create a workflow, add and wire a step, Run now: the run finishes with its
     const side = page.getByRole('complementary', { name: 'Step' });
     await expect(side.getByText('Agent step')).toBeVisible();
     await side.getByLabel('Title').fill('Part one');
-    await side.getByLabel('Agent').selectOption('atlas');
+    await side.getByLabel('Chosen agent').selectOption('atlas');
     await side.getByLabel('Prompt').fill('Do part one');
 
     // Add a second agent step; it is selected.
     await page.getByRole('button', { name: '+ Add step' }).click();
     await page.getByRole('menuitem', { name: /Agent step/ }).click();
     await side.getByLabel('Title').fill('Part two');
-    await side.getByLabel('Agent').selectOption('atlas');
+    await side.getByLabel('Chosen agent').selectOption('atlas');
     await side.getByLabel('Prompt').fill('Do part two after {{previous.summary}}');
 
     // Wire: drag step1's « done » exit onto the new step.
@@ -152,7 +152,7 @@ test('a task-event workflow: a new task starts its run, the run shows what start
     // Fill the step, with a field from « Insert a field ».
     const side = page.getByRole('complementary', { name: 'Step' });
     await side.getByLabel('Title').fill('Triage');
-    await side.getByLabel('Agent').selectOption('atlas');
+    await side.getByLabel('Chosen agent').selectOption('atlas');
     await side.getByLabel('Prompt').fill('Triage ');
     await side.getByRole('button', { name: /Insert a field/ }).click();
     await page.getByRole('dialog', { name: 'Insert a field' }).getByRole('option', { name: /^Task title/ }).click();

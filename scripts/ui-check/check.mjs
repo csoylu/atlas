@@ -443,6 +443,7 @@ const WF_RUN1 = { ...WF_RUN, id: 'wr_uicheck1', number: 1, state: 'failed', reas
 const WORKFLOW = {
   id: 'wf_uicheck', name: 'Validate, fix, approve and merge a pull request (a deliberately long workflow name)', enabled: true, origin: null, revision: 3,
   nextRunAt: null, lastFiredAt: wfAgo(42), lastError: null, lastRun: WF_RUN, recentRuns: ['done', 'done', 'stopped', 'failed', 'waiting'], createdBy: 'user', createdAt: wfAgo(3000), updatedAt: wfAgo(60),
+  commandSteps: [], needsApproval: false, // #273: no command step here
   nodes: [
     { id: 'trigger', kind: 'trigger', x: 40, y: 120, config: { kind: 'manual' } },
     { id: 'validate', kind: 'agent', x: 290, y: 120, config: { title: 'Validate the PR', agentId: 'zurich', prompt: 'Validate {{previous.summary}}', newTaskEachRun: true } },

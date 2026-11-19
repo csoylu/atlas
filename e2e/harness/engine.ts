@@ -19,7 +19,7 @@ export class TestAtlas {
     public dataDir: string,
   ) {}
 
-  static async start(o: { dataDir?: string; model?: Scripted; version?: string; updates?: EngineOptions['updates']; prs?: EngineOptions['prs']; secrets?: EngineOptions['secrets']; env?: EngineOptions['env']; projects?: EngineOptions['projects'] } = {}): Promise<TestAtlas> {
+  static async start(o: { dataDir?: string; model?: Scripted; version?: string; updates?: EngineOptions['updates']; prs?: EngineOptions['prs']; secrets?: EngineOptions['secrets']; env?: EngineOptions['env']; projects?: EngineOptions['projects']; workflowCommand?: EngineOptions['workflowCommand'] } = {}): Promise<TestAtlas> {
     const model = o.model ?? new Scripted();
     const dataDir = o.dataDir ?? mkdtempSync(join(tmpdir(), 'atlas-e2e-'));
     mkdirSync(join(dataDir, 'workspaces', 'atlas'), { recursive: true });
@@ -38,6 +38,8 @@ export class TestAtlas {
       ...(o.env ? { env: o.env } : {}),
       // Projects (#218): a fake gh for the repo check and a clone from local bare repos (harness/projects.ts).
       ...(o.projects ? { projects: o.projects } : {}),
+      // « Run a command » steps (#273): their clean checkout cloned from a local bare repo, never GitHub.
+      ...(o.workflowCommand ? { workflowCommand: o.workflowCommand } : {}),
       // Never the real GitHub: a test that links PRs passes its own reader (#189).
       prs: o.prs ?? { read: async () => { throw new Error('no GitHub in e2e'); }, intervalMs: false },
     });

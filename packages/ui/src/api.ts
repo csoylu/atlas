@@ -1,4 +1,4 @@
-import type { About, Account, Agent, Card, CardStatus, ChatGptModel, ChatGptStatus, ChatUsage, ClaudePlanModel, ClaudePlanStatus, ClearEvent, CompactResult, CreateAccount, CreateAgent, CreateCard, CreateModelRequest, CreatePlanAccount, CreateWorkflow, Doc, DocContent, DocHit, DocRef, DocVersion, FileChange, Folder, Inbox, LocalModel, LocalPull, LocalStatus, Memory, MemoryBudget, MemoryChange, MemoryProposal, MemoryQuery, Message, Model, ModelTest, Notification, PanelTab, PlanProvider, RewindPreview, RewindResult, Run, CreateSecret, SecretInfo, SecretList, SecretStoreStatus, UpdateSecret, SaveWorkflowGraph, ServerEvent, Settings, Timeline, ToolCallTiming, UpdateAccount, UpdateAgent, UpdateChatGpt, UpdateClaudePlan, UpdateLocal, UpdateMemory, UpdateModelRequest, UpdatePlanAccount, UpdateStatus, UpdateVoice, Upload, UsageSummary, VoiceName, VoiceStatus, TriggerPreview, UpdateWorkflow, Workflow, WorkflowRun, WorkflowField, WorkflowRunContext, TaskWorkflow, RunWorkflow, Project, CreateProject, UpdateProject, RepoCheck, WebhookInfo } from '@atlas/shared';
+import type { About, Account, Agent, Card, CardStatus, ChatGptModel, ChatGptStatus, ChatUsage, ClaudePlanModel, ClaudePlanStatus, ClearEvent, CompactResult, CreateAccount, CreateAgent, CreateCard, CreateModelRequest, CreatePlanAccount, CreateWorkflow, Doc, DocContent, DocHit, DocRef, DocVersion, FileChange, Folder, Inbox, LocalModel, LocalPull, LocalStatus, Memory, MemoryBudget, MemoryChange, MemoryProposal, MemoryQuery, Message, Model, ModelTest, Notification, PanelTab, PlanProvider, RewindPreview, RewindResult, Run, CreateSecret, SecretInfo, SecretList, SecretStoreStatus, UpdateSecret, SaveWorkflowGraph, ServerEvent, Settings, Timeline, ToolCallTiming, UpdateAccount, UpdateAgent, UpdateChatGpt, UpdateClaudePlan, UpdateLocal, UpdateMemory, UpdateModelRequest, UpdatePlanAccount, UpdateStatus, UpdateVoice, Upload, UsageSummary, VoiceName, VoiceStatus, TriggerPreview, UpdateWorkflow, Workflow, WorkflowRun, WorkflowField, WorkflowRunContext, TaskWorkflow, RunWorkflow, Project, CreateProject, UpdateProject, RepoCheck, WebhookInfo, TryCondition, ConditionTryResult } from '@atlas/shared';
 
 /** HTTP error with the parsed body (e.g. a 409's details). */
 export class ApiError extends Error {
@@ -222,6 +222,13 @@ export const api = {
   workflowRuns: (id: string) => call<WorkflowRun[]>('GET', `/workflows/${id}/runs`),
   workflowRun: (id: string) => call<WorkflowRun>('GET', `/workflow-runs/${id}`),
   stopWorkflowRun: (id: string) => call<WorkflowRun>('POST', `/workflow-runs/${id}/stop`),
+  /** A step that couldn't run (#261): try it again now, or take its negative exit. */
+  retryWorkflowRun: (id: string) => call<WorkflowRun>('POST', `/workflow-runs/${id}/retry`),
+  followWorkflowRun: (id: string) => call<WorkflowRun>('POST', `/workflow-runs/${id}/follow`),
+  /** Master approves the command steps of that revision, or rejects them (the workflow turns off), #273. */
+  approveWorkflow: (id: string, revision: number) => call<Workflow>('POST', `/workflows/${id}/approve`, { revision }),
+  rejectWorkflow: (id: string) => call<Workflow>('POST', `/workflows/${id}/reject`),
+  tryCondition: (id: string, t: TryCondition) => call<ConditionTryResult>('POST', `/workflows/${id}/try-condition`, t),
   /** Next firings of a draft time trigger; a bad cron or zone rejects with the reason. */
   webhook: (id: string) => call<WebhookInfo>('GET', `/workflows/${id}/hook`),
   webhookSeen: (id: string) => call<{ ok: true }>('POST', `/workflows/${id}/hook/seen`),

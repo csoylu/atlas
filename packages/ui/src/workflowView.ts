@@ -198,12 +198,14 @@ export function nodeMeta(n: WorkflowNode, nodes: WorkflowNode[] = []): string {
             ? ['Webhook', ...(n.config.filters.length ? n.config.filters.map((f) => `${f.field} ${OP_TEXT[f.op]} ${f.value}`.trim()) : ['any call'])].join(' · ')
             : 'Run now, from here or a chat';
     case 'agent':
-      return n.config.agentId ? `@${n.config.agentId} · ${n.config.newTaskEachRun ? 'new task' : 'one task'}` : 'Pick an agent and a prompt';
+      if (n.config.reviewAgent) return 'The review agent · in the task thread';
+      return n.config.agentId ? `@${n.config.agentId} · ${n.config.inThread ? 'in the task thread' : n.config.newTaskEachRun ? 'new task' : 'one task'}` : 'Pick an agent and a prompt';
     case 'approval':
       return 'You, in the Inbox';
     case 'condition':
       return n.config.title ? conditionText(n.config, nodes) : n.config.test === 'ranFewer' ? 'Counts the rounds' : n.config.test === 'fields' ? 'Tests the run’s fields' : 'Reads the previous summary';
     case 'action':
+      if (n.config.do === 'command') return `Clean checkout · at most ${n.config.limitMin} min`;
       return n.config.title ? actionText(n.config) : 'Atlas does it, no model';
     case 'wait':
       return `At most ${n.config.limitMin % 60 === 0 ? `${n.config.limitMin / 60} h` : `${n.config.limitMin} min`}`;
@@ -272,9 +274,11 @@ export function chainOf(w: Pick<Workflow, 'nodes' | 'edges'>, max = 4): { steps:
 /* ── Runs ── */
 
 /** What a node shows in a run, from its latest step (earlier rounds stay listed inside the node). */
-export type NodeRunState = 'working' | 'waiting' | 'done' | 'failed' | 'approved' | 'rejected' | 'yes' | 'no' | 'stopped' | 'skipped' | 'not-reached';
+/** couldnt: the step couldn't run (#261, no outcome yet): the run waits on it, Atlas retries. */
+export type NodeRunState = 'couldnt' | 'working' | 'waiting' | 'done' | 'failed' | 'approved' | 'rejected' | 'yes' | 'no' | 'stopped' | 'skipped' | 'not-reached';
 
 export function stepState(s: WorkflowRunStep): Exclude<NodeRunState, 'skipped' | 'not-reached'> {
+  if (s.couldntRun && !s.endedAt) return 'couldnt';
   if (s.state === 'running') return 'working';
   if (s.state === 'waiting') return 'waiting';
   if (s.state === 'stopped') return 'stopped';
@@ -292,6 +296,7 @@ export function nodeRunState(run: WorkflowRun, nodeId: string): { state: NodeRun
 }
 
 export const STATE_LABEL: Record<NodeRunState, string> = {
+  couldnt: "Couldn't run",
   working: 'Working',
   waiting: 'Waiting for you',
   done: 'Done',
@@ -320,6 +325,7 @@ export function chipClass(s: NodeRunState | WorkflowRun['state']): string {
       return 'done';
     case 'failed':
     case 'rejected':
+    case 'couldnt':
       return 'failed';
     default:
       return 'idle';
@@ -332,7 +338,7 @@ export const RUN_LABEL: Record<WorkflowRun['state'], string> = { running: 'Runni
 export function nodeClass(s: NodeRunState): string {
   if (s === 'working') return 'now';
   if (s === 'waiting') return 'wait';
-  if (s === 'failed' || s === 'rejected') return 'bad';
+  if (s === 'failed' || s === 'rejected' || s === 'couldnt') return 'bad';
   if (s === 'skipped') return 'skip';
   if (s === 'not-reached') return 'unreached';
   return '';
@@ -367,7 +373,7 @@ export function edgePath(a: Pt, b: Pt, srcBottom: number, dstTop: number, bottom
     const c = r1(Math.max(28, (bx - ax) / 2));
     return `M${ax},${ay} C${r1(ax + c)},${ay} ${r1(bx - c)},${by} ${bx},${by}`;
   }
-  const lane = r1(dstTop > srcBottom ? (srcBottom + dstTop) / 2 : bottom + 22);
+  const lane = laneOf(srcBottom, dstTop, bottom);
   const x1 = r1(ax + 12);
   const x2 = r1(bx - 14);
   const r = 8;
@@ -376,6 +382,14 @@ export function edgePath(a: Pt, b: Pt, srcBottom: number, dstTop: number, bottom
     `M${ax},${ay} H${x1 - r} Q${x1},${ay} ${x1},${ay + r} V${lane - r} Q${x1},${lane} ${x1 - r},${lane}` +
     ` H${x2 + r} Q${x2},${lane} ${x2},${lane + (up ? -r : r)} V${by + (up ? r : -r)} Q${x2},${by} ${x2 + r},${by} H${bx}`
   );
+}
+
+/**
+ * The lane of an edge going back to an earlier column: just above the target's row when it is lower (#262: not through
+ * the rows in between, as in the mockup), else under everything.
+ */
+function laneOf(srcBottom: number, dstTop: number, bottom: number): number {
+  return r1(dstTop > srcBottom ? Math.max((srcBottom + dstTop) / 2, dstTop - 26) : bottom + 22);
 }
 
 /** The draft line while wiring: a bezier from the exit to the pointer. */
@@ -675,7 +689,7 @@ export function fieldParts(text: string): { text: string; field: boolean }[] {
 /** Where an edge's exit name goes when the edge leaves the node's column backwards or downwards: the middle of its lane. Null for a forward edge. */
 export function edgeLabelAt(a: Pt, b: Pt, srcBottom: number, dstTop: number, bottom: number): Pt | null {
   if (b[0] > a[0] + 20) return null;
-  const lane = r1(dstTop > srcBottom ? (srcBottom + dstTop) / 2 : bottom + 22);
+  const lane = laneOf(srcBottom, dstTop, bottom);
   return [r1((a[0] + 12 + b[0] - 14) / 2), lane];
 }
 
@@ -695,4 +709,102 @@ export function prLabel(url: string): string {
 /** A workflow stopped by the loop guard: off, and its last error says so. */
 export function loopGuardHit(w: Pick<Workflow, 'enabled' | 'lastError'>): boolean {
   return !w.enabled && !!w.lastError && w.lastError.startsWith('loop guard');
+}
+
+/* ── Workflows v2 stage 2 (#262, mockup doc_bf5e40e1 « Add step ») ── */
+
+export type AddKind = Exclude<WorkflowNodeKind, 'trigger'>;
+/** The « Add step » menu: each kind says its exits, so the wiring is known before adding. */
+export const ADD_STEPS: { kind: AddKind; label: string; help: string; isNew?: boolean }[] = [
+  { kind: 'agent', label: 'Agent step', help: 'An agent works, in the task thread (new) or as a new task. Exits: done, not done.' },
+  { kind: 'approval', label: 'Approval', help: 'A question to you, in the Inbox. Exits: approved, rejected.' },
+  { kind: 'condition', label: 'Condition', help: 'An exact test on task, PR or payload fields (new), a summary, or rounds. Exits: yes, no.' },
+  { kind: 'action', label: 'Action', help: 'Atlas does it, no model: set status or assignee, merge a PR, notify you, run a command. Exits name the outcome: merged / refused, exit 0 / other exit…', isNew: true },
+  { kind: 'wait', label: 'Wait', help: 'Until an event (CI finished, merged, unblocked…), with a time limit. Exits: event, timed out.', isNew: true },
+];
+
+/** The run's own task exists for task and PR triggers only: an agent step works in its thread by default there. */
+export function hasRunTask(g: Pick<Workflow, 'nodes'>): boolean {
+  const t = g.nodes.find((n) => n.kind === 'trigger');
+  return t?.kind === 'trigger' && (t.config.kind === 'task' || t.config.kind === 'pr');
+}
+
+/** A new step of `kind`, with settings that save as they are (the save refuses an invalid step). */
+export function blankStep(kind: AddKind, id: string, at: { x: number; y: number }, g: Pick<Workflow, 'nodes'>): WorkflowNode {
+  const pos = { id, x: Math.round(at.x), y: Math.round(at.y) };
+  const thread = hasRunTask(g);
+  switch (kind) {
+    case 'agent':
+      return { ...pos, kind, config: { title: '', agentId: null, prompt: '', newTaskEachRun: !thread, ...(thread ? { inThread: true } : {}) } };
+    case 'approval':
+      return { ...pos, kind, config: { title: '', question: '' } };
+    case 'condition': {
+      const t = g.nodes.find((n) => n.kind === 'trigger');
+      const field = t?.kind === 'trigger' && t.config.kind === 'webhook' ? 'payload.ref' : t?.kind === 'trigger' && t.config.kind === 'pr' ? 'pr.ci' : 'task.status';
+      return { ...pos, kind, config: { test: 'fields', title: '', match: 'all', tests: [{ field, op: 'is', value: '' }] } };
+    }
+    case 'action':
+      return { ...pos, kind, config: { do: 'setStatus', title: '', status: 'ready', note: '' } };
+    case 'wait':
+      return { ...pos, kind, config: { title: '', for: 'ciFinished', status: null, limitMin: 120 } };
+  }
+}
+
+/** The first exit of `n` that leads nowhere yet, or null. */
+export function firstFreeExit(n: WorkflowNode, edges: WorkflowEdge[]): string | null {
+  return workflowExits(n).find((x) => !edges.some((e) => e.from === n.id && e.exit === x)) ?? null;
+}
+
+/**
+ * Add a step (#262). From the header: right of the selected step, wired to its first free exit (none selected: right
+ * of everything, unwired). From a dragged exit: at the drop point, wired to that exit (replacing its old link).
+ */
+export function addStep(g: Pick<Workflow, 'nodes' | 'edges'>, kind: AddKind, where: { from: WorkflowNode; exit?: string; at?: { x: number; y: number } } | null): { graph: Pick<Workflow, 'nodes' | 'edges'>; id: string } {
+  const id = newNodeId(g.nodes);
+  const at = where?.at ?? freeSpot(g.nodes, where?.from);
+  const node = blankStep(kind, id, at, g);
+  const exit = where ? (where.exit ?? firstFreeExit(where.from, g.edges)) : null;
+  const added = { nodes: [...g.nodes, node], edges: g.edges };
+  return { graph: where && exit ? wire(added, where.from.id, exit, id) : added, id };
+}
+
+/** The exits that lead into `n` (« Comes from · N exits »), with their step. */
+export function incomingOf(n: Pick<WorkflowNode, 'id'>, g: Pick<Workflow, 'nodes' | 'edges'>): { exit: string; from: WorkflowNode; failing: boolean }[] {
+  return g.edges.flatMap((e) => {
+    const from = e.to === n.id ? g.nodes.find((x) => x.id === e.from) : undefined;
+    return from ? [{ exit: e.exit, from, failing: (WORKFLOW_FAILING_EXITS as readonly string[]).includes(e.exit) }] : [];
+  });
+}
+
+/** The env vars a command reads from the run (#273: every run field is one, never pasted into the text): $PAYLOAD_AFTER… */
+export function runVarsOf(command: string): string[] {
+  const out = new Set<string>();
+  for (const m of command.matchAll(/\$\{?((?:PAYLOAD|TASK|PR|PROJECT|EVENT|RUN|WORKFLOW|STEPS|PREVIOUS)_[A-Z0-9_]*)/g)) out.add(m[1]!);
+  return [...out];
+}
+
+/** The env var of a run field: payload.ref → PAYLOAD_REF (#273). */
+export function envOf(field: string): string {
+  return field.toUpperCase().replace(/[^A-Z0-9]/g, '_');
+}
+
+/** A box of `w` × `h` at `p`, moved inside `area` (the canvas): the add menu never leaves the canvas (#262). */
+export function clampBox(p: { x: number; y: number }, w: number, h: number, area: { w: number; h: number }, pad = 8): { x: number; y: number } {
+  return { x: Math.max(pad, Math.min(p.x, area.w - w - pad)), y: Math.max(pad, Math.min(p.y, area.h - h - pad)) };
+}
+
+/** Minutes as the Wait panel's « At most »: a number and a unit. */
+export function limitParts(min: number): { n: number; unit: 'minutes' | 'hours' | 'days' } {
+  if (min % 1440 === 0) return { n: min / 1440, unit: 'days' };
+  if (min % 60 === 0) return { n: min / 60, unit: 'hours' };
+  return { n: min, unit: 'minutes' };
+}
+export const UNIT_MIN = { minutes: 1, hours: 60, days: 1440 } as const;
+
+const TRIGGER_SHORT: Record<string, string> = { time: 'At set times', task: 'Task event', pr: 'Pull request event', webhook: 'Webhook', manual: 'By hand' };
+/** A node's kind line on the canvas (#262): « Action · Command », « Trigger · Webhook », « Wait ». */
+export function kindLine(n: WorkflowNode): string {
+  if (n.kind === 'action') return n.config.do === 'command' ? `${KIND_LABEL.action} · Command` : KIND_LABEL.action;
+  if (n.kind === 'trigger') return `${KIND_LABEL.trigger} · ${TRIGGER_SHORT[n.config.kind]}`;
+  return KIND_LABEL[n.kind];
 }

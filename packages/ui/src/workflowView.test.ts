@@ -1,6 +1,55 @@
 import { describe, expect, it } from 'vitest';
 import type { TriggerConfig, Workflow, WorkflowEdge, WorkflowNode, WorkflowRun, WorkflowRunStep } from '@atlas/shared';
-import { chainOf, groupCount, listGroup, runStrip, TEMPLATES, cronOf, describeTrigger, edgePath, exitTarget, exitsOf, freeSpot, newNodeId, nodeRunState, nodeTitle, patternOf, runTask, stepOrder, takenEdges, timeDraftOf, triggerOf, wire, withoutNode , TRIGGER_KINDS, PR_EVENT_CHOICES, TASK_EVENT_CHOICES, blankTrigger, edgeLabelAt, eventChoiceOf, fieldParts, filterKeys, filterRows, groupFields, loopGuardHit, prLabel, runGets, startedBy, withEvent, withFilters } from './workflowView.ts';
+import {
+  chainOf,
+  groupCount,
+  listGroup,
+  runStrip,
+  TEMPLATES,
+  cronOf,
+  describeTrigger,
+  edgePath,
+  exitTarget,
+  exitsOf,
+  freeSpot,
+  newNodeId,
+  nodeRunState,
+  nodeTitle,
+  patternOf,
+  runTask,
+  stepOrder,
+  takenEdges,
+  timeDraftOf,
+  triggerOf,
+  wire,
+  withoutNode,
+  TRIGGER_KINDS,
+  PR_EVENT_CHOICES,
+  TASK_EVENT_CHOICES,
+  blankTrigger,
+  edgeLabelAt,
+  eventChoiceOf,
+  fieldParts,
+  filterKeys,
+  filterRows,
+  groupFields,
+  loopGuardHit,
+  prLabel,
+  runGets,
+  startedBy,
+  withEvent,
+  withFilters,
+  ADD_STEPS,
+  addStep,
+  incomingOf,
+  clampBox,
+  envOf,
+  runVarsOf,
+  limitParts,
+  stepState,
+  nodeClass,
+  STATE_LABEL,
+} from './workflowView.ts';
 
 const trigger: WorkflowNode = { id: 'trigger', kind: 'trigger', x: 40, y: 120, config: { kind: 'time', repeat: 'cron', cron: '0 9 * * 1-5', at: null, timezone: 'Europe/Paris' } };
 const agent = (id: string, title: string, x = 300, y = 120): WorkflowNode => ({ id, kind: 'agent', x, y, config: { title, agentId: 'zurich', prompt: 'do it', newTaskEachRun: true } });
@@ -84,7 +133,7 @@ describe('workflow view helpers (#171)', () => {
     expect(back.startsWith('M300,50 H304')).toBe(true);
     expect(back).toContain('V214'); // lane at bottom + 22, minus the radius
     // down: lane between the two nodes
-    expect(edgePath([300, 50], [100, 260], 100, 240, 400)).toContain('V162');
+    expect(edgePath([300, 50], [100, 260], 100, 240, 400)).toContain('V206'); // just above the target's row (#262)
   });
 
   it('editing: new ids, free spots, wiring replaces the exit, deleting drops its edges', () => {
@@ -197,7 +246,7 @@ describe('Workflows v2 stage 1 (#259)', () => {
 
   it('a backward edge gets a label in its lane, a forward one none', () => {
     expect(edgeLabelAt([200, 50], [300, 50], 100, 0, 400)).toBeNull();
-    expect(edgeLabelAt([500, 50], [40, 300], 100, 260, 400)).toEqual([269, 180]);
+    expect(edgeLabelAt([500, 50], [40, 300], 100, 260, 400)).toEqual([269, 234]);
     expect(edgeLabelAt([500, 300], [40, 50], 400, 0, 400)?.[1]).toBe(422);
   });
 
@@ -207,5 +256,94 @@ describe('Workflows v2 stage 1 (#259)', () => {
     expect(prLabel('https://github.com/csoylu/atlas/pull/74')).toBe('PR #74');
     expect(loopGuardHit({ enabled: false, lastError: 'loop guard: 6 runs on #12 in an hour' })).toBe(true);
     expect(loopGuardHit({ enabled: true, lastError: null })).toBe(false);
+  });
+});
+
+describe('Workflows v2 stage 2 (#262)', () => {
+  const trig = (kind: 'task' | 'time'): WorkflowNode =>
+    kind === 'task'
+      ? ({ id: 'trigger', kind: 'trigger', x: 0, y: 0, config: { kind: 'task', event: 'status', to: ['review'], from: [], assignee: [], project: null, maxRunsPerHour: 3 } } as unknown as WorkflowNode)
+      : ({ id: 'trigger', kind: 'trigger', x: 0, y: 0, config: { kind: 'time', repeat: 'cron', cron: '0 9 * * *', at: null, timezone: 'UTC' } } as unknown as WorkflowNode);
+  const appr: WorkflowNode = { id: 'n1', kind: 'approval', x: 260, y: 0, config: { title: 'OK?', question: 'Merge?' } };
+
+  it('the menu says every kind with its exits', () => {
+    expect(ADD_STEPS.map((a) => a.kind)).toEqual(['agent', 'approval', 'condition', 'action', 'wait']);
+    for (const a of ADD_STEPS) expect(a.help).toMatch(/Exits/);
+  });
+
+  it('adds right of the selected step, wired to its first free exit', () => {
+    const g = {
+      nodes: [trig('time'), appr],
+      edges: [
+        { from: 'trigger', exit: 'start', to: 'n1' },
+        { from: 'n1', exit: 'approved', to: 'n1' },
+      ],
+    };
+    const r = addStep(g, 'action', { from: appr });
+    const added = r.graph.nodes.find((n) => n.id === r.id)!;
+    expect(added.kind).toBe('action');
+    expect(added.x).toBeGreaterThan(appr.x);
+    expect(r.graph.edges).toContainEqual({ from: 'n1', exit: 'rejected', to: r.id });
+  });
+
+  it('a dragged exit wires the new step at the drop point, replacing the old link', () => {
+    const g = { nodes: [trig('time'), appr], edges: [{ from: 'n1', exit: 'approved', to: 'n1' }] };
+    const r = addStep(g, 'wait', { from: appr, exit: 'approved', at: { x: 500, y: 300 } });
+    const added = r.graph.nodes.find((n) => n.id === r.id)!;
+    expect([added.x, added.y]).toEqual([500, 300]);
+    expect(r.graph.edges.filter((e) => e.from === 'n1' && e.exit === 'approved')).toEqual([{ from: 'n1', exit: 'approved', to: r.id }]);
+  });
+
+  it('no step selected: added unwired; an agent step works in the task thread when the run has a task', () => {
+    const r = addStep({ nodes: [trig('task')], edges: [] }, 'agent', null);
+    expect(r.graph.edges).toEqual([]);
+    const a = r.graph.nodes.find((n) => n.id === r.id)!;
+    expect(a.kind === 'agent' && a.config.inThread).toBe(true);
+    const b = addStep({ nodes: [trig('time')], edges: [] }, 'agent', null).graph.nodes.at(-1)!;
+    expect(b.kind === 'agent' && !b.config.inThread && b.config.newTaskEachRun).toBe(true);
+  });
+
+  it('comes from: the exits leading into a step', () => {
+    const g = {
+      nodes: [trig('time'), appr],
+      edges: [
+        { from: 'trigger', exit: 'start', to: 'n1' },
+        { from: 'n1', exit: 'rejected', to: 'n1' },
+      ],
+    };
+    expect(incomingOf(appr, g).map((x) => [x.exit, x.from.id, x.failing])).toEqual([
+      ['start', 'trigger', false],
+      ['rejected', 'n1', true],
+    ]);
+  });
+
+  it('the menu stays inside the canvas', () => {
+    expect(clampBox({ x: 900, y: 500 }, 320, 400, { w: 1000, h: 600 })).toEqual({ x: 672, y: 192 });
+    expect(clampBox({ x: -20, y: -5 }, 320, 400, { w: 1000, h: 600 })).toEqual({ x: 8, y: 8 });
+  });
+
+  it('env vars and limits', () => {
+    expect(envOf('payload.after')).toBe('PAYLOAD_AFTER');
+    expect(envOf('steps.n2.exit')).toBe('STEPS_N2_EXIT');
+    expect(runVarsOf('npm run deploy -- --sha "$PAYLOAD_AFTER" ${PAYLOAD_REF} $HOME')).toEqual(['PAYLOAD_AFTER', 'PAYLOAD_REF']);
+    expect(limitParts(120)).toEqual({ n: 2, unit: 'hours' });
+    expect(limitParts(2880)).toEqual({ n: 2, unit: 'days' });
+    expect(limitParts(45)).toEqual({ n: 45, unit: 'minutes' });
+  });
+
+  it("a step that couldn't run and has no outcome reads « Couldn't run », red", () => {
+    const step = {
+      id: 1,
+      nodeId: 'n1',
+      kind: 'action',
+      round: 1,
+      state: 'running',
+      startedAt: '2026-11-19T11:47:00Z',
+      endedAt: null,
+      couldntRun: { reason: "GitHub can't be read", since: '2026-11-19T11:47:00Z', autoRetry: true, negativeExit: 'refused', notified: false },
+    } as unknown as WorkflowRunStep;
+    expect(stepState(step)).toBe('couldnt');
+    expect(nodeClass('couldnt')).toBe('bad');
+    expect(STATE_LABEL.couldnt).toBe("Couldn't run");
   });
 });
