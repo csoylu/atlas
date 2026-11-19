@@ -4,7 +4,7 @@ import { prBits, prUnreadable, readAgo, tilePrs } from './prView.ts';
 
 const pr = (over: Partial<CardPr> = {}): CardPr => ({
   repo: 'csoylu/atlas', number: 41, url: 'https://github.com/csoylu/atlas/pull/41', branch: 'feat/170-x', base: 'main', headSha: 'aaaaaaa1111',
-  state: 'open', mergeSha: null, mergeable: true, ci: 'pending', qa: null, qaDescription: null, checkedAt: '2026-11-18T10:00:00Z', error: null, errorSince: null, reviewedSha: null,
+  state: 'open', mergeSha: null, mergeable: true, ci: 'pending', ciFailed: null, qa: null, qaDescription: null, checkedAt: '2026-11-18T10:00:00Z', error: null, errorSince: null, reviewedSha: null,
   ...over,
 });
 

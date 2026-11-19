@@ -8,10 +8,12 @@ import { ghBinary, ghClient, validate, type Gh } from '../../../scripts/pr/valid
 
 /**
  * pr_validate (#216): the PR validation gate, shipped with the engine so a reviewer can run it from any project's
- * workspace. It runs scripts/pr/validate.mjs's validate() in-process with the gate of the task's project (repo, CI
- * job, changelog rule: Settings → Projects), as the reviewer (the status description says who). Only the task's
- * reviewer gets the tool, during a review of one of the task's own PRs. Atlas's rules are the same as the script's:
- * --ok needs the reviewed head sha, merge pins the merge to it, a conflicting PR is refused (its builder rebases).
+ * workspace. It runs scripts/pr/validate.mjs's validate() in-process with the gate of the task's project (repo and
+ * required CI check: Settings → Projects), as the reviewer (the status description says who). Only the task's
+ * reviewer gets the tool, during a review of one of the task's own PRs. The gate is the same for every repo: base =
+ * the default branch, ok needs the reviewed head sha, no conflict, the required check green; merge pins the merge to
+ * the sha. A repo's own rules (Atlas's changelog entry) are checks its CI runs on the PR (#238), never code here: an
+ * installed engine never lags behind a rule changed on main.
  */
 export interface PrToolContext {
   db: Db;
@@ -39,10 +41,10 @@ const SPECS = {
   pr_validate: {
     description:
       "Your verdict on this task's pull request, as its reviewer: sets the commit status qa/validated on its head with " +
-      "the gate of the task's project (repo, required CI check, changelog entry if the project asks for one) and, for ok, " +
-      'merges it (merge: false to only validate). ok is refused, with the reason, while CI is not green, the head moved ' +
-      'since the sha you give, the PR conflicts with its base or the changelog rule fails (one new file in changelog/, ' +
-      'no other changelog file changed). fail sends the task back to its builder with your reason.',
+      "the gate of the task's project (repo, required CI check) and, for ok, merges it (merge: false to only validate). " +
+      "ok is refused, with the reason, while the required CI check is not green (the repo's own rules run there), the " +
+      "head moved since the sha you give, the PR conflicts with its base or is not based on the repo's default branch. " +
+      'fail sends the task back to its builder with your reason.',
     input: Validate,
   },
 } as const;
@@ -75,10 +77,9 @@ export async function runPrTool(name: string, input: unknown, ctx: PrToolContext
 
     const env = await ctx.env();
     const gh = ctx.gh ?? ghClient({ bin: ghBinary(), env });
-    const changelog = project.changelog === 1;
     const verdict = i.verdict === 'ok' ? 'success' : 'failure';
     const out = await validate(
-      { pr: pr.number, verdict, sha: i.sha ?? null, as: ctx.agentId, reason: i.reason, merge: verdict === 'success' && i.merge !== false, base: 'main', repo: project.repo, ciJob: project.ci_job, changelog },
+      { pr: pr.number, verdict, sha: i.sha ?? null, as: ctx.agentId, reason: i.reason, merge: verdict === 'success' && i.merge !== false, base: null, repo: project.repo, ciJob: project.ci_job },
       gh,
     );
     return { output: out.join('\n'), isError: false };

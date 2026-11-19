@@ -3,18 +3,13 @@ import { describe, expect, it } from 'vitest';
 import { CONTEXT, parseArgs, pending, validate } from './validate.mjs';
 
 const SHA = 'a'.repeat(40);
-const ENTRY = 'changelog/2-new.md';
-type File = { filename: string; status: string; previous_filename?: string };
-const code = { filename: 'src/x.ts', status: 'modified' };
-const added = (filename = ENTRY) => ({ filename, status: 'added' });
+type Over = { pr?: Record<string, unknown>; ci?: unknown[]; mergeFails?: boolean };
 
-type Over = { pr?: Record<string, unknown>; ci?: unknown[]; files?: File[]; entry?: string; mergeFails?: boolean };
-
-/** A fake `gh`: answers the API paths validate.mjs asks for and records every call. */
+/** A fake `gh`: answers the API paths validate.mjs asks for (the PR, check runs, statuses, merge) and records every call. */
 function fakeGh(over: Over = {}) {
   const calls: string[][] = [];
   const pr = {
-    state: 'open', draft: false, merged: false, mergeable: true, base: { ref: 'main' }, head: { sha: SHA, ref: 'fix/2-x' },
+    state: 'open', draft: false, merged: false, mergeable: true, base: { ref: 'main', repo: { full_name: 'csoylu/atlas', default_branch: 'main' } }, head: { sha: SHA, ref: 'fix/2-x' },
     number: 2, title: 't', updated_at: '2026-11-18T10:00:00Z', ...over.pr,
   };
   const ci = over.ci ?? [{ id: 1, name: 'test', status: 'completed', conclusion: 'success' }];
@@ -27,8 +22,6 @@ function fakeGh(over: Over = {}) {
       return JSON.stringify({ sha: 'b'.repeat(40), merged: true });
     }
     if (/check-runs/.test(path)) return JSON.stringify({ check_runs: ci });
-    if (/\/compare\/[^/]+\.\.\.a+$/.test(path)) return JSON.stringify({ merge_base_commit: { sha: 'c'.repeat(40) }, files: over.files ?? [code, added()] });
-    if (path.startsWith(`repos/csoylu/atlas/contents/changelog/`) && path.endsWith(`?ref=${SHA}`)) return over.entry ?? '## Added · #2 · new\n\nDetails.\n';
     if (/\/statuses\//.test(path)) return '{}';
     throw new Error(`unexpected gh call: ${args.join(' ')}`);
   };
@@ -36,12 +29,12 @@ function fakeGh(over: Over = {}) {
 }
 
 const ok = (extra: Record<string, unknown> = {}) =>
-  ({ pr: 2, verdict: 'success', sha: SHA, as: 'zurich', reason: 'tests green, read the diff', merge: false, base: 'main', ...extra });
+  ({ pr: 2, verdict: 'success', sha: SHA, as: 'zurich', reason: 'tests green, read the diff', merge: false, base: null, repo: 'csoylu/atlas', ciJob: 'test', ...extra });
 
 describe('validate.mjs arguments', () => {
   it('parses --ok with sha, who and the reason', async () => {
     expect(parseArgs(['2', '--ok', '--sha', 'abc1234', '--as', 'zurich', 'read', 'it', '--merge'])).toMatchObject({
-      pr: 2, verdict: 'success', sha: 'abc1234', as: 'zurich', reason: 'read it', merge: true, base: 'main',
+      pr: 2, verdict: 'success', sha: 'abc1234', as: 'zurich', reason: 'read it', merge: true, base: null, repo: 'csoylu/atlas', ciJob: 'test',
     });
   });
   it('refuses a missing or wrong PR number, verdict, who, reason and sha', async () => {
@@ -86,8 +79,8 @@ describe('validate.mjs --ok', () => {
   it('a failed merge (head moved) is an error after the status, not a silent success', async () => {
     await expect(validate(ok({ merge: true }), fakeGh({ mergeFails: true }).gh)).rejects.toThrow(/409/);
   });
-  it('refuses a PR whose base is not main, and sets nothing', async () => {
-    const f = fakeGh({ pr: { base: { ref: 'feat/slash-commands' } } });
+  it('refuses a PR whose base is not the default branch, and sets nothing', async () => {
+    const f = fakeGh({ pr: { base: { ref: 'feat/slash-commands', repo: { default_branch: 'main' } } } });
     await expect(validate(ok(), f.gh)).rejects.toThrow(/based on "feat\/slash-commands", not main/);
     expect(f.statuses()).toHaveLength(0);
   });
@@ -116,7 +109,9 @@ describe('validate.mjs --ok', () => {
   it('refuses while CI is missing, running or red', async () => {
     await expect(validate(ok(), fakeGh({ ci: [] }).gh)).rejects.toThrow(/has not run/);
     await expect(validate(ok(), fakeGh({ ci: [{ id: 1, name: 'test', status: 'in_progress', conclusion: null }] }).gh)).rejects.toThrow(/still running/);
-    await expect(validate(ok(), fakeGh({ ci: [{ id: 1, name: 'test', status: 'completed', conclusion: 'failure' }] }).gh)).rejects.toThrow(/is failure/);
+    await expect(validate(ok(), fakeGh({ ci: [{ id: 1, name: 'test', status: 'completed', conclusion: 'failure', html_url: 'https://x/runs/1' }] }).gh)).rejects.toThrow(
+      /CI job "test" is failure on aaaaaaa \(https:\/\/x\/runs\/1\): its log says what to fix in the repo/,
+    );
   });
   it('uses the latest run of the job (a re-run that passes)', async () => {
     const ci = [
@@ -125,29 +120,18 @@ describe('validate.mjs --ok', () => {
     ];
     await expect(validate(ok(), fakeGh({ ci }).gh)).resolves.toBeDefined();
   });
-  it('changelog (#223): accepts one new entry file, refuses none, two, an edited, removed or renamed old one, a bad file', async () => {
-    const refused = async (over: Over, why: RegExp) => {
-      const f = fakeGh(over);
-      await expect(validate(ok(), f.gh)).rejects.toThrow(why);
-      expect(f.statuses()).toHaveLength(0);
-    };
-    await refused({ files: [code] }, /changelog: no new changelog entry: add one file changelog\/<task>-<slug>\.md/);
-    await refused({ files: [code, added(), added('changelog/3-other.md')] }, /2 new changelog entries/);
-    await refused({ files: [added(), { filename: 'changelog/1-old.md', status: 'modified' }] }, /changelog\/1-old\.md is changed: existing changelog files never change/);
-    await refused({ files: [added(), { filename: 'changelog/1-old.md', status: 'removed' }] }, /changelog\/1-old\.md is removed/);
-    await refused({ files: [{ filename: ENTRY, previous_filename: 'changelog/1-old.md', status: 'renamed' }] }, /changelog\/1-old\.md is removed/);
-    await refused({ files: [added(), { filename: 'changelog/history.md', status: 'modified' }] }, /history\.md is changed/);
-    await refused({ entry: '## Added · #9 · wrong task\n' }, /must be the file's number, #2/);
-    await refused({ entry: 'Added · #2 · no heading\n' }, /first line must be the heading/);
-    await refused({ entry: '## Added · #2 · a\n\n## Details\n' }, /unknown kind « Details »/);
-    await refused({ files: [added('changelog/Two.md')] }, /not an entry file name/);
-    await refused({ files: Array.from({ length: 300 }, (_, i) => ({ filename: `f${i}`, status: 'added' })) }, /GitHub lists only 300/);
-    await expect(validate(ok(), fakeGh().gh)).resolves.toBeDefined();
+  it('reads no file of the PR: a repo rule (the changelog entry, #223) is a CI check of the repo (#238)', async () => {
+    const f = fakeGh();
+    await validate(ok({ merge: true }), f.gh);
+    expect(f.calls.map((c) => c[1].replace(SHA, 'SHA'))).toEqual([
+      'repos/csoylu/atlas/pulls/2',
+      'repos/csoylu/atlas/commits/SHA/check-runs?per_page=100',
+      'repos/csoylu/atlas/statuses/SHA',
+      'repos/csoylu/atlas/pulls/2/merge',
+    ]);
   });
-  it('changelog: the PR that starts the folder may add history.md (CHANGELOG.md renamed into it)', async () => {
-    const files = [{ filename: 'changelog/history.md', previous_filename: 'CHANGELOG.md', status: 'renamed' }, added('changelog/223-changelog-folder.md')];
-    const entry = '## Changed · #223 · One file per PR\n';
-    await expect(validate({ ...ok(), pr: 2 }, fakeGh({ files, entry }).gh)).resolves.toBeDefined();
+  it('needs the repo: the shared gate has no default project', async () => {
+    await expect(validate(ok({ repo: undefined }), fakeGh().gh)).rejects.toThrow(/needs the repo/);
   });
   it("refuses a QA PR validated by its author, accepts it from atlas", async () => {
     const pr = { head: { sha: SHA, ref: 'qa/141-pr-gate' } };
@@ -157,30 +141,31 @@ describe('validate.mjs --ok', () => {
 });
 
 describe('validate.mjs for another project (#216)', () => {
-  it('parses --repo, --ci-job (any = every check) and --no-changelog; defaults are Atlas’s', async () => {
-    expect(parseArgs(['2', '--fail', '--as', 'zurich', 'x'])).toMatchObject({ repo: 'csoylu/atlas', ciJob: 'test', changelog: true });
-    expect(parseArgs(['2', '--fail', '--as', 'zurich', 'x', '--repo', 'datinel/datinel', '--ci-job', 'any', '--no-changelog'])).toMatchObject({ repo: 'datinel/datinel', ciJob: null, changelog: false });
+  it('parses --repo and --ci-job (any = every check); defaults are Atlas’s; --no-changelog is gone (#238)', async () => {
+    expect(parseArgs(['2', '--fail', '--as', 'zurich', 'x'])).toMatchObject({ repo: 'csoylu/atlas', ciJob: 'test' });
+    expect(parseArgs(['2', '--fail', '--as', 'zurich', 'x', '--repo', 'datinel/datinel', '--ci-job', 'any'])).toMatchObject({ repo: 'datinel/datinel', ciJob: null });
+    expect(() => parseArgs(['2', '--fail', '--as', 'zurich', 'x', '--no-changelog'])).toThrow(/unknown option --no-changelog/);
     expect(parseArgs(['2', '--fail', '--as', 'zurich', 'x', '--ci-job', 'ci'])).toMatchObject({ ciJob: 'ci' });
     expect(() => parseArgs(['2', '--fail', '--as', 'zurich', 'x', '--repo', 'nope'])).toThrow(/owner\/name/);
   });
-  it('without a changelog: no changed files read, no entry needed, no release wording', async () => {
-    const f = fakeGh({ files: [code] });
-    const out = await validate(ok({ merge: true, changelog: false }), f.gh);
-    expect(f.calls.some((c) => /compare|contents/.test(c[1]))).toBe(false);
-    expect(out.join('\n')).not.toMatch(/release/);
+  it('any check: every latest check run green (skipped counts), a red one named', async () => {
+    const ci = [{ id: 1, name: 'build', status: 'completed', conclusion: 'success' }, { id: 2, name: 'lint', status: 'completed', conclusion: 'skipped' }];
+    await expect(validate(ok({ repo: 'csoylu/atlas', ciJob: null }), fakeGh({ ci }).gh)).resolves.toBeDefined();
+    const red = [...ci, { id: 3, name: 'e2e', status: 'completed', conclusion: 'failure' }];
+    await expect(validate(ok({ ciJob: null }), fakeGh({ ci: red }).gh)).rejects.toThrow(/CI check "e2e" is failure/);
   });
 });
 
 describe('validate.mjs --fail', () => {
   it('sets failure with the reason, without checking CI or the sha', async () => {
     const f = fakeGh({ ci: [] });
-    await validate({ pr: 2, verdict: 'failure', sha: null, as: 'zurich', reason: 'screenshot shows overflow', merge: false, base: 'main' }, f.gh);
+    await validate({ pr: 2, verdict: 'failure', sha: null, as: 'zurich', reason: 'screenshot shows overflow', merge: false, base: null, repo: 'csoylu/atlas', ciJob: 'test' }, f.gh);
     expect(f.statuses()[0]).toContain('state=failure');
     expect(f.calls.some((c) => /check-runs/.test(c[1]))).toBe(false);
   });
   it('truncates a long reason to GitHub’s 140 characters', async () => {
     const f = fakeGh();
-    await validate({ pr: 2, verdict: 'failure', sha: null, as: 'zurich', reason: 'x'.repeat(300), merge: false, base: 'main' }, f.gh);
+    await validate({ pr: 2, verdict: 'failure', sha: null, as: 'zurich', reason: 'x'.repeat(300), merge: false, base: null, repo: 'csoylu/atlas', ciJob: 'test' }, f.gh);
     const d = f.statuses()[0].find((a: string) => a.startsWith('description='))!.slice('description='.length);
     expect(d.length).toBeLessThanOrEqual(140);
   });

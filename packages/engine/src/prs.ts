@@ -35,6 +35,8 @@ export interface GhPr {
   ci: CardPr['ci'];
   qa: CardPr['qa'];
   qaDescription: string | null;
+  /** The failing check when ci is failure (#238): its name and link. Omitted = not known. */
+  ciFailed?: CardPr['ciFailed'];
 }
 export type GhRead = (repo: string, number: number) => Promise<GhPr>;
 
@@ -63,6 +65,8 @@ interface PrRow {
   error: string | null;
   error_since: string | null;
   reviewed_sha: string | null;
+  ci_failed_name: string | null;
+  ci_failed_url: string | null;
   failed_sha: string | null;
 }
 
@@ -77,6 +81,7 @@ const toPr = (r: PrRow): CardPr => ({
   mergeSha: r.merge_sha,
   mergeable: r.mergeable === null ? null : r.mergeable === 1,
   ci: r.ci,
+  ciFailed: r.ci_failed_name ? { name: r.ci_failed_name, url: r.ci_failed_url } : null,
   qa: r.qa,
   qaDescription: r.qa_description,
   checkedAt: r.checked_at,
@@ -210,10 +215,14 @@ export class Prs {
     this.db.transaction(() => {
       this.db
         .prepare(
-          `UPDATE card_prs SET state = ?, merge_sha = ?, head_sha = ?, branch = ?, base = ?, mergeable = ?, ci = ?, qa = ?,
-             qa_description = ?, checked_at = ?, error = NULL, error_since = NULL WHERE card_id = ? AND repo = ? AND number = ?`,
+          `UPDATE card_prs SET state = ?, merge_sha = ?, head_sha = ?, branch = ?, base = ?, mergeable = ?, ci = ?, ci_failed_name = ?,
+             ci_failed_url = ?, qa = ?, qa_description = ?, checked_at = ?, error = NULL, error_since = NULL WHERE card_id = ? AND repo = ? AND number = ?`,
         )
-        .run(got.state, got.mergeSha, got.headSha, got.branch, got.base, got.mergeable === null ? null : got.mergeable ? 1 : 0, got.ci, got.qa, got.qaDescription, at, cardId, pr.repo, pr.number);
+        .run(
+          got.state, got.mergeSha, got.headSha, got.branch, got.base, got.mergeable === null ? null : got.mergeable ? 1 : 0, got.ci,
+          got.ci === 'failure' ? (got.ciFailed?.name ?? null) : null, got.ci === 'failure' ? (got.ciFailed?.url ?? null) : null,
+          got.qa, got.qaDescription, at, cardId, pr.repo, pr.number,
+        );
       // GitHub reads again: its « can't read » item leaves the Inbox.
       const { changes } = this.db
         .prepare("UPDATE notifications SET archived_at = ?, read_at = COALESCE(read_at, ?) WHERE kind = 'github.unreadable' AND card_id = ? AND archived_at IS NULL")
@@ -261,7 +270,9 @@ export class Prs {
       if (p.headSha === null || p.headSha === this.failedSha(cardId, p)) continue;
       const why =
         p.ci === 'failure'
-          ? `CI failed on ${short(p.headSha)}`
+          ? p.ciFailed // the repo's own rules (tests, changelog entry…) are its CI checks (#238): name and link the red one
+            ? `CI check "${p.ciFailed.name}" failed on ${short(p.headSha)}${p.ciFailed.url ? ` (${p.ciFailed.url})` : ''}: its log says what to fix`
+            : `CI failed on ${short(p.headSha)}`
           : p.mergeable === false
             ? `conflicts with ${p.base ?? 'its base'}: rebase`
             : p.qa === 'failure'
@@ -438,9 +449,11 @@ export function ghReader(env: () => Promise<NodeJS.ProcessEnv>, gh = 'gh'): GhRe
     let ci: CardPr['ci'] = null;
     let qa: CardPr['qa'] = null;
     let qaDescription: string | null = null;
+    let ciFailed: CardPr['ciFailed'] = null;
     if (state === 'open') {
-      const runs = (await api(`repos/${repo}/commits/${pr.head.sha}/check-runs?per_page=100`)) as { check_runs: { status: string; conclusion: string | null }[] };
+      const runs = (await api(`repos/${repo}/commits/${pr.head.sha}/check-runs?per_page=100`)) as { check_runs: CheckRun[] };
       ci = combineChecks(runs.check_runs);
+      ciFailed = failedCheck(runs.check_runs);
       const st = (await api(`repos/${repo}/commits/${pr.head.sha}/status`)) as { statuses: { context: string; state: string; description: string | null }[] };
       const v = st.statuses.find((s) => s.context === 'qa/validated'); // newest first
       if (v) {
@@ -448,14 +461,30 @@ export function ghReader(env: () => Promise<NodeJS.ProcessEnv>, gh = 'gh'): GhRe
         qaDescription = v.description;
       }
     }
-    return { state, mergeSha: pr.merged ? pr.merge_commit_sha : null, headSha: pr.head.sha, branch: pr.head.ref, base: pr.base.ref, mergeable: pr.mergeable, ci, qa, qaDescription };
+    return { state, mergeSha: pr.merged ? pr.merge_commit_sha : null, headSha: pr.head.sha, branch: pr.head.ref, base: pr.base.ref, mergeable: pr.mergeable, ci, ciFailed, qa, qaDescription };
   };
 }
 
+interface CheckRun {
+  name?: string;
+  status: string;
+  conclusion: string | null;
+  html_url?: string | null;
+  details_url?: string | null;
+}
+const RED = ['failure', 'timed_out', 'cancelled', 'action_required', 'startup_failure'];
+const isRed = (r: CheckRun) => r.status === 'completed' && RED.includes(r.conclusion ?? '');
+
 /** The head's check runs as one state: any failure → failure, any not finished → pending, else success (none: null). */
-export function combineChecks(runs: { status: string; conclusion: string | null }[]): CardPr['ci'] {
+export function combineChecks(runs: CheckRun[]): CardPr['ci'] {
   if (!runs.length) return null;
-  if (runs.some((r) => r.status === 'completed' && ['failure', 'timed_out', 'cancelled', 'action_required', 'startup_failure'].includes(r.conclusion ?? ''))) return 'failure';
+  if (runs.some(isRed)) return 'failure';
   if (runs.some((r) => r.status !== 'completed')) return 'pending';
   return 'success';
+}
+
+/** The first red check run, named and linked (#238): what the builder opens to see which rule of the repo failed. */
+export function failedCheck(runs: CheckRun[]): CardPr['ciFailed'] {
+  const r = runs.find(isRed);
+  return r ? { name: r.name || 'a check', url: r.html_url || r.details_url || null } : null;
 }

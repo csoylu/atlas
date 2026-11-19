@@ -19,6 +19,9 @@
 //   node scripts/release/changelog.mjs full                prints the whole changelog, newest first, with versions
 //   node scripts/release/changelog.mjs check <before-sha>  exit 1 unless <before-sha>..HEAD adds exactly one entry
 //                                                           file and changes no other changelog file
+//   node scripts/release/changelog.mjs check <base> --pr   the same for a pull request (#238): CI runs it in the job
+//                                                           « test » on the PR's merge commit against its base (HEAD^1),
+//                                                           so the review gate only reads CI and never this rule
 import { execFileSync } from 'node:child_process';
 import { readdirSync, readFileSync } from 'node:fs';
 import { join } from 'node:path';
@@ -180,8 +183,11 @@ export function changelogRule(changes) {
 
 const STATUS = { A: 'added', D: 'removed' };
 
-/** CI, push to main: null when <before>..HEAD follows the rule (and the whole changelog still reads), else why not. */
-export function checkPush(cwd, before) {
+/**
+ * CI, push to main or pull request (#238): null when <before>..HEAD follows the rule (and the whole changelog still
+ * reads), else why not. `what` names it in the reason.
+ */
+export function checkPush(cwd, before, what = 'this push') {
   const diff = git(cwd, ['diff', '--no-renames', '--name-status', before, 'HEAD', '--', `${DIR}/`]);
   const changes = diff
     .split('\n')
@@ -191,7 +197,7 @@ export function checkPush(cwd, before) {
       return { path, status: STATUS[s[0]] ?? 'modified' };
     });
   const r = changelogRule(changes);
-  if (r.problem) return `this push: ${r.problem}`;
+  if (r.problem) return `${what}: ${r.problem}`;
   try {
     parseEntry(readFileSync(join(cwd, r.file), 'utf8'), r.file);
     readEntries(cwd);
@@ -203,20 +209,20 @@ export function checkPush(cwd, before) {
 
 // CLI
 if (import.meta.url === pathToFileURL(process.argv[1] ?? '').href) {
-  const [cmd, a] = process.argv.slice(2);
+  const [cmd, a, flag] = process.argv.slice(2);
   try {
     if (cmd === 'version') console.log(versionAt());
     else if (cmd === 'notes') process.stdout.write(notesOf(readEntries()));
     else if (cmd === 'full') process.stdout.write(fullOf(readEntries()));
     else if (cmd === 'check') {
-      if (!a) throw new Error('usage: check <before-sha>');
-      const reason = checkPush('.', a);
+      if (!a || (flag && flag !== '--pr')) throw new Error('usage: check <before-sha> [--pr]');
+      const reason = checkPush('.', a, flag ? 'this pull request' : 'this push');
       if (reason) {
         console.error(`CHANGELOG check failed: ${reason}`);
         process.exit(1);
       }
       console.log(`CHANGELOG check ok: one new entry, version ${versionAt()}`);
-    } else throw new Error('usage: changelog.mjs version|notes|full|check <before-sha>');
+    } else throw new Error('usage: changelog.mjs version|notes|full|check <before-sha> [--pr]');
   } catch (e) {
     console.error(e instanceof Error ? e.message : e);
     process.exit(1);
