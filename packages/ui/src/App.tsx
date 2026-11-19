@@ -55,7 +55,8 @@ function useRoute(): [Route, (hash: string) => void] {
     if (settings) {
       // The query stays (?card=…&msg=… from a memory's source link).
       if (path !== settings.path) history.replaceState(null, '', settings.path + location.hash.slice(path.length));
-      return { view: 'settings', target: settings.page, rest: settings.rest };
+      // #/settings alone: the list of pages (no target); a wide window opens the last page instead.
+      return { view: 'settings', target: settings.index ? null : settings.page, rest: settings.rest };
     }
     if (view === 'library') return { view: 'library', target: id ? decodeURIComponent(id) : null };
     // Old links: #/doc/<id> is the Library viewer; #/canvas/<id> (canvases are gone, #120) the Library's Canvases folder.
@@ -491,7 +492,11 @@ export function App() {
                   parts: [<span key="s" className="crumb-part">Settings</span>, <a key="p" className="crumb-link" href="#/settings/projects">Projects</a>],
                   title: pinfo.byId(route.rest.split('/')[0])?.name ?? (route.rest === 'new' ? 'New project' : 'Project'),
                 }
-              : { parts: [<span key="s" className="crumb-part">Settings</span>], title: settingsLabel(route.target as SettingsPage) }
+              : route.target === 'agents' && route.rest
+                ? { parts: [<span key="s" className="crumb-part">Settings</span>, <a key="a" className="crumb-link" href="#/settings/agents">Agents</a>], title: '@' + route.rest }
+                : route.target
+                  ? { parts: [<span key="s" className="crumb-part">Settings</span>], title: settingsLabel(route.target as SettingsPage) }
+                  : { parts: [], title: 'Settings' }
               : { parts: [], title: 'Document' };
   const paletteCtx: PaletteContext = {
     view: route.view,
@@ -506,7 +511,7 @@ export function App() {
     chatId: openChat?.id ?? null,
   };
   /** A pushed screen's way back on a narrow window (no sidebar there): Chats for a chat, More for settings… */
-  const back = narrow ? backOf(route.view, route.target) : null;
+  const back = narrow ? backOf(route.view, route.target, route.rest) : null;
   const backButton = back && (
     <button type="button" className="head-back" aria-label={back.label} title={back.label} onClick={() => go(back.hash)}>
       <Icon.back />
@@ -661,7 +666,7 @@ export function App() {
         title="Settings"
         aria-current={route.view === 'settings' ? 'page' : undefined}
         onClick={() => {
-          if (route.view !== 'settings') go('#/settings/' + (localStorage.getItem('atlas.settings') ?? 'agents'));
+          if (route.view !== 'settings') go(narrow ? '#/settings' : '#/settings/' + (localStorage.getItem('atlas.settings') ?? 'agents'));
         }}
       >
         <Icon.gear />
@@ -696,7 +701,8 @@ export function App() {
           {route.view !== 'inbox' && <header className="screen-head">
             {backButton}
             <div className="crumb">
-              {crumb.parts.map((p, i) => (
+              {/* A settings page on a narrow window: the back button and the page's name only (#272). */}
+              {(narrow && route.view === 'settings' ? [] : crumb.parts).map((p, i) => (
                 <span key={i} className="crumb-part">
                   {p}
                   <span className="crumb-sep" aria-hidden="true">
@@ -780,7 +786,8 @@ export function App() {
           />
         ) : route.view === 'settings' ? (
           <SettingsView
-            page={route.target as SettingsPage}
+            page={route.target as SettingsPage | null}
+            narrow={narrow}
             memoryRest={route.rest}
             cards={cards}
             chats={chats}

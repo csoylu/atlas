@@ -6,7 +6,7 @@ import { KindIcon } from './Viewer.tsx';
 import { StatusIcon, STATUS_LABEL } from './StatusIcon.tsx';
 import { Avatar } from './Board.tsx';
 import { moveSel, rank, sectionOrder, type PaletteItem } from './palette.ts';
-import { SETTINGS_PAGES } from './settingsPages.ts';
+import { MODEL_SECTIONS, modelsHref, SETTINGS_PAGES } from './settingsPages.ts';
 import { SHORTCUTS } from './keys.ts';
 import { ProjDot, ProjTag, useProjectFilter, useProjects } from './projects.tsx';
 
@@ -62,6 +62,17 @@ export function Palette(props: {
     input.current?.focus();
     api.documents().then((ds) => setDocs([...ds].sort((a, b) => b.updatedAt.localeCompare(a.updatedAt))), onError);
   }, [onError]);
+  // Esc closes it wherever the focus is: a task opened behind it can take the focus (its composer) after it opened.
+  useEffect(() => {
+    const key = (e: KeyboardEvent) => {
+      if (e.key !== 'Escape' || e.defaultPrevented) return;
+      e.preventDefault();
+      e.stopPropagation();
+      onClose();
+    };
+    window.addEventListener('keydown', key, true);
+    return () => window.removeEventListener('keydown', key, true);
+  }, [onClose]);
 
   const rows = useMemo<Row[]>(() => {
     const act = (fn: () => void) => () => {
@@ -118,6 +129,8 @@ export function Palette(props: {
     nav('go:library', 'Go to Library', '#/library', <Icon.library />, 'G L', 'documents artifacts');
     nav('go:workflows', 'Go to Workflows', '#/workflows', <Icon.workflows />, 'G W');
     for (const p of SETTINGS_PAGES) nav('go:settings:' + p.id, 'Settings: ' + p.label, '#/settings/' + p.id, <Icon.gear />, undefined, 'preferences');
+    // The four sections of Models & accounts (#272) stay one step away, as when they were pages.
+    for (const m of MODEL_SECTIONS) nav('go:settings:models:' + m.id, 'Settings: Models & accounts › ' + m.label, modelsHref(m.id), <Icon.gear />, undefined, 'preferences models');
     const action = (id: string, title: string, icon: ReactNode, run: () => void, kbd?: string, keywords?: string) =>
       out.push({ id, section: 'Actions', title, icon, kbd, keywords, run: act(run) });
     action('new-card', 'New task', <Icon.plus />, props.onNewCard, 'C', 'create ticket issue');

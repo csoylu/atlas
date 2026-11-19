@@ -12,7 +12,8 @@ import { UsageSection } from './Usage.tsx';
 import { ProfileSettings } from './Profile.tsx';
 import { SecretsPage } from './SecretsPage.tsx';
 import { VoiceSettings } from './VoiceSettings.tsx';
-import { SETTINGS_GROUPS, type SettingsPage } from './settingsPages.ts';
+import { findSettings, MODEL_SECTIONS, modelSectionOf, modelsHref, SETTINGS_GROUPS, SETTINGS_PAGES, type ModelSection, type SettingsPage } from './settingsPages.ts';
+import { HeaderActions, Icon } from './ScreenHeader.tsx';
 import { ProjectsPage } from './ProjectsPage.tsx';
 import { useProjects } from './projects.tsx';
 import { THEMES, type ThemeChoice } from './theme.ts';
@@ -21,12 +22,15 @@ import { UpdateAbout } from './UpdateDialog.tsx';
 import { Skeleton } from './Kit.tsx';
 
 /**
- * Settings (design §12): a second navigation inside the sheet, grouped (Team, Models, Insight, App), and the page on
- * the right. Each page reuses the section components that used to live on the Agents and Models pages.
+ * Settings (design §12, redesign #272 « Agents » / « Memory »): one header (« Settings » and « Find a setting »), a
+ * grouped navigation (Team, Models, App) and the page. On a narrow window #/settings is the list of pages and each page
+ * has the shell's back button and its name as the title.
  */
 export function SettingsView(props: {
-  page: SettingsPage;
-  /** What follows #/settings/memory: a scope (« agent:atlas »), a memory (« m12 ») or nothing. */
+  /** null: #/settings alone, the list of pages (a wide window opens the last page instead). */
+  page: SettingsPage | null;
+  narrow: boolean;
+  /** What follows the page: a memory scope or m12, a project, an agent, a models section. */
   memoryRest: string;
   cards: Card[];
   chats: Card[];
@@ -50,16 +54,14 @@ export function SettingsView(props: {
   onError(e: unknown): void;
 }) {
   const { page, stream, onError } = props;
-  const go = (p: SettingsPage) => (location.hash = '#/settings/' + p);
 
-  // Counts in the sub-navigation, and the key store the subscription and API key sections mention.
+  // Counts in the navigation and the models section links, and the key store the subscription and API key sections mention.
   const [claudeAccounts, setClaudeAccounts] = useState<number | null>(null);
   const [apiKeys, setApiKeys] = useState<number | null>(null);
   const [keyStore, setKeyStore] = useState<string | null>(null);
   const [secretCount, setSecretCount] = useState<number | null>(null);
   // Voice exists only in the desktop app (About.voice): hidden from the navigation elsewhere.
   const [voice, setVoice] = useState(false);
-  const groups = SETTINGS_GROUPS.map((g) => ({ ...g, pages: g.pages.filter((p) => p.id !== 'voice' || voice) }));
   const loadCounts = useCallback(() => {
     api.claude().then((c) => setClaudeAccounts(c.accounts.length), onError);
     api.accounts().then((a) => setApiKeys(a.length), onError);
@@ -87,112 +89,184 @@ export function SettingsView(props: {
     props.onModelsChanged();
   };
 
+  // A wide window has the navigation beside the page: #/settings alone opens the last page.
+  useEffect(() => {
+    if (page === null && !props.narrow) location.replace('#/settings/' + (localStorage.getItem('atlas.settings') ?? 'agents'));
+  }, [page, props.narrow]);
+
+  // « Find a setting »: page names and a few words per page (settingsPages.ts), never every control.
+  const [find, setFind] = useState('');
+  const visible = SETTINGS_PAGES.filter((p) => p.id !== 'voice' || voice);
+  const found = new Set(findSettings(find, visible));
+  const groups = SETTINGS_GROUPS.map((g) => ({ ...g, pages: g.pages.filter((p) => found.has(p.id)) })).filter((g) => g.pages.length);
+
   const projects = useProjects();
+  const subscriptions = claudeAccounts === null || !props.chatgpt ? null : claudeAccounts + props.chatgpt.accounts.length;
   const counts: Partial<Record<SettingsPage, number | null>> = {
     projects: projects.active.length,
     agents: props.agents.length,
     secrets: secretCount,
-    subscriptions: claudeAccounts === null || !props.chatgpt ? null : claudeAccounts + props.chatgpt.accounts.length,
-    'api-keys': apiKeys,
-    'model-list': props.models.length,
+    models: props.models.length,
   };
+
+  const nav = (cls: string) => (
+    <nav className={cls} aria-label="Settings">
+      {groups.map((g) => (
+        <div key={g.title} className="settings-group" role="group" aria-label={g.title}>
+          <div className="settings-group-title">{g.title}</div>
+          {g.pages.map((p) => (
+            <a key={p.id} href={'#/settings/' + p.id} className={'nav-item' + (page === p.id ? ' active' : '')} aria-current={page === p.id ? 'page' : undefined}>
+              <span>{p.label}</span>
+              {counts[p.id] != null && <span className="settings-count">{counts[p.id]}</span>}
+              {cls === 'settings-index' && <Icon.chev />}
+            </a>
+          ))}
+        </div>
+      ))}
+      {!groups.length && (
+        <p className="settings-none" role="status">
+          No setting matches « {find.trim()} ».
+        </p>
+      )}
+    </nav>
+  );
 
   return (
     <div className="settings">
-      <nav className="settings-nav" aria-label="Settings">
-        {groups.map((g) => (
-          <div key={g.title} className="settings-group" role="group" aria-label={g.title}>
-            <div className="settings-group-title">{g.title}</div>
-            {g.pages.map((p) => (
-              <a
-                key={p.id}
-                href={'#/settings/' + p.id}
-                className={'nav-item' + (page === p.id ? ' active' : '')}
-                aria-current={page === p.id ? 'page' : undefined}
-              >
-                <span>{p.label}</span>
-                {counts[p.id] != null && <span className="settings-count">{counts[p.id]}</span>}
-              </a>
-            ))}
+      {!props.narrow && (
+        <HeaderActions>
+          <span className="head-sp" />
+          <label className="mem-search settings-find">
+            <Icon.search />
+            <input
+              type="search"
+              value={find}
+              placeholder="Find a setting"
+              aria-label="Find a setting"
+              onChange={(e) => setFind(e.target.value)}
+              onKeyDown={(e) => {
+                if (e.key === 'Escape') {
+                  setFind('');
+                  e.currentTarget.blur();
+                } else if (e.key === 'Enter' && find.trim()) {
+                  const first = groups[0]?.pages[0];
+                  if (first) {
+                    location.hash = '#/settings/' + first.id;
+                    setFind('');
+                  }
+                }
+              }}
+            />
+          </label>
+        </HeaderActions>
+      )}
+      {!props.narrow && nav('settings-nav')}
+      {page === null ? (
+        props.narrow && <div className="settings-main settings-list">{nav('settings-index')}</div>
+      ) : (
+        <div className="settings-main settings-view" key={page === 'projects' || page === 'agents' ? page + '/' + props.memoryRest.split('/')[0] : page}>
+          <div className="setb">
+            {page === 'projects' ? (
+              <ProjectsPage rest={props.memoryRest} agents={props.agents} cards={props.cards} workflows={props.workflows} onError={onError} />
+            ) : page === 'agents' ? (
+              <AgentsView rest={props.memoryRest} settings={props.settings} cards={props.cards} chats={props.chats} onSettings={props.onSettings} onAgentsChanged={props.onAgentsChanged} onError={onError} />
+            ) : page === 'memory' ? (
+              <MemoryPage rest={props.memoryRest} agents={props.agents} cards={props.cards} chats={props.chats} stream={stream} settings={props.settings} models={props.models} onSettings={props.onSettings} onError={onError} />
+            ) : page === 'board' ? (
+              <BoardSettings settings={props.settings} agents={props.agents} onSettings={props.onSettings} onError={onError} />
+            ) : page === 'secrets' ? (
+              <SecretsPage agents={props.agents} cards={props.cards} models={props.models} status={props.secretStatus} userName={props.settings?.userName ?? null} stream={stream} onError={onError} />
+            ) : page === 'models' ? (
+              <ModelsPage
+                section={modelSectionOf(props.memoryRest)}
+                counts={{ subscriptions, 'api-keys': apiKeys, local: null, 'model-list': props.models.length }}
+                stream={stream}
+                keyStore={keyStore}
+                agents={props.agents}
+                chatgpt={props.chatgpt}
+                onChanged={modelsChanged}
+                onError={onError}
+              />
+            ) : page === 'usage' ? (
+              <UsageSection stream={stream} onError={onError} />
+            ) : page === 'profile' ? (
+              <ProfileSettings settings={props.settings} onSettings={props.onSettings} />
+            ) : page === 'appearance' ? (
+              <Appearance theme={props.theme} onTheme={props.onTheme} />
+            ) : page === 'voice' ? (
+              voice ? (
+                <VoiceSettings stream={stream} onError={onError} />
+              ) : (
+                <section>
+                  <header className="section-head">
+                    <h2>Voice</h2>
+                    <p>Voice mode runs on the Mac with the Atlas desktop app: open Settings → Voice there.</p>
+                  </header>
+                </section>
+              )
+            ) : (
+              <AboutData update={props.update} onOpenUpdate={props.onOpenUpdate} onError={onError} />
+            )}
           </div>
+        </div>
+      )}
+    </div>
+  );
+}
+
+/**
+ * Models & accounts (#272): the four former model pages as four sections of one page, one link each at the top, so
+ * API keys or the model list stay one click away (#/settings/models/<section>; the old hashes land here).
+ */
+function ModelsPage(props: {
+  section: ModelSection;
+  counts: Record<ModelSection, number | null>;
+  stream: MessageStream;
+  keyStore: string | null;
+  agents: Agent[];
+  chatgpt: ChatGptStatus | null;
+  onChanged(): void;
+  onError(e: unknown): void;
+}) {
+  const { section: s, stream, onChanged, onError } = props;
+  return (
+    <>
+      <div className="set-head">
+        <h2>Models &amp; accounts</h2>
+      </div>
+      <p className="set-lead">Which models your agents can use, and the plans, keys and local server they run on.</p>
+      <nav className="view-tabs set-tabs" aria-label="Models & accounts">
+        {MODEL_SECTIONS.map((x) => (
+          <a key={x.id} href={modelsHref(x.id)} className={'tabbtn' + (s === x.id ? ' on' : '')} aria-current={s === x.id ? 'page' : undefined}>
+            {x.label}
+            {props.counts[x.id] != null && <span className="tab-n">{props.counts[x.id]}</span>}
+          </a>
         ))}
       </nav>
-      <div className="settings-main">
-        <div className="settings-select">
-          <select aria-label="Settings page" value={page} onChange={(e) => go(e.target.value as SettingsPage)}>
-            {groups.map((g) => (
-              <optgroup key={g.title} label={g.title}>
-                {g.pages.map((p) => (
-                  <option key={p.id} value={p.id}>
-                    {p.label}
-                    {counts[p.id] != null ? ` (${counts[p.id]})` : ''}
-                  </option>
-                ))}
-              </optgroup>
-            ))}
-          </select>
+      {s === 'subscriptions' ? (
+        <>
+          <ClaudePlanSection stream={stream} keyStore={props.keyStore} onChanged={onChanged} onError={onError} />
+          <ChatGptSection status={props.chatgpt} onChanged={onChanged} onError={onError} />
+        </>
+      ) : s === 'api-keys' ? (
+        <AccountsSection keyStore={props.keyStore} onChanged={onChanged} onError={onError} />
+      ) : s === 'local' ? (
+        <div className="models-view">
+          <LocalModels stream={stream} agents={props.agents} onModelsChanged={onChanged} onError={onError} />
         </div>
-        {page === 'memory' ? (
-          // Memory (#87, from the Library): a full-height list with its own scroller, not a padded settings column.
-          <div className="settings-view settings-memory">
-            <MemoryPage rest={props.memoryRest} agents={props.agents} cards={props.cards} chats={props.chats} stream={stream} settings={props.settings} models={props.models} onSettings={props.onSettings} onError={onError} />
-          </div>
-        ) : (
-        <div className="agents-view settings-view" key={page === 'projects' ? page + '/' + props.memoryRest.split('/')[0] : page}>
-          {page === 'projects' ? (
-            <ProjectsPage rest={props.memoryRest} agents={props.agents} cards={props.cards} workflows={props.workflows} onError={onError} />
-          ) : page === 'agents' ? (
-            <AgentsView settings={props.settings} onSettings={props.onSettings} onAgentsChanged={props.onAgentsChanged} onError={onError} />
-          ) : page === 'board' ? (
-            <BoardSettings settings={props.settings} agents={props.agents} onSettings={props.onSettings} onError={onError} />
-          ) : page === 'secrets' ? (
-            <SecretsPage agents={props.agents} cards={props.cards} models={props.models} status={props.secretStatus} userName={props.settings?.userName ?? null} stream={stream} onError={onError} />
-          ) : page === 'subscriptions' ? (
-            <>
-              <ClaudePlanSection stream={stream} keyStore={keyStore} onChanged={modelsChanged} onError={onError} />
-              <ChatGptSection status={props.chatgpt} onChanged={modelsChanged} onError={onError} />
-            </>
-          ) : page === 'api-keys' ? (
-            <AccountsSection keyStore={keyStore} onChanged={modelsChanged} onError={onError} />
-          ) : page === 'local' ? (
-            <div className="models-view">
-              <LocalModels stream={stream} agents={props.agents} onModelsChanged={modelsChanged} onError={onError} />
-            </div>
-          ) : page === 'model-list' ? (
-            <ModelListSection stream={stream} chatgpt={props.chatgpt} onChanged={modelsChanged} onError={onError} />
-          ) : page === 'usage' ? (
-            <UsageSection stream={stream} onError={onError} />
-          ) : page === 'profile' ? (
-            <ProfileSettings settings={props.settings} onSettings={props.onSettings} />
-          ) : page === 'appearance' ? (
-            <Appearance theme={props.theme} onTheme={props.onTheme} />
-          ) : page === 'voice' ? (
-            voice ? (
-              <VoiceSettings stream={stream} onError={onError} />
-            ) : (
-              <section>
-                <header className="section-head">
-                  <h2>Voice</h2>
-                  <p>Voice mode runs on the Mac with the Atlas desktop app: open Settings → Voice there.</p>
-                </header>
-              </section>
-            )
-          ) : (
-            <AboutData update={props.update} onOpenUpdate={props.onOpenUpdate} onError={onError} />
-          )}
-        </div>
-        )}
-      </div>
-    </div>
+      ) : (
+        <ModelListSection stream={stream} chatgpt={props.chatgpt} onChanged={onChanged} onError={onError} />
+      )}
+    </>
   );
 }
 
 function BoardSettings(props: { settings: Settings | null; agents: Agent[]; onSettings(s: Settings): void; onError(e: unknown): void }) {
   return (
-    <section>
+    <section className="set-page">
       <header className="section-head">
         <h2>Board &amp; triage</h2>
-        <p>Choose who turns ideas in Triage into actionable tasks.</p>
+        <p>Choose who turns ideas in Triage into actionable tasks, and who checks pull requests.</p>
       </header>
       {props.settings ? (
         <label className="field settings-field">

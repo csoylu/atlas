@@ -2869,3 +2869,96 @@ button.wfl-ghead:hover { color: var(--text); background: var(--hover); }
 .artifact.deleted { border-style: dashed; background: transparent; }
 .artifact.deleted .art-icon { background: var(--hover); color: var(--muted); }
 .artifact.deleted .art-title { color: var(--muted); }
+
+/* ── Settings redesign (#272, mockup « Agents » / « Memory »): one header, Team · Models · App, a 860 px column ── */
+.settings-main { overflow-y: auto; }
+.setb { max-width: 860px; padding: 20px 24px 48px; display: flex; flex-direction: column; gap: 12px; }
+.setb > section, .setb > .set-page, .setb > .models-view { display: flex; flex-direction: column; gap: 12px; }
+.setb > section + section, .setb > section + .models-view { margin-top: 20px; }
+.setb .section-head p { margin: 4px 0 0; }
+.setb .section-head { margin-bottom: 4px; }
+.set-head { display: flex; align-items: center; gap: 10px; min-width: 0; }
+.set-head h2 { margin: 0; font-size: var(--fs-large); font-weight: var(--fw-bold); line-height: var(--lh-tight); min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.set-head .dot-avatar { width: 28px; height: 28px; flex: none; }
+.set-head .switch { margin-left: 0; }
+.set-lead { margin: 0; color: var(--muted); font-size: var(--fs-base); line-height: var(--lh-normal); max-width: 760px; }
+.set-lead a, .set-link { color: var(--accent); }
+.set-card { border: 1px solid var(--line); border-radius: var(--radius-card); background: var(--sheet); padding: 16px; display: flex; flex-direction: column; gap: 12px; }
+.set-link { flex-direction: row; align-items: center; gap: 8px; padding: 10px 14px; text-decoration: none; font-size: var(--fs-base); }
+.set-link .muted { font-size: var(--fs-small); white-space: nowrap; }
+.set-link { flex-wrap: wrap; }
+.set-link .over { color: var(--negative); }
+.set-link > .icon:last-child { color: var(--muted); }
+.set-link:hover { background: var(--hover); }
+.set-danger { display: flex; align-items: center; justify-content: flex-end; gap: 8px; flex-wrap: wrap; }
+.set-tabs { margin-left: 0; flex-wrap: wrap; }
+.set-tabs .tabbtn { text-decoration: none; }
+.set-fold { border: 1px solid var(--line); border-radius: var(--radius-card); padding: 0 14px; }
+.set-fold > summary { cursor: pointer; padding: 10px 0; color: var(--muted); font-size: var(--fs-small); }
+.set-fold[open] > summary { color: var(--text); }
+.set-fold > .field, .set-fold > .hint { margin: 0 0 12px; }
+.set-list { border: 1px solid var(--line); border-radius: var(--radius-card); overflow: hidden; }
+.setb .state-empty.set-list { padding: 24px 16px; }
+.settings-find { width: 220px; }
+.settings-none { margin: 8px 10px; color: var(--muted); font-size: var(--fs-small); line-height: var(--lh-normal); }
+/* Phone: #/settings is the list of pages, each row a link with its chevron. */
+.settings-list .settings-index { padding: 8px 12px 24px; display: flex; flex-direction: column; gap: 2px; }
+.settings-index .settings-group-title { padding: 14px 10px 4px; }
+.settings-index .nav-item { height: 44px; font-size: var(--fs-large); text-decoration: none; }
+.settings-index .nav-item > .icon:last-child { color: var(--faint); margin-left: auto; flex: none; }
+.settings-index .nav-item > .settings-count + .icon { margin-left: 8px; }
+.settings-index .nav-item .settings-count { font-size: var(--fs-base); }
+/* Agents: one row per agent; the name opens its page (the whole row is the link, the switch sits above it). */
+.agr { position: relative; display: grid; grid-template-columns: 28px minmax(0, 1fr) 150px 80px 100px 34px 16px; gap: 14px; align-items: center; padding: 10px 14px; border-top: 1px solid var(--line); }
+.agr:first-child { border-top: 0; }
+.agr:hover { background: var(--hover); }
+.agr > .dot-avatar { width: 28px; height: 28px; }
+.agr-main { min-width: 0; }
+.agr .agr-open { display: flex; align-items: center; gap: 8px; color: var(--text); font-weight: var(--fw-medium); text-decoration: none; font-size: var(--fs-base); line-height: var(--lh-tight); }
+.agr-open::after { content: ''; position: absolute; inset: 0; }
+.agr-open:focus-visible { outline: none; }
+.agr:has(.agr-open:focus-visible) { box-shadow: inset 0 0 0 2px var(--accent); }
+.agr-sub { margin-top: 2px; color: var(--muted); font-size: var(--fs-small); line-height: var(--lh-tight); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.agr-model { font: var(--fw-regular) var(--fs-small) var(--mono); color: var(--muted); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.agr-model.bad { color: var(--neg-ink); }
+.agr-n { font-size: var(--fs-small); color: var(--muted); white-space: nowrap; }
+.agr-state { font-size: var(--fs-small); color: var(--muted); }
+.agr > .icon:last-child { color: var(--muted); width: 15px; height: 15px; }
+.agr.off .agr-open { color: var(--muted); }
+.agent-page.off .set-card { border-style: dashed; }
+/* Memory: kind, text with its id, scope; the row opens its detail (when, by whom, source, edit, pin, archive). */
+.meml .mem-row { grid-template-columns: 90px minmax(0, 1fr) 200px; gap: 6px 14px; align-items: start; padding: 10px 14px; border-bottom: 0; border-top: 1px solid var(--line); }
+.meml .mem-row:first-child { border-top: 0; }
+.meml .mem-row.open { background: var(--hover); }
+.meml .mem-k { margin-top: 2px; }
+.meml .mem-t { cursor: pointer; font-size: var(--fs-base); }
+.meml .mem-scope { flex-wrap: wrap; padding-top: 3px; }
+.meml .mem-scope > span:last-child { overflow: visible; }
+.mem-who { display: inline-flex; align-items: center; gap: 4px; }
+.mem-who .dot-avatar { width: 16px; height: 16px; }
+.mem-detail { grid-column: 2 / -1; display: flex; align-items: center; gap: 8px; flex-wrap: wrap; min-width: 0; }
+.mem-detail .mem-edit { flex: 1; }
+.mem-meta { font-size: var(--fs-small); color: var(--muted); line-height: var(--lh-normal); }
+.mem-meta a { color: var(--accent); }
+.mem-acts .btn.on { color: var(--accent); }
+.memory-page .mem-chips { flex: none; flex-wrap: wrap; overflow: visible; }
+.memory-page .mem-note { border: 0; padding: 0; }
+@media (max-width: 640px) {
+  .setb { padding: 14px 12px 32px; }
+  .agr { grid-template-columns: 28px minmax(0, 1fr) 34px 16px; gap: 10px; }
+  .agr-model, .agr-n { display: none; }
+  .meml .mem-row { grid-template-columns: minmax(0, 1fr); grid-template-areas: none; gap: 6px; }
+  .meml .mem-row > * { grid-area: auto; }
+  .mem-detail { grid-column: 1; }
+  .memory-page .set-head { flex-wrap: wrap; }
+  .memory-page .set-head .mem-search { width: 100%; order: 9; height: 36px; }
+  .memory-page .set-head .mem-search input { font-size: var(--fs-large); }
+  .memory-page .set-head .head-sp { display: none; }
+}
+.setb > .memory-page { flex: none; min-height: auto; }
+.settings-view .agr .agr-open, .settings-view .set-link { color: var(--text); }
+.settings-view .set-link .set-link-go { color: var(--accent); }
+.settings-view .set-tabs a.tabbtn { color: var(--muted); }
+.settings-view .set-tabs a.tabbtn.on, .settings-view .set-tabs a.tabbtn:hover { color: var(--text); }
+.set-tabs { margin-bottom: 8px; padding-bottom: 12px; border-bottom: 1px solid var(--line); }
+.setb .section-head h2 { font-size: var(--fs-large); line-height: var(--lh-tight); }

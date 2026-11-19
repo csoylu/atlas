@@ -30,14 +30,17 @@ export function tabOf(view: string): Tab {
  * the route's id (a chat, a workflow). Chats come from the Chats list, Workflows and Settings from More. A Library
  * document has its own « ‹ Library » in the viewer.
  */
-export function backOf(view: string, target: string | null): { hash: string; label: string } | null {
+export function backOf(view: string, target: string | null, rest = ''): { hash: string; label: string } | null {
   switch (view) {
     case 'chat':
       return { hash: '#/chats', label: 'Back to chats' };
     case 'workflows':
       return target ? { hash: '#/workflows', label: 'Back to workflows' } : { hash: '#/more', label: 'Back to more' };
     case 'settings':
-      return { hash: '#/more', label: 'Back to more' };
+      // #/settings alone is the list of pages (#272): a page goes back to it, an agent or a project to its page.
+      if (!target) return { hash: '#/more', label: 'Back to more' };
+      if (rest && (target === 'agents' || target === 'projects')) return { hash: '#/settings/' + target, label: target === 'agents' ? 'Back to agents' : 'Back to projects' };
+      return { hash: '#/settings', label: 'Back to settings' };
     default:
       return null;
   }
