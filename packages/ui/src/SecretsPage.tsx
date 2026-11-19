@@ -7,6 +7,7 @@ import { agentSecrets, agoText, cleanName, deleteText, grantees, modelKeyRow, st
 import type { MessageStream } from './useMessages.ts';
 import { HeaderActions } from './ScreenHeader.tsx';
 import { effectiveFilter, inFilter, ProjectFilterButton, ProjTag, projectForNew, useProjectFilter, useProjects } from './projects.tsx';
+import { Skeleton } from './Kit.tsx';
 
 /**
  * Settings → Secrets (#209, mockup #205): agent secrets (API keys, tokens, RPC URLs agents use as $NAME in shell
@@ -34,7 +35,7 @@ export function SecretsPage(props: { agents: Agent[]; cards: Card[]; models: Mod
   const pinfo = useProjects();
   const [pfRaw, setPf] = useProjectFilter();
   const pf = effectiveFilter(pfRaw, pinfo, true);
-  if (!list || !status) return <div className="model-row skeleton" />;
+  if (!list || !status) return <Skeleton />;
   const locked = status.kind === 'file' && status.locked;
   const writable = status.kind !== 'env' && !locked;
   const allMine = agentSecrets(list.secrets);
@@ -78,7 +79,7 @@ export function SecretsPage(props: { agents: Agent[]; cards: Card[]; models: Mod
         {locked && <LockedPanel status={status} keys={keys.filter((k) => k.hasValue).map((k) => modelKeyRow(k, accounts, props.models).title)} onError={onError} />}
         <div className="model-list">
           {!mine.length && !adding && (
-            <div className="empty-note">
+            <div className="state-empty">
               No agent secret yet. {writable ? 'Add one here, or an' : 'An'} agent saves one with its <span className="mono">secret_set</span> tool and it shows up here.
             </div>
           )}
@@ -130,22 +131,22 @@ export function SecretsPage(props: { agents: Agent[]; cards: Card[]; models: Mod
                   <div className="model-actions">
                     {s.hasValue ? (
                       <>
-                        <button className="tool" onClick={() => toggle(s.name, 'replace')}>
+                        <button className="btn" onClick={() => toggle(s.name, 'replace')}>
                           Replace value
                         </button>
-                        <button className="ghost" onClick={() => toggle(s.name, 'edit')}>
+                        <button className="btn ghost" onClick={() => toggle(s.name, 'edit')}>
                           Edit
                         </button>
-                        <button className="ghost danger" onClick={() => toggle(s.name, 'delete')}>
+                        <button className="btn ghost danger" onClick={() => toggle(s.name, 'delete')}>
                           Delete
                         </button>
                       </>
                     ) : (
                       <>
-                        <button className="primary small" onClick={() => toggle(s.name, 'replace')}>
+                        <button className="btn primary small" onClick={() => toggle(s.name, 'replace')}>
                           Add the value
                         </button>
-                        <button className="ghost danger" onClick={() => toggle(s.name, 'delete')}>
+                        <button className="btn ghost danger" onClick={() => toggle(s.name, 'delete')}>
                           Dismiss
                         </button>
                       </>
@@ -176,7 +177,7 @@ export function SecretsPage(props: { agents: Agent[]; cards: Card[]; models: Mod
         </header>
         <div className="model-list">
           {!keys.length && (
-            <div className="empty-note">
+            <div className="state-empty">
               {status.kind === 'env' ? "This engine reads model keys from its environment: they aren't listed here." : 'No model key stored yet. Add one in API keys or on a model in Model list.'}
             </div>
           )}
@@ -202,10 +203,10 @@ export function SecretsPage(props: { agents: Agent[]; cards: Card[]; models: Mod
                 </div>
                 {writable && open?.name !== k.name && (
                   <div className="model-actions">
-                    <button className="tool" onClick={() => toggle(k.name, 'replace')}>
+                    <button className="btn" onClick={() => toggle(k.name, 'replace')}>
                       Replace value
                     </button>
-                    <button className="ghost" onClick={() => (location.hash = row.open.hash)}>
+                    <button className="btn ghost" onClick={() => (location.hash = row.open.hash)}>
                       {row.open.label}
                     </button>
                   </div>
@@ -344,7 +345,7 @@ function LockedPanel({ status, keys, onError }: { status: SecretStoreStatus; key
             </p>
             <form className="key-form" onSubmit={unlock}>
               <input type="password" autoComplete="current-password" placeholder="Secrets password" aria-label="Secrets password" value={password} onChange={(e) => setPassword(e.target.value)} />
-              <button className="primary small" disabled={!password || busy}>
+              <button className="btn primary small" disabled={!password || busy}>
                 {busy ? 'Unlocking…' : 'Unlock'}
               </button>
             </form>
@@ -358,7 +359,7 @@ function LockedPanel({ status, keys, onError }: { status: SecretStoreStatus; key
             <PasswordForm exists={false} onDone={() => undefined} onError={onError} />
           </>
         )}
-        {(error ?? status.error) && <p className="error-text">{error ?? `ATLAS_SECRETS_PASSWORD did not unlock it: ${status.error}`}</p>}
+        {(error ?? status.error) && <p className="state-err inline">{error ?? `ATLAS_SECRETS_PASSWORD did not unlock it: ${status.error}`}</p>}
         <div className="sec-paused">Paused until you unlock</div>
         <ul>
           <li>Shell commands that use a secret: they stop with « secrets are locked », the task waits and goes on after the unlock.</li>
@@ -413,14 +414,14 @@ function PasswordForm({ exists, onDone, onCancel, onError }: { exists: boolean; 
           <input type="password" autoComplete="new-password" value={f.again} onChange={(e) => setF({ ...f, again: e.target.value })} aria-invalid={mismatch} />
         </label>
       </div>
-      {mismatch && <p className="error-text">The two passwords differ.</p>}
+      {mismatch && <p className="state-err inline">The two passwords differ.</p>}
       <div className="actions">
         {onCancel && (
-          <button type="button" className="ghost" onClick={onCancel}>
+          <button type="button" className="btn ghost" onClick={onCancel}>
             Cancel
           </button>
         )}
-        <button className="primary small" disabled={!ok || busy}>
+        <button className="btn primary small" disabled={!ok || busy}>
           {exists ? 'Change the password' : 'Set the password'}
         </button>
       </div>
@@ -461,10 +462,10 @@ function ReplaceForm({ name, add, onDone, onCancel, onError }: { name: string; a
           value={value}
           onChange={(e) => setValue(e.target.value)}
         />
-        <button type="button" className="ghost" onClick={onCancel}>
+        <button type="button" className="btn ghost" onClick={onCancel}>
           Cancel
         </button>
-        <button className="primary small" disabled={!value.trim() || busy}>
+        <button className="btn primary small" disabled={!value.trim() || busy}>
           {add ? 'Add' : 'Replace'}
         </button>
       </form>
@@ -502,10 +503,10 @@ function DeleteConfirm(props: { secret: SecretInfo; cards: Card[]; allAgents: st
             </>
           )}
         </span>
-        <button type="button" className="ghost" onClick={props.onCancel}>
+        <button type="button" className="btn ghost" onClick={props.onCancel}>
           Cancel
         </button>
-        <button className="primary small danger" onClick={() => void del()}>
+        <button className="btn primary small danger" onClick={() => void del()}>
           {dismiss ? 'Dismiss' : 'Delete'}
         </button>
       </div>
@@ -591,7 +592,7 @@ function SecretForm(props: { secret?: SecretInfo; project?: string | null; agent
               ••••••••
             </span>
             <span className="muted">set {whenText(s.updatedAt)}, never shown again</span>
-            <button type="button" className="tool" onClick={props.onReplace}>
+            <button type="button" className="btn" onClick={props.onReplace}>
               Replace value
             </button>
           </div>
@@ -650,10 +651,10 @@ function SecretForm(props: { secret?: SecretInfo; project?: string | null; agent
         )}
       </p>
       <div className="actions">
-        <button type="button" className="ghost" onClick={props.onCancel}>
+        <button type="button" className="btn ghost" onClick={props.onCancel}>
           Cancel
         </button>
-        <button className="primary small" disabled={!ok || busy}>
+        <button className="btn primary small" disabled={!ok || busy}>
           {s ? 'Save' : 'Add'}
         </button>
       </div>

@@ -6,6 +6,8 @@ import { HeaderActions, Icon } from './ScreenHeader.tsx';
 import { api } from './api.ts';
 import { effectiveFilter, inFilter, ProjDot, ProjectFilterButton, ProjTag, projectForNew, useProjectFilter, useProjects } from './projects.tsx';
 import { StatusIcon, STATUS_LABEL } from './StatusIcon.tsx';
+import { PriorityMark } from './Kit.tsx';
+import { PRIORITIES, priorityName } from './priority.ts';
 import { Menu, PopRow } from './HeadMenu.tsx';
 import {
   columnsFor,
@@ -39,7 +41,6 @@ const TABS: { id: BoardTab; label: string; long?: string }[] = [
   { id: 'needs', label: 'Needs you' },
   { id: 'running', label: 'Running' },
 ];
-const PRIORITY_LABEL = ['No priority', 'P1', 'P2', 'P3'];
 
 /**
  * The Board in the Linear direction (design §16): header tabs All cards / Needs you / Running, Filter (agent,
@@ -185,9 +186,9 @@ export function Board(props: {
           <PopRow on={view.filter.agent === ''} onClick={() => save({ ...view, filter: { ...view.filter, agent: '' } })}>Unassigned</PopRow>
           <div className="pop-k">Priority</div>
           <PopRow on={view.filter.priority === null} onClick={() => save({ ...view, filter: { ...view.filter, priority: null } })}>Any priority</PopRow>
-          {[3, 2, 1, 0].map((p) => (
+          {PRIORITIES.map((p) => (
             <PopRow key={p} on={view.filter.priority === p} onClick={() => save({ ...view, filter: { ...view.filter, priority: p } })}>
-              {PRIORITY_LABEL[p]}
+              <PriorityMark p={p} />
             </PopRow>
           ))}
           {nFilters > 0 && (
@@ -220,7 +221,7 @@ export function Board(props: {
             <span className={'pop-switch' + (view.showEmpty ? ' on' : '')} aria-hidden="true" />
           </button>
         </Menu>
-        <button type="button" className="head-btn pri" onClick={() => setCreating('triage')} title="New task (C)" aria-label="New task">
+        <button type="button" className="btn primary" onClick={() => setCreating('triage')} title="New task (C)" aria-label="New task">
           <Icon.plus />
           <span className="btn-text">New task</span>
           <span className="kbd">C</span>
@@ -402,11 +403,7 @@ function Labels({ card: c, cards, tagged }: { card: Card; cards: Card[]; tagged:
   return (
     <div className="labels">
       {tagged && <ProjTag id={c.projectId} />}
-      {c.priority !== 0 && (
-        <span className={'lab prio p' + c.priority}>
-          <i />P{c.priority}
-        </span>
-      )}
+      {c.priority !== 0 && <PriorityMark p={c.priority} />}
       {showAfter && (
         <span className="lab" title={'After ' + after.join(', ')}>
           after {after.length === 1 ? after[0] : after.length}
@@ -535,15 +532,15 @@ function NewCard(props: { status: CardStatus; agents: Agent[]; filterAgent: stri
           </label>
           <label className="prop-pill" title="Priority">
             <select value={priority} onChange={(e) => setPriority(Number(e.target.value))} aria-label="Priority">
-              {[0, 1, 2, 3].map((p) => (
-                <option key={p} value={p}>{PRIORITY_LABEL[p]}</option>
+              {PRIORITIES.map((p) => (
+                <option key={p} value={p}>{p ? 'Priority ' + priorityName(p) : 'No priority'}</option>
               ))}
             </select>
           </label>
         </div>
         <div className="nc-foot">
           <span className="nc-note">{status === 'triage' ? (pinfo.multi && project ? (project.lead ? `${project.name}'s lead (${project.lead}) shapes it.` : `${project.name} has no lead: assign an agent so it runs.`) : 'The triage agent shapes it.') : assignee ? `@${assignee} picks it up when it is ready.` : 'Assign an agent so it runs.'}</span>
-          <button type="submit" className="primary small" disabled={!title.trim() || busy}>
+          <button type="submit" className="btn primary small" disabled={!title.trim() || busy}>
             Create task <span className="kbd">⌘↵</span>
           </button>
         </div>

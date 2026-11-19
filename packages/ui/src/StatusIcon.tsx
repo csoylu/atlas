@@ -20,12 +20,14 @@ export const STATUS_LABEL: Record<IconStatus, string> = {
 /**
  * Linear-style status circles, one per card status (design §16): triage dashed, todo/ready empty (todo grey, ready
  * bright), running half-filled yellow, blocked orange with « ! », review half-filled green, done teal with a check,
- * failed red with a cross, closed/archived grey with a cross. Colours come from the --st-* tokens (both themes).
+ * failed (a run state, not a task status) red with a cross, closed/archived a grey ring with a cross (#265). Colours come from the --st-* tokens (both themes).
  */
 export function StatusIcon({ status, size = 14, title }: { status: IconStatus; size?: number; title?: string }) {
+  // title « »: decorative, the name is written next to it (a status chip, a toast).
+  const label = title === '' ? { 'aria-hidden': true } : { role: 'img', 'aria-label': title ?? STATUS_LABEL[status] };
   return (
-    <svg className={'status-icon ' + status} width={size} height={size} viewBox="0 0 14 14" role="img" aria-label={title ?? STATUS_LABEL[status]}>
-      {title !== undefined && <title>{title}</title>}
+    <svg className={'status-icon ' + status} width={size} height={size} viewBox="0 0 14 14" {...label}>
+      {!!title && <title>{title}</title>}
       {SHAPES[status]}
     </svg>
   );
@@ -73,14 +75,14 @@ const SHAPES: Record<IconStatus, ReactNode> = {
   ),
   closed: (
     <>
-      <circle cx="7" cy="7" r="6.3" fill="var(--faint)" />
-      {cross('var(--panel)')}
+      {ring('var(--muted)')}
+      {cross('var(--muted)')}
     </>
   ),
   archived: (
     <>
-      <circle cx="7" cy="7" r="6.3" fill="var(--faint)" />
-      {cross('var(--panel)')}
+      {ring('var(--muted)')}
+      {cross('var(--muted)')}
     </>
   ),
 };

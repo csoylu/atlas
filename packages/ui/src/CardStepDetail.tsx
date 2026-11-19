@@ -114,7 +114,7 @@ export function cardDetail(step: Step, ctx: DetailContext): ReactNode | null {
     case 'task_list': {
       if (out === null) return null;
       const groups = boardGroups(out);
-      if (!groups.length) return <p className="step-empty">No cards{str(o.status) ? ` in ${str(o.status)}` : ''}.</p>;
+      if (!groups.length) return <p className="state-empty inline">No cards{str(o.status) ? ` in ${str(o.status)}` : ''}.</p>;
       return (
         <div className="step-board">
           {groups.map((g) => (
@@ -155,7 +155,7 @@ export function cardDetail(step: Step, ctx: DetailContext): ReactNode | null {
         );
       }
       const { hits, more } = historyHits(out);
-      if (!hits.length) return <p className="step-empty">No message contains “{q}”.</p>;
+      if (!hits.length) return <p className="state-empty inline">No message contains “{q}”.</p>;
       return (
         <div className="step-hits">
           {hits.map((h) => (
@@ -167,7 +167,7 @@ export function cardDetail(step: Step, ctx: DetailContext): ReactNode | null {
               </span>
             </div>
           ))}
-          {more > 0 && <p className="step-empty">{more} older matches not shown.</p>}
+          {more > 0 && <p className="state-empty inline">{more} older matches not shown.</p>}
         </div>
       );
     }

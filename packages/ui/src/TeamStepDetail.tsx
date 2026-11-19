@@ -56,7 +56,7 @@ export function teamDetail(step: Step, ctx: DetailContext): ReactNode | null | u
     case 'schedule_list': {
       if (out === null) return undefined;
       const list = scheduleList(out);
-      if (!list.length) return <p className="step-empty">No schedules.</p>;
+      if (!list.length) return <p className="state-empty inline">No schedules.</p>;
       return (
         <div className="step-list">
           {list.map((s) => (

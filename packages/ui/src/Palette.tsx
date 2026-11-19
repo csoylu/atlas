@@ -176,7 +176,7 @@ export function Palette(props: {
           <span className="pal-ctx" title="Where the palette was opened">{ctx.label}</span>
         </div>
         <div className="pal-list" id="pal-list" role="listbox" ref={list}>
-          {!flat.length && <p className="pal-empty">Nothing matches « {query} ».</p>}
+          {!flat.length && <p className="state-empty inline pal-empty">Nothing matches « {query} ».</p>}
           {groups.map((g) => (
             <div key={g.section} role="group" aria-label={g.section}>
               <div className="pal-sec">{g.section}</div>

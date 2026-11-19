@@ -190,7 +190,7 @@ export function TaskImages({ cardId, images, att, onAdd, onRemove }: { cardId: s
       ))}
       <AttachButton onFiles={onAdd} label={count ? undefined : 'Add images'} />
       {(att.notice || att.items.some((x) => x.error)) && (
-        <span className="attach-note" role="alert">
+        <span className="state-err inline attach-note" role="alert">
           {[att.notice, ...att.items.flatMap((x) => (x.error ? [x.error] : []))].filter(Boolean).join(' · ')}
         </span>
       )}
@@ -214,7 +214,7 @@ export function AttachmentStrip({ a }: { a: ReturnType<typeof useAttachments> })
         </div>
       ))}
       {(a.notice || a.items.some((x) => x.error)) && (
-        <span className="attach-note" role="alert">
+        <span className="state-err inline attach-note" role="alert">
           {[a.notice, ...a.items.flatMap((x) => (x.error ? [x.error] : []))].filter(Boolean).join(' · ')}
         </span>
       )}

@@ -42,8 +42,8 @@ export function ClaudePlanSection(props: { stream: MessageStream; keyStore: stri
       <label>Paste the authorization code shown by Claude
         <input type="password" autoComplete="off" value={code} onChange={(e) => setCode(e.target.value)} placeholder="code#state" />
       </label>
-      <button className="primary" disabled={!code.trim() || busy === 'complete'} onClick={() => act('complete', async () => { await api.claudeComplete(code); setCode(''); })}>Finish sign-in</button>
-      <button className="ghost" onClick={() => act('cancel', () => api.claudeCancel())}>
+      <button className="btn primary" disabled={!code.trim() || busy === 'complete'} onClick={() => act('complete', async () => { await api.claudeComplete(code); setCode(''); })}>Finish sign-in</button>
+      <button className="btn ghost" onClick={() => act('cancel', () => api.claudeCancel())}>
         Cancel
       </button>
     </>
@@ -58,7 +58,7 @@ export function ClaudePlanSection(props: { stream: MessageStream; keyStore: stri
         </p>
       </header>
       {!s ? null : !s.available ? (
-        <div className="empty-note">{s.unavailableReason}</div>
+        <div className="state-empty">{s.unavailableReason}</div>
       ) : (
         <div className="model-list">
           {showSettings ? (
@@ -71,11 +71,11 @@ export function ClaudePlanSection(props: { stream: MessageStream; keyStore: stri
                   <span className="model-name">Use your Claude plan</span>
                 </div>
                 <p className="plan-text">Complete AI requests in Atlas with usage included in your Claude plan.</p>
-                {s.lastError && <div className="model-error">{s.lastError}</div>}
+                {s.lastError && <div className="state-err">{s.lastError}</div>}
               </div>
               <div className="model-actions">
                 {s.pending ? pasteCode : (
-                  <button className="primary" disabled={busy === 'login'} onClick={() => signIn()}>
+                  <button className="btn primary" disabled={busy === 'login'} onClick={() => signIn()}>
                     Sign in with Claude
                   </button>
                 )}
@@ -88,20 +88,20 @@ export function ClaudePlanSection(props: { stream: MessageStream; keyStore: stri
               quotaNone={<span className="muted">No usage reported yet: it shows after the next answer.</span>}
               signIn={(a) =>
                 s.pending && s.pendingAccountId === a.id ? pasteCode : (
-                  <button className="primary" disabled={busy === 'login' || s.pending} onClick={() => signIn(a.id)}>
+                  <button className="btn primary" disabled={busy === 'login' || s.pending} onClick={() => signIn(a.id)}>
                     Sign in with Claude
                   </button>
                 )
               }
               signOut={(a) => api.claudeLogout(a.id)}
-              badge={() => <span className="pill ok-pill">Using Claude plan</span>}
+              badge={() => <span className="badge ok">Using Claude plan</span>}
               onChanged={() => void load().then(props.onChanged)}
               onError={onError}
             />
           ) : null}
           {s.configured && !editing && (
             <div className="plan-add">
-              <button className="ghost small" onClick={() => setEditing(true)}>
+              <button className="btn ghost small" onClick={() => setEditing(true)}>
                 Advanced settings
               </button>
             </div>
@@ -137,7 +137,7 @@ function ClaudeSettings(props: { status: ClaudePlanStatus; keyStore: string | nu
       <div className="model-main">
         <div className="model-title">
           <span className="model-name">Advanced settings from Anthropic</span>
-          {s.configured ? <span className="pill ok-pill">Complete</span> : <span className="badge bad">Not set up</span>}
+          {s.configured ? <span className="badge ok">Complete</span> : <span className="badge bad">Not set up</span>}
         </div>
         <p className="plan-text">
           Subscription OAuth works with built-in defaults; only change these for a custom OAuth server.{' '}
@@ -172,7 +172,7 @@ function ClaudeSettings(props: { status: ClaudePlanStatus; keyStore: string | nu
           ))}
         </div>
         {s.configProblems.length > 0 && (
-          <ul className="model-error claude-problems">
+          <ul className="state-err claude-problems">
             {s.configProblems.map((p) => (
               <li key={p}>{p}</li>
             ))}
@@ -181,12 +181,12 @@ function ClaudeSettings(props: { status: ClaudePlanStatus; keyStore: string | nu
       </div>
       <div className="model-actions">
         {props.keyStore && (
-          <button className="primary" disabled={saving || Object.keys(draft).length === 0} onClick={() => void save()}>
+          <button className="btn primary" disabled={saving || Object.keys(draft).length === 0} onClick={() => void save()}>
             {saving ? 'Saving…' : 'Save'}
           </button>
         )}
         {s.configured && (
-          <button className="ghost" onClick={props.onDone}>
+          <button className="btn ghost" onClick={props.onDone}>
             Close
           </button>
         )}
@@ -202,7 +202,7 @@ export function ClaudeWelcome(props: { onDone(): void }) {
       <div className="modal" role="dialog" aria-modal="true" aria-labelledby="claude-welcome">
         <h2 id="claude-welcome">You're using your Claude plan</h2>
         <p>Agents on Claude plan models now use your Claude plan's usage. When a subscription reaches its limit, work moves to your next one; when all are out, Atlas waits until the first resets.</p>
-        <button className="primary" autoFocus onClick={props.onDone}>
+        <button className="btn primary" autoFocus onClick={props.onDone}>
           Got it
         </button>
       </div>

@@ -39,7 +39,7 @@ export function ChatView(props: {
 }) {
   const { agents, onError } = props;
   const chat = props.chats.find((c) => c.id === props.target);
-  if (!agents.length) return <div className="empty-note chat-empty">No agents yet. Add one on the Agents page.</div>;
+  if (!agents.length) return <div className="state-empty chat-empty">No agents yet. Add one on the Agents page.</div>;
   if (chat) return <ChatWithPanel key={chat.id} {...props} chat={chat} />;
   if (props.target?.startsWith('c_') && !props.loaded) return <div className="chat-pane loading" />;
   const enabled = agents.filter((a) => a.enabled);

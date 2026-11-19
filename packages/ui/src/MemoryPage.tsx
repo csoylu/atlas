@@ -212,7 +212,7 @@ export function MemoryPage(props: {
       )}
       <div className="lib-list mem-list" ref={listRef}>
         {list && !shown.length && (
-          <div className="lib-empty">
+          <div className="state-empty">
             {list.length || query ? (
               <p>
                 Nothing matches.{' '}
@@ -318,10 +318,10 @@ function MemoryRow(props: { m: Memory; focused: boolean; cards: Card[]; chats: C
             <span className="mem-len num">
               {edit.text.trim().length}/{MEMORY_TEXT_MAX}
             </span>
-            <button type="button" className="head-btn" onClick={() => setEdit(null)}>
+            <button type="button" className="btn" onClick={() => setEdit(null)}>
               Cancel
             </button>
-            <button type="submit" className="head-btn pri" disabled={busy || !edit.text.trim()}>
+            <button type="submit" className="btn primary" disabled={busy || !edit.text.trim()}>
               Save
             </button>
           </div>

@@ -198,10 +198,10 @@ export function RewindNote({ rw }: { rw: Rewind }) {
           </span>
         )}
       </span>
-      <button type="button" className="ghost small" onClick={rw.undo} title={isMac() ? 'Undo (⌘Z)' : 'Undo (Ctrl+Z)'}>
+      <button type="button" className="btn ghost small" onClick={rw.undo} title={isMac() ? 'Undo (⌘Z)' : 'Undo (Ctrl+Z)'}>
         Undo
       </button>
-      <button type="button" className="ghost small rewind-x" onClick={rw.dismiss} aria-label="Dismiss">
+      <button type="button" className="btn ghost small rewind-x" onClick={rw.dismiss} aria-label="Dismiss">
         ×
       </button>
     </div>
@@ -248,10 +248,10 @@ export function RewindConfirm({ rw }: { rw: Rewind }) {
           back; other chats' work is left alone. Other commands the agent ran (and other services) stay done.
         </p>
         <div className="rewind-actions">
-          <button type="button" className="ghost" onClick={cancel}>
+          <button type="button" className="btn ghost" onClick={cancel}>
             Cancel
           </button>
-          <button type="button" className="primary" autoFocus onClick={rw.accept}>
+          <button type="button" className="btn primary" autoFocus onClick={rw.accept}>
             Rewind
           </button>
         </div>

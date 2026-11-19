@@ -108,11 +108,11 @@ function AgentCard(props: { agent: Agent; models: Model[]; triage: boolean; onCh
       <div className="actions">
         {dirty && (
           <>
-            <button className="ghost" onClick={() => setDraft(a)}>
+            <button className="btn ghost" onClick={() => setDraft(a)}>
               Cancel
             </button>
             <button
-              className="primary small"
+              className="btn primary small"
               onClick={() =>
                 api
                   .updateAgent(a.id, { rolePrompt: draft.rolePrompt, modelId: draft.modelId, workdir: draft.workdir, enabled: draft.enabled, maxRuns: draft.maxRuns })
@@ -125,7 +125,7 @@ function AgentCard(props: { agent: Agent; models: Model[]; triage: boolean; onCh
         )}
         {!dirty && !confirming && (
           <button
-            className="ghost danger"
+            className="btn ghost danger"
             onClick={() => {
               setRefusal(null);
               setConfirming(true);
@@ -137,17 +137,17 @@ function AgentCard(props: { agent: Agent; models: Model[]; triage: boolean; onCh
         {!dirty && confirming && (
           <>
             <span className="confirm-text">Its schedules go with it; its chat is archived.</span>
-            <button className="ghost" onClick={() => setConfirming(false)}>
+            <button className="btn ghost" onClick={() => setConfirming(false)}>
               Cancel
             </button>
-            <button className="primary small danger" onClick={remove}>
+            <button className="btn primary small danger" onClick={remove}>
               Delete @{a.id}
             </button>
           </>
         )}
       </div>
       {refusal && (
-        <p className="agent-refusal" role="alert">
+        <p className="state-err" role="alert">
           {refusal}
           {/triage agent/.test(refusal) && (
             <>
@@ -220,10 +220,10 @@ function NewAgent(props: { models: Model[]; onCreated(): void; onError(e: unknow
         </select>
       </label>
       <div className="actions">
-        <button type="button" className="ghost" onClick={() => setOpen(false)}>
+        <button type="button" className="btn ghost" onClick={() => setOpen(false)}>
           Cancel
         </button>
-        <button className="primary small">Create</button>
+        <button className="btn primary small">Create</button>
       </div>
     </form>
   );

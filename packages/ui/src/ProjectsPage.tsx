@@ -26,7 +26,7 @@ export function ProjectsPage(props: { rest: string; agents: Agent[]; cards: Card
       {!creating && (
         <HeaderActions>
           <span className="head-sp" />
-          <button type="button" className="head-btn pri" onClick={() => setCreating(true)}>
+          <button type="button" className="btn primary" onClick={() => setCreating(true)}>
             <Icon.plus />
             <span className="btn-text">New project</span>
           </button>
@@ -143,25 +143,25 @@ function ProjectRow({ project: p, cards, workflows, onError }: { project: Projec
       </div>
       <div className="model-actions">
         {archived && (
-          <button type="button" className="ghost" onClick={restore}>
+          <button type="button" className="btn ghost" onClick={restore}>
             Restore
           </button>
         )}
-        <button type="button" className="ghost" onClick={() => (location.hash = '#/settings/projects/' + encodeURIComponent(p.id))}>
+        <button type="button" className="btn ghost" onClick={() => (location.hash = '#/settings/projects/' + encodeURIComponent(p.id))}>
           {archived ? 'Open' : 'Edit'}
         </button>
       </div>
       {showClones && <CloneList p={p} />}
       {!archived && failed.length > 0 && (
-        <div className="pj-err" role="alert">
+        <div className="state-err pj-err" role="alert">
           <CloneError p={p} failed={failed} />
           <div className="actions">
             {!p.members.some((m) => m.home || m.cloneState === 'ready' || m.cloneState === 'cloning') && (
-              <button type="button" className="primary small" onClick={() => (location.hash = `#/settings/projects/${encodeURIComponent(p.id)}/repo`)}>
+              <button type="button" className="btn primary small" onClick={() => (location.hash = `#/settings/projects/${encodeURIComponent(p.id)}/repo`)}>
                 Fix the repo name
               </button>
             )}
-            <button type="button" className="tool" disabled={busy} onClick={retry}>
+            <button type="button" className="btn" disabled={busy} onClick={retry}>
               {busy ? 'Trying…' : 'Try again'}
             </button>
           </div>
@@ -430,17 +430,17 @@ function NewProject({ agents, onDone, onError }: { agents: Agent[]; onDone(): vo
         Their other chats stay as they are. {name.trim() ? `${shown}'s` : "The project's"} memory, secrets and workflows start empty.
       </p>
       {error && (
-        <p className="pj-err" role="alert">
+        <p className="state-err pj-err" role="alert">
           <span>
             <b>Not created:</b> {error}. Change it above, then create the project again.
           </span>
         </p>
       )}
       <div className="actions">
-        <button type="button" className="ghost" onClick={onDone}>
+        <button type="button" className="btn ghost" onClick={onDone}>
           Cancel
         </button>
-        <button className="primary small" disabled={!name.trim() || !repoOk || busy} title={!name.trim() ? 'Give it a name first' : !repoOk ? 'Wait for the repo check, or fix the repo' : undefined}>
+        <button className="btn primary small" disabled={!name.trim() || !repoOk || busy} title={!name.trim() ? 'Give it a name first' : !repoOk ? 'Wait for the repo check, or fix the repo' : undefined}>
           {busy ? 'Creating…' : 'Create project'}
         </button>
       </div>
@@ -560,7 +560,7 @@ function ProjectDetail({ project: p, agents, cards, workflows, focusRepo, onErro
           </p>
         )}
         {formError && (
-          <p className="pj-err" role="alert">
+          <p className="state-err pj-err" role="alert">
             <span>
               <b>Not saved:</b> {formError}.
             </span>
@@ -568,10 +568,10 @@ function ProjectDetail({ project: p, agents, cards, workflows, focusRepo, onErro
         )}
         {dirty && (
           <div className="actions">
-            <button type="button" className="ghost" onClick={() => (setName(p.name), setRepo(p.repo ?? ''), setFormError(null))}>
+            <button type="button" className="btn ghost" onClick={() => (setName(p.name), setRepo(p.repo ?? ''), setFormError(null))}>
               Cancel
             </button>
-            <button className="primary small" disabled={saving || !repoOk || !name.trim()}>
+            <button className="btn primary small" disabled={saving || !repoOk || !name.trim()}>
               {saving ? 'Saving…' : 'Save'}
             </button>
           </div>
@@ -620,11 +620,11 @@ function ProjectDetail({ project: p, agents, cards, workflows, focusRepo, onErro
               {removing !== m.agentId && !archived && (
                 <div className="model-actions">
                   {m.cloneState === 'failed' && (
-                    <button type="button" className="tool" onClick={() => api.retryClone(p.id, m.agentId).catch(onError)}>
+                    <button type="button" className="btn" onClick={() => api.retryClone(p.id, m.agentId).catch(onError)}>
                       Try again
                     </button>
                   )}
-                  <button type="button" className={'ghost' + (isLead ? '' : ' danger')} disabled={isLead} title={isLead ? 'Choose another lead first' : undefined} onClick={() => setRemoving(m.agentId)}>
+                  <button type="button" className={'btn ghost' + (isLead ? '' : ' danger')} disabled={isLead} title={isLead ? 'Choose another lead first' : undefined} onClick={() => setRemoving(m.agentId)}>
                     Remove
                   </button>
                 </div>
@@ -657,12 +657,12 @@ function ProjectDetail({ project: p, agents, cards, workflows, focusRepo, onErro
                     )}
                   </ul>
                   <div className="actions">
-                    <button type="button" className="ghost" onClick={() => setRemoving(null)}>
+                    <button type="button" className="btn ghost" onClick={() => setRemoving(null)}>
                       Cancel
                     </button>
                     <button
                       type="button"
-                      className="primary small danger"
+                      className="btn primary small danger"
                       disabled={saving}
                       onClick={() => void save({ members: p.members.map((x) => x.agentId).filter((x) => x !== m.agentId) }).then(() => setRemoving(null))}
                     >
@@ -709,7 +709,7 @@ function ProjectDetail({ project: p, agents, cards, workflows, focusRepo, onErro
                 </div>
                 {!k.home && deletingKept !== k.agentId && (
                   <div className="model-actions">
-                    <button type="button" className="ghost danger" onClick={() => setDeletingKept(k.agentId)}>
+                    <button type="button" className="btn ghost danger" onClick={() => setDeletingKept(k.agentId)}>
                       Delete…
                     </button>
                   </div>
@@ -721,10 +721,10 @@ function ProjectDetail({ project: p, agents, cards, workflows, focusRepo, onErro
                       <li>Its files go for good, uncommitted or unpushed work in it too. Its tasks and chats stay.</li>
                     </ul>
                     <div className="actions">
-                      <button type="button" className="ghost" onClick={() => setDeletingKept(null)}>
+                      <button type="button" className="btn ghost" onClick={() => setDeletingKept(null)}>
                         Cancel
                       </button>
-                      <button type="button" className="primary small danger" onClick={() => api.deleteKept(p.id, k.agentId).then(() => setDeletingKept(null), onError)}>
+                      <button type="button" className="btn primary small danger" onClick={() => api.deleteKept(p.id, k.agentId).then(() => setDeletingKept(null), onError)}>
                         Delete the folder
                       </button>
                     </div>
@@ -778,7 +778,7 @@ function ProjectDetail({ project: p, agents, cards, workflows, focusRepo, onErro
               </div>
               {!confirmArchive && (
                 <div className="model-actions">
-                  <button type="button" className="ghost danger" onClick={() => setConfirmArchive(true)}>
+                  <button type="button" className="btn ghost danger" onClick={() => setConfirmArchive(true)}>
                     Archive…
                   </button>
                 </div>
@@ -819,10 +819,10 @@ function AddMember(props: { agents: Agent[]; repo: string | null; project: strin
           )}
         </span>
         <div className="actions">
-          <button type="button" className="ghost" onClick={props.onCancel}>
+          <button type="button" className="btn ghost" onClick={props.onCancel}>
             Cancel
           </button>
-          <button type="button" className="primary small" disabled={!id} onClick={() => props.onAdd(id)}>
+          <button type="button" className="btn primary small" disabled={!id} onClick={() => props.onAdd(id)}>
             Add {id}
           </button>
         </div>
@@ -857,12 +857,12 @@ function ArchiveConfirm(props: { p: Project; running: Card[]; open: number; work
         <li>Workspaces, memory and secrets stay as they are.</li>
       </ul>
       <div className="actions">
-        <button type="button" className="ghost" onClick={props.onCancel}>
+        <button type="button" className="btn ghost" onClick={props.onCancel}>
           Cancel
         </button>
         <button
           type="button"
-          className="primary small danger"
+          className="btn primary small danger"
           disabled={busy}
           onClick={() => {
             setBusy(true);

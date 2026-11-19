@@ -34,10 +34,10 @@ describe('toolRow', () => {
 
   it('cards and team', () => {
     expect(toolRow('card_create', { title: 'Rewind bug' }, ok('created #68 [ready] @atlas P1 Rewind must only restore files'))).toMatchObject({
-      icon: 'cardp', tone: 'acc', verb: 'Created', ref: '#68', object: 'Rewind must only restore files', meta: [{ text: '@atlas · P1' }],
+      icon: 'cardp', tone: 'acc', verb: 'Created', ref: '#68', object: 'Rewind must only restore files', meta: [{ text: '@atlas · Low' }],
     });
     expect(toolRow('card_update', { id: 58, status: 'ready' }, ok('updated #58 [ready] @atlas P2 Chat: compact'))).toMatchObject({ verb: 'Updated', ref: '#58', object: 'Chat: compact', rest: 'status → ready' });
-    expect(toolRow('card_update', { id: '#58', priority: 1, assignee: 'atlas', body: 'x' }).rest).toBe('priority → P1, assignee → @atlas, body');
+    expect(toolRow('card_update', { id: '#58', priority: 1, assignee: 'atlas', body: 'x' }).rest).toBe('priority → Low, assignee → @atlas, body');
     expect(toolRow('card_create', { title: 'X' }, ok('created #9 [todo] @atlas P2 Child (parents: #7, #8)'))).toMatchObject({ ref: '#9', object: 'Child' });
     expect(toolRow('card_create', { title: 'X' }, err('unknown parent #99'))).toMatchObject({ ref: undefined, object: 'X', tone: 'bad', verb: 'Couldn’t create' });
     expect(toolRow('card_message', { id: 57, text: '#56: done.\nmore' }, ok('message posted on #57'))).toMatchObject({ verb: 'Messaged', ref: '#57', rest: '#56: done.' });

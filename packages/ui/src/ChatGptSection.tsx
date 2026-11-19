@@ -33,7 +33,7 @@ export function ChatGptSection(props: { status: ChatGptStatus | null; onChanged(
     s?.pending && (!accountId || s.pendingAccountId === accountId) ? (
       <>
         <span className="muted">Waiting for the browser…</span>
-        <button className="ghost" onClick={() => act('cancel', () => api.chatgptCancel())}>
+        <button className="btn ghost" onClick={() => act('cancel', () => api.chatgptCancel())}>
           Cancel
         </button>
       </>
@@ -43,7 +43,7 @@ export function ChatGptSection(props: { status: ChatGptStatus | null; onChanged(
       </button>
     );
   const manage = (
-    <a className="tool link-btn" href={CHATGPT_USAGE_URL} target="_blank" rel="noreferrer">
+    <a className="btn ghost" href={CHATGPT_USAGE_URL} target="_blank" rel="noreferrer">
       Manage usage
     </a>
   );
@@ -59,7 +59,7 @@ export function ChatGptSection(props: { status: ChatGptStatus | null; onChanged(
         </p>
       </header>
       {!s ? null : !s.available ? (
-        <div className="empty-note">{s.unavailableReason}</div>
+        <div className="state-empty">{s.unavailableReason}</div>
       ) : s.accounts.length === 0 ? (
         <div className="model-row plan-card">
           <div className="model-main">
@@ -67,7 +67,7 @@ export function ChatGptSection(props: { status: ChatGptStatus | null; onChanged(
               <span className="model-name">Use your ChatGPT plan</span>
             </div>
             <p className="plan-text">Complete AI requests in Atlas with usage included in your ChatGPT plan or credits balance. Atlas itself is free.</p>
-            {s.lastError && <div className="model-error">{s.lastError}</div>}
+            {s.lastError && <div className="state-err">{s.lastError}</div>}
           </div>
           <div className="model-actions">{siwc()}</div>
         </div>
@@ -86,7 +86,7 @@ export function ChatGptSection(props: { status: ChatGptStatus | null; onChanged(
             }
             signIn={(a) => siwc(a.id)}
             signOut={(a) => api.chatgptLogout(a.id)}
-            badge={(a) => (a.planUsage ? <span className="pill ok-pill">Using ChatGPT plan</span> : <span className="badge bad">Plan use not allowed</span>)}
+            badge={(a) => (a.planUsage ? <span className="badge ok">Using ChatGPT plan</span> : <span className="badge bad">Plan use not allowed</span>)}
             extra={(a) =>
               a.signedIn && !a.planUsage ? (
                 <div className="plan-text">
@@ -118,7 +118,7 @@ export function PlanWelcome(props: { onDone(): void }) {
           </a>
           .
         </p>
-        <button className="primary" autoFocus onClick={props.onDone}>
+        <button className="btn primary" autoFocus onClick={props.onDone}>
           Got it
         </button>
       </div>

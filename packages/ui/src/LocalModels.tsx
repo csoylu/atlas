@@ -2,6 +2,7 @@ import { useCallback, useEffect, useState } from 'react';
 import type { Agent, LocalModel, LocalPull, LocalStatus } from '@atlas/shared';
 import { api } from './api.ts';
 import type { MessageStream } from './useMessages.ts';
+import { Skeleton } from './Kit.tsx';
 
 /**
  * Settings → Local: the engine runs Ollama on its own machine (engine/src/local.ts). This page asks it to install, start
@@ -69,7 +70,7 @@ export function LocalModels(props: {
             crashes. Models run on this machine and nothing leaves it.
           </p>
         </div>
-        {status ? <ServerPanel status={status} loadedMemory={loadedMemory} busy={busy} act={act} /> : <div className="model-row skeleton" />}
+        {status ? <ServerPanel status={status} loadedMemory={loadedMemory} busy={busy} act={act} /> : <Skeleton />}
       </section>
 
       <section>
@@ -125,14 +126,14 @@ function ServerPanel(props: {
                 ? 'Atlas can install it with Homebrew (about 100 MB).'
                 : 'Install it from ollama.com/download, then come back here.'}
           </div>
-          {s.error && <div className="model-error">{s.error}</div>}
+          {s.error && <div className="state-err">{s.error}</div>}
         </div>
         {s.canInstall ? (
-          <button className="primary small" disabled={s.installing} onClick={() => act('install', api.installLocal)}>
+          <button className="btn primary small" disabled={s.installing} onClick={() => act('install', api.installLocal)}>
             {s.installing ? 'Installing…' : 'Install Ollama'}
           </button>
         ) : (
-          <a className="primary small" href="https://ollama.com/download" target="_blank" rel="noreferrer">
+          <a className="btn primary small" href="https://ollama.com/download" target="_blank" rel="noreferrer">
             Download Ollama
           </a>
         )}
@@ -175,15 +176,15 @@ function ServerPanel(props: {
           </label>
           {s.owner === 'external' && <span className="muted">Context applies once Atlas runs the server (Stop, then Start).</span>}
         </div>
-        {s.error && <div className="model-error">{s.error}</div>}
+        {s.error && <div className="state-err">{s.error}</div>}
       </div>
       <div className="model-actions">
         {s.running ? (
-          <button className="tool" disabled={busy === 'stop'} onClick={() => act('stop', api.stopLocal)}>
+          <button className="btn" disabled={busy === 'stop'} onClick={() => act('stop', api.stopLocal)}>
             {busy === 'stop' ? 'Stopping…' : 'Stop'}
           </button>
         ) : (
-          <button className="primary small" disabled={busy === 'start'} onClick={() => act('start', api.startLocal)}>
+          <button className="btn primary small" disabled={busy === 'start'} onClick={() => act('start', api.startLocal)}>
             {busy === 'start' ? 'Starting…' : 'Start'}
           </button>
         )}
@@ -202,9 +203,9 @@ function Installed(props: {
   act(key: string, f: () => Promise<unknown>): void;
 }) {
   const { models, busy, act } = props;
-  if (!props.running && !models?.length) return <div className="empty-note">Start the server to see the models on this machine.</div>;
-  if (!models) return <div className="model-row skeleton" />;
-  if (!models.length) return <div className="empty-note">No models yet. Download one below.</div>;
+  if (!props.running && !models?.length) return <div className="state-empty">Start the server to see the models on this machine.</div>;
+  if (!models) return <Skeleton />;
+  if (!models.length) return <div className="state-empty">No models yet. Download one below.</div>;
   return (
     <div className="model-list">
       {models.map((m) => {
@@ -240,7 +241,7 @@ function Installed(props: {
             </div>
             <div className="model-actions">
               <button
-                className="tool"
+                className="btn"
                 disabled={busy === 'load:' + m.name}
                 onClick={() => act('load:' + m.name, () => api.loadLocal(m.name, !m.loaded))}
                 title={m.loaded ? 'Free its memory; it loads again on the next call' : 'Load it now and keep it in memory'}
@@ -248,7 +249,7 @@ function Installed(props: {
                 {busy === 'load:' + m.name ? (m.loaded ? 'Unloading…' : 'Loading…') : m.loaded ? 'Unload' : 'Load'}
               </button>
               <button
-                className="ghost danger"
+                className="btn ghost danger"
                 disabled={m.usedBy.length > 0}
                 title={m.usedBy.length ? 'Used by an Atlas model: remove it from « Available to agents » first' : 'Delete from disk'}
                 onClick={() => confirm(`Delete ${m.name} (${gb(m.size)}) from this machine?`) && act('del:' + m.name, () => api.deleteLocal(m.name))}
@@ -278,7 +279,7 @@ function Downloads(props: { pulls: Map<string, LocalPull>; onCancel(name: string
                 <span className="model-name">{p.name}</span>
               </div>
               {p.error ? (
-                <div className="model-error">{p.error}</div>
+                <div className="state-err">{p.error}</div>
               ) : (
                 <>
                   <div className="progress" role="progressbar" aria-valuenow={Math.round(pct)} aria-valuemin={0} aria-valuemax={100}>
@@ -296,7 +297,7 @@ function Downloads(props: { pulls: Map<string, LocalPull>; onCancel(name: string
               )}
             </div>
             <div className="model-actions">
-              <button className="ghost" onClick={() => props.onCancel(p.name)}>
+              <button className="btn ghost" onClick={() => props.onCancel(p.name)}>
                 {p.done ? 'Dismiss' : 'Cancel'}
               </button>
             </div>
@@ -322,7 +323,7 @@ function Finder(props: { installed: Set<string>; pulls: Map<string, LocalPull>; 
       }}
     >
       <input value={q} onChange={(e) => setQ(e.target.value)} placeholder="Model name, e.g. qwen3:8b" aria-label="Model name" spellCheck={false} />
-      <button className="primary small" disabled={props.disabled || !valid || props.installed.has(name) || (!!pull && !pull.done)}>
+      <button className="btn primary small" disabled={props.disabled || !valid || props.installed.has(name) || (!!pull && !pull.done)}>
         {props.installed.has(name) ? 'Installed' : pull && !pull.done ? 'Downloading…' : 'Download'}
       </button>
     </form>

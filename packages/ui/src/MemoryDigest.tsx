@@ -106,7 +106,7 @@ export function DigestBody({ digest, onError }: { digest: MemoryDigestState; onE
                 ) : (
                   <button
                     type="button"
-                    className="head-btn"
+                    className="btn"
                     disabled={!canUndo || busy === c.id}
                     title={canUndo ? undoTitle(c) : 'A newer change of this memory came after: undo that one first'}
                     onClick={() => undo(c)}
@@ -227,10 +227,10 @@ export function CleanupBody({ cardId, summary, stream, onError }: { cardId: stri
                     <span className="md-note bad">{refused.get(p.id)}</span>
                   ) : (
                     <span className="md-btns">
-                      <button type="button" className="head-btn pri" disabled={busy === p.id} onClick={() => decide(p, true)}>
+                      <button type="button" className="btn primary" disabled={busy === p.id} onClick={() => decide(p, true)}>
                         Approve
                       </button>
-                      <button type="button" className="head-btn" disabled={busy === p.id} onClick={() => decide(p, false)}>
+                      <button type="button" className="btn" disabled={busy === p.id} onClick={() => decide(p, false)}>
                         Reject
                       </button>
                     </span>

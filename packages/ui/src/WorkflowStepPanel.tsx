@@ -91,7 +91,7 @@ export function StepPanel(props: { n: WorkflowNode; g: Graph; w: Workflow; agent
           <>
             <span className="wf-sum">The trigger can't be deleted.</span>
             <button
-              className="ghost danger"
+              className="btn ghost danger"
               onClick={() => confirm(`Delete workflow "${props.w.name}"? Its tasks stay.`) && api.deleteWorkflow(props.w.id).then(() => props.go('#/workflows'), props.onError)}
             >
               Delete workflow
@@ -100,13 +100,13 @@ export function StepPanel(props: { n: WorkflowNode; g: Graph; w: Workflow; agent
         ) : (
           <>
             <button
-              className="ghost"
+              className="btn ghost"
               onClick={() => props.change({ nodes: [...g.nodes, { ...n, id: newNodeId(g.nodes), ...freeSpot(g.nodes, n) } as WorkflowNode], edges: g.edges })}
             >
               Duplicate
             </button>
             <button
-              className="ghost danger"
+              className="btn ghost danger"
               onClick={() => {
                 props.change(withoutNode(g, n.id));
                 props.onDeleted();
@@ -166,7 +166,7 @@ function PromptField(props: { label: string; value: string; placeholder: string;
         />
       </div>
       <div className="wf-ins">
-        <button type="button" className={'tool' + (open ? ' on' : '')} aria-expanded={open} onClick={() => setOpen(!open)}>
+        <button type="button" className={'btn' + (open ? ' on' : '')} aria-expanded={open} onClick={() => setOpen(!open)}>
           {'{ }'} Insert a field
         </button>
         <span className="muted">or type {'{{'}</span>
@@ -547,7 +547,7 @@ export function EventFields({ t, projectId, agents, set }: { t: EventTrigger; pr
               </button>
             </div>
           ))}
-          <button type="button" className="ghost small wf-addflt" onClick={() => setRows([...rows, { key: keys.find((k) => !rows.some((r) => r.key === k)) ?? keys[0]!, value: '' }])}>
+          <button type="button" className="btn ghost small wf-addflt" onClick={() => setRows([...rows, { key: keys.find((k) => !rows.some((r) => r.key === k)) ?? keys[0]!, value: '' }])}>
             + Add a filter
           </button>
         </div>

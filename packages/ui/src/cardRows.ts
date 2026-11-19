@@ -1,4 +1,5 @@
 import { CARD_STATUSES, type CardStatus } from '@atlas/shared';
+import { priorityName } from './priority.ts';
 
 /**
  * Card & team tool results → what their expanded rows show (#62, docs/chat-activity.md §1): a card chip, board counts,
@@ -11,8 +12,8 @@ export interface CardLine {
   status: CardStatus;
   /** "@atlas", null when unassigned. */
   who: string | null;
-  /** "P2" */
-  prio: string;
+  /** The engine's « P2 » as its number (2); shown by name (« Medium », #265). */
+  prio: number;
   title: string;
   /** Parent refs: "#58". */
   parents: string[];
@@ -31,12 +32,12 @@ export function cardLine(s: string): CardLine | null {
     title = title.slice(0, p.index);
     parents = p[1]!.split(/,\s*/).filter(Boolean);
   }
-  return { ref: '#' + m[1], status: m[2], who: m[3] === 'unassigned' ? null : m[3]!, prio: m[4]!, title, parents };
+  return { ref: '#' + m[1], status: m[2], who: m[3] === 'unassigned' ? null : m[3]!, prio: Number(m[4]!.slice(1)), title, parents };
 }
 
-/** The chip's faint line: "todo · @atlas · P2 · after #58". */
+/** The chip's faint line: "todo · @atlas · Medium · after #58" (no priority: left out). */
 export function cardSub(c: Pick<CardLine, 'status' | 'who' | 'prio' | 'parents'>): string {
-  return [c.status, c.who, c.prio, c.parents.length ? `after ${c.parents.join(', ')}` : null].filter(Boolean).join(' · ');
+  return [c.status, c.who, c.prio ? priorityName(c.prio) : null, c.parents.length ? `after ${c.parents.join(', ')}` : null].filter(Boolean).join(' · ');
 }
 
 /** Statuses in board order, the ones that need attention first. */

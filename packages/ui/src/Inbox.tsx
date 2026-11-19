@@ -175,7 +175,7 @@ export function Inbox(props: {
         </header>
         <div className="ibx-list" ref={listRef} role="listbox" aria-label="Inbox items">
           {!inbox ? null : !items.length ? (
-            <p className="ibx-empty">{tab === 'needs' ? 'Nothing waits on you.' : 'All clear. Questions, reviews and results land here.'}</p>
+            <p className="state-empty">{tab === 'needs' ? 'Nothing waits on you.' : 'All clear. Questions, reviews and results land here.'}</p>
           ) : (
             <>
               {needs.length > 0 && group('Needs you', needs)}
@@ -203,7 +203,7 @@ export function Inbox(props: {
             onError={onError}
           />
         ) : (
-          wide && <p className="ibx-empty pane-empty">{inbox ? 'Nothing selected.' : ''}</p>
+          wide && <p className="state-empty pane-empty">{inbox ? 'Nothing selected.' : ''}</p>
         )}
       </section>
     </div>
@@ -293,12 +293,12 @@ function Detail(props: {
         </div>
         <div className="head-actions">
           {cardId && (
-            <button type="button" className="head-btn" onClick={() => props.onOpenCard(cardId)}>
+            <button type="button" className="btn" onClick={() => props.onOpenCard(cardId)}>
               Open task
             </button>
           )}
           {item.update && (
-            <button type="button" className="head-btn" onClick={() => props.onArchive(item.update!)}>
+            <button type="button" className="btn" onClick={() => props.onArchive(item.update!)}>
               Archive <span className="kbd">E</span>
             </button>
           )}
@@ -360,7 +360,7 @@ function NeedBody(props: Parameters<typeof Detail>[0] & { need: InboxNeed }) {
     >
       <textarea ref={props.replyRef} rows={text.includes('\n') ? 4 : 1} value={text} placeholder={placeholder} aria-label={placeholder} onChange={(e) => setText(e.target.value)} onKeyDown={submitOnEnter} />
       {text.trim() ? (
-        <button type="submit" className="head-btn pri" disabled={busy}>
+        <button type="submit" className="btn primary" disabled={busy}>
           Send
         </button>
       ) : (
@@ -386,10 +386,10 @@ function NeedBody(props: Parameters<typeof Detail>[0] & { need: InboxNeed }) {
             <p className="muted">No summary: open the task for the conversation.</p>
           )}
           <div className="ibx-actions">
-            <button type="button" className="head-btn pri" onClick={() => api.moveCard(card.id, 'done').catch(onError)}>
+            <button type="button" className="btn primary" onClick={() => api.moveCard(card.id, 'done').catch(onError)}>
               Approve
             </button>
-            <button type="button" className="head-btn" onClick={() => props.replyRef.current?.focus()}>
+            <button type="button" className="btn" onClick={() => props.replyRef.current?.focus()}>
               Request changes
             </button>
           </div>
@@ -410,7 +410,7 @@ function NeedBody(props: Parameters<typeof Detail>[0] & { need: InboxNeed }) {
           </div>
           <pre className="ibx-error">{b.reason}</pre>
           <div className="ibx-actions">
-            <button type="button" className="head-btn pri" onClick={() => api.retry(card.id).catch(onError)}>
+            <button type="button" className="btn primary" onClick={() => api.retry(card.id).catch(onError)}>
               Retry
             </button>
           </div>
@@ -465,7 +465,7 @@ function UpdateBody(props: Parameters<typeof Detail>[0] & { update: Notification
             <div className="ibx-actions">
               <button
                 type="button"
-                className="head-btn pri"
+                className="btn primary"
                 disabled={retried}
                 onClick={() => {
                   setRetried(true);
@@ -500,7 +500,7 @@ function StallActions(props: { cardId: string; card: Card | undefined; onOpenCar
       {act && (
         <button
           type="button"
-          className="head-btn pri"
+          className="btn primary"
           disabled={busy}
           onClick={() => {
             setBusy(true);
@@ -513,7 +513,7 @@ function StallActions(props: { cardId: string; card: Card | undefined; onOpenCar
           {act.label}
         </button>
       )}
-      <button type="button" className="head-btn" onClick={() => props.onOpenCard(props.cardId)}>
+      <button type="button" className="btn" onClick={() => props.onOpenCard(props.cardId)}>
         Open
       </button>
     </div>

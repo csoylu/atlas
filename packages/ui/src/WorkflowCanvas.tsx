@@ -246,7 +246,7 @@ export function WorkflowCanvas(props: {
       </label>
       <span className="wf-runbtn">
         <button
-          className="head-btn"
+          className="btn"
           disabled={starting}
           aria-expanded={runOn ? picking : undefined}
           aria-label={phone ? (runOn ? `Run on a ${runOn === 'task' ? 'task' : 'PR'}…` : 'Run now') : undefined}
@@ -319,7 +319,7 @@ export function WorkflowCanvas(props: {
           <>
             {off}
             {save.state === 'error' && (
-              <div className="wf-refused" role="alert">
+              <div className="state-err bar wf-refused" role="alert">
                 <span>Not saved: {save.message}</span>
                 <button className="linklike" onClick={flush}>
                   Try again
@@ -334,10 +334,10 @@ export function WorkflowCanvas(props: {
         tools={
           mode === 'edit' && (
             <div className="wf-tools">
-              <button className="head-btn" aria-expanded={menu} aria-haspopup="menu" onClick={() => setMenu(!menu)}>
+              <button className="btn" aria-expanded={menu} aria-haspopup="menu" onClick={() => setMenu(!menu)}>
                 + Add step
               </button>
-              <button className="head-btn" disabled={!canUndo} onClick={doUndo} title="Undo (⌘Z)">
+              <button className="btn" disabled={!canUndo} onClick={doUndo} title="Undo (⌘Z)">
                 Undo
               </button>
               {menu && (
@@ -385,7 +385,7 @@ export function WorkflowCanvas(props: {
             </div>
           </aside>
         ) : (
-          <button className="head-btn wf-side-open" onClick={() => setSideOpen(true)}>
+          <button className="btn wf-side-open" onClick={() => setSideOpen(true)}>
             Runs
           </button>
         ))}

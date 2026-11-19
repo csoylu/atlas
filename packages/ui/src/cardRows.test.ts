@@ -4,14 +4,15 @@ import { boardGroups, boardMeta, cardLine, cardSub, historyHits, historyMessage,
 // Outputs in the engine's exact wording (packages/engine/src/cardTools.ts).
 describe('card rows', () => {
   it('parses a card line, parents apart', () => {
-    expect(cardLine('created #59 [todo] @atlas P2 Chat activity redesign (parents: #58)')).toEqual({ ref: '#59', status: 'todo', who: '@atlas', prio: 'P2', title: 'Chat activity redesign', parents: ['#58'] });
+    expect(cardLine('created #59 [todo] @atlas P2 Chat activity redesign (parents: #58)')).toEqual({ ref: '#59', status: 'todo', who: '@atlas', prio: 2, title: 'Chat activity redesign', parents: ['#58'] });
     expect(cardLine('#7 [done] unassigned P0 A (b) title\n\nbody')).toMatchObject({ who: null, title: 'A (b) title', parents: [] });
     expect(cardLine('#7 [weird] unassigned P0 x')).toBeNull();
     expect(cardLine('message posted on #57')).toBeNull();
   });
   it('chip line', () => {
-    expect(cardSub({ status: 'todo', who: '@atlas', prio: 'P2', parents: ['#58', '#57'] })).toBe('todo · @atlas · P2 · after #58, #57');
-    expect(cardSub({ status: 'done', who: null, prio: 'P0', parents: [] })).toBe('done · P0');
+    expect(cardSub({ status: 'todo', who: '@atlas', prio: 2, parents: ['#58', '#57'] })).toBe('todo · @atlas · Medium · after #58, #57');
+    expect(cardSub({ status: 'todo', who: null, prio: 0, parents: [] })).toBe('todo');
+    expect(cardSub({ status: 'done', who: null, prio: 3, parents: [] })).toBe('done · High');
   });
   it('board counts in board order', () => {
     const out = '#1 [done] @atlas P2 A\n#2 [running] @atlas P2 B (parents: #1)\n#3 [ready] unassigned P1 C\n#4 [running] @atlas P3 D';

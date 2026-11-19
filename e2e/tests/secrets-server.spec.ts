@@ -62,7 +62,7 @@ test('locked → unlock → works → Lock now, on a server', async ({ page }) =
     // A wrong password is refused and stays locked; the right one opens it.
     await page.getByLabel('Secrets password').fill('not-the-password-1');
     await page.getByRole('button', { name: 'Unlock', exact: true }).click();
-    await expect(page.locator('.sec-lock .error-text')).toContainText(/wrong secrets password/);
+    await expect(page.locator('.sec-lock .state-err')).toContainText(/wrong secrets password/);
     await expect(page.getByRole('heading', { name: 'Secrets are locked' })).toBeVisible();
     await page.getByLabel('Secrets password').fill(PW);
     await page.getByRole('button', { name: 'Unlock', exact: true }).click();
