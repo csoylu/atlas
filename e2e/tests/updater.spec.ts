@@ -156,7 +156,7 @@ for (const theme of THEMES)
 
         // badge
         await page.goto(r.atlas.url + '/#/inbox');
-        if (v.w < 500) await page.getByRole('button', { name: 'Menu' }).click();
+        if (v.w < 500) await page.getByRole('button', { name: 'More', exact: true }).click();
         const badge = page.locator('.update-badge');
         await expect(badge).toBeVisible();
         await expect(badge).toContainText('Update available');
@@ -212,7 +212,7 @@ for (const theme of THEMES)
         // downloading: progress, Later/Esc disabled while busy
         r.gh.stallAfter = 200_000; // the zip stops at 200 kB and the connection stays open
         await page.goto(r.atlas.url + '/#/inbox');
-        if (v.w < 500) await page.getByRole('button', { name: 'Menu' }).click();
+        if (v.w < 500) await page.getByRole('button', { name: 'More', exact: true }).click();
         await page.locator('.update-badge').click();
         await page.getByRole('button', { name: 'Update and restart' }).click();
         await expect(page.locator('.update-progress')).toContainText(/Downloading/);
@@ -237,7 +237,7 @@ for (const theme of THEMES)
         expect(r.quits.n).toBe(0);
         await page.getByRole('button', { name: 'Later' }).click();
         await page.goto(r.atlas.url + '/#/inbox');
-        if (v.w < 500) await page.getByRole('button', { name: 'Menu' }).click();
+        if (v.w < 500) await page.getByRole('button', { name: 'More', exact: true }).click();
         await expect(page.locator('.update-badge')).toContainText('Update failed');
         await readable(page);
         await shot('7-badge-failed');
@@ -360,7 +360,7 @@ for (const width of [1440, 390]) {
       try {
         await r.atlas.engine.updater.check();
         await page.goto(r.atlas.url + '/#/inbox');
-        if (width < 500) await page.getByRole('button', { name: 'Menu' }).click();
+        if (width < 500) await page.getByRole('button', { name: 'More', exact: true }).click();
         await page.locator('.update-badge').click();
         const notes = page.locator('.update-notes');
         await expect(notes).toContainText('long_file_name_that_never_breaks');

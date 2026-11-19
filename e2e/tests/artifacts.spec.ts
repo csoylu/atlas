@@ -113,7 +113,10 @@ test('phone: the panel is full screen with ‹ Back', async ({ atlas, page }) =>
   await expect(panel).toBeVisible();
   const box = await panel.boundingBox();
   expect(box!.width).toBeGreaterThanOrEqual(388);
-  expect(box!.height).toBeGreaterThanOrEqual(780);
+  // Down to the tab bar (#264: the narrow window keeps it under every screen).
+  const tabs = (await page.locator('nav.tabbar').boundingBox())!;
+  expect(box!.y + box!.height).toBeGreaterThanOrEqual(tabs.y - 1);
+  expect(box!.height).toBeGreaterThanOrEqual(700);
   await expect(panel.locator('.sd-head')).toHaveCount(1);
   await expect(panel.getByRole('button', { name: /Back/ })).toBeVisible();
   await panel.getByRole('button', { name: /Back/ }).click();

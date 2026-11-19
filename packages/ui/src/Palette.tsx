@@ -8,6 +8,7 @@ import { Avatar } from './Board.tsx';
 import { moveSel, rank, sectionOrder, type PaletteItem } from './palette.ts';
 import { SETTINGS_PAGES } from './settingsPages.ts';
 import { SHORTCUTS } from './keys.ts';
+import { ProjDot, ProjTag, useProjectFilter, useProjects } from './projects.tsx';
 
 /** A palette row: what it shows and what ↵ does. */
 interface Row extends PaletteItem {
@@ -15,6 +16,8 @@ interface Row extends PaletteItem {
   /** Right side: a shortcut (kbd) or a faint note. */
   kbd?: string;
   note?: string;
+  /** Its project: a tag on the right when there are two projects or more (#264). */
+  project?: string | null;
   run(): void;
 }
 
@@ -52,6 +55,8 @@ export function Palette(props: {
   const [docs, setDocs] = useState<Doc[]>([]);
   const input = useRef<HTMLInputElement>(null);
   const list = useRef<HTMLDivElement>(null);
+  const pinfo = useProjects();
+  const [, setFilter] = useProjectFilter();
 
   useEffect(() => {
     input.current?.focus();
@@ -78,6 +83,7 @@ export function Palette(props: {
         boost: ctx.chatId && d.chatId === ctx.chatId ? 40 : d.pinned ? 10 : 0,
         icon: <KindIcon kind={d.kind} />,
         note: d.path,
+        project: d.projectId,
         run: openDoc(d),
       });
     for (const c of props.chats)
@@ -88,6 +94,7 @@ export function Palette(props: {
         keywords: '@' + (c.assignee ?? ''),
         icon: <Avatar id={c.assignee ?? '?'} />,
         note: c.id === ctx.chatId ? 'open' : undefined,
+        project: c.projectId,
         run: act(() => props.go('#/chat/' + c.id)),
       });
     const byRecent = [...props.cards].sort((a, b) => b.updatedAt.localeCompare(a.updatedAt));
@@ -101,6 +108,7 @@ export function Palette(props: {
         boost: ctx.chatId && c.originCard === ctx.chatId ? 40 : c.status === 'blocked' || c.status === 'review' ? 10 : 0,
         icon: <StatusIcon status={c.status} />,
         note: cardRef(c),
+        project: c.projectId,
         run: act(() => props.onOpenCard(c.id)),
       });
     const nav = (id: string, title: string, hash: string, icon: ReactNode, kbd?: string, keywords?: string) =>
@@ -116,11 +124,17 @@ export function Palette(props: {
     action('new-chat', 'Main chat', <Icon.edit />, () => props.go('#/chat/new'), '⌘N');
     for (const a of props.agents) action('new-chat:' + a.id, `Chat with @${a.id}`, <Avatar id={a.id} />, () => props.go('#/chat/' + (a.mainChat ?? a.id)));
     if (ctx.view === 'chat' && ctx.chatId) action('panel', 'Show / hide documents panel', <Icon.doc />, props.onTogglePanel, '⌘\\', 'side panel toggle');
+    // « Switch to project … » sets the shared project filter (Tasks, Inbox, Library, Workflows).
+    if (pinfo.multi) {
+      for (const p of pinfo.active)
+        action('project:' + p.id, `Switch to project ${p.name}`, <ProjDot hue={p.colour} />, () => setFilter(p.id), undefined, 'filter project');
+      action('project:all', 'Show all projects', <Icon.folder />, () => setFilter('all'), undefined, 'filter project switch');
+    }
     const other = props.theme === 'dark' ? 'light' : 'dark';
     action('theme', `Switch to ${other} theme`, other === 'light' ? <Icon.sun /> : <Icon.moon />, () => props.onTheme(other), undefined, 'appearance mode');
     action('help', 'Keyboard shortcuts', <Icon.list />, props.onHelp, '?', 'help keys cheat sheet');
     return out;
-  }, [docs, props.chats, props.cards, props.agents, props.theme, ctx.chatId, ctx.view]); // eslint-disable-line react-hooks/exhaustive-deps
+  }, [docs, props.chats, props.cards, props.agents, props.theme, ctx.chatId, ctx.view, pinfo, setFilter]); // eslint-disable-line react-hooks/exhaustive-deps
 
   const groups = useMemo(() => rank(rows, query, sectionOrder(ctx.view)), [rows, query, ctx.view]);
   const flat = groups.flatMap((g) => g.items.map((r) => r.item));
@@ -181,6 +195,7 @@ export function Palette(props: {
                   >
                     <span className="pal-ic">{item.icon}</span>
                     <span className="pal-t">{highlight(item.title, match.hits)}</span>
+                    {item.project !== undefined && <ProjTag id={item.project} />}
                     {item.kbd ? <Kbd keys={item.kbd} /> : item.note ? <span className="pal-note">{item.note}</span> : null}
                     {i === current && <span className="kbd pal-enter">↵</span>}
                   </div>

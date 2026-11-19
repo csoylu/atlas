@@ -32,15 +32,16 @@ test.describe('sidebar Running titles', () => {
             await expect.poll(() => atlas.db("SELECT COUNT(*) AS n FROM tool_calls WHERE status = 'running'"), { timeout: 15_000 }).toEqual([{ n: i + 1 }]);
           }
           await page.goto(`${atlas.url}/?theme=${theme}#/board`);
-          if (width < 900) await page.getByRole('button', { name: /menu/i }).first().click();
+          // ≤ 900 px (#264): no sidebar; the Running rows are on the More tab.
+          if (width <= 900) await page.getByRole('button', { name: 'More', exact: true }).click();
           const items = page.locator('.running-item');
           await expect(items).toHaveCount(3);
           for (const [i, t] of titles.entries()) {
             const item = items.nth(i);
-            // Measured against the sidebar in the same frame (at 390 px the drawer is still sliding in).
+            // Measured against the Running section in the same frame.
             const m = await item.locator('.running-title').evaluate((e) => ({ over: e.scrollWidth > e.clientWidth, ell: getComputedStyle(e).textOverflow, out: e.getBoundingClientRect().right - e.closest('.side-running')!.getBoundingClientRect().right }));
             expect(m.ell, t).toBe('ellipsis');
-            expect(m.out, `${t}: inside the sidebar`).toBeLessThanOrEqual(0.5);
+            expect(m.out, `${t}: inside its section`).toBeLessThanOrEqual(0.5);
             if (t.length > 40) expect(m.over, `${t}: is cut (so the ellipsis shows)`).toBe(true);
             else expect(m.over, `${t}: fits`).toBe(false);
           }

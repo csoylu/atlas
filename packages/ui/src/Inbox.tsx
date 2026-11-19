@@ -50,7 +50,6 @@ export function Inbox(props: {
   selected: string | null;
   onSelect(key: string | null): void;
   onOpenCard(id: string): void;
-  menuButton: ReactNode;
   stream: MessageStream;
   /** The daily memory digest (#82): its row is in `inbox` already (withDigest), read and archived here. */
   digest: MemoryDigestState;
@@ -147,7 +146,6 @@ export function Inbox(props: {
     <div className={'inbox' + (pushed ? ' pushed' : '')}>
       <section className="ibx" aria-label="Inbox">
         <header className="screen-head">
-          {props.menuButton}
           <div className="crumb">
             <h1>Inbox</h1>
           </div>
@@ -195,7 +193,6 @@ export function Inbox(props: {
             agents={props.agents}
             cards={props.cards}
             replyRef={replyRef}
-            menuButton={props.menuButton}
             wide={wide}
             stream={props.stream}
             onBack={() => onSelect(null)}
@@ -262,7 +259,6 @@ function Detail(props: {
   agents: Agent[];
   cards: Card[];
   replyRef: React.RefObject<HTMLTextAreaElement | null>;
-  menuButton: ReactNode;
   wide: boolean;
   stream: MessageStream;
   onBack(): void;
@@ -280,7 +276,7 @@ function Detail(props: {
     <>
       <header className="screen-head">
         {!props.wide && (
-          <button type="button" className="menu-btn ghost" aria-label="Back to the inbox" onClick={props.onBack}>
+          <button type="button" className="head-back" aria-label="Back to the inbox" title="Back to the inbox" onClick={props.onBack}>
             <Icon.back />
           </button>
         )}

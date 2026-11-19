@@ -539,8 +539,10 @@ const SCREENS = [
   // #211: the panel dragged to its widest (Home on the separator), so the chat is at its narrowest: pins and buttons
   // still must not cover messages or the composer. Phones have no separator: the panel stays full screen.
   { name: 'panel-max', hash: `#/chat/${chat.id}`, ready: '.side-doc', pins: true, panel: true, then: { js: `const h = document.querySelector('.sd-resize'); if (innerWidth <= 760) { if (h) throw new Error('a resize handle on a phone'); document.body.dataset.wideOk = '1'; return; } if (!h) throw new Error('no resize handle'); h.focus(); h.dispatchEvent(new KeyboardEvent('keydown', { key: 'Home', bubbles: true })); await new Promise((r) => setTimeout(r, 200)); const max = +h.getAttribute('aria-valuemax'), w = Math.round(document.querySelector('.side-doc').getBoundingClientRect().width); if (Math.abs(w - max) > 1) throw new Error('panel ' + w + 'px after Home, max ' + max); h.blur(); localStorage.removeItem('atlas.panel.width'); document.body.dataset.wideOk = '1';`, ready: 'body[data-wide-ok]' }, keys: ['.sd-tab', '.chat-pin-title'] },
-  // The phone drawer (hamburger): sidebar rows 40 / 44 px, faces, 13 px labels.
-  { name: 'drawer', hash: `#/chat/${chat.id}`, ready: '.menu-btn', then: { js: `document.querySelector('.menu-btn').click(); await new Promise((r) => setTimeout(r, 400));`, ready: '.scrim' }, keys: ['.nav-item', '.side-group'] },
+  // The narrow window's Chats and More tabs (#264, ≤ 900 px: no sidebar, the tab bar): the sidebar's rows, 40 / 44 px,
+  // faces, 13 px labels. A wider window has no such tab: #/chats and #/more go home.
+  { name: 'tab-chats', hash: '#/chats', ready: '.side-list, .app:not(.narrow) .sidebar', then: { js: `if (!document.querySelector('.app.narrow') && /#\\/(chats|more)/.test(location.hash)) throw new Error('a wide window stayed on ' + location.hash + ' (#264: it goes home)'); document.body.dataset.tabOk = '1';`, ready: 'body[data-tab-ok]' }, keys: ['.nav-item', '.side-group', '.tabbar-btn'] },
+  { name: 'tab-more', hash: '#/more', ready: '.side-list, .app:not(.narrow) .sidebar', then: { js: `if (!document.querySelector('.app.narrow') && /#\\/(chats|more)/.test(location.hash)) throw new Error('a wide window stayed on ' + location.hash + ' (#264: it goes home)'); document.body.dataset.tabOk = '1';`, ready: 'body[data-tab-ok]' }, keys: ['.nav-item', '.me-name', '.tabbar-btn'] },
   { name: 'board', hash: '#/board', ready: '.board', keys: ['.board .name', '.card-title', '.nav-item'] },
   { name: 'inbox', hash: `#/inbox/${INBOX_CARDS[0].id}`, ready: '.ibx-q', inbox: true, keys: ['.ibx-det h2', '.ibx-opt b', '.ibx-k', '.ni-l2', '.nav-item'] },
   // A task note's link from the chat (#143): #/inbox/task:<id> lands on the task's question, or on a finished task's update.
@@ -572,7 +574,7 @@ const SCREENS = [
   { name: 'project-new', hash: '#/settings/projects/new', ready: '.pj-form', projects2: true, keys: ['.pj-form .field', '.pj-check', '.pj-form .actions button'] },
   { name: 'board-2', hash: '#/board', ready: '.board', projects2: true, then: { js: `document.querySelector('.proj-btn').click();`, ready: '.proj-menu .pop-row' }, keys: ['.proj-btn', '.proj-menu .pop-row', '.proj-tag', '.side-group'] },
   { name: 'new-task-2', hash: '#/board', ready: '.board', projects2: true, then: { js: `document.querySelector('button[aria-label="New task"]').click();`, ready: '.new-card-modal select[aria-label=Project]' }, keys: ['.nc-crumb', '.nc-note', '.prop-pill'] },
-  { name: 'drawer-2', hash: '#/board', ready: '.menu-btn', projects2: true, then: { js: `document.querySelector('.menu-btn').click(); await new Promise((r) => setTimeout(r, 400));`, ready: '.scrim' }, keys: ['.nav-item', '.side-group'] },
+  { name: 'tab-chats-2', hash: '#/chats', ready: '.side-list, .app:not(.narrow) .sidebar', projects2: true, then: { js: `if (!document.querySelector('.app.narrow') && /#\\/(chats|more)/.test(location.hash)) throw new Error('a wide window stayed on ' + location.hash + ' (#264: it goes home)'); document.body.dataset.tabOk = '1';`, ready: 'body[data-tab-ok]' }, keys: ['.nav-item', '.side-proj-name'] },
   { name: 'inbox-2', hash: '#/inbox', ready: '.ni', inbox: true, projects2: true, keys: ['.ni-l2', '.proj-tag'] },
   { name: 'workflows-2', hash: '#/workflows', ready: '.wf-row', workflows: true, projects2: true, keys: ['.wfl-name', '.proj-btn', '.proj-tag'] },
   { name: 'workflows', hash: '#/workflows', ready: '.wf-row', workflows: true, keys: ['.wfl-name', '.wfl-sub .trig', '.wfl-last .st', '.wfl-ghead', '.wfl-cols'] },
@@ -640,7 +642,8 @@ const projects2 = async () => {
     cloneProgress: i === 1 ? 62 : null, mainChat: null, joinedAt: at, branch: i === 0 ? 'main' : null,
   });
   const fixture = { id: PJ2, name: 'Datinel', repo: 'datinel/datinel', ciJob: null, changelog: false, lead, colour: 145, status: 'active', createdAt: at, archivedAt: null, members: agentIds.slice(0, 3).map(member), kept: [], isDefault: false };
-  return live.some((p) => p.id !== live[0]?.id && p.status === 'active') ? live : [...live, fixture];
+  // Always there (the project page and the tasks moved into it need it), even when the live data has a second project.
+  return live.some((p) => p.id === PJ2) ? live : [...live, fixture];
 };
 const inProject2 = (list) => list.map((c, i) => (i % 3 === 1 ? { ...c, projectId: PJ2 } : c));
 
