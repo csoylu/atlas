@@ -44,6 +44,10 @@ describe('CI job graph (docs/updater.md step 3)', () => {
     expect(j.test!.cond).toBeNull();
     expect(j.test!.text).toContain('npm run typecheck');
     expect(j.test!.text).toMatch(/npm test\b/);
+    // the durability test and the real-Chrome screenshot test run in the required job too, never as a skip (#254)
+    expect(j.test!.text).toMatch(/CRASH_KILLS: '\d+'\n\s+run: npx vitest run --project slow packages\/engine\/test\/crash\.test\.ts/);
+    expect(j.test!.text).toContain('test -x "/Applications/Google Chrome.app/Contents/MacOS/Google Chrome"');
+    expect(j.test!.text).toContain('npx vitest run --project slow packages/engine/test/screenshot.chrome.test.ts');
     // every job that builds or publishes hangs off `changelog`, which is skipped on pull requests
     expect(j.changelog!.cond).toBe("github.event_name != 'pull_request'");
     for (const id of ['mac', 'release', 'windows']) expect(j[id]!.needs.length).toBeGreaterThan(0);
