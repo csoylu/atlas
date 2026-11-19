@@ -96,11 +96,15 @@ messages or the composer, the modal or panel off-screen, uncaught page errors, a
   - Engine-only or docs-only change: no ui-check.
   - UI change: `--only` on the screens that render the changed components, plus the ones the builder lists, at all four
     widths. `--only` matches screen-name **prefixes**: `chat` (all `chat-*`), `task` (task-board, -list, -inbox, -chat,
-    -images, -blocked), `thread` (thread, thread-images), `new-task-images`, `panel` (panel, panel-max), `drawer`,
-    `board`, `inbox`, `library`, `settings-` (or `settings-memory`, `settings-secrets`…), `workflow` (list, edit, runs,
-    off), `palette`, `shortcuts`. The list of names: `grep -oE "name: '[^']+'" scripts/ui-check/check.mjs`.
+    -images, -blocked), `thread` (thread, thread-images), `new-task` (new-task-images, new-task-2), `panel` (panel,
+    panel-max), `drawer`, `board`, `inbox`, `library`, `project` (projects-2, project-page, project-new: **not** covered
+    by `settings-`, though they live under `#/settings/projects`), `settings-` (the 12 settings pages, memory and secrets
+    included; or `settings-memory`, `settings-secrets`…), `workflow` (list, edit, runs, off, workflows-2), `palette`,
+    `shortcuts`. The `-2` screens (board-2, drawer-2, inbox-2, workflows-2…) are the second-project fixtures (#217) and
+    follow their prefix. The names: the `SCREENS` array and the `SETTINGS` list in `scripts/ui-check/check.mjs`; check a
+    prefix matches something before trusting a run (`--only` with no match checks nothing).
   - **Full run** (no `--only`) only when the change touches something every screen shares: global styles (`styles.css`
-    tokens and resets, `theme.css`), the app shell or sidebar, shared headers, the side panel shell, fonts
+    tokens and resets), the app shell or sidebar, shared headers, the side panel shell, fonts
     (`main.tsx` imports), or `scripts/ui-check` itself.
   - **One ui-check at a time** on the machine (two at once give false failures): `pgrep -fl check.mjs` first, wait if
     one runs.
