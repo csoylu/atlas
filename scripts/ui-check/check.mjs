@@ -727,6 +727,9 @@ handlers.set('Fetch.requestPaused', async ({ requestId, request }) => {
       });
     if (request.method === 'GET' && url.pathname === '/api/cards' && screen?.table) return await json([...(await get('/cards')), ...TOOL_CARDS]);
     if (request.method === 'GET' && url.pathname === `/api/cards/${chat.id}/messages` && screen?.table) return await json([...(await get(`/cards/${chat.id}/messages`)), ...TABLE_MSGS]);
+    // The tool rows' artifact cards point at fixture documents: their versions, so the cards don't read « Deleted artifact » (#242).
+    const fixtureDoc = /^\/api\/documents\/(doc_uicheck2?)\/versions$/.exec(url.pathname);
+    if (request.method === 'GET' && fixtureDoc && screen?.tools) return await json([{ docId: fixtureDoc[1], version: fixtureDoc[1] === 'doc_uicheck' ? 3 : 1, updatedBy: 'atlas', updatedAt: new Date().toISOString() }]);
     if (request.method === 'GET' && url.pathname === '/api/cards' && screen?.tools) return await json([...(await get('/cards')), ...TOOL_CARDS]);
     if (request.method === 'GET' && url.pathname === '/api/cards' && screen?.pins) return await json([...(await get('/cards')), ...FIXTURE_CARDS]);
     if (request.method === 'GET' && url.pathname === '/api/cards' && screen?.reports) return await json([...(await get('/cards')), ...REPORT_CARDS]);

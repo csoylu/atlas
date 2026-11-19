@@ -282,7 +282,7 @@ export function DeleteArtifactDialog(props: { doc: Doc; onCancel(): void; onDele
           {n === null ? 'All its versions are removed.' : n === 1 ? 'Its only version is removed.' : `All ${n} versions are removed.`} This can't be undone.
         </p>
         <p className="del-fine">
-          Its file <code>{doc.path}</code> in {who(doc.agentId)}'s workspace is deleted too. Chat cards that show it say « Deleted artifact ».
+          Its file <code>{doc.path}</code> in {who(doc.agentId)}'s workspace is deleted too. Its cards in chats will read “Deleted artifact”.
         </p>
         <div className="modal-actions">
           <button type="button" className="ghost" onClick={onCancel}>
