@@ -3,6 +3,7 @@ import { z } from 'zod';
 import type { ContentBlock } from '@atlas/shared';
 import type { ToolSpec } from './providers/types.ts';
 import { REDACT_OVERLAP, type Secrets } from './secrets.ts';
+import { specsOf } from './toolSpec.ts';
 
 /**
  * secret_set and secret_delete (#207). No tool ever reads a value: an agent stores one (from a command's output it
@@ -21,7 +22,7 @@ export interface SecretToolContext {
   env: (command: string) => Promise<NodeJS.ProcessEnv>;
 }
 
-const Name = z.string().describe('env var name: A-Z, 0-9 and _, starting with a letter, e.g. ETHERSCAN_KEY');
+const Name = z.string().describe('env var name: A-Z, 0-9, _, starting with a letter');
 /** How long the value's command may run. */
 const COMMAND_TIMEOUT_S = 60;
 /** The end of stderr shown when the command fails (redacted). */
@@ -30,9 +31,9 @@ const STDERR_TAIL = 600;
 const SecretSet = z
   .object({
     name: Name,
-    description: z.string().max(500).optional().describe('what it is, shown to the user and in your instructions'),
-    command: z.string().min(1).optional().describe('a shell command whose stdout is the value; you never see the output'),
-    value: z.string().min(1).optional().describe('the value itself, when it is not on this machine (prefer command)'),
+    description: z.string().max(500).optional().describe('shown to the user and in your instructions'),
+    command: z.string().min(1).optional().describe('its stdout is the value'),
+    value: z.string().min(1).optional().describe('only if no command can give it'),
   })
   .refine((i) => (i.command === undefined) !== (i.value === undefined), 'give exactly one of command or value');
 
@@ -41,25 +42,19 @@ const SecretDelete = z.object({ name: Name });
 const SPECS = {
   secret_set: {
     description:
-      'Store a secret (API key, token, password) for your shell commands, as $NAME. Prefer command: the engine runs it ' +
-      'in your workdir with your shell environment and stores its trimmed stdout; the output never reaches you, the ' +
-      'transcript or the model provider (the result says only how many chars were stored). value: the value itself, ' +
-      'when no command can produce it; it is hidden as [secret NAME] in the stored transcript, but the model provider ' +
-      'has already seen it in this call. A new secret belongs to this project and is granted to you only. You can overwrite or delete only secrets ' +
-      'you created, never the user\'s or another agent\'s, nor a model key. Never print a value.',
+      'Store a secret (API key, token, password) as $NAME for your shell commands. Prefer command: run in your workdir, ' +
+      'its stdout is stored unseen by you, the transcript and the provider; value: hidden in the transcript, but the provider sees it. ' +
+      "Yours alone, in this project; you change or delete only secrets you created. Never print a value.",
     input: SecretSet,
   },
   secret_delete: {
-    description: 'Delete a secret you created (its value and its entry). Not the user\'s, another agent\'s or a model key.',
+    description: 'Delete a secret you created (value and entry).',
     input: SecretDelete,
   },
 } as const;
 
 export function secretToolSpecs(): ToolSpec[] {
-  return Object.entries(SPECS).map(([name, t]) => {
-    const { $schema: _s, ...schema } = z.toJSONSchema(t.input, { io: 'input' }) as Record<string, unknown>;
-    return { name, description: t.description, input_schema: schema };
-  });
+  return specsOf(SPECS);
 }
 
 export const isSecretTool = (name: string): boolean => name in SPECS;

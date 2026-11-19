@@ -2,6 +2,8 @@ import { z } from 'zod';
 import { findSection, splitSections, type Doc, type DocKind } from '@atlas/shared';
 import type { Documents } from './documents.ts';
 import type { ToolSpec } from './providers/types.ts';
+import { specsOf } from './toolSpec.ts';
+import { ProjectArg } from './cardTools.ts';
 
 export interface DocToolContext {
   documents: Documents;
@@ -26,8 +28,8 @@ function reachDoc(doc: Doc, ctx: DocToolContext): Doc {
 }
 
 const Target = {
-  artifact: z.string().optional().describe('an artifact id (doc_…) or a path in your workspace (e.g. docs/design.md)'),
-  path: z.string().optional().describe('same as artifact: a path in your workspace'),
+  artifact: z.string().optional().describe('doc_… id or path'),
+  path: z.string().optional().describe('= artifact'),
 };
 
 function resolveDoc(i: { artifact?: string; path?: string }, ctx: DocToolContext): Doc {
@@ -72,17 +74,15 @@ const tool = <S extends z.ZodType>(t: DocTool<S>) => t;
 export const DOC_TOOLS = {
   artifact_create: tool({
     description:
-      'Create an artifact: a markdown document (specs, designs, reports), an html page (mockups, UI), an svg diagram ' +
-      '(system design) or a url link (a running app, a page served from your workspace at /api/files/<you>/<path>). ' +
-      'It is saved as a file in your workspace (docs/, pages/, diagrams/, links/), versioned, listed in the Library, and ' +
-      'appears in the chat right away (in a task: attached to it). Use it instead of pasting long text. folder: a ' +
-      'Library folder name (created if new); leave it out for Unfiled.',
+      'Create an artifact: markdown (specs, reports), html (mockups, UI), svg (system design) or url (running app, ' +
+      '/api/files/<you>/<path>). A versioned workspace file (docs/, pages/, diagrams/, links/), in the Library and the ' +
+      'chat (in a task: attached). Use it instead of pasting long text.',
     input: z.object({
       kind: KIND,
       title: z.string().min(1).max(200),
-      content: z.string().describe('the markdown, html or svg; for url: the address'),
-      folder: z.string().optional(),
-      path: z.string().optional().describe('optional file path in your workspace; default from the title'),
+      content: z.string().describe('url: the address'),
+      folder: z.string().optional().describe('Library folder, created if new; none = Unfiled'),
+      path: z.string().optional().describe('default: from the title'),
     }),
     run: (i, ctx) => {
       const doc = ctx.documents.create(ctx.agentId, { kind: kindOf(i.kind), title: i.title, content: i.content, path: i.path, folder: i.folder ?? null }, ctx.agentId, ctx.cardId);
@@ -91,16 +91,15 @@ export const DOC_TOOLS = {
   }),
   artifact_update: tool({
     description:
-      'Change an artifact: a new version that appears in the chat right away (older chat cards keep their version). ' +
-      'Give the whole new content, or old_text + new_text for one exact replacement; title renames it. Editing the ' +
-      'file with write_file / edit_file also makes a version, but posts no card.',
+      'New version of an artifact, shown in the chat (older cards keep theirs): whole content, or old_text + new_text (one ' +
+      'exact replacement); title renames. write_file / edit_file on its file version it too, without a card.',
     input: z.object({
       ...Target,
       content: z.string().optional(),
       old_text: z.string().optional(),
       new_text: z.string().optional(),
       title: z.string().optional(),
-      section: z.string().optional().describe('scroll the panel to this markdown heading or html id'),
+      section: z.string().optional().describe('scroll to this markdown heading or html id'),
     }),
     run: (i, ctx) => {
       const before = resolveDoc(i, ctx);
@@ -110,11 +109,11 @@ export const DOC_TOOLS = {
     },
   }),
   artifact_list: tool({
-    description: "List this project's artifacts in the Library (every agent's), latest first: id, kind, title, version, folder, path. query searches titles and content.",
+    description: "List this project's artifacts (every agent's), latest first; query searches titles and content.",
     input: z.object({
       query: z.string().optional(),
-      folder: z.string().optional().describe('a folder name, or Unfiled'),
-      project: z.string().min(1).optional().describe("project id or name; omitted = this run's project (another project: leads only)"),
+      folder: z.string().optional().describe('or Unfiled'),
+      project: ProjectArg,
     }),
     run: (i, ctx) => {
       const project = ctx.scope?.(i.project);
@@ -133,7 +132,7 @@ export const DOC_TOOLS = {
     },
   }),
   artifact_read: tool({
-    description: 'Read an artifact\'s content (any agent\'s), at its latest version or an older one.',
+    description: "Read any agent's artifact, latest or an older version.",
     input: z.object({ ...Target, version: z.number().int().positive().optional() }),
     run: (i, ctx) => {
       const ref = i.artifact ?? i.path;
@@ -145,7 +144,7 @@ export const DOC_TOOLS = {
   }),
   artifact_delete: tool({
     description:
-      'Delete one of your own artifacts for good (file and every version). Cannot be undone: only when the user asks.',
+      'Delete one of your artifacts for good (file and every version): only when the user asks.',
     input: z.object(Target),
     run: (i, ctx) => {
       const ref = i.artifact ?? i.path;
@@ -160,8 +159,7 @@ export const DOC_TOOLS = {
   }),
   panel_open: tool({
     description:
-      'Show an existing artifact again in the side panel beside the chat (artifact_create / artifact_update already ' +
-      'show theirs). section scrolls to a markdown heading (id or text) or an html element id.',
+      "Show an artifact again in the chat's side panel; section: a markdown heading (id or text) or html id.",
     input: z.object({ ...Target, section: z.string().optional() }),
     run: (i, ctx) => {
       const doc = resolveDoc(i, ctx);
@@ -170,7 +168,7 @@ export const DOC_TOOLS = {
     },
   }),
   panel_close: tool({
-    description: 'Close an artifact\'s tab in the side panel beside the chat, or the whole panel (no artifact).',
+    description: "Close an artifact's side panel tab, or the whole panel (no artifact).",
     input: z.object(Target),
     run: (i, ctx) => {
       if (!ctx.chatId) throw new Error('this task has no chat with the user, so there is no panel to close');
@@ -188,10 +186,7 @@ export const DOC_TOOLS = {
 } satisfies Record<string, DocTool<z.ZodType>>;
 
 export function docToolSpecs(): ToolSpec[] {
-  return Object.entries(DOC_TOOLS).map(([name, t]) => {
-    const { $schema: _s, ...schema } = z.toJSONSchema(t.input, { io: 'input' }) as Record<string, unknown>;
-    return { name, description: t.description, input_schema: schema };
-  });
+  return specsOf(DOC_TOOLS);
 }
 
 export const isDocTool = (name: string) => name in DOC_TOOLS;

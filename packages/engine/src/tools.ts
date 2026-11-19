@@ -14,6 +14,7 @@ import { findSpans, replaceSpans, type Span } from './fuzzy.ts';
 import { globFiles, grep, isBinary, shownPath, SKIP_DIRS } from './search.ts';
 import { fetchPage, headTail } from './web.ts';
 import { FULL_PAGE_MAX, PHONE_BELOW, TIMEOUT_MS, takeScreenshot, type EngineAccess } from './screenshot.ts';
+import { specsOf } from './toolSpec.ts';
 
 export interface ToolContext {
   workdir: string;
@@ -226,16 +227,13 @@ export function numberedPage(text: string, offset: number, limit: number, budget
 export const TOOLS = {
   read_file: tool({
     description:
-      'Read a UTF-8 text file, with line numbers (`N|text`; the `N|` prefix is not part of the file). Paths are relative ' +
-      'to your working directory; absolute paths work there, in the temp folders (/tmp, $TMPDIR) and for a saved output ' +
-      `Atlas gave you (${PATH_RULE}). Reads ${READ_LINES} lines from ` +
-      '`offset` (1-based) by default; a footer says how to continue. Read a file before editing or overwriting it. ' +
-      'A png, jpeg, gif or webp file (up to 10 MB) comes back as the picture itself, so you can look at it (e.g. a ' +
-      'screenshot in /tmp: no need to copy it into your workdir).',
+      'Read a UTF-8 text file, numbered (`N|` is not in the file), `limit` lines from `offset`; a footer says how to go ' +
+      'on. Relative paths: from your workdir; absolute: also temp folders and saved outputs. Read before editing or ' +
+      'overwriting. png, jpeg, gif, webp (≤ 10 MB): the picture.',
     input: z.object({
       path: z.string(),
-      offset: z.number().int().min(1).default(1).describe('first line to read (1-based)'),
-      limit: z.number().int().min(1).default(READ_LINES).describe('lines to read at most'),
+      offset: z.number().int().min(1).default(1),
+      limit: z.number().int().min(1).default(READ_LINES),
     }),
     run: async ({ path, offset, limit }, ctx) => {
       const full = readable(ctx, path);
@@ -256,8 +254,7 @@ export const TOOLS = {
   }),
   write_file: tool({
     description:
-      'Create or overwrite a text file in your working directory (parent folders are created; ' + PATH_RULE + '). Overwriting an existing file needs a read_file of it ' +
-      'in this conversation first. Prefer edit_file for changes to an existing file.',
+      'Create or overwrite a text file (parent folders created). Overwriting needs a read_file of it in this conversation first; prefer edit_file for changes.',
     input: z.object({ path: z.string(), content: z.string() }),
     run: ({ path, content }, ctx) => {
       const full = writable(ctx, path);
@@ -275,10 +272,8 @@ export const TOOLS = {
   }),
   edit_file: tool({
     description:
-      'Replace old_text with new_text in a file of your working directory (' + PATH_RULE + '). old_text must be found exactly once (add surrounding lines to make it ' +
-      'unique), or set replace_all to replace every occurrence. Refused if the file changed on disk since you last read ' +
-      'or wrote it in this conversation. ' +
-      'If old_text is not found exactly, a match ignoring indentation or runs of spaces is tried and reported.',
+      'Replace old_text (must match once: add lines, or replace_all) with new_text. Refused if the file changed since you ' +
+      'last read or wrote it. No exact match: one ignoring indentation and spaces is tried and reported.',
     input: z.object({
       path: z.string(),
       old_text: z.string().min(1),
@@ -291,7 +286,7 @@ export const TOOLS = {
     },
   }),
   list_files: tool({
-    description: `List files and folders (recursive up to depth 3, skips node_modules and .git). Your working directory or a temp folder such as /tmp (${PATH_RULE}).`,
+    description: 'List files and folders, recursive to depth 3, skipping node_modules and .git.',
     input: z.object({ path: z.string().default('.') }),
     run: async ({ path }, ctx) => {
       const { workdir } = ctx;
@@ -313,16 +308,15 @@ export const TOOLS = {
   }),
   grep: tool({
     description:
-      'Search file contents with a regular expression (ripgrep syntax; use ignore_case instead of (?i)). Use this instead of grep/rg/find in shell. ' +
-      'mode: content (matching lines as path:line:text), files (paths only) or count (path:matches). Skips node_modules and .git. ' +
-      `Searches your working directory, a temp folder such as /tmp, or a saved output (${PATH_RULE}).`,
+      'Search file contents by regex (ripgrep syntax; ignore_case, not (?i)), instead of grep/rg in shell. mode: content ' +
+      '(path:line:text), files, count. Skips node_modules and .git.',
     input: z.object({
       pattern: z.string().min(1),
-      path: z.string().default('.').describe('file or folder to search'),
-      glob: z.string().optional().describe('only files matching this glob, e.g. *.ts or src/**/*.{ts,tsx}'),
+      path: z.string().default('.'),
+      glob: z.string().optional().describe('e.g. *.ts or src/**/*.{ts,tsx}'),
       mode: z.enum(['content', 'files', 'count']).default('content'),
-      limit: z.number().int().min(1).max(2000).default(100).describe('output lines at most'),
-      context: z.number().int().min(0).max(20).optional().describe('lines of context around each match (content mode)'),
+      limit: z.number().int().min(1).max(2000).default(100).describe('output lines'),
+      context: z.number().int().min(0).max(20).optional().describe('lines around each match'),
       ignore_case: z.boolean().default(false),
     }),
     run: async ({ pattern, path, glob, mode, limit, context, ignore_case }, ctx) => {
@@ -333,12 +327,11 @@ export const TOOLS = {
   }),
   glob: tool({
     description:
-      'Find files by name pattern, newest first: `**/*.ts`, `src/**/test*.{ts,tsx}`; a pattern without / matches the name ' +
-      'at any depth. Use this instead of find/ls in shell. Skips node_modules and .git. ' +
-      `path: your working directory or a temp folder such as /tmp (${PATH_RULE}).`,
+      'Find files by name pattern, newest first (`**/*.ts`, `src/**/*.{ts,tsx}`; no / = the name at any depth), instead ' +
+      'of find/ls in shell. Skips node_modules and .git.',
     input: z.object({
       pattern: z.string().min(1),
-      path: z.string().default('.').describe('folder to search from'),
+      path: z.string().default('.'),
       limit: z.number().int().min(1).max(1000).default(100),
     }),
     run: async ({ pattern, path, limit }, ctx) => {
@@ -349,9 +342,8 @@ export const TOOLS = {
   }),
   shell: tool({
     description:
-      'Run a shell command in your working directory. Returns the exit code and output (the last 30000 chars; the full ' +
-      'output is saved to a file when longer). background: true starts it and returns at once with an id (servers, ' +
-      'watchers, long builds): read its output with shell_output, stop it with shell_kill; you get a message when it ends.',
+      'Run a shell command in your workdir: exit code + output (last 30000 chars, the rest saved to a file). background: ' +
+      'id at once (servers, watchers, long builds); shell_output reads, shell_kill stops, a message comes at the end.',
     input: z.object({
       command: z.string().min(1),
       timeout_s: z.number().int().positive().max(1800).default(120).describe('foreground only'),
@@ -376,7 +368,7 @@ export const TOOLS = {
     },
   }),
   shell_output: tool({
-    description: 'Status and new output of a background process started with shell (background: true). offset (bytes) re-reads from there.',
+    description: 'Status and new output of a background process; offset (bytes) re-reads from there.',
     input: z.object({ id: z.string(), offset: z.number().int().min(0).optional() }),
     run: async ({ id, offset }, ctx) => {
       if (!ctx.background) throw new Error('background processes are not available here');
@@ -384,7 +376,7 @@ export const TOOLS = {
     },
   }),
   shell_kill: tool({
-    description: 'Stop a background process (its whole process tree).',
+    description: 'Stop a background process and its process tree.',
     input: z.object({ id: z.string() }),
     run: async ({ id }, ctx) => {
       if (!ctx.background) throw new Error('background processes are not available here');
@@ -393,9 +385,8 @@ export const TOOLS = {
   }),
   web_fetch: tool({
     description:
-      'Fetch a web page or text URL as readable text (HTML converted to markdown). Long pages show the start and the end; ' +
-      'the full text is saved to a file you can read_file or grep. A png, jpeg, gif or webp URL comes back as the picture ' +
-      '(saved to a file too).',
+      'Fetch a URL as text (HTML → markdown). Long pages: start and end shown, full text saved to a file. png, jpeg, gif, ' +
+      'webp: the picture (saved too).',
     input: z.object({
       url: z.string().min(1),
       max_chars: z.number().int().min(1000).max(100_000).default(15_000),
@@ -418,27 +409,23 @@ export const TOOLS = {
   }),
   screenshot: tool({
     description:
-      'Take a screenshot of the running Atlas UI or of a page in a workspace, and get it back as a picture (also saved to ' +
-      'screenshots/ in your workspace). target: an app route (`#/chat/paris`, `#/board`, `/` = home), a file in your ' +
-      'workspace (`pages/x.html`), or another agent\'s `/api/files/<agent>/pages/x.html`; other sites are refused (use ' +
-      'web_fetch). Read-only: the page sees your live data, but every write it tries (POST, PUT, DELETE…) is refused and ' +
-      `listed. Waits for the page to load, fonts and a quiet network (then wait_for), ${TIMEOUT_MS / 1000} s at most, else it ` +
-      `fails and says what was missing. Under ${PHONE_BELOW} px wide: phone mode (mobile, touch). actions run before the ` +
-      'shot: {click: selector}, {type: selector, text}, {press: "Escape" | "Meta+k"}. Page errors and console.error lines ' +
-      'come back with the picture. Needs Google Chrome.',
+      'Screenshot the Atlas UI or a workspace page (saved in screenshots/; other sites: web_fetch). Read-only on live ' +
+      'data: page writes are refused and listed. Waits for load, fonts, quiet network, then wait_for, ' +
+      `${TIMEOUT_MS / 1000} s max, else fails naming what is missing. Under ${PHONE_BELOW} px: phone (touch). ` +
+      'Returns page errors and console.error lines. Needs Google Chrome.',
     input: z.object({
-      target: z.string().min(1).describe('#/route, a workspace file path, or /api/files/<agent>/<path>'),
+      target: z.string().min(1).describe('route (`#/board`, `/`), workspace file (`pages/x.html`) or /api/files/<agent>/<path>'),
       width: z.number().int().min(320).max(2560).default(1440),
       height: z.number().int().min(320).max(2000).default(900),
-      theme: z.enum(['dark', 'light']).optional().describe("omitted: the page's own choice"),
-      full_page: z.boolean().default(false).describe(`the whole page height (up to ${FULL_PAGE_MAX} px), not just the viewport`),
-      clip: z.string().optional().describe('CSS selector: shoot only this element'),
-      wait_for: z.string().optional().describe('CSS selector that must be visible before the shot (after actions)'),
+      theme: z.enum(['dark', 'light']).optional().describe("default: page's"),
+      full_page: z.boolean().default(false).describe(`whole page, up to ${FULL_PAGE_MAX} px`),
+      clip: z.string().optional().describe('selector: only this element'),
+      wait_for: z.string().optional().describe('selector to wait for, after actions'),
       actions: z
         .array(z.union([z.object({ click: z.string() }), z.object({ type: z.string(), text: z.string() }), z.object({ press: z.string() })]))
         .max(20)
         .optional()
-        .describe('steps before the shot, in order'),
+        .describe('in order; press e.g. "Escape", "Meta+k"'),
     }),
     run: async (o, ctx) => {
       if (!ctx.engine) throw new Error('screenshot is not available here (no engine address)');
@@ -533,10 +520,7 @@ function runForeground(command: string, timeout_s: number, env: NodeJS.ProcessEn
 }
 
 export function toolSpecs(): ToolSpec[] {
-  return Object.entries(TOOLS).map(([name, t]) => {
-    const { $schema: _s, ...schema } = z.toJSONSchema(t.input, { io: 'input' }) as Record<string, unknown>;
-    return { name, description: t.description, input_schema: schema };
-  });
+  return specsOf(TOOLS);
 }
 
 /** Execute a tool call. Errors are returned to the model as is_error results, not thrown. */

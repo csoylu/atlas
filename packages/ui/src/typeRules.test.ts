@@ -3,7 +3,7 @@ import { readFileSync, readdirSync, statSync } from 'node:fs';
 import { join } from 'node:path';
 
 /**
- * The UI type rules (CLAUDE.md « UI type rules », #112): every font-size, font-weight, line-height and font-family in
+ * The UI type rules (docs/ui.md « UI type rules », #112): every font-size, font-weight, line-height and font-family in
  * packages/ui/src goes through the tokens in styles.css; nothing under 13 px; text colours for information reach 4.5:1
  * on the surfaces in both themes. Rules without a test drift.
  */

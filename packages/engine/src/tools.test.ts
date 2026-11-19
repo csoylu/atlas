@@ -78,9 +78,7 @@ describe('tools', () => {
     expect(r).toContain('path /etc/hosts is outside the folders you can open (read: workdir and temp folders; write: workdir only)');
     expect(r).not.toContain('\n');
     expect(() => readable(c, join(homedir(), 'x'))).toThrow(PATH_RULE);
-    // The tool descriptions say the rule.
-    const names = ['read_file', 'write_file', 'edit_file', 'grep', 'glob', 'list_files'];
-    for (const t of toolSpecs().filter((s) => names.includes(s.name))) expect(t.description).toContain(PATH_RULE);
+    // The rule is said once, in the system prompt's Workspace section (#295; projectWorkspaces.test), not in each tool description.
   });
 
   it('writes, edits, reads (with line numbers) and lists files', async () => {
