@@ -91,7 +91,23 @@ messages or the composer, the modal or panel off-screen, uncaught page errors, a
   responses the page sees (4 cards in every pin state, a real document in a panel tab); nothing is stored.
 - `--ui packages/ui/dist` tests a local build (`npm -w @atlas/ui run build`) against the same engine, before reinstalling.
 - `--widths 390`, `--only chat,modal` (screen-name prefixes) to narrow a run; a full run takes ~75 s.
-- Run it after any UI layout change; the acceptance bar is « no issues » at all widths.
+- Run it after any UI layout change; the acceptance bar is « no issues » at all widths. **Run only what the change can
+  affect** (#240, Master: « tasks in side panel doesn't need 260 screens »):
+  - Engine-only or docs-only change: no ui-check.
+  - UI change: `--only` on the screens that render the changed components, plus the ones the builder lists, at all four
+    widths. `--only` matches screen-name **prefixes**: `chat` (all `chat-*`), `task` (task-board, -list, -inbox, -chat,
+    -images, -blocked), `thread` (thread, thread-images), `new-task` (new-task-images, new-task-2), `panel` (panel,
+    panel-max), `drawer`, `board`, `inbox`, `library`, `project` (projects-2, project-page, project-new: **not** covered
+    by `settings-`, though they live under `#/settings/projects`), `settings-` (the 12 settings pages, memory and secrets
+    included; or `settings-memory`, `settings-secrets`…), `workflow` (list, edit, runs, off, workflows-2), `palette`,
+    `shortcuts`. The `-2` screens (board-2, drawer-2, inbox-2, workflows-2…) are the second-project fixtures (#217) and
+    follow their prefix. The names: the `SCREENS` array and the `SETTINGS` list in `scripts/ui-check/check.mjs`; check a
+    prefix matches something before trusting a run (`--only` with no match checks nothing).
+  - **Full run** (no `--only`) only when the change touches something every screen shares: global styles (`styles.css`
+    tokens and resets), the app shell or sidebar, shared headers, the side panel shell, fonts
+    (`main.tsx` imports), or `scripts/ui-check` itself.
+  - **One ui-check at a time** on the machine (two at once give false failures): `pgrep -fl check.mjs` first, wait if
+    one runs.
 
 **Screenshot tool** (#133, `packages/engine/src/screenshot.ts`): agents have a built-in `screenshot` tool, one picture
 of a route (`#/board`) or a workspace page (`pages/x.html`, `/api/files/<agent>/…`) at a width/height and theme, with
@@ -138,7 +154,12 @@ with `process.env` directly: take `ctx.env()`.
   the engine's **`pr_validate` tool** (#216: `{pr, verdict: "ok", sha: <head>, reason: "what was checked"}`, merges
   by default; or `{pr, verdict: "fail", reason: "why, for the builder"}`), offered only to the task's reviewer while
   it is In review. Master's terminal: `node scripts/pr/validate.mjs <pr> --ok --sha <head> --as master "…" --merge`
-  (same gate, same code). Atlas moves the task by itself: **merged → Done**; **CI red, a conflict
+  (same gate, same code). **ui-check in a review (#240):** none for an engine-only or docs-only PR; for a UI PR,
+  `--only` on the screens the diff can affect at all four widths (the builder names them in the `task_request_review`
+  summary, otherwise the reviewer derives them from the diff); a full run only for a change to something shared by every
+  screen (list in the ui-check section), with the reason said in the verdict. Never two runs at once (`pgrep -fl
+  check.mjs`). The verdict says which screens were checked and which were not: a narrowed run is never reported as a full
+  one. Builders: name the affected screens in the summary. Atlas moves the task by itself: **merged → Done**; **CI red, a conflict
   or a failed validation → Ready** for the builder, with the reason as a note in the thread; the builder fixes, pushes and calls
   `task_request_review` again. Blocked only ever means "needs Master". When GitHub can't be read (gh logged out,
   offline) nothing moves; the card says why. The gate (`pr_validate` and the script, same code) refuses a base other
