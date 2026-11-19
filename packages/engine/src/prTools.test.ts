@@ -54,7 +54,7 @@ describe('pr_validate (#216)', () => {
     expect(f.merges()[0]).toContain(`sha=${SHA}`);
   });
 
-  it('no CI job: one red or running check refuses, naming it; no check at all refuses', async () => {
+  it('no CI job: one red or running check refuses, naming it; no check at all passes (#263: a repo with no CI)', async () => {
     const { inReview, run } = await setup();
     const c = inReview('datinel', 'https://github.com/datinel/datinel/pull/3');
     const ok = { pr: 3, verdict: 'ok', sha: SHA, reason: 'r' };
@@ -62,12 +62,14 @@ describe('pr_validate (#216)', () => {
     for (const [checks, why] of [
       [[green, { id: 2, name: 'e2e', status: 'completed', conclusion: 'failure', html_url: 'https://github.com/datinel/datinel/runs/2' }], /CI check "e2e" is failure on aaaaaaa \(https:\/\/github\.com\/datinel\/datinel\/runs\/2\)/],
       [[green, { id: 2, name: 'e2e', status: 'in_progress', conclusion: null }], /CI check "e2e" is still running/],
-      [[], /CI has not run on aaaaaaa yet/],
     ] as const) {
       const f = fakeGh('datinel/datinel', 3, { checks: [...checks] });
       expect(await run(c.id, ok, f.gh)).toMatchObject({ isError: true, output: expect.stringMatching(why) });
       expect(f.statuses()).toHaveLength(0);
     }
+    const none = fakeGh('datinel/datinel', 3, { checks: [] });
+    expect(await run(c.id, { ...ok, merge: false }, none.gh)).toMatchObject({ isError: false });
+    expect(none.statuses()).toHaveLength(1);
   });
 
   it('the project’s CI job when set: only that check counts', async () => {

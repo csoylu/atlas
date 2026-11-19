@@ -154,12 +154,14 @@ export class Prs {
       // A Review run ended (#263): a PR merged or closed meanwhile is GitHub's to settle now.
       if (e.type === 'workflow.run' && e.run.state !== 'running' && e.run.state !== 'waiting' && e.run.subject) {
         const id = e.run.subject.cardId;
-        if (!this.polling)
+        // After a poll in progress (its decide may have run before the run ended): never both at once.
+        void (this.polling ?? Promise.resolve()).then(() => {
           try {
-            this.decide(id);
+            if (this.cardOrNull(id)) this.decide(id);
           } catch (err) {
             console.error(`pull requests of ${id}: deciding failed`, err);
           }
+        });
       }
     });
     void this.poll();

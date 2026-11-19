@@ -1045,11 +1045,12 @@ export class Workflows {
     return !t.result || t.result === d.result;
   }
 
-  /** A task made by this workflow's runs (a step's task, or an agent step's own task). */
+  /** A task made by this workflow's runs (a step's task, or an agent step's own task); not a run's own task a step worked in (in its thread, #263). */
   private isStepCard(workflowId: string, cardId: string): boolean {
     return !!this.db
       .prepare(
         `SELECT 1 FROM workflow_run_steps s JOIN workflow_runs r ON r.id = s.run_id WHERE r.workflow_id = ? AND s.card_id = ?
+           AND s.card_id IS NOT r.subject_card
          UNION ALL SELECT 1 FROM workflow_nodes WHERE workflow_id = ? AND own_card_id = ? LIMIT 1`,
       )
       .get(workflowId, cardId, workflowId, cardId);
