@@ -82,7 +82,7 @@ export function WebhookFields({ t, w, set }: { t: WebhookTrigger; w: Workflow; s
             <span className="mono" title="Copy gives the whole URL">
               {shortUrl(url)}
             </span>
-            <button type="button" className="ghost small" onClick={copy}>
+            <button type="button" className="btn ghost small" onClick={copy}>
               {copied ? 'Copied' : 'Copy'}
             </button>
           </div>
@@ -103,15 +103,15 @@ export function WebhookFields({ t, w, set }: { t: WebhookTrigger; w: Workflow; s
             {confirm ? (
               <>
                 <span className="help">The old URL stops working at once.</span>
-                <button type="button" className="ghost small danger" onClick={regenerate}>
+                <button type="button" className="btn ghost small danger" onClick={regenerate}>
                   Make a new URL
                 </button>
-                <button type="button" className="ghost small" onClick={() => setConfirm(false)}>
+                <button type="button" className="btn ghost small" onClick={() => setConfirm(false)}>
                   Cancel
                 </button>
               </>
             ) : (
-              <button type="button" className="ghost small" onClick={() => setConfirm(true)}>
+              <button type="button" className="btn ghost small" onClick={() => setConfirm(true)}>
                 New URL…
               </button>
             )}
@@ -124,7 +124,7 @@ export function WebhookFields({ t, w, set }: { t: WebhookTrigger; w: Workflow; s
         </div>
       )}
       {error && (
-        <p className="error" role="alert">
+        <p className="state-err inline" role="alert">
           {error}
         </p>
       )}
@@ -157,7 +157,7 @@ export function WebhookFields({ t, w, set }: { t: WebhookTrigger; w: Workflow; s
               </button>
             </div>
           ))}
-          <button type="button" className="ghost small wf-addflt" onClick={() => setRows([...rows, { field: 'payload.', op: 'is', value: '' }])}>
+          <button type="button" className="btn ghost small wf-addflt" onClick={() => setRows([...rows, { field: 'payload.', op: 'is', value: '' }])}>
             + Add a filter
           </button>
         </div>
