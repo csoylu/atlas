@@ -5,7 +5,8 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import type { Card, ChatGptStatus } from '@atlas/shared';
 import { startEngine, type Engine } from './index.ts';
-import { responsesBody, toResponsesInput } from './providers/chatgpt.ts';
+import { ChatGptProvider, responsesBody, toResponsesInput } from './providers/chatgpt.ts';
+import { OUTPUT_LIMIT } from './providers/types.ts';
 
 class MemoryStore {
   label = 'test keychain';
@@ -312,6 +313,28 @@ describe('Responses API request format', () => {
     expect(body.tools).toEqual([
       expect.objectContaining({ type: 'namespace', name: 'atlas', tools: [{ type: 'function', name: 'bash', description: 'run', parameters: { type: 'object' } }] }),
     ]);
+  });
+});
+
+describe('ChatGPT stop reasons', () => {
+  const complete = (events: unknown[]) =>
+    new ChatGptProvider({ token: async () => 't', signedOut: () => {} }, 'http://x/v1', (async () => sse(events)) as unknown as typeof fetch).complete(
+      { model: 'm', system: 's', maxTokens: 10, tools: [], messages: [{ role: 'user', content: [{ type: 'text', text: 'hi' }] }] },
+      () => {},
+      new AbortController().signal,
+    );
+  const call = { type: 'response.output_item.done', item: { type: 'function_call', call_id: 'c1', name: 'write_file', arguments: '{"path":"a","content":"x' } };
+
+  it('a tool call cut at max_output_tokens reports the output limit, not tool_use (#274)', async () => {
+    const res = await complete([call, { type: 'response.incomplete', response: { usage: { input_tokens: 5, output_tokens: 128000 }, incomplete_details: { reason: 'max_output_tokens' } } }]);
+    expect(res.stopReason).toBe(OUTPUT_LIMIT);
+    expect(res.content).toEqual([{ type: 'tool_use', id: 'c1', name: 'write_file', input: { _invalid_json: '{"path":"a","content":"x' } }]);
+    expect(res.usage.output).toBe(128000);
+  });
+
+  it('keeps tool_use for a completed turn and names another incomplete reason', async () => {
+    expect((await complete([call, { type: 'response.completed', response: { usage: {} } }])).stopReason).toBe('tool_use');
+    expect((await complete([{ type: 'response.output_text.delta', delta: 'hm' }, { type: 'response.incomplete', response: { usage: {}, incomplete_details: { reason: 'content_filter' } } }])).stopReason).toBe('incomplete: content_filter');
   });
 });
 

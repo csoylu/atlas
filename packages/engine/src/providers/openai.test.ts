@@ -2,7 +2,7 @@ import { describe, expect, it } from 'vitest';
 import { createServer } from 'node:http';
 import type { AddressInfo } from 'node:net';
 import { OpenAiCompatProvider, toOpenAiMessages } from './openai.ts';
-import { ModelError } from './types.ts';
+import { ModelError, OUTPUT_LIMIT } from './types.ts';
 
 describe('openai-compatible provider', () => {
   it('converts the transcript', () => {
@@ -55,6 +55,35 @@ describe('openai-compatible provider', () => {
       stopReason: 'tool_use',
       usage: { input: 7, output: 3, cached: 0 },
     });
+  });
+
+  it('a tool call cut at max_tokens (finish_reason length) reports the output limit, not tool_use (#274)', async () => {
+    const serve = async (chunks: unknown[]) => {
+      const server = createServer((_req, res) => {
+        res.writeHead(200, { 'content-type': 'text/event-stream' });
+        for (const c of chunks) res.write(`data: ${JSON.stringify(c)}\n\n`);
+        res.end('data: [DONE]\n\n');
+      });
+      await new Promise<void>((r) => server.listen(0, '127.0.0.1', r));
+      const url = `http://127.0.0.1:${(server.address() as AddressInfo).port}/v1`;
+      try {
+        return await new OpenAiCompatProvider(url, 'k').complete(
+          { model: 'm', system: 's', maxTokens: 10, tools: [], messages: [{ role: 'user', content: [{ type: 'text', text: 'hi' }] }] },
+          () => {},
+          new AbortController().signal,
+        );
+      } finally {
+        server.close();
+      }
+    };
+    const call = (finish: string) => [
+      { choices: [{ delta: { tool_calls: [{ index: 0, id: 'c1', function: { name: 'write_file', arguments: '{"path":"a","content":"x' } }] } }] },
+      { choices: [{ delta: {}, finish_reason: finish }] },
+    ];
+    const cut = await serve(call('length'));
+    expect(cut.stopReason).toBe(OUTPUT_LIMIT);
+    expect(cut.content).toEqual([{ type: 'tool_use', id: 'c1', name: 'write_file', input: { _invalid_json: '{"path":"a","content":"x' } }]);
+    expect((await serve(call('tool_calls'))).stopReason).toBe('tool_use');
   });
 
   it('reports an unreachable server clearly', async () => {

@@ -1,7 +1,7 @@
 import { randomUUID } from 'node:crypto';
 import type { ContentBlock, ImageBlock } from '@atlas/shared';
 import { imageLine, viewHasPictures } from '../images.ts';
-import { ModelError, toolInput, type ModelRequest, type ModelResponse, type OnDelta, type Provider } from './types.ts';
+import { ModelError, OUTPUT_LIMIT, toolInput, type ModelRequest, type ModelResponse, type OnDelta, type Provider } from './types.ts';
 
 type OaPart = { type: 'text'; text: string } | { type: 'image_url'; image_url: { url: string } };
 type OaMessage =
@@ -171,6 +171,7 @@ export class OpenAiCompatProvider implements Provider {
     for (const c of calls) {
       content.push({ type: 'tool_use', id: c.id || 'call_' + randomUUID().slice(0, 8), name: c.name, input: toolInput(c.args) });
     }
-    return { content, stopReason: calls.length ? 'tool_use' : finish, usage };
+    // Cut at max_tokens: say so even with tool calls, the last one's arguments are cut short (#274).
+    return { content, stopReason: finish === 'length' ? OUTPUT_LIMIT : calls.length ? 'tool_use' : finish, usage };
   }
 }

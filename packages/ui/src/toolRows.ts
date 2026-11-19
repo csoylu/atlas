@@ -185,6 +185,8 @@ export function toolRow(called: string, input: unknown, result?: ToolOutcome | n
  */
 export function badInput(name: string, error: string): string | null {
   if (error.startsWith('Your arguments were not valid JSON')) return 'arguments weren’t valid JSON';
+  // A call the model's output limit cut short (#274): its JSON is fine, just unfinished.
+  if (error.startsWith('Your tool call was cut off at the output limit')) return 'cut off at the output limit';
   const prefix = `invalid input for ${name}: `;
   if (!error.startsWith(prefix)) return null;
   const raw = error.slice(prefix.length);

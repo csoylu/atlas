@@ -9,7 +9,7 @@ import { chatTitle, ConflictError, InvalidError, RENAME_AT, type Kanban } from '
 import type { Agents } from './agents.ts';
 import type { Models } from './models.ts';
 import type { Usage } from './usage.ts';
-import { invalidToolInput, ModelError, type ModelRequest, type Provider, type ToolSpec } from './providers/types.ts';
+import { invalidToolInput, ModelError, OUTPUT_LIMIT, type ModelRequest, type Provider, type ToolSpec } from './providers/types.ts';
 import {
   COMPACT_AT,
   COMPACT_TO,
@@ -641,7 +641,11 @@ export class Runner {
         if (!uses.length) continue;
         // Arguments that weren't valid JSON: the call gets an error result and the model resends it; a model that keeps
         // failing ends the run (rule 3).
-        badJsonTurns = uses.some((u) => invalidToolInput(u.input)) ? badJsonTurns + 1 : 0;
+        // A turn cut at the output limit cuts its last call's arguments short: that call is told so, not « escape your
+        // quotes » (#274). Earlier calls of the turn were complete: a bad one there was badly escaped.
+        const cut = res.stopReason === OUTPUT_LIMIT ? { tokens: res.usage.output || model.maxTokens } : undefined;
+        const invalids = uses.map((u, i) => invalidToolInput(u.input, i === uses.length - 1 ? cut : undefined));
+        badJsonTurns = invalids.some(Boolean) ? badJsonTurns + 1 : 0;
         const calls: GuardCall[] = [];
         const results = await Promise.all(
           uses.map(async (u, i) => {
@@ -667,7 +671,7 @@ export class Runner {
                 return x;
               },
             };
-            const invalid = invalidToolInput(u.input);
+            const invalid = invalids[i];
             // Card, canvas and team tools run synchronously: what the tables gained in between is theirs (#138).
             const mark = this.opts.effects && !invalid && !isSecretTool(u.name) ? this.opts.effects.mark() : null;
             if (invalid) r = { output: invalid, isError: true };
@@ -764,7 +768,7 @@ export class Runner {
           break;
         }
         if (badJsonTurns >= MAX_BAD_JSON_TURNS)
-          throw new ModelError(`model ${model.id} sent tool calls with invalid JSON arguments ${badJsonTurns} turns in a row: ${invalidToolInput(uses.find((u) => invalidToolInput(u.input))!.input)!.split('\n')[0]}`);
+          throw new ModelError(`model ${model.id} sent tool calls with invalid JSON arguments ${badJsonTurns} turns in a row: ${invalids.find(Boolean)!.split('\n')[0]}`);
       }
     } catch (e) {
       if (signal.aborted) {

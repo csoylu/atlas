@@ -1,7 +1,7 @@
 import type { ContentBlock, ImageBlock } from '@atlas/shared';
 import { imageLine } from '../images.ts';
 import { CHATGPT_USAGE_URL } from '@atlas/shared';
-import { ModelError, toolInput, type ModelRequest, type ModelResponse, type OnDelta, type Provider } from './types.ts';
+import { ModelError, OUTPUT_LIMIT, toolInput, type ModelRequest, type ModelResponse, type OnDelta, type Provider } from './types.ts';
 import { PlanLimitError } from '../plan-accounts.ts';
 
 /** Atlas's tools go to the model as one namespace (ChatGPT plan usage accepts function tools only inside one). */
@@ -233,7 +233,9 @@ export class ChatGptProvider implements Provider {
     for (const c of calls) {
       content.push({ type: 'tool_use', id: c.id, name: c.name, input: toolInput(c.args) });
     }
-    const stopReason = calls.length ? 'tool_use' : done === 'incomplete' ? `incomplete: ${incomplete || 'unknown'}` : 'end_turn';
+    // Cut at the output limit: say so even with tool calls, the last one's arguments are cut short (#274).
+    const stopReason =
+      done === 'incomplete' && incomplete === 'max_output_tokens' ? OUTPUT_LIMIT : calls.length ? 'tool_use' : done === 'incomplete' ? `incomplete: ${incomplete || 'unknown'}` : 'end_turn';
     return { content, stopReason, usage };
   }
 }
