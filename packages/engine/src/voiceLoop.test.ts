@@ -6,7 +6,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import sherpa from 'sherpa-onnx-node';
 import { afterAll, afterEach, beforeAll, describe, expect, it } from 'vitest';
-import { VoiceLoop, VoiceModels, defaultModelsDir, isQuiet, missingModels, stripAck, type LoopMetric, type LoopState, type OrbPort } from '@atlas/voice';
+import { VoiceLoop, VoiceModels, defaultModelsDir, missingModels, stripAck, type LoopMetric, type LoopState, type OrbPort } from '@atlas/voice';
 import { eventually, retry, sleep } from '../test/kit/index.ts';
 import { startEngine, type Engine } from './index.ts';
 import { FakeProvider } from './providers/fake.ts';
@@ -251,10 +251,10 @@ describe.skipIf(!haveModels)('voice loop end to end (WAV fixtures, fake provider
   }, 60_000);
 
   it('drops its own « Yes, Master? » heard back as the command', async () => {
-    // Supertonic draws new noise on every synthesis, and Whisper then hears the echo as « Yesta. » or « Yes, Moss. » about once in
-    // ten (#255, measured: 3 of 40 syntheses, 4 of 32 runs of this test). What the loop drops is what stripAck reduces to nothing, so
-    // a transcript that is no « Yes, Master? » at all says nothing about the loop: take a new synthesis (kit retry, 4 tries, said in
-    // the log; #257 makes the loop drop such an echo itself: then pin that and remove this retry). When Whisper heard the ack, the assertion is the same as ever: only the real command reaches the chat.
+    // Supertonic draws new noise on every synthesis, and Whisper hears the echo as « Yes, Master? », « Yesta. », « Yes, Moss. »…
+    // (#255: 3 of 40 syntheses were not « Yes master »). The loop drops all of those since #257 (stripAck with the ack just said),
+    // so they are asserted, not retried. Only a reading the loop is not meant to drop (« yes do it »: a command) says nothing about
+    // the loop: take a new synthesis (kit retry, 4 tries, logged). The assertion is the same either way: only the real command is sent.
     class Misheard extends Error {}
     let tries = 0;
     await retry(
@@ -275,7 +275,7 @@ describe.skipIf(!haveModels)('voice loop end to end (WAV fixtures, fake provider
         loop.feed(new Float32Array(16_000));
         await loop.settled();
         const echoHeard = heard.slice(before).map((h) => h.replace(/^\w+: /, ''));
-        if (echoHeard.some((t) => stripAck(t, 'Master'))) throw new Misheard(`Whisper heard the echo as ${JSON.stringify(echoHeard)}`);
+        if (echoHeard.some((t) => stripAck(t, 'Master', true))) throw new Misheard(`Whisper heard the echo as ${JSON.stringify(echoHeard)}`);
         for (let i = wakeEnd; i < s.length; i += 1600) loop.feed(s.subarray(i, i + 1600));
         await loop.settled();
         await until('the reply', () => orb.spoken.includes('Fine.'));
@@ -428,47 +428,29 @@ describe.skipIf(!haveModels)('voice loop end to end (WAV fixtures, fake provider
     const long = 'Here is the full report. The first card is about the login page. The second card is about the billing export. The third card is about the onboarding emails. The fourth card is about the release notes.';
     const lat: Record<string, number> = {};
     const missed: string[] = [];
-    // Whisper over the echo sometimes tacks a cut-off token on a bare stop word (« Yeter. Y », « Hayyuz. Hayy »: 3 runs of ~75, #255): the loop sends it
-    // (isQuiet wants every token to be a stop word) and Atlas answers it. That is a weakness of the loop (#257 fixes it: then delete this retry); it
-    // makes what the test is about (cut at once, stop word not sent) unobservable for that word, so that word runs again (3 tries).
-    class Residue extends Error {}
-    const residue = (t: string) => {
-      const [first = '', ...rest] = t.split(/(?<=[.!?])\s+/); // « Yeter. Y », « Hayyuz. Hayy »: the stop word, then a cut-off token
-      return isQuiet(first) && rest.length === 1 && /^\p{L}{1,4}\W*$/u.test(rest[0]!);
-    };
     for (const name of ['barge-stop-en', 'barge-wait-en', 'barge-dur-tr', 'barge-hayir-tr', 'barge-yeter-tr', 'barge-hayir-command-tr']) {
-      await retry(
-        async () => {
-          const { engine, orb, loop, heard } = await setup([text(long), text('Tamam, yarın için açtım.')]);
-          await say(loop, 'wake-daniel-one-breath', 30);
-          await until('speaking', () => loop.state === 'speaking');
-          let hushedAt = 0;
-          const t0 = await sayOver(loop, orb, name, () => (hushedAt ||= orb.hushes ? performance.now() : 0));
-          if (orb.hushes === 0 && name.endsWith('-tr') && !name.includes('command') && !missed.length) {
-            missed.push(`${name}: ${heard.join(' | ')}`); // Whisper over the echo: one short Turkish word may be missed
-            return;
-          }
-          expect(orb.hushes, `${name}: ${heard.join(' | ')} (missed before: ${missed})`).toBe(1);
-          expect(orb.cut.length, name).toBeGreaterThan(0);
-          lat[name] = Math.round(hushedAt - t0 - fixture(name).speechEnd! / 16);
-          const sent = userTexts(engine, engine.voiceChat!.id());
-          if (name.includes('command')) {
-            await until('the answer', () => orb.spoken.includes('Tamam, yarın için açtım.'));
-            expect(userTexts(engine, engine.voiceChat!.id()).at(-1), name).toMatch(/^hayır, yarı[nm] için bir kart ?a[çşc]\W*$/iu); // Whisper glues « kart aç » into « kartaş » in ~1 run in 7 (#255, #257): same command, « hayır » kept
-          } else {
-            if (sent.length > 1 && sent.slice(1).every(residue)) throw new Residue(`${name}: sent ${JSON.stringify(sent.slice(1))} (heard: ${heard.join(' | ')})`);
-            expect(sent, name).toEqual(['what is on the board today?']); // the stop word itself is not a message
-            expect(loop.state, name).toBe('listening'); // and Atlas listens: the next sentence is the new message
-          }
-        },
-        {
-          times: 3,
-          retryIf: (e) => {
-            if (e instanceof Residue) console.log(`#255 ${e.message}; running the word again`);
-            return e instanceof Residue;
-          },
-        },
-      );
+      const { engine, orb, loop, heard } = await setup([text(long), text('Tamam, yarın için açtım.')]);
+      await say(loop, 'wake-daniel-one-breath', 30);
+      await until('speaking', () => loop.state === 'speaking');
+      let hushedAt = 0;
+      const t0 = await sayOver(loop, orb, name, () => (hushedAt ||= orb.hushes ? performance.now() : 0));
+      if (orb.hushes === 0 && name.endsWith('-tr') && !name.includes('command') && !missed.length) {
+        missed.push(`${name}: ${heard.join(' | ')}`); // Whisper over the echo: one short Turkish word may be missed
+        continue;
+      }
+      expect(orb.hushes, `${name}: ${heard.join(' | ')} (missed before: ${missed})`).toBe(1);
+      expect(orb.cut.length, name).toBeGreaterThan(0);
+      lat[name] = Math.round(hushedAt - t0 - fixture(name).speechEnd! / 16);
+      const sent = userTexts(engine, engine.voiceChat!.id());
+      if (name.includes('command')) {
+        await until('the answer', () => orb.spoken.includes('Tamam, yarın için açtım.'));
+        // Whisper glues « kart aç » into « kartaş » in ~1 run in 7 (#255, #257): the same command, « hayır » kept
+        expect(userTexts(engine, engine.voiceChat!.id()).at(-1), name).toMatch(/^hayır, yarı[nm] için bir kart ?a[çşc]\W*$/iu);
+      } else {
+        // « Yeter. Y », « Hayyuz. Hayy » (Whisper over the echo, a cut-off token) must stay quiet too (#257): no retry here
+        expect(sent, name).toEqual(['what is on the board today?']); // the stop word itself is not a message
+        expect(loop.state, name).toBe('listening'); // and Atlas listens: the next sentence is the new message
+      }
     }
     console.log('#53 end of stop word → speech cut (ms, frame resolution 100 ms; < 0: mid-word)', lat, 'missed', missed);
     for (const [n, ms] of Object.entries(lat)) expect(ms, n).toBeLessThan(3000);
