@@ -991,8 +991,12 @@ A project is a repo the team works on: a name, a GitHub repo `owner/name` (fixed
   is archived: … read-only », and it is hidden unless asked. Restore brings it back; workflows stay off.
 - **Workspaces (#214, migration 0051)**: one per agent per project. `project_members.home` = 1 for the agent's
   first project (the members 0048 made): its own `agents.workdir`, untouched. In any other project a member gets a
-  clone in `data/workspaces/<agent>/<project>/` (`gh repo clone` with the login-shell env, i.e. Master's gh login;
-  a project without a repo gets an empty folder). `clone_state`: pending → cloning → ready | failed (`clone_error`
+  clone in `data/projects/<project>/<agent>/` (`gh repo clone` with the login-shell env, i.e. Master's gh login;
+  a project without a repo gets an empty folder). Never inside an agent's own workdir (#245: isolation by layout, so
+  the home project's file tools and shell can't reach another project's clone): a clone folder that would overlap one
+  fails with that reason. Clones #214 made in `data/workspaces/<agent>/<project>/` move out at start, before any run
+  (`relocateClones`: one rename, then the stored paths and the rewind log in one transaction; a kill between the two
+  finds the folder already moved and only rewrites the paths; linked git worktrees are repaired). `clone_state`: pending → cloning → ready | failed (`clone_error`
   in words for Master). git writes into `<dir>.cloning`, renamed when done, so a folder is never half-ready: a stopped
   or killed engine leaves the row `cloning`, the next start throws the partial folder away and clones again (or marks
   it ready if the rename had happened). Progress (git's « Receiving objects » %) goes out in `project.updated`

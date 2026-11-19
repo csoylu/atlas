@@ -1,6 +1,6 @@
-import { execFile, spawn } from 'node:child_process';
-import { existsSync, mkdirSync, readdirSync, readFileSync, renameSync, rmSync } from 'node:fs';
-import { dirname, join, resolve } from 'node:path';
+import { execFile, execFileSync, spawn } from 'node:child_process';
+import { existsSync, mkdirSync, readdirSync, readFileSync, renameSync, rmdirSync, rmSync } from 'node:fs';
+import { dirname, isAbsolute, join, relative, resolve, sep } from 'node:path';
 import { CreateProject, PROJECT_HUES, UpdateProject, type CloneState, type KeptWorkspace, type Project, type ProjectMember, type RepoCheck } from '@atlas/shared';
 import type { Db } from './store/db.ts';
 import type { Bus } from './events.ts';
@@ -48,8 +48,28 @@ function homeDir(db: Db, dataDir: string, agentId: string): string {
   return resolve(a.workdir ?? join(dataDir, 'workspaces', agentId));
 }
 
-/** Where a member's clone of a project goes (#214): data/workspaces/<agent>/<project>. */
-export const cloneDir = (dataDir: string, agentId: string, projectId: string) => resolve(dataDir, 'workspaces', agentId, projectId);
+/**
+ * Where a member's clone of a project goes: data/projects/<project>/<agent> (#245). Never inside an agent's own workdir
+ * (data/workspaces/<agent>, its home project's workspace), or a run there would reach the other project's files.
+ */
+export const cloneDir = (dataDir: string, agentId: string, projectId: string) => resolve(dataDir, 'projects', projectId, agentId);
+/** Where #214 put the clones, inside the home workdir: moved to cloneDir at start (Projects.relocateClones). */
+export const legacyCloneDir = (dataDir: string, agentId: string, projectId: string) => resolve(dataDir, 'workspaces', agentId, projectId);
+
+/** `a` is `b` or a folder inside it. */
+const within = (a: string, b: string): boolean => {
+  const rel = relative(b, a);
+  return rel === '' || (rel !== '..' && !rel.startsWith('..' + sep) && !isAbsolute(rel));
+};
+
+/** The agent whose own workdir holds `dir` or lies inside it (a clone there would cross projects), if any. */
+function homeOverlapping(db: Db, dataDir: string, dir: string): string | null {
+  const ids = (db.prepare('SELECT id FROM agents').all() as { id: string }[]).map((r) => r.id);
+  return ids.find((id) => {
+    const home = homeDir(db, dataDir, id);
+    return within(dir, home) || within(home, dir);
+  }) ?? null;
+}
 
 /**
  * The workspace of `agentId` in `projectId` (#214): the folder a run there works in (file tools, shell, screenshots,
@@ -240,6 +260,23 @@ function cloneMessage(repo: string, e: unknown): string {
 }
 
 const nonEmpty = (dir: string) => existsSync(dir) && readdirSync(dir).length > 0;
+
+interface Relocatable {
+  project_id: string;
+  agent_id: string;
+  path: string;
+  kept: boolean;
+}
+
+/** After a clone moved: its linked worktrees (git worktree add) point back to the new place. Logged if git fails. */
+function repairWorktrees(dir: string): void {
+  if (!existsSync(join(dir, '.git', 'worktrees'))) return;
+  try {
+    execFileSync('git', ['-C', dir, 'worktree', 'repair'], { stdio: 'pipe', timeout: 15_000 });
+  } catch (e) {
+    console.error(`project workspaces: git worktree repair in ${dir} failed (run it there by hand)`, e);
+  }
+}
 
 export interface ProjectsOptions {
   dataDir: string;
@@ -434,6 +471,70 @@ export class Projects {
     return this.emit(p.id);
   }
 
+  /**
+   * #245: clones #214 made inside the agent's own workdir (data/workspaces/<agent>/<project>) move to
+   * data/projects/<project>/<agent>, at start, before any run or clone. Restart-safe: the folder moves first (one
+   * rename), then the stored paths change in one transaction; a kill between the two finds the folder at the new
+   * place and only rewrites the paths. Until the paths change the old one stays valid. The rewind log follows (paths
+   * of the clone, and changes logged in the home workdir under `<project>/`). Returns how many workspaces moved.
+   */
+  relocateClones(): number {
+    const dataDir = this.o.dataDir;
+    const rows = [
+      ...(this.db.prepare('SELECT project_id, agent_id, workspace AS path FROM project_members WHERE home = 0 AND workspace IS NOT NULL').all() as Relocatable[]).map((r) => ({ ...r, kept: false })),
+      ...(this.db.prepare('SELECT project_id, agent_id, path FROM kept_workspaces WHERE home = 0').all() as Relocatable[]).map((r) => ({ ...r, kept: true })),
+    ];
+    let moved = 0;
+    for (const r of rows) {
+      const old = legacyCloneDir(dataDir, r.agent_id, r.project_id);
+      if (resolve(r.path) !== old) continue; // already moved, or a folder Master chose
+      const to = cloneDir(dataDir, r.agent_id, r.project_id);
+      rmSync(`${old}.cloning`, { recursive: true, force: true }); // a cut clone's partial folder: cloned anew at `to`
+      if (existsSync(old)) {
+        if (existsSync(to) && !nonEmpty(to)) rmdirSync(to);
+        if (existsSync(to)) {
+          console.error(`project workspaces: cannot move ${old} to ${to}: both exist. Move one away; ${old} stays in use until then.`);
+          continue;
+        }
+        try {
+          mkdirSync(dirname(to), { recursive: true });
+          renameSync(old, to);
+        } catch (e) {
+          console.error(`project workspaces: moving ${old} to ${to} failed; ${old} stays in use until the next start`, e);
+          continue;
+        }
+        repairWorktrees(to);
+      }
+      this.db.transaction(() => {
+        if (r.kept) this.db.prepare('UPDATE kept_workspaces SET path = ? WHERE project_id = ? AND agent_id = ?').run(to, r.project_id, r.agent_id);
+        else this.db.prepare('UPDATE project_members SET workspace = ? WHERE project_id = ? AND agent_id = ?').run(to, r.project_id, r.agent_id);
+        this.moveRewindPaths(old, to);
+      })();
+      moved++;
+    }
+    return moved;
+  }
+
+  /** The rewind log's absolute workdirs from `old` to `to`; changes logged in old's parent under its name move too. */
+  private moveRewindPaths(old: string, to: string): void {
+    for (const t of ['checkpoints', 'rewinds', 'file_changes']) this.db.prepare(`UPDATE ${t} SET workdir = ? WHERE workdir = ?`).run(to, old);
+    const parent = dirname(old);
+    const prefix = `${old.slice(parent.length + 1)}/`;
+    this.db
+      .prepare('UPDATE file_changes SET workdir = ?, path = substr(path, ?) WHERE workdir = ? AND substr(path, 1, ?) = ?')
+      .run(to, prefix.length + 1, parent, prefix.length, prefix);
+    const rewinds = this.db.prepare('SELECT id, ops FROM rewinds WHERE ops IS NOT NULL').all() as { id: string; ops: string }[];
+    for (const rw of rewinds) {
+      const ops = JSON.parse(rw.ops) as { workdir: string; path: string }[];
+      let changed = false;
+      for (const op of ops) {
+        if (op.workdir === old) [op.workdir, changed] = [to, true];
+        else if (op.workdir === parent && op.path.startsWith(prefix)) [op.workdir, op.path, changed] = [to, op.path.slice(prefix.length), true];
+      }
+      if (changed) this.db.prepare('UPDATE rewinds SET ops = ? WHERE id = ?').run(JSON.stringify(ops), rw.id);
+    }
+  }
+
   /** Stop the clones in progress (engine stop): they stay 'cloning' and start again at the next start. */
   async stop(): Promise<void> {
     const running = [...this.clones.values()];
@@ -481,6 +582,8 @@ export class Projects {
     this.emit(projectId);
     rmSync(partial, { recursive: true, force: true });
     try {
+      const overlap = homeOverlapping(this.db, this.o.dataDir, dir);
+      if (overlap) throw new Error(`the folder ${dir} overlaps @${overlap}'s own workdir: a clone there would mix two projects' files. Change that agent's workdir, then try again.`);
       if (nonEmpty(dir)) {
         if (wasCloning) return this.setState(projectId, agentId, 'ready');
         throw new Error(`the folder ${dir} exists already and is not empty: move it away, then try again`);
@@ -545,7 +648,7 @@ export class Projects {
 
   /**
    * Inside a transaction. The first project's members work in their own workdir (home: ready at once, as before
-   * projects); another project's member gets a clone in data/workspaces/<agent>/<project>, made after the commit
+   * projects); another project's member gets a clone in data/projects/<project>/<agent>, made after the commit
    * (resume). A workspace kept from an earlier membership is taken back as it is.
    */
   private addMember(projectId: string, agentId: string): void {

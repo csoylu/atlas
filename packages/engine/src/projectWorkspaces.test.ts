@@ -1,7 +1,7 @@
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, onTestFinished } from 'vitest';
 import { execFileSync } from 'node:child_process';
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, writeFileSync } from 'node:fs';
-import { tmpdir } from 'node:os';
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, writeFileSync } from 'node:fs';
+import { homedir, tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { RESUME_KICK, type ContentBlock, type Project } from '@atlas/shared';
 import { eventually, launch, until, type Launched } from '../test/kit/index.ts';
@@ -53,7 +53,7 @@ const ready = (l: Launched, project: string, ...agents: string[]) =>
   until(() => agents.every((a) => state(l, project, a) === 'ready'), `${agents.join(', ')} ready in ${project}`, 10_000);
 
 describe('project workspaces (#214)', () => {
-  it('clones each member a workspace in workspaces/<agent>/<project>; the first project keeps the old workdirs', async () => {
+  it('clones each member a workspace in projects/<project>/<agent>; the first project keeps the old workdirs', async () => {
     const l = await setup();
     remote(l.remotes, 'datinel/datinel', { 'README.md': 'datinel', 'AGENTS.md': 'Datinel rules' });
     const progress: number[] = [];
@@ -66,7 +66,7 @@ describe('project workspaces (#214)', () => {
     expect(made.status).toBe(201);
     await ready(l, 'datinel', 'dina', 'zurich');
     const z = member(l, 'datinel', 'zurich')!;
-    expect(z).toMatchObject({ home: false, workspace: join(l.dataDir, 'workspaces', 'zurich', 'datinel'), cloneError: null });
+    expect(z).toMatchObject({ home: false, workspace: join(l.dataDir, 'projects', 'datinel', 'zurich'), cloneError: null });
     expect(readFileSync(join(z.workspace!, 'README.md'), 'utf8')).toBe('datinel');
     expect(existsSync(`${z.workspace}.cloning`)).toBe(false);
     expect(progress.every((p) => p >= 0 && p <= 100)).toBe(true);
@@ -77,7 +77,7 @@ describe('project workspaces (#214)', () => {
     // A project without a repo: an empty folder.
     await l.call('POST', '/projects', { name: 'Notes', lead: 'munih' });
     await ready(l, 'notes', 'munih');
-    expect(readdirSync(join(l.dataDir, 'workspaces', 'munih', 'notes'))).toEqual([]);
+    expect(readdirSync(join(l.dataDir, 'projects', 'notes', 'munih'))).toEqual([]);
   });
 
   it('a failed clone says why and waits; Try again and Fix the repo name clone it', async () => {
@@ -85,7 +85,7 @@ describe('project workspaces (#214)', () => {
     await l.call('POST', '/projects', { name: 'Datinel', repo: 'datinel/datinal', lead: 'dina', members: ['zurich'] });
     await until(() => state(l, 'datinel', 'dina') === 'failed' && state(l, 'datinel', 'zurich') === 'failed', 'both clones failed', 10_000);
     expect(member(l, 'datinel', 'dina')!.cloneError).toMatch(/datinel\/datinal/);
-    expect(existsSync(join(l.dataDir, 'workspaces', 'dina', 'datinel'))).toBe(false);
+    expect(existsSync(join(l.dataDir, 'projects', 'datinel', 'dina'))).toBe(false);
     // A run there fails loudly, never in another project's folder.
     expect(() => l.engine.projects.workspace('dina', 'datinel')).toThrow(/could not be cloned/);
     // Try again: still missing → failed again; then the repo appears → ready.
@@ -104,7 +104,7 @@ describe('project workspaces (#214)', () => {
     remote(l.remotes, 'datinel/other', { 'o.txt': 'o' });
     expect((await l.call('PATCH', '/projects/other', { repo: 'datinel/other' })).body).toMatchObject({ repo: 'datinel/other' });
     await ready(l, 'other', 'munih');
-    expect(readFileSync(join(l.dataDir, 'workspaces', 'munih', 'other', 'o.txt'), 'utf8')).toBe('o');
+    expect(readFileSync(join(l.dataDir, 'projects', 'other', 'munih', 'o.txt'), 'utf8')).toBe('o');
   });
 
   it("a task in project B works only in B's workspace: file tools, shell cwd, instructions, served files", async () => {
@@ -123,7 +123,7 @@ describe('project workspaces (#214)', () => {
     writeFileSync(join(l.dataDir, 'workspaces', 'zurich', 'README.md'), 'atlas readme');
     l.engine.projects.create({ name: 'Datinel', repo: 'datinel/datinel', lead: 'dina', members: ['zurich'] });
     await ready(l, 'datinel', 'zurich');
-    const ws = join(l.dataDir, 'workspaces', 'zurich', 'datinel');
+    const ws = join(l.dataDir, 'projects', 'datinel', 'zurich');
 
     const c = l.engine.kanban.create({ title: 'work', projectId: 'datinel', assignee: 'zurich', status: 'done' }, 'user');
     l.engine.kanban.appendMessage(c.id, 'user', 'user', text('go'));
@@ -280,7 +280,7 @@ describe('project workspaces (#214)', () => {
 
     const after = (await l.call<Project>('PATCH', '/projects/datinel', { members: ['dina'] })).body;
     expect(after.members.map((m) => m.agentId)).toEqual(['dina']);
-    expect(after.kept).toEqual([expect.objectContaining({ agentId: 'zurich', path: join(l.dataDir, 'workspaces', 'zurich', 'datinel'), home: false })]);
+    expect(after.kept).toEqual([expect.objectContaining({ agentId: 'zurich', path: join(l.dataDir, 'projects', 'datinel', 'zurich'), home: false })]);
     await l.engine.runner.settled(t.id); // the row is stopped with the removal (#246); wait for the loop itself
     expect(l.engine.db.prepare('SELECT status FROM runs WHERE card_id = ?').get(t.id)).toEqual({ status: 'stopped' });
     expect(l.engine.kanban.get(other.id)).toMatchObject({ status: 'triage', assignee: null });
@@ -289,7 +289,7 @@ describe('project workspaces (#214)', () => {
     expect(l.engine.kanban.get(atlasChat.id).status).not.toBe('archived');
     expect(l.engine.kanban.get(atlasTask.id)).toMatchObject({ status: 'todo', assignee: 'zurich' });
     // The clone stays on disk and is still served (read-only history), until Master deletes it.
-    expect(readFileSync(join(l.dataDir, 'workspaces', 'zurich', 'datinel', 'f.txt'), 'utf8')).toBe('kept');
+    expect(readFileSync(join(l.dataDir, 'projects', 'datinel', 'zurich', 'f.txt'), 'utf8')).toBe('kept');
     expect((await fetch(l.api + '/files/zurich@datinel/f.txt')).status).toBe(200);
     // Back in: takes the kept workspace as it is, ready, no clone.
     const back = (await l.call<Project>('PATCH', '/projects/datinel', { members: ['dina', 'zurich'] })).body;
@@ -298,7 +298,7 @@ describe('project workspaces (#214)', () => {
     // Delete: Master's explicit action, only on a kept one.
     await l.call('PATCH', '/projects/datinel', { members: ['dina'] });
     expect((await l.call('DELETE', '/projects/datinel/kept/zurich')).body).toMatchObject({ kept: [] });
-    expect(existsSync(join(l.dataDir, 'workspaces', 'zurich', 'datinel'))).toBe(false);
+    expect(existsSync(join(l.dataDir, 'projects', 'datinel', 'zurich'))).toBe(false);
     expect((await l.call('DELETE', '/projects/datinel/kept/zurich')).status).toBe(404);
   });
 
@@ -324,7 +324,7 @@ describe('project workspaces (#214)', () => {
     await a.engine.stop();
     // A stop leaves it 'cloning' (a kill too: the row was written before git started); the partial folder is gone.
     // Simulate a kill that left the partial folder.
-    const ws = join(dataDir, 'workspaces', 'dina', 'datinel');
+    const ws = join(dataDir, 'projects', 'datinel', 'dina');
     mkdirSync(`${ws}.cloning`, { recursive: true });
     writeFileSync(join(`${ws}.cloning`, 'half'), 'x');
 
@@ -350,7 +350,7 @@ describe('project workspaces (#214)', () => {
     await ready(a, 'notes', 'munih');
     await a.engine.stop();
     // As if killed right after the rename: the folder is full, the row still says cloning.
-    const ws = join(dataDir, 'workspaces', 'munih', 'notes');
+    const ws = join(dataDir, 'projects', 'notes', 'munih');
     writeFileSync(join(ws, 'done'), 'z');
     const Database = (await import('better-sqlite3')).default;
     const db = new Database(dbFile);
@@ -481,5 +481,138 @@ describe('project workspaces (#214)', () => {
       { status: 'interrupted', error: left === 'running' ? 'engine stopped during the run' : null },
       { status: 'done', error: null },
     ]);
+  });
+
+  it("#245: file tools never cross projects, in either direction: the clone lives outside the agent's own workdir", async () => {
+    // The six file tools aimed at the other project's folder (absolute), then a listing of the run's own workdir.
+    const dirs = { target: '' };
+    const round = (tag: string) => [
+      () => use(`${tag}1`, 'read_file', { path: join(dirs.target, 'README.md') }),
+      () => use(`${tag}2`, 'write_file', { path: join(dirs.target, 'new.txt'), content: 'crossed' }),
+      () => use(`${tag}3`, 'edit_file', { path: join(dirs.target, 'README.md'), old_text: 'readme', new_text: 'crossed' }),
+      () => use(`${tag}4`, 'grep', { pattern: 'readme', path: dirs.target }),
+      () => use(`${tag}5`, 'list_files', { path: dirs.target }),
+      () => use(`${tag}6`, 'glob', { pattern: '*.md', path: dirs.target }),
+      () => use(`${tag}7`, 'list_files', { path: '.' }),
+      () => text('done'),
+    ];
+    // Temp folders are readable from any run: the data dir must live elsewhere for reads to be refused.
+    const dataDir = mkdtempSync(join(homedir(), '.atlas-t245-'));
+    onTestFinished(() => rmSync(dataDir, { recursive: true, force: true }));
+    const l = await setup({ script: [...round('a'), ...round('b')], dbFile: join(dataDir, 'atlas.db'), dataDir });
+    remote(l.remotes, 'datinel/datinel', { 'README.md': 'datinel readme' });
+    const home = join(l.dataDir, 'workspaces', 'zurich');
+    mkdirSync(home, { recursive: true });
+    writeFileSync(join(home, 'README.md'), 'atlas readme');
+    l.engine.projects.create({ name: 'Datinel', repo: 'datinel/datinel', lead: 'dina', members: ['zurich'] });
+    await ready(l, 'datinel', 'zurich');
+    const clone = l.engine.projects.workspace('zurich', 'datinel');
+
+    const runIn = async (projectId: string, target: string) => {
+      dirs.target = target;
+      const before = l.fake.calls.length;
+      const c = l.engine.kanban.create({ title: `cross from ${projectId}`, projectId, assignee: 'zurich', status: 'done' }, 'user');
+      l.engine.kanban.appendMessage(c.id, 'user', 'user', text('go'));
+      l.engine.runner.wake(c.id);
+      await l.engine.runner.settled(c.id);
+      const calls = l.fake.calls.slice(before);
+      expect(calls).toHaveLength(8);
+      return calls.slice(1).map((req) => results(req)[0]!);
+    };
+    const refused = /outside (your workdir|the folders you can open)/;
+    // A → B: a run in the home project (Atlas) reaching the Datinel clone.
+    const fromHome = await runIn('atlas', clone);
+    for (const out of fromHome.slice(0, 6)) expect(out).toMatch(refused);
+    expect(fromHome[6]).toContain('README.md');
+    expect(fromHome[6]).not.toContain('datinel');
+    // B → A: a run in Datinel reaching the home workdir.
+    const fromClone = await runIn('datinel', home);
+    for (const out of fromClone.slice(0, 6)) expect(out).toMatch(refused);
+    expect(fromClone[6]).toContain('README.md');
+    // Nothing was written or edited on either side.
+    expect(readFileSync(join(clone, 'README.md'), 'utf8')).toBe('datinel readme');
+    expect(readFileSync(join(home, 'README.md'), 'utf8')).toBe('atlas readme');
+    expect(existsSync(join(clone, 'new.txt')) || existsSync(join(home, 'new.txt'))).toBe(false);
+    // By layout: neither folder holds the other.
+    expect(clone).toBe(join(l.dataDir, 'projects', 'datinel', 'zurich'));
+    expect(clone.startsWith(home + '/') || home.startsWith(clone + '/')).toBe(false);
+  });
+
+  it('#245: a clone made inside an agent workdir moves out at start, restart-safe, with its rewind log and worktrees', async () => {
+    const dataDir = mkdtempSync(join(tmpdir(), 'atlas-t-'));
+    const dbFile = join(dataDir, 'atlas.db');
+    const a = await setup({ dbFile, dataDir });
+    remote(a.remotes, 'datinel/datinel', { 'README.md': 'datinel readme' });
+    a.engine.projects.create({ name: 'Datinel', repo: 'datinel/datinel', lead: 'dina', members: ['zurich', 'munih'] });
+    await ready(a, 'datinel', 'dina', 'zurich', 'munih');
+    a.engine.projects.update('datinel', { members: ['dina', 'zurich'] }); // munih's clone is kept
+    const card = a.engine.kanban.create({ title: 'old work', projectId: 'datinel', assignee: 'zurich', status: 'todo' }, 'user');
+    await a.engine.stop();
+
+    // Put the #214 layout back: every clone inside its agent's own workdir, paths stored that way.
+    const fresh = (agent: string) => join(dataDir, 'projects', 'datinel', agent);
+    const legacy = (agent: string) => join(dataDir, 'workspaces', agent, 'datinel');
+    const { renameSync } = await import('node:fs');
+    for (const agent of ['dina', 'zurich', 'munih']) {
+      mkdirSync(join(dataDir, 'workspaces', agent), { recursive: true });
+      renameSync(fresh(agent), legacy(agent));
+    }
+    // zurich's clone has a linked worktree next to it; dina was killed mid-move (folder moved, path not yet).
+    git(legacy('zurich'), 'worktree', 'add', '-q', join(dataDir, 'wt'), '-b', 'side');
+    renameSync(legacy('dina'), fresh('dina'));
+    mkdirSync(`${legacy('zurich')}.cloning`);
+    const Database = (await import('better-sqlite3')).default;
+    const db = new Database(dbFile);
+    for (const agent of ['dina', 'zurich']) db.prepare("UPDATE project_members SET workspace = ? WHERE project_id = 'datinel' AND agent_id = ?").run(legacy(agent), agent);
+    db.prepare("UPDATE kept_workspaces SET path = ? WHERE project_id = 'datinel' AND agent_id = 'munih'").run(legacy('munih'));
+    const now = new Date().toISOString();
+    const log = db.prepare("INSERT INTO file_changes (card_id, workdir, path, tool, started_at, ended_at) VALUES (?, ?, ?, 'write_file', ?, ?)");
+    log.run(card.id, legacy('zurich'), 'a.txt', now, now);
+    log.run(card.id, join(dataDir, 'workspaces', 'zurich'), 'datinel/b.txt', now, now); // logged by a home run
+    log.run(card.id, join(dataDir, 'workspaces', 'zurich'), 'notes.txt', now, now);
+    db.prepare("INSERT INTO checkpoints (card_id, seq, workdir, card_status, at) VALUES (?, 1, ?, 'todo', ?)").run(card.id, legacy('zurich'), now);
+    const ops = [{ workdir: join(dataDir, 'workspaces', 'zurich'), path: 'datinel/c.txt', from: null, to: null }, { workdir: legacy('zurich'), path: 'd.txt', from: null, to: null }];
+    db.prepare("INSERT INTO rewinds (id, card_id, from_seq, upto_seq, workdir, card_before, state, at, ops) VALUES ('rw1', ?, 1, 1, ?, '{}', 'done', ?, ?)").run(card.id, legacy('zurich'), now, JSON.stringify(ops));
+    db.close();
+
+    const b = await setup({ dbFile, dataDir });
+    for (const agent of ['dina', 'zurich']) {
+      expect(member(b, 'datinel', agent)).toMatchObject({ workspace: fresh(agent), cloneState: 'ready' });
+      expect(b.engine.projects.workspace(agent, 'datinel')).toBe(fresh(agent));
+      expect(readFileSync(join(fresh(agent), 'README.md'), 'utf8')).toBe('datinel readme');
+      expect(existsSync(legacy(agent))).toBe(false);
+    }
+    expect(b.engine.projects.get('datinel').kept).toEqual([expect.objectContaining({ agentId: 'munih', path: fresh('munih') })]);
+    expect(existsSync(join(fresh('munih'), 'README.md'))).toBe(true);
+    expect(existsSync(`${legacy('zurich')}.cloning`)).toBe(false);
+    // The worktree still finds its repo; the rewind log follows the files.
+    expect(git(join(dataDir, 'wt'), 'rev-parse', '--abbrev-ref', 'HEAD').toString().trim()).toBe('side');
+    const q = (sql: string) => b.engine.db.prepare(sql).all();
+    expect(q('SELECT workdir, path FROM file_changes ORDER BY id')).toEqual([
+      { workdir: fresh('zurich'), path: 'a.txt' },
+      { workdir: fresh('zurich'), path: 'b.txt' },
+      { workdir: join(dataDir, 'workspaces', 'zurich'), path: 'notes.txt' },
+    ]);
+    expect(q('SELECT workdir FROM checkpoints')).toEqual([{ workdir: fresh('zurich') }]);
+    const rw = b.engine.db.prepare("SELECT workdir, ops FROM rewinds WHERE id = 'rw1'").get() as { workdir: string; ops: string };
+    expect(rw.workdir).toBe(fresh('zurich'));
+    expect(JSON.parse(rw.ops)).toEqual([
+      { workdir: fresh('zurich'), path: 'c.txt', from: null, to: null },
+      { workdir: fresh('zurich'), path: 'd.txt', from: null, to: null },
+    ]);
+    // Served files follow too.
+    expect((await fetch(b.api + '/files/zurich@datinel/README.md')).status).toBe(200);
+    // A second start changes nothing.
+    expect(b.engine.projects.relocateClones()).toBe(0);
+  });
+
+  it('#245: a clone folder that would sit in an agent workdir is refused, never made', async () => {
+    const l = await setup();
+    l.engine.agents.update('dina', { workdir: l.dataDir });
+    l.engine.projects.create({ name: 'Notes', lead: 'dina', members: ['munih'] });
+    await until(() => state(l, 'notes', 'dina') === 'failed', 'dina refused', 10_000);
+    expect(member(l, 'notes', 'dina')!.cloneError).toMatch(/overlaps @dina's own workdir/);
+    expect(state(l, 'notes', 'munih')).toBe('failed'); // munih's clone would be inside dina's workdir too
+    expect(existsSync(join(l.dataDir, 'projects', 'notes'))).toBe(false);
   });
 });
