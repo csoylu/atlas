@@ -93,6 +93,8 @@ export function kindOf(item: InboxItem): { label: string; icon: IconStatus } {
       return { label: 'memory', icon: 'done' };
     case 'plan.exhausted':
       return { label: 'system', icon: 'failed' };
+    case 'card.stalled':
+      return { label: 'stuck', icon: 'blocked' };
     default:
       return { label: 'system', icon: 'blocked' };
   }

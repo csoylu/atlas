@@ -8,6 +8,7 @@ import type { RunEnd, Runner } from './runner.ts';
 import { ModelError } from './providers/types.ts';
 import { REWOUND } from './rewind.ts';
 import { stopNote } from './loopGuard.ts';
+import type { Stalls } from './stalls.ts';
 
 import { TRIAGE_KICK, WORK_KICK } from '@atlas/shared';
 export { TRIAGE_KICK, WORK_KICK };
@@ -39,6 +40,8 @@ export class Dispatcher {
   /** Set by the PR watcher (#189): why a task In review isn't moving, and Retry on one. */
   reviewReason: (c: Card) => string | null = () => 'in review';
   recheck: (cardId: string) => void = () => {};
+  /** Stuck tasks (#237), looked at on this tick; omitted in tests that don't need them. */
+  stalls: Stalls | null = null;
 
   constructor(
     private bus: Bus,
@@ -122,6 +125,7 @@ export class Dispatcher {
         if (cur && cur.kind !== 'chat') this.runner.stop(c.id, 'task closed');
       }
       this.deliverAgentMessages();
+      this.stalls?.maybeCheck();
       // Refresh « why not moving » in the UI when it changed.
       for (const c of this.kanban.list()) {
         if (this.lastWaiting.get(c.id) !== c.waiting) {
@@ -288,6 +292,8 @@ export class Dispatcher {
     const c = this.kanban.get(cardId);
     this.kanban.event(c.id, 'retry', { by: 'user' });
     if (c.status === 'blocked' || c.retry) this.kanban.update(c.id, { status: 'ready' }, 'user');
+    // Working with no run on it (#237 « Restart the run »): back to Ready, the next tick starts a fresh work run.
+    else if (c.status === 'running' && !this.runner.current(c.id)) this.kanban.update(c.id, { status: 'ready' }, 'user');
     else if (c.status === 'review') this.recheck(c.id);
     else {
       this.kanban.emit(c.id);
@@ -320,7 +326,7 @@ export class Dispatcher {
   }
 
   /** Why a ready card can't start now, or null if it can. */
-  private startProblem(c: Card): string | null {
+  startProblem(c: Card): string | null {
     if (!c.assignee) return 'no assignee: pick an agent';
     const bad = this.agentUsable(c.assignee, c.modelId);
     if (bad) return bad;

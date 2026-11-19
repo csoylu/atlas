@@ -21,6 +21,7 @@ import { MEMORY_SELECT, staleCardMemories, toMemory } from './memory.ts';
 import { isCleanupCard } from './cleanup.ts';
 import { stripData } from './images.ts';
 import { cardPrs, parsePrUrl } from './prs.ts';
+import { stallOf } from './stalls.ts';
 import { assertActive, defaultProjectId, defaultProjectOrNull, isMember, leadOf, projectForNewCard, projectRow, resolveProject, scopeFor } from './projects.ts';
 
 interface CardRow {
@@ -46,6 +47,7 @@ interface CardRow {
   images: string;
   reviewer: string | null;
   project_id: string;
+  status_since: string | null;
 }
 interface MessageRow {
   id: string;
@@ -206,6 +208,8 @@ export class Kanban {
       reviewer: r.reviewer,
       prs: r.board === 'main' ? cardPrs(this.db, r.id) : [],
       projectId: r.project_id,
+      statusSince: r.status_since,
+      stall: r.board === 'main' ? stallOf(this.db, r.id) : null,
     };
     card.waiting = this.waitingReason(card);
     return card;

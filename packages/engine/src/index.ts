@@ -36,6 +36,7 @@ import { ShellEnv, type ShellPathOptions } from './shellEnv.ts';
 import { Prs, ghReader, type GhRead, type PrSync } from './prs.ts';
 import { findClone, syncBranch } from './prSync.ts';
 import { Projects, ghClone, ghRunner, workspaceOf, type CloneRun, type GhRun } from './projects.ts';
+import { Stalls } from './stalls.ts';
 
 export interface EngineOptions {
   /** SQLite file, or ':memory:'. */
@@ -55,6 +56,8 @@ export interface EngineOptions {
   maxTurns?: number;
   /** Background memory review after runs (v3); default on. Tests with a scripted provider turn it off. */
   memoryReview?: boolean;
+  /** The stall checker's clock (#237 tests). */
+  stallsNow?: () => number;
   /** Start the dispatcher (default true). Runner-only tests turn it off. */
   dispatch?: boolean;
   /**
@@ -125,6 +128,7 @@ export interface Engine {
   voiceChat: VoiceChat | null;
   updater: Updater;
   prs: Prs;
+  stalls: Stalls;
   secrets: Secrets;
   projects: Projects;
   url: string;
@@ -208,6 +212,13 @@ export async function startEngine(opts: EngineOptions): Promise<Engine> {
   });
   dispatcher.reviewReason = (c) => prs.reason(c);
   dispatcher.recheck = (id) => prs.recheck(id);
+  // Stuck tasks (#237): looked at on the dispatcher's tick.
+  const stalls = new Stalls(db, bus, kanban, runner, opts.stallsNow);
+  stalls.startProblem = (c) => dispatcher.startProblem(c);
+  stalls.reviewStall = (c) => prs.reviewStall(c);
+  stalls.reviewQueue = (c) => prs.queueSpot(c);
+  stalls.deliver = (id) => dispatcher.onAgentMessage(id);
+  dispatcher.stalls = stalls;
   const updater = new Updater(db, bus, {
     version: opts.version ?? 'dev',
     dataDir: opts.dataDir,
@@ -313,6 +324,7 @@ export async function startEngine(opts: EngineOptions): Promise<Engine> {
     voiceChat,
     updater,
     prs,
+    stalls,
     url,
     stop: async () => {
       prs.stop();

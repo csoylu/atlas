@@ -7,6 +7,7 @@ import { api } from './api.ts';
 import { Icon } from './ScreenHeader.tsx';
 import { StatusIcon } from './StatusIcon.tsx';
 import { CardDocs } from './DocPanel.tsx';
+import { stallAction } from './stallView.ts';
 import { ago } from './PlanAccounts.tsx';
 import { submitOnEnter } from './composerKeys.ts';
 import type { MessageStream } from './useMessages.ts';
@@ -484,9 +485,42 @@ function UpdateBody(props: Parameters<typeof Detail>[0] & { update: Notification
           )}
         </div>
       ) : null}
+      {update.kind === 'card.stalled' && update.cardId && <StallActions cardId={update.cardId} card={props.cards.find((c) => c.id === update.cardId)} onOpenCard={props.onOpenCard} onError={onError} />}
       {update.cardId && update.kind !== 'run.failed' && <CardDocs cardId={update.cardId} stream={props.stream} onOpenCard={props.onOpenCard} onError={onError} />}
       <p className="ibx-note">E archives it. « Archive all read » in the list menu clears every update you have read.</p>
     </>
+  );
+}
+
+/**
+ * A stuck task (#237): the action its reason calls for (Retry the review, Restart the run, Move to Ready) and Open.
+ * The item leaves the Inbox by itself once the task moves; a task no longer stuck shows only Open.
+ */
+function StallActions(props: { cardId: string; card: Card | undefined; onOpenCard(id: string): void; onError(e: unknown): void }) {
+  const [busy, setBusy] = useState(false);
+  const act = props.card?.stall ? stallAction(props.card.stall) : null;
+  return (
+    <div className="ibx-actions">
+      {act && (
+        <button
+          type="button"
+          className="head-btn pri"
+          disabled={busy}
+          onClick={() => {
+            setBusy(true);
+            act.run(props.cardId).catch((e: unknown) => {
+              setBusy(false);
+              props.onError(e);
+            });
+          }}
+        >
+          {act.label}
+        </button>
+      )}
+      <button type="button" className="head-btn" onClick={() => props.onOpenCard(props.cardId)}>
+        Open
+      </button>
+    </div>
   );
 }
 
@@ -498,7 +532,7 @@ function metaOf(item: InboxItem): string {
     if (item.need.failed) return 'failed';
     return 'blocked';
   }
-  return ({ 'card.done': 'done', 'schedule.ran': 'ran', 'run.failed': 'failed', 'memory.digest': 'latest change', 'memory.cleanup': 'proposed' } as Record<string, string>)[item.update.kind] ?? '';
+  return ({ 'card.done': 'done', 'schedule.ran': 'ran', 'run.failed': 'failed', 'memory.digest': 'latest change', 'memory.cleanup': 'proposed', 'card.stalled': 'stuck' } as Record<string, string>)[item.update.kind] ?? '';
 }
 
 function refName(id: string, cards: Card[]): string {

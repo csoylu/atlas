@@ -93,6 +93,38 @@ export const CardPr = z.object({
 });
 export type CardPr = z.infer<typeof CardPr>;
 
+/**
+ * What unsticks a stuck task (#237): retry_review starts the reviewer again, restart a new work run, ready moves a
+ * todo whose parents are done to Ready, open just opens it (Master decides).
+ */
+export const STALL_ACTIONS = ['retry_review', 'restart', 'ready', 'open'] as const;
+export const CardStall = z.object({
+  /** The rule that matched: the state it is stuck in. */
+  rule: z.enum(['review', 'running', 'ready', 'todo']),
+  /** Plain words, without the duration: « CI is green, no review is running ». */
+  reason: z.string(),
+  /** When the stuck stretch began (the card shows the time in state from statusSince). */
+  since: z.string(),
+  action: z.enum(STALL_ACTIONS),
+});
+export type CardStall = z.infer<typeof CardStall>;
+
+/** « 35 min », « 2 h », « 1 d »: a time in state, rounded down. */
+export function sinceLabel(iso: string, now = Date.now()): string {
+  const m = Math.max(0, Math.floor((now - Date.parse(iso)) / 60_000));
+  if (m < 1) return 'now';
+  if (m < 60) return `${m} min`;
+  const h = Math.floor(m / 60);
+  if (h < 24) return `${h} h`;
+  return `${Math.floor(h / 24)} d`;
+}
+
+/** The words for a status in « In review for 2 h » (stalls, #237). */
+export const STALL_STATE: Record<CardStall['rule'], string> = { review: 'In review', running: 'Working', ready: 'Ready', todo: 'Todo' };
+/** The card's stuck mark and Inbox text: « In review for 2 h: CI is green, no review is running ». */
+export const stallText = (s: CardStall, statusSince: string | null, now = Date.now()): string =>
+  `${STALL_STATE[s.rule]} for ${sinceLabel(statusSince ?? s.since, now)}: ${s.reason}`;
+
 export const Card = z.object({
   id: z.string(),
   /** Board cards: sequential number shown as #N (never reused). Direct chats: null. */
@@ -135,6 +167,10 @@ export const Card = z.object({
   prs: z.array(CardPr).default([]),
   /** The project it belongs to (#213): set at creation, never changes. */
   projectId: z.string().default('atlas'),
+  /** Since when it is in its current status (#237): « In review · 2 h ». */
+  statusSince: z.string().nullable().default(null),
+  /** Stuck in its state with nothing moving it (#237): why, since when, and what the Inbox offers. Null = moving. */
+  stall: CardStall.nullable().default(null),
 });
 export type Card = z.infer<typeof Card>;
 
@@ -1013,7 +1049,7 @@ export type UpdatePlanAccount = z.infer<typeof UpdatePlanAccount>;
  * Kinds of notification the engine writes. card.blocked / card.review rows are for the system notification and history;
  * the Inbox shows those cards from their live state (InboxNeed). plan.* rows are « system ».
  */
-export const NOTIFICATION_KINDS = ['card.blocked', 'card.review', 'card.done', 'run.failed', 'schedule.ran', 'memory.cleanup', 'plan.switched', 'plan.exhausted', 'github.unreadable', 'review.stalled'] as const;
+export const NOTIFICATION_KINDS = ['card.blocked', 'card.review', 'card.done', 'run.failed', 'schedule.ran', 'memory.cleanup', 'plan.switched', 'plan.exhausted', 'github.unreadable', 'review.stalled', 'card.stalled'] as const;
 export type NotificationKind = (typeof NOTIFICATION_KINDS)[number];
 
 /** Something the user is told about (also shown as a system notification by the app). */

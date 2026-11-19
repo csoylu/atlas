@@ -1,4 +1,4 @@
-import { CARD_STATUSES, type Card, type CardStatus } from '@atlas/shared';
+import { CARD_STATUSES, sinceLabel, stallText, type Card, type CardStatus } from '@atlas/shared';
 
 /**
  * Pure helpers for the Board (design §16, Linear direction): the header tabs, the Filter (agent, priority), which
@@ -34,8 +34,12 @@ export function filterCount(f: BoardFilter): number {
   return (f.agent !== null ? 1 : 0) + (f.priority !== null ? 1 : 0);
 }
 
-/** The card's one line under the title: why it is blocked, else why it isn't running. Null when it is moving. */
-export function whyLine(c: Pick<Card, 'status' | 'block' | 'waiting'>): { text: string; blocked: boolean } | null {
+/**
+ * The card's one line under the title: why it is blocked, else why it is stuck (#237: « In review for 2 h: CI is green,
+ * no review is running », `stuck`), else why it isn't running. Null when it is moving.
+ */
+export function whyLine(c: Pick<Card, 'status' | 'block' | 'waiting'> & Partial<Pick<Card, 'stall' | 'statusSince'>>, now = Date.now()): { text: string; blocked: boolean; stuck?: true } | null {
+  if (c.stall && c.status !== 'blocked') return { text: stallText(c.stall, c.statusSince ?? null, now), blocked: false, stuck: true };
   if (c.status === 'blocked' && c.block) {
     const first = c.block.reason.split('\n').find((l) => l.trim()) ?? '';
     const kind = c.block.kind === 'needs_input' ? 'Needs your answer' : c.block.kind === 'capability' ? 'Missing access' : c.block.kind === 'dependency' ? 'Waiting on other work' : 'Retrying later';
@@ -44,6 +48,13 @@ export function whyLine(c: Pick<Card, 'status' | 'block' | 'waiting'>): { text: 
   }
   if (c.waiting) return { text: c.waiting, blocked: false };
   return null;
+}
+
+/** Statuses whose time in state is shown (#237): not Triage, Done, Closed or Archived. */
+const TIMED: CardStatus[] = ['todo', 'ready', 'running', 'blocked', 'review'];
+/** « 2 h »: how long the card has been in its status, or null when that isn't shown. */
+export function timeInState(c: Pick<Card, 'status' | 'statusSince'>, now = Date.now()): string | null {
+  return c.statusSince && TIMED.includes(c.status) ? sinceLabel(c.statusSince, now) : null;
 }
 
 /**

@@ -62,6 +62,7 @@ describe('inbox view', () => {
     const [a, r, d, s] = itemsOf(inbox, 'all');
     expect([a, r, d, s].map((i) => kindOf(i!).label)).toEqual(['asked', 'review', 'done', 'system']);
     expect(kindOf({ key: 'x', need: need({ card: ask, failed: true }) }).icon).toBe('failed');
+    expect(kindOf({ key: 'y', update: { ...s!.update!, kind: 'card.stalled' } }).label).toBe('stuck');
     expect(lineOf(a!)).toBe('Kaiko or CoinGecko?');
     expect(lineOf(r!)).toBe('2 400 words');
     expect([a, r, d, s].map((i) => unreadOf(i!))).toEqual([true, false, true, false]);

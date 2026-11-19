@@ -405,7 +405,7 @@ export class Prs {
         this.kanban.event(cardId, 'review_retry', { by: 'github', reviewer: stall.by, runId: stall.run.id, prs: stall.prs.map((p) => ({ number: p.number, sha: p.headSha })) });
       })();
       again = true;
-    } else if (stall) this.stalled(card, stall);
+    }
     const fresh = again ? this.kanban.get(cardId) : card;
     // CI green on every open PR, none validated yet on this head: the reviewer's turn.
     const openNow = fresh.prs.filter((p) => p.state === 'open');
@@ -448,25 +448,15 @@ export class Prs {
     return { by: last.by, run, prs: ok, tries: Math.max(...ok.map((p) => this.tries(card.id, p))) };
   }
 
-  /** A review that keeps ending without a verdict: one Inbox item per stalled review (the card says why, Retry restarts it). */
-  private stalled(card: Card, s: NonNullable<ReturnType<Prs['stall']>>): void {
-    const seen = this.db.prepare("SELECT payload FROM card_events WHERE card_id = ? AND kind = 'review_stalled'").all(card.id) as { payload: string }[];
-    if (seen.some((r) => (JSON.parse(r.payload) as { runId?: string }).runId === s.run.id)) return;
-    const n = this.db.transaction(() => {
-      this.kanban.event(card.id, 'review_stalled', { by: 'github', reviewer: s.by, runId: s.run.id, tries: s.tries, prs: s.prs.map((p) => ({ number: p.number, sha: p.headSha })) });
-      return insertNotification(
-        this.db,
-        {
-          kind: 'review.stalled',
-          title: `Review by @${s.by} ended without a verdict`,
-          body: `${s.prs.map((p) => `PR #${p.number} (${short(p.headSha)})`).join(', ')} of “${card.title}”: ${s.tries} review run${s.tries > 1 ? 's' : ''} ended without validating or failing it${s.run.status === 'failed' ? ` (the last one failed: ${s.run.error ?? 'the run failed'})` : ''}. The task waits In review: Retry starts the review again.`,
-          cardId: card.id,
-        },
-        new Date(this.now()),
-      );
-    })();
-    this.bus.emit({ type: 'notification.created', notification: n });
-    this.kanban.emit(card.id);
+  /**
+   * A review that keeps ending without a verdict (#221), in plain words for the stall mark (#237: stalls.ts shows it on
+   * the card and in the Inbox, one mechanism for every stuck task), or null.
+   */
+  reviewStall(card: Card): string | null {
+    if (card.status !== 'review') return null;
+    const s = this.stall(card);
+    if (!s || s.tries < REVIEW_TRIES) return null;
+    return `the review by @${s.by} ended without a verdict on ${s.prs.map((p) => short(p.headSha)).join(', ')} (${s.tries} runs${s.run.status === 'failed' ? `, the last failed: ${s.run.error ?? 'the run failed'}` : ''})`;
   }
 
   private failedSha(cardId: string, p: CardPr): string | null {
@@ -494,6 +484,14 @@ export class Prs {
     const busy = this.runner.workRuns(agent.id).filter((r) => r.cardId !== card.id);
     if (busy.length >= agent.maxRuns) return `waiting for @${agent.id} (busy with ${busy.map((r) => this.kanban.ref(r.cardId)).join(', ')})`;
     return null;
+  }
+
+  /** The task's place in its project's merge queue (0 = the head) and when it became the head (#237); null: not queued. */
+  queueSpot(card: Card): { position: number; headAt: string | null } | null {
+    const position = this.queue(card.projectId).indexOf(card.id);
+    if (position < 0) return null;
+    const headAt = (this.db.prepare('SELECT review_head_at AS at FROM cards WHERE id = ?').get(card.id) as { at: string | null } | undefined)?.at ?? null;
+    return { position, headAt };
   }
 
   /** The plain-words « why isn't this moving » of a task In review. */

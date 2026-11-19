@@ -16,12 +16,14 @@ import {
   phoneColumn,
   showAfterLabel,
   whyLine,
+  timeInState,
   type BoardFilter,
   type BoardLayout,
   type BoardTab,
 } from './boardView.ts';
 import { PrLine } from './PrChips.tsx';
 import { prUnreadable } from './prView.ts';
+import { useMinute } from './useMinute.ts';
 import { useMedia } from './Inbox.tsx';
 
 const HINT: Partial<Record<CardStatus, string>> = {
@@ -62,6 +64,7 @@ export function Board(props: {
     localStorage.setItem('atlas.board.view', JSON.stringify(next));
   };
   const [over, setOver] = useState<CardStatus | null>(null);
+  const now = useMinute();
   const [creating, setCreating] = useState<CardStatus | null>(null);
   const [menu, setMenu] = useState<'filter' | 'display' | null>(null);
   // Columns folded to a slim rail (kept across reloads). Done and Closed start folded: history, the rest is work.
@@ -273,7 +276,7 @@ export function Board(props: {
                   <div className="cards">
                     {cards.length === 0 && HINT[status] && <p className="hint">{HINT[status]}</p>}
                     {cards.map((c) => (
-                      <BoardCard key={c.id} card={c} cards={props.cards} tagged={tagged} open={props.openId === c.id} onOpen={props.onOpen} />
+                      <BoardCard key={c.id} card={c} cards={props.cards} tagged={tagged} open={props.openId === c.id} onOpen={props.onOpen} now={now} />
                     ))}
                   </div>
                 )}
@@ -299,7 +302,8 @@ export function Board(props: {
                   )}
                 </h2>
                 {cards.map((c) => {
-                  const why = whyLine(c);
+                  const why = whyLine(c, now);
+                  const since = timeInState(c, now);
                   return (
                     <div
                       key={c.id}
@@ -316,7 +320,8 @@ export function Board(props: {
                       <StatusIcon status={c.status} />
                       <span className="card-title">{c.title}</span>
                       <PrLine card={c} />
-                      {why && <span className={'why' + (why.blocked ? ' blocked' : '')}>{why.text}</span>}
+                      {why && <span className={'why' + (why.blocked ? ' blocked' : '') + (why.stuck ? ' stuck prc-unreadable' : '')} title={why.text}>{why.text}</span>}
+                      {since && <span className={'st-since' + (c.stall ? ' stuck' : '')} title={why?.stuck ? why.text : `${STATUS_LABEL[c.status]} for ${since}`}>{since}</span>}
                       <Labels card={c} cards={props.cards} tagged={tagged} />
                       {c.assignee ? <Avatar id={c.assignee} /> : <span className="avatar-none" />}
                     </div>
@@ -346,8 +351,9 @@ export function Board(props: {
   );
 }
 
-function BoardCard({ card: c, cards, open, tagged, onOpen }: { card: Card; cards: Card[]; open: boolean; tagged: boolean; onOpen(id: string): void }) {
-  const why = whyLine(c);
+function BoardCard({ card: c, cards, open, tagged, onOpen, now }: { card: Card; cards: Card[]; open: boolean; tagged: boolean; onOpen(id: string): void; now: number }) {
+  const why = whyLine(c, now);
+  const since = timeInState(c, now);
   return (
     <article
       className={'card' + (open ? ' open' : '')}
@@ -361,6 +367,7 @@ function BoardCard({ card: c, cards, open, tagged, onOpen }: { card: Card; cards
     >
       <div className="card-top">
         <span className="id" title={c.id}>{cardRef(c)}</span>
+        {since && <span className={'st-since' + (c.stall ? ' stuck' : '')} title={`${STATUS_LABEL[c.status]} for ${since}`}>{STATUS_LABEL[c.status]} · {since}</span>}
         {c.assignee ? <Avatar id={c.assignee} /> : <span className="unassigned">unassigned</span>}
         {c.status === 'review' && c.reviewer && (
           <span className="rv-face" title={'reviewer @' + c.reviewer}>
@@ -374,7 +381,7 @@ function BoardCard({ card: c, cards, open, tagged, onOpen }: { card: Card; cards
       </div>
       <PrLine card={c} />
       {why && (
-        <div className={'why' + (why.blocked ? ' blocked' : '') + (prUnreadable(c) ? ' prc-unreadable' : '')} title={c.block?.reason ?? c.waiting ?? undefined}>
+        <div className={'why' + (why.blocked ? ' blocked' : '') + (why.stuck ? ' stuck' : '') + (why.stuck || prUnreadable(c) ? ' prc-unreadable' : '')} title={why.stuck ? why.text : (c.block?.reason ?? c.waiting ?? undefined)}>
           {why.blocked && <StatusIcon status="blocked" size={12} />}
           <span>{why.text}</span>
         </div>

@@ -289,4 +289,37 @@ describe('store', () => {
     ]);
     db.close();
   });
+
+  it('0056 stalls: status_since backfilled from the last change to the current status, else updated_at; set on every status change', () => {
+    const db = new Database(':memory:');
+    db.exec('CREATE TABLE schema_migrations (name TEXT PRIMARY KEY, applied_at TEXT NOT NULL)');
+    const dir = join(dirname(fileURLToPath(import.meta.url)), 'migrations');
+    db.pragma('foreign_keys = OFF');
+    for (const f of readdirSync(dir).filter((f) => /^\d{4}_.+\.sql$/.test(f) && f < '0056').sort()) {
+      db.exec(readFileSync(join(dir, f), 'utf8'));
+      db.prepare('INSERT INTO schema_migrations (name, applied_at) VALUES (?, ?)').run(f, 'x');
+    }
+    const card = db.prepare("INSERT INTO cards (id, title, status, conversation_id, created_by, created_at, updated_at) VALUES (?, 't', ?, ?, 'user', '2026-11-01T00:00:00Z', ?)");
+    card.run('c_1', 'review', 'k1', '2026-11-19T09:00:00Z');
+    card.run('c_2', 'blocked', 'k2', '2026-11-19T09:00:00Z');
+    card.run('c_3', 'ready', 'k3', '2026-01-02T08:00:00Z');
+    const ev = db.prepare('INSERT INTO card_events (card_id, at, kind, payload) VALUES (?, ?, ?, ?)');
+    ev.run('c_1', '2026-11-18T10:00:00Z', 'status', JSON.stringify({ from: 'running', to: 'review' }));
+    ev.run('c_1', '2026-11-18T11:00:00Z', 'status', JSON.stringify({ from: 'review', to: 'ready' }));
+    ev.run('c_1', '2026-11-18T12:00:00Z', 'status', JSON.stringify({ from: 'running', to: 'review' }));
+    ev.run('c_2', '2026-11-18T13:00:00Z', 'blocked', JSON.stringify({ from: 'running', kind: 'needs_input' }));
+    db.pragma('foreign_keys = ON');
+    expect(migrate(db)).toContain('0056_stalls.sql');
+    const since = () => db.prepare('SELECT id, status_since FROM cards ORDER BY id').all();
+    expect(since()).toEqual([
+      { id: 'c_1', status_since: '2026-11-18T12:00:00Z' },
+      { id: 'c_2', status_since: '2026-11-18T13:00:00Z' },
+      { id: 'c_3', status_since: '2026-01-02T08:00:00Z' },
+    ]);
+    db.prepare("UPDATE cards SET title = 'x' WHERE id = 'c_3'").run();
+    expect(db.prepare("SELECT status_since FROM cards WHERE id = 'c_3'").get()).toEqual({ status_since: '2026-01-02T08:00:00Z' });
+    db.prepare("UPDATE cards SET status = 'running' WHERE id = 'c_3'").run();
+    expect((db.prepare("SELECT status_since FROM cards WHERE id = 'c_3'").get() as { status_since: string }).status_since > '2026-01-02T08:00:00Z').toBe(true);
+    db.close();
+  });
 });
