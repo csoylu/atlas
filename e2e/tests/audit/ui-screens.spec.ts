@@ -183,7 +183,7 @@ test.describe('U · screens (Playwright, real UI, scripted model)', () => {
     await page.getByRole('button', { name: 'New workflow' }).click();
     await page.getByLabel('Name').fill('Ping the team');
     await page.getByRole('radio', { name: /Only by hand/ }).click();
-    await page.getByRole('button', { name: 'Create and open the canvas' }).click();
+    await page.getByRole('button', { name: 'Create and open' }).click();
     await expect.poll(() => page.evaluate(() => location.hash)).toMatch(/#\/workflows\/wf_/);
     const side = page.getByRole('complementary', { name: 'Step' });
     await side.getByLabel('Agent').selectOption('atlas');

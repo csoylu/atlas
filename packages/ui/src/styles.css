@@ -2446,6 +2446,8 @@ button.wfl-ghead:hover { color: var(--text); background: var(--hover); }
   .wf-side { position: absolute; inset: 0 0 0 auto; width: min(340px, 92%); z-index: 6; box-shadow: var(--float-shadow); }
 }
 /* ── Workflows v2 stage 1 (#259): triggers, filters, fields, runs ── */
+.wf-start a { color: var(--accent); text-decoration: none; }
+.wf-start a:hover { text-decoration: underline; }
 .modal.wf-newdlg { width: min(780px, 100%); max-height: calc(100vh - 32px); padding: 0; gap: 0; }
 .wf-new-head { display: flex; align-items: center; justify-content: space-between; gap: 12px; padding: 14px 20px; border-bottom: 1px solid var(--line); }
 .modal.wf-newdlg h2 { font-size: var(--fs-base); font-weight: var(--fw-medium); line-height: var(--lh-tight); }
