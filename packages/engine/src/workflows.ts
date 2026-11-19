@@ -2438,7 +2438,7 @@ export class Workflows {
       id: r.id,
       name: r.name,
       enabled: !!r.enabled,
-      origin: r.origin === 'schedules' ? 'schedules' : null,
+      origin: r.origin === 'schedules' || r.origin === 'review' ? r.origin : null,
       revision: r.revision,
       nextRunAt: r.next_run_at,
       lastFiredAt: r.last_fired_at,
