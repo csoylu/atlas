@@ -13,6 +13,7 @@ import type { MessageStream } from './useMessages.ts';
 import { CleanupBody, DigestBody, type MemoryDigestState } from './MemoryDigest.tsx';
 import { DIGEST_ID } from './memoryView.ts';
 import { clearDraft, draftKey, readDraft, useDraft } from './drafts.ts';
+import { ProjTag } from './projects.tsx';
 import {
   inboxKey,
   itemsOf,
@@ -239,6 +240,7 @@ export function Inbox(props: {
         <span className="ni-bd">
           <span className="ni-l1">
             {refOf(i, numbers) && <span>{refOf(i, numbers)}</span>}
+            <ProjTag id={i.need ? i.need.card.projectId : i.update.cardId ? props.cards.find((c) => c.id === i.update!.cardId)?.projectId : undefined} />
             {agent && (
               <AgentFace id={agent} />
             )}

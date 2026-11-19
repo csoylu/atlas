@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from 'react';
 import { AgentFace } from './AgentFace.tsx';
-import { cardRef, type SecretStoreStatus, type UpdateStatus, type Doc, type Agent, type Card, type ChatGptStatus, type Inbox as InboxData, type Model, type Settings, type Workflow } from '@atlas/shared';
+import { cardRef, type SecretStoreStatus, type UpdateStatus, type Doc, type Agent, type Card, type ChatGptStatus, type Inbox as InboxData, type Model, type Settings, type Workflow, type Project } from '@atlas/shared';
 import { api, subscribe, type AuthState } from './api.ts';
 import { Board } from './Board.tsx';
 import { Inbox } from './Inbox.tsx';
@@ -30,6 +30,7 @@ import { Palette, ShortcutsSheet, type PaletteContext } from './Palette.tsx';
 import { GO_HASH, globalKey, nextRow } from './keys.ts';
 import { LAST_AGENT, TOGGLE_PANEL } from './ChatView.tsx';
 import { groupCount } from './workflowView.ts';
+import { effectiveFilter, inFilter, ProjDot, ProjectsCtx, projectsInfo, useProjectFilter } from './projects.tsx';
 
 /**
  * Route in the URL hash, so reloads and the Electron window keep the place: #/inbox/<item>, #/board, #/library/<docId>,
@@ -143,6 +144,14 @@ export function App() {
   const [claudeWelcome, setClaudeWelcome] = useState(false);
   const [models, setModels] = useState<Model[]>([]);
   const [inbox, setInbox] = useState<InboxData | null>(null);
+  const [projects, setProjects] = useState<Project[]>([]);
+  const pinfo = useMemo(() => projectsInfo(projects), [projects]);
+  // The Workflows header counts what the list shows: the workflows of the project filter (#217).
+  const [wfFilter] = useProjectFilter();
+  const wfShown = useMemo(() => {
+    const f = effectiveFilter(wfFilter, pinfo);
+    return f === 'archived' ? [] : workflows.filter((w) => inFilter(f, w.projectId, pinfo, true));
+  }, [workflows, wfFilter, pinfo]);
   const stream = useMessageStream();
   const pendingAuth = useRef(false);
 
@@ -200,6 +209,8 @@ export function App() {
         else if (e.type === 'memory.proposal') stream.push('memories', { type: 'proposal', proposal: e.proposal });
         else if (e.type === 'panel.updated') stream.push('panel:' + e.chatId, { type: 'panel', tabs: e.tabs });
         else if (e.type === 'workflow.updated') setWorkflows((ws) => { const i = ws.findIndex(w => w.id === e.workflow.id); const next = ws.slice(); if (i < 0) return [...ws, e.workflow]; next[i] = e.workflow; return next; });
+        else if (e.type === 'project.updated')
+          setProjects((ps) => (ps.some((p) => p.id === e.project.id) ? ps.map((p) => (p.id === e.project.id ? e.project : p)) : [...ps, e.project]));
         else if (e.type === 'workflow.deleted') setWorkflows((ws) => ws.filter(w => w.id !== e.id));
         else if (e.type === 'workflow.run') stream.push('workflow-runs:' + e.run.workflowId, { type: 'workflowRun', run: e.run });
         else if (e.type === 'local.updated') stream.push('local', { type: 'local', status: e.status });
@@ -232,6 +243,7 @@ export function App() {
           reloadInbox();
           api.agents().then(setAgents, (e: Error) => setError(e.message));
           api.workflows().then(setWorkflows, (e: Error) => setError(e.message));
+          api.projects().then(setProjects, (e: Error) => setError(e.message));
           api.settings().then(setSettings, (e: Error) => setError(e.message));
           api.update().then(setUpdate, (e: Error) => setError(e.message));
           api.secretsStatus().then(setSecretStatus, (e: Error) => setError(e.message));
@@ -325,12 +337,15 @@ export function App() {
   /** The open Library document's title, for the breadcrumb. */
   const [libraryTitle, setLibraryTitle] = useState<string | null>(null);
   /** An agent's main chat (v3): created on first use; replaces the #/chat/<agent> or #/chat/new entry in the history. */
-  const openMain = useCallback((agentId: string) => {
-    api.mainChat(agentId).then(
+  const openMain = useCallback((agentId: string, project?: Project) => {
+    const other = project && !project.isDefault ? project : undefined;
+    api.mainChat(agentId, other?.id).then(
       (c) => {
         localStorage.setItem(LAST_AGENT, agentId);
         setChats((cs) => (cs.some((x) => x.id === c.id) ? cs : [c, ...cs]));
-        setAgents((as) => as.map((a) => (a.id === agentId ? { ...a, mainChat: c.id } : a)));
+        if (other)
+          setProjects((ps) => ps.map((p) => (p.id !== other.id ? p : { ...p, members: p.members.map((m) => (m.agentId === agentId ? { ...m, mainChat: c.id } : m)) })));
+        else setAgents((as) => as.map((a) => (a.id === agentId ? { ...a, mainChat: c.id } : a)));
         location.replace(withCard('#/chat/' + c.id, splitHash(location.hash).card));
       },
       (e: Error) => setError(e.message),
@@ -387,7 +402,17 @@ export function App() {
   const openWorkflow = route.view === 'workflows' && route.target ? workflows.find((w) => w.id === route.target) : undefined;
   /** An agent is busy while one of its cards runs or one of its chats is answering. */
   const busy = (id: string) => cards.some((c) => c.assignee === id && c.status === 'running') || chats.some((c) => c.assignee === id && c.working);
-  const mainChats = new Set(agents.flatMap((a) => (a.mainChat ? [a.mainChat] : [])));
+  // Main chats: one per agent and project (#214); none of them is in History.
+  const mainChats = new Set([...agents.flatMap((a) => (a.mainChat ? [a.mainChat] : [])), ...projects.flatMap((p) => p.members.flatMap((m) => (m.mainChat ? [m.mainChat] : [])))]);
+  /** With two active projects or more, the sidebar has one agent group per project. */
+  const groups = pinfo.active.length >= 2 ? pinfo.active : null;
+  const chatProject = openChat && pinfo.multi ? pinfo.byId(openChat.projectId) : undefined;
+  const projCrumb = chatProject ? (
+    <span key="p" className="crumb-part proj-crumb">
+      <ProjDot hue={chatProject.colour} />
+      {chatProject.name}
+    </span>
+  ) : null;
   const history = chats.filter((c) => !mainChats.has(c.id));
   const runningTasks = cards.filter((c) => c.status === 'running');
   const nav0 = (hash: string) => {
@@ -402,10 +427,11 @@ export function App() {
   const crumb: { parts: ReactNode[]; title: string; titleIcon?: ReactNode; sub?: string } =
     route.view === 'chat'
       ? openChat && openIsMain
-        ? { parts: [], title: openChat.assignee ?? openChat.title, titleIcon: agentDot(openChat.assignee ?? '') }
+        ? { parts: projCrumb ? [projCrumb] : [], title: openChat.assignee ?? openChat.title, titleIcon: agentDot(openChat.assignee ?? '') }
         : openChat
         ? {
             parts: [
+              ...(projCrumb ? [projCrumb] : []),
               <span key="a" className="crumb-part crumb-agent">
                 <AgentFace id={openChat.assignee} />
                 {openChat.assignee}
@@ -423,9 +449,14 @@ export function App() {
           : route.view === 'workflows'
             ? route.target
               ? { parts: [<a key="w" className="crumb-link" href="#/workflows">Workflows</a>], title: openWorkflow?.name ?? 'Workflow' }
-              : { parts: [], title: 'Workflows', sub: groupCount(workflows) }
+              : { parts: [], title: 'Workflows', sub: groupCount(wfShown) }
             : route.view === 'settings'
-              ? { parts: [<span key="s" className="crumb-part">Settings</span>], title: settingsLabel(route.target as SettingsPage) }
+              ? route.target === 'projects' && route.rest
+              ? {
+                  parts: [<span key="s" className="crumb-part">Settings</span>, <a key="p" className="crumb-link" href="#/settings/projects">Projects</a>],
+                  title: pinfo.byId(route.rest.split('/')[0])?.name ?? (route.rest === 'new' ? 'New project' : 'Project'),
+                }
+              : { parts: [<span key="s" className="crumb-part">Settings</span>], title: settingsLabel(route.target as SettingsPage) }
               : { parts: [], title: 'Document' };
   const paletteCtx: PaletteContext = {
     view: route.view,
@@ -452,6 +483,7 @@ export function App() {
   };
 
   return (
+    <ProjectsCtx.Provider value={pinfo}>
     <div className={'app' + (menu ? ' menu-open' : '')}>
       <aside className="sidebar" aria-label="Navigation">
         <div className="ws-row">
@@ -479,7 +511,36 @@ export function App() {
             </button>
           ))}
         </nav>
-        {agents.length > 0 && (
+        {groups ? (
+          // A project shows up once one member has a workspace there (cloning or failed: nothing to open yet).
+          groups.filter((p) => p.members.some((m) => m.home || m.cloneState === 'ready')).map((p) => (
+            <section key={p.id} className="side-agents" aria-label={p.name}>
+              <div className="side-group">
+                <ProjDot hue={p.colour} />
+                {p.name}
+              </div>
+              {agents
+                .filter((a) => p.members.some((m) => m.agentId === a.id && (m.home || m.cloneState === 'ready')))
+                .map((a) => {
+                  const m = p.members.find((x) => x.agentId === a.id)!;
+                  const main = p.isDefault ? a.mainChat : m.mainChat;
+                  const working = cards.some((c) => c.projectId === p.id && c.assignee === a.id && c.status === 'running') || chats.some((c) => c.projectId === p.id && c.assignee === a.id && c.working);
+                  return (
+                    <button
+                      key={a.id}
+                      className={'nav-item agent-item' + (route.view === 'chat' && ((p.isDefault && route.target === a.id) || (!!main && route.target === main)) ? ' active' : '')}
+                      title={`Chat with @${a.id} in ${p.name}${working ? ' · working…' : ''}`}
+                      onClick={() => (main ? nav0('#/chat/' + main) : (setMenu(false), openMain(a.id, p)))}
+                    >
+                      <AgentFace id={a.id} />
+                      <span>{a.id}</span>
+                      {working && <span className="spin" aria-label="working" />}
+                    </button>
+                  );
+                })}
+            </section>
+          ))
+        ) : agents.length > 0 && (
           <section className="side-agents" aria-label="Agents">
             <div className="side-group">Agents</div>
             {agents.map((a) => (
@@ -500,7 +561,7 @@ export function App() {
           <section className="side-running" aria-label="Running tasks">
             <div className="side-group">Running</div>
             {runningTasks.map((c) => (
-              <button key={c.id} type="button" className="nav-item running-item" title={`${cardRef(c)} ${c.title}${c.assignee ? ' · @' + c.assignee : ''}`} onClick={() => (setMenu(false), setOpenId(c.id))}>
+              <button key={c.id} type="button" className="nav-item running-item" title={`${cardRef(c)} ${c.title}${c.assignee ? ' · @' + c.assignee : ''}${pinfo.multi && pinfo.byId(c.projectId) ? ' · ' + pinfo.byId(c.projectId)!.name : ''}`} onClick={() => (setMenu(false), setOpenId(c.id))}>
                 <span className="spin" aria-hidden="true" />
                 <span className="running-ref">{cardRef(c)}</span>
                 <span className="running-title">{c.title}</span>
@@ -638,6 +699,7 @@ export function App() {
             memoryRest={route.rest}
             cards={cards}
             chats={chats}
+            workflows={workflows}
             stream={stream}
             settings={settings}
             agents={agents}
@@ -726,6 +788,7 @@ export function App() {
       {settings?.userName && settings.userAbout && chatgpt?.showWelcome && <PlanWelcome onDone={() => api.updateChatgpt({ welcomed: true }).then(setChatgpt, fail)} />}
       {settings?.userName && settings.userAbout && claudeWelcome && !chatgpt?.showWelcome && <ClaudeWelcome onDone={() => api.updateClaude({ welcomed: true }).then((c) => setClaudeWelcome(c.showWelcome), fail)} />}
     </div>
+    </ProjectsCtx.Provider>
   );
 }
 

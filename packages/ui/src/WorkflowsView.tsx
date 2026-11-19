@@ -3,6 +3,7 @@ import { type Agent, type Card, type CreateWorkflow, type TriggerConfig, type Wo
 import { api } from './api.ts';
 import { AgentFace } from './AgentFace.tsx';
 import { HeaderActions } from './ScreenHeader.tsx';
+import { effectiveFilter, inFilter, ProjectFilterButton, ProjTag, projectForNew, useProjectFilter, useProjects } from './projects.tsx';
 import type { MessageStream } from './useMessages.ts';
 import { WorkflowCanvas } from './WorkflowCanvas.tsx';
 import { BROWSER_TZ, RUN_LABEL, chainOf, describeTrigger, listGroup, nodeTitle, refOf, relative, runStrip, runTask, STATE_LABEL, TEMPLATES, type ListGroup, type Template, when } from './workflowView.ts';
@@ -80,25 +81,40 @@ function WorkflowList(props: {
     return () => clearInterval(t);
   }, []);
   const [pastOpen, setPastOpen] = useState(false);
+  const pinfo = useProjects();
+  const [pfRaw, setPf] = useProjectFilter();
+  const pf = effectiveFilter(pfRaw, pinfo);
+  const hasArchived = pinfo.all.some((p) => p.status === 'archived');
+  // « Archived »: archived projects' workflows (off), fetched on demand; the app's list has active projects only.
+  const [archived, setArchived] = useState<Workflow[]>([]);
+  const { onError } = props;
+  useEffect(() => {
+    if (hasArchived) api.workflows(true).then((ws) => setArchived(ws.filter((w) => pinfo.byId(w.projectId)?.status === 'archived')), onError);
+  }, [hasArchived, pinfo, onError]);
+  const pool = pf === 'archived' ? archived : props.workflows;
+  const shown = useMemo(() => pool.filter((w) => inFilter(pf, w.projectId, pinfo, true)), [pool, pf, pinfo]);
   const groups = useMemo(() => {
-    const sorted = props.workflows.slice().sort((a, b) => (a.nextRunAt ?? '~').localeCompare(b.nextRunAt ?? '~') || a.createdAt.localeCompare(b.createdAt));
+    const sorted = shown.slice().sort((a, b) => (a.nextRunAt ?? '~').localeCompare(b.nextRunAt ?? '~') || a.createdAt.localeCompare(b.createdAt));
     const g: Record<ListGroup, Workflow[]> = { on: [], off: [], past: [] };
     for (const w of sorted) g[listGroup(w)].push(w);
     return g;
-  }, [props.workflows]);
+  }, [shown]);
   const row = (w: Workflow) => <WorkflowRow key={w.id} w={w} cards={props.cards} onOpen={() => props.go('#/workflows/' + w.id)} onOpenCard={props.onOpenCard} onError={props.onError} />;
   return (
     <div className="wfl-view">
       {!props.creating && (
         <HeaderActions>
+          <ProjectFilterButton value={pf} onChange={setPf} count={(f) => (f === 'archived' ? archived.length : props.workflows.filter((w) => inFilter(f, w.projectId, pinfo, true)).length)} />
+          {pinfo.multi && <span className="head-sp" />}
           <button className="primary small" onClick={() => props.setCreating(true)}>
             New workflow
           </button>
         </HeaderActions>
       )}
       <div className="wfl-inner">
-        {props.creating && <NewWorkflow onCancel={() => props.setCreating(false)} onCreated={props.onCreated} onError={props.onError} />}
+        {props.creating && <NewWorkflow project={projectForNew(pf, pinfo)?.id ?? null} onCancel={() => props.setCreating(false)} onCreated={props.onCreated} onError={props.onError} />}
         {!props.workflows.length && !props.creating && <EmptyWorkflows agents={props.agents} onCreated={props.onCreated} onScratch={() => props.setCreating(true)} onError={props.onError} />}
+        {props.workflows.length > 0 && !shown.length && !props.creating && <div className="empty-note">No workflow in this project yet.</div>}
         {groups.on.length > 0 && (
           <section className="wfl-group">
             <div className="wfl-ghead">
@@ -235,6 +251,7 @@ function WorkflowRow(props: { w: Workflow; cards: Card[]; onOpen(): void; onOpen
               </>
             )}
           </span>
+          <ProjTag id={w.projectId} global />
         </div>
         {failure && (
           <div className="wfl-err">
@@ -375,7 +392,10 @@ function EmptyWorkflows(props: { agents: Agent[]; onCreated(w: Workflow): void; 
 }
 
 /** « New workflow »: a name and how it starts; then the canvas opens with one empty agent step selected. */
-function NewWorkflow(props: { onCancel(): void; onCreated(w: Workflow): void; onError(e: unknown): void }) {
+function NewWorkflow(props: { project: string | null; onCancel(): void; onCreated(w: Workflow): void; onError(e: unknown): void }) {
+  const pinfo = useProjects();
+  const [projectId, setProjectId] = useState(props.project);
+  const project = pinfo.byId(projectId);
   const [name, setName] = useState('');
   const [starts, setStarts] = useState<'time' | 'manual'>('time');
   const [saving, setSaving] = useState(false);
@@ -383,6 +403,7 @@ function NewWorkflow(props: { onCancel(): void; onCreated(w: Workflow): void; on
     setSaving(true);
     const body: CreateWorkflow = {
       name: name.trim(),
+      ...(pinfo.multi && projectId ? { projectId } : {}),
       // Off until its step is filled in: a time trigger would otherwise fire an empty step (Run now still works).
       enabled: starts === 'manual',
       nodes: [
@@ -408,6 +429,18 @@ function NewWorkflow(props: { onCancel(): void; onCreated(w: Workflow): void; on
         Name
         <input autoFocus value={name} onChange={(e) => setName(e.target.value)} placeholder="Weekly dependency check" />
       </label>
+      {pinfo.multi && project && (
+        <label className="field">
+          Project
+          <select value={project.id} onChange={(e) => setProjectId(e.target.value)}>
+            {pinfo.active.map((p) => (
+              <option key={p.id} value={p.id}>
+                {p.name}
+              </option>
+            ))}
+          </select>
+        </label>
+      )}
       <div className="field">
         Starts
         <div className="wf-trig-pick" role="radiogroup" aria-label="How it starts">

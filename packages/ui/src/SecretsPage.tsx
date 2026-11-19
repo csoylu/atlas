@@ -5,6 +5,8 @@ import { api } from './api.ts';
 import { withCard } from './cardModal.ts';
 import { agentSecrets, agoText, cleanName, deleteText, grantees, modelKeyRow, storeLine, whenText } from './secretsView.ts';
 import type { MessageStream } from './useMessages.ts';
+import { HeaderActions } from './ScreenHeader.tsx';
+import { effectiveFilter, inFilter, ProjectFilterButton, ProjTag, projectForNew, useProjectFilter, useProjects } from './projects.tsx';
 
 /**
  * Settings → Secrets (#209, mockup #205): agent secrets (API keys, tokens, RPC URLs agents use as $NAME in shell
@@ -29,10 +31,14 @@ export function SecretsPage(props: { agents: Agent[]; cards: Card[]; models: Mod
   const status = props.status ?? list?.status ?? null;
   useEffect(reload, [reload, status?.locked]);
 
+  const pinfo = useProjects();
+  const [pfRaw, setPf] = useProjectFilter();
+  const pf = effectiveFilter(pfRaw, pinfo, true);
   if (!list || !status) return <div className="model-row skeleton" />;
   const locked = status.kind === 'file' && status.locked;
   const writable = status.kind !== 'env' && !locked;
-  const mine = agentSecrets(list.secrets);
+  const allMine = agentSecrets(list.secrets);
+  const mine = allMine.filter((s) => inFilter(pf, s.project, pinfo, true));
   const keys = list.secrets.filter((s) => s.kind === 'model_key');
   const allAgents = props.agents.map((a) => a.id);
   const toggle = (name: string, mode: 'replace' | 'delete' | 'edit') => {
@@ -55,6 +61,11 @@ export function SecretsPage(props: { agents: Agent[]; cards: Card[]; models: Mod
 
   return (
     <>
+      {pinfo.multi && (
+        <HeaderActions>
+          <ProjectFilterButton value={pf} onChange={setPf} globalOnly count={(f) => allMine.filter((s) => inFilter(f, s.project, pinfo, true)).length} />
+        </HeaderActions>
+      )}
       <section>
         <header className="section-head">
           <h2>Agent secrets</h2>
@@ -71,7 +82,7 @@ export function SecretsPage(props: { agents: Agent[]; cards: Card[]; models: Mod
               No agent secret yet. {writable ? 'Add one here, or an' : 'An'} agent saves one with its <span className="mono">secret_set</span> tool and it shows up here.
             </div>
           )}
-          {adding && <SecretForm agents={props.agents} store={list.store} onCancel={() => setAdding(false)} onSaved={() => (setAdding(false), reload())} onError={onError} />}
+          {adding && <SecretForm project={projectForNew(pf, pinfo)?.id ?? null} agents={props.agents} store={list.store} onCancel={() => setAdding(false)} onSaved={() => (setAdding(false), reload())} onError={onError} />}
           {mine.map((s) =>
             open?.name === s.name && open.mode === 'edit' ? (
               <SecretForm key={s.name} secret={s} agents={props.agents} store={list.store} onCancel={() => setOpen(null)} onReplace={() => setOpen({ name: s.name, mode: 'replace' })} onSaved={done} onError={onError} />
@@ -81,6 +92,7 @@ export function SecretsPage(props: { agents: Agent[]; cards: Card[]; models: Mod
                   <div className="model-title">
                     <span className="sec-name">{s.name}</span>
                     {!s.hasValue && <span className="badge bad">No value</span>}
+                    <ProjTag id={s.project} global />
                     <GrantChips secret={s} />
                   </div>
                   {!s.hasValue && s.createdBy !== 'user' ? (
@@ -241,7 +253,9 @@ function CardLink({ id, cards, prefix }: { id: string; cards: Card[]; prefix?: s
 }
 
 function GrantChips({ secret: s }: { secret: SecretInfo }) {
-  if (s.grant === 'all') return <span className="sec-grant all">All agents</span>;
+  const pinfo = useProjects();
+  const p = pinfo.multi ? pinfo.byId(s.project) : undefined;
+  if (s.grant === 'all') return <span className="sec-grant all">{p ? `All of ${p.name}` : 'All agents'}</span>;
   if (s.grant === 'none' || !s.agents.length) return <span className="sec-grant none">No agent</span>;
   return (
     <>
@@ -500,7 +514,7 @@ function DeleteConfirm(props: { secret: SecretInfo; cards: Card[]; allAgents: st
 }
 
 /** Add (no `secret`) or Edit: name (fixed once made), description, value (add only), who gets it. */
-function SecretForm(props: { secret?: SecretInfo; agents: Agent[]; store: string | null; onCancel(): void; onReplace?(): void; onSaved(): void; onError(e: unknown): void }) {
+function SecretForm(props: { secret?: SecretInfo; project?: string | null; agents: Agent[]; store: string | null; onCancel(): void; onReplace?(): void; onSaved(): void; onError(e: unknown): void }) {
   const s = props.secret;
   const [name, setName] = useState(s?.name ?? '');
   const [description, setDescription] = useState(s?.description ?? '');
@@ -508,13 +522,22 @@ function SecretForm(props: { secret?: SecretInfo; agents: Agent[]; store: string
   const [grant, setGrant] = useState<SecretGrant>(s?.grant ?? 'none');
   const [picked, setPicked] = useState<string[]>(s?.agents ?? []);
   const [busy, setBusy] = useState(false);
+  const pinfo = useProjects();
+  // Its project: null = global. With one project the form has no Project field and a new secret stays global, as before.
+  const [projectId, setProjectId] = useState<string | null>(s ? s.project : (props.project ?? null));
+  const project = pinfo.multi ? pinfo.byId(projectId) : undefined;
+  // A project's secret can be granted to its members only.
+  const agents = project ? props.agents.filter((a) => project.members.some((m) => m.agentId === a.id)) : props.agents;
   const nameOk = SECRET_NAME_RE.test(name);
   const ok = nameOk && (s || value.trim()) && (grant !== 'agents' || picked.length > 0);
   const submit = (e: FormEvent) => {
     e.preventDefault();
     setBusy(true);
-    const agents = grant === 'agents' ? picked : [];
-    (s ? api.updateSecret(s.name, { description, grant, agents }) : api.createSecret({ name, description, value, grant, agents, project: null })) // global until the Projects UI picks one (#215)
+    const ids = grant === 'agents' ? picked.filter((id) => agents.some((a) => a.id === id)) : [];
+    const where = pinfo.multi ? projectId : (s?.project ?? null);
+    (s
+      ? api.updateSecret(s.name, { description, grant, agents: ids, ...(pinfo.multi && where !== s.project ? { project: where } : {}) })
+      : api.createSecret({ name, description, value, grant, agents: ids, project: where }))
       .then(
         () => {
           setValue('');
@@ -528,6 +551,14 @@ function SecretForm(props: { secret?: SecretInfo; agents: Agent[]; store: string
       .finally(() => setBusy(false));
   };
   const shown = name || 'NAME';
+  const describe = (
+    <label className="field">
+      <span>
+        Description <span className="sec-opt">· optional, agents read it</span>
+      </span>
+      <input value={description} maxLength={500} autoFocus={!!s} onChange={(e) => setDescription(e.target.value)} placeholder="What it opens, and for what" />
+    </label>
+  );
   return (
     <form className="model-row new sec-form" onSubmit={submit} data-secret-form={s ? 'edit' : 'add'}>
       <div className="field-row">
@@ -535,13 +566,23 @@ function SecretForm(props: { secret?: SecretInfo; agents: Agent[]; store: string
           Name
           <input className="mono" value={name} disabled={!!s} autoFocus={!s} autoComplete="off" spellCheck={false} placeholder="DUNE_API_KEY" onChange={(e) => setName(cleanName(e.target.value))} aria-invalid={!!name && !nameOk} />
         </label>
-        <label className="field">
-          <span>
-            Description <span className="sec-opt">· optional, agents read it</span>
-          </span>
-          <input value={description} maxLength={500} autoFocus={!!s} onChange={(e) => setDescription(e.target.value)} placeholder="What it opens, and for what" />
-        </label>
+        {pinfo.multi ? (
+          <label className="field">
+            Project
+            <select value={projectId ?? ''} onChange={(e) => setProjectId(e.target.value || null)}>
+              {pinfo.active.map((p) => (
+                <option key={p.id} value={p.id}>
+                  {p.name}
+                </option>
+              ))}
+              <option value="">Global · every project</option>
+            </select>
+          </label>
+        ) : (
+          describe
+        )}
       </div>
+      {pinfo.multi && describe}
       {s ? (
         <div className="field">
           Value
@@ -568,7 +609,7 @@ function SecretForm(props: { secret?: SecretInfo; agents: Agent[]; store: string
             [
               ['none', 'No agent'],
               ['agents', 'Selected agents'],
-              ['all', 'All agents'],
+              ['all', project ? `All of ${project.name}` : 'All agents'],
             ] as const
           ).map(([g, label]) => (
             <button key={g} type="button" role="radio" aria-checked={grant === g} className={grant === g ? 'on' : ''} onClick={() => setGrant(g)}>
@@ -578,7 +619,7 @@ function SecretForm(props: { secret?: SecretInfo; agents: Agent[]; store: string
         </div>
         {grant === 'agents' && (
           <div className="sec-pick">
-            {props.agents.map((a) => {
+            {agents.map((a) => {
               const on = picked.includes(a.id);
               return (
                 <label key={a.id} className={on ? 'on' : ''}>
@@ -592,6 +633,11 @@ function SecretForm(props: { secret?: SecretInfo; agents: Agent[]; store: string
         )}
       </div>
       <p className="muted form-note">
+        {pinfo.multi && (
+          <>
+            {project ? `A ${project.name} secret reaches only ${project.name}'s members, and only in their ${project.name} runs.` : 'A global secret reaches the agents you pick in every project.'}{' '}
+          </>
+        )}
         {s ? (
           <>
             The name stays <code>${s.name}</code>: to rename it, add a new secret and delete this one.

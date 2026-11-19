@@ -3,6 +3,7 @@ import { cardRef, MEMORY_BUDGET, MEMORY_BUDGET_GLOBAL, MEMORY_REVIEW_EVERY as RE
 import { api } from './api.ts';
 import type { MessageStream } from './useMessages.ts';
 import { HeaderActions, Icon } from './ScreenHeader.tsx';
+import { effectiveFilter, inFilter, ProjectFilterButton, ProjTag, useProjectFilter, useProjects } from './projects.tsx';
 import { Menu, PopRow } from './HeadMenu.tsx';
 import { Avatar } from './Board.tsx';
 import { StatusIcon } from './StatusIcon.tsx';
@@ -95,11 +96,15 @@ export function MemoryPage(props: {
     listRef.current?.querySelector(`[data-mem="${focused.id}"]`)?.scrollIntoView({ block: 'center' });
   }, [focused, list]);
 
+  const pinfo = useProjects();
+  const [pfRaw, setPf] = useProjectFilter();
+  const pf = effectiveFilter(pfRaw, pinfo, true);
+  const inProj = (list ?? []).filter((m) => inFilter(pf, m.projectId, pinfo, true));
   const status: MemStatus = focused ? (focused.status === 'archived' ? 'archived' : 'live') : view.status;
   const kind = focused ? 'all' : view.kind;
-  const counts = chipCounts(list ?? [], status === 'archived' ? 'archived' : 'live');
+  const counts = chipCounts(inProj, status === 'archived' ? 'archived' : 'live');
   // A memory link shows that memory alone (its live copy once the list has it), whatever the filters.
-  const shown = focused ? [list?.find((m) => m.id === focused.id) ?? focused] : shownMemories(list ?? [], { kind, status });
+  const shown = focused ? [list?.find((m) => m.id === focused.id) ?? focused] : shownMemories(inProj, { kind, status });
   const scopes = ['global', 'shared', ...props.agents.map((a) => 'agent:' + a.id)];
   const update = (m: Memory, patch: Parameters<typeof api.updateMemory>[1]) =>
     api.updateMemory(m.id, patch).then((x) => {
@@ -121,6 +126,7 @@ export function MemoryPage(props: {
   return (
     <div className="memory-page">
       <HeaderActions>
+        <ProjectFilterButton value={pf} onChange={setPf} globalOnly count={(f) => (list ?? []).filter((m) => m.status !== 'archived' && inFilter(f, m.projectId, pinfo, true)).length} />
         <span className="head-sp" />
         <Menu
           open={menu}
@@ -271,6 +277,7 @@ function MemoryRow(props: { m: Memory; focused: boolean; cards: Card[]; chats: C
   const srcCard = src && !src.chat ? props.cards.find((c) => c.id === src.cardId) : undefined;
   const srcChat = src?.chat ? props.chats.find((c) => c.id === src.cardId) : undefined;
   const archived = m.status === 'archived';
+  const { multi } = useProjects();
   return (
     <div className={'mem-row' + (m.status !== 'active' ? ' dim' : '') + (props.focused ? ' focus' : '') + (edit ? ' editing' : '')} data-mem={m.id}>
       <span className={'mem-k ' + m.kind}>{KIND_BADGE[m.kind]}</span>
@@ -327,7 +334,16 @@ function MemoryRow(props: { m: Memory; focused: boolean; cards: Card[]; chats: C
         </button>
       )}
       <span className="mem-scope">
-        {m.scope === 'shared' || m.scope === 'global' ? m.scope : (
+        {multi && m.scope !== 'global' ? (
+          <>
+            <ProjTag id={m.projectId} />
+            {m.scope !== 'shared' && (
+              <span className="pj-who" title={'only @' + m.scope.slice('agent:'.length)}>
+                <Avatar id={m.scope.slice('agent:'.length)} />
+              </span>
+            )}
+          </>
+        ) : m.scope === 'shared' || m.scope === 'global' ? m.scope : (
           <>
             <Avatar id={m.scope.slice('agent:'.length)} />
             <span>{m.scope.slice('agent:'.length)}</span>

@@ -12,6 +12,7 @@ import { CardDocs, TaskDocReader, type DocToRead } from './DocPanel.tsx';
 import { RewindConfirm, RewindNote, useRewind } from './Rewind.tsx';
 import { StatusIcon, STATUS_LABEL } from './StatusIcon.tsx';
 import { PrRows } from './PrChips.tsx';
+import { ProjTag } from './projects.tsx';
 
 export interface CardViewProps {
   card: Card;
@@ -116,6 +117,7 @@ export const CardView = forwardRef<HTMLTextAreaElement, CardViewProps & { close:
         <header className="cm-head">
           <div className="cm-row">
             <span className="id cm-id" title={card.id}>{cardRef(card)}</span>
+            <ProjTag id={card.projectId} title="Project (set when the task was made)" />
             {chip ? (
               <span className={'cm-pill st-chip ' + chip.kind} title="Status (live)">
                 {chip.label}

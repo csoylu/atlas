@@ -1,0 +1,4 @@
+## Added · #217 · Settings → Projects: make a project from a GitHub repo, follow each member's clone, and filter tasks, Library, workflows, memory and secrets by project
+- Settings → Projects (first under Team): the list, New project with a live check of the repo (found, private, default branch, instructions file), each member's clone with its progress, a failed clone with « Fix the repo name » / « Try again », a project's page (name, lead, members with their workspace and branch, add or remove a member with what it does, archive).
+- With two projects or more: one agent group per project in the sidebar, a project button in the header of Tasks, Library, Workflows, Memory and Secrets (+ « Global only » on the last two), the project tag on cards, rows and Inbox items, a Project field in New task, the project in the chat header and the task header.
+- With a single project the app looks as before.
