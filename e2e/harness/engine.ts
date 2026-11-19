@@ -37,7 +37,8 @@ export class TestAtlas {
       ...(o.secrets ? { secrets: o.secrets } : {}),
       ...(o.env ? { env: o.env } : {}),
       // Never the real GitHub: a test that links PRs passes its own reader (#189).
-      prs: o.prs ?? { read: async () => { throw new Error('no GitHub in e2e'); }, intervalMs: false },
+      // The merge queue's rebase (#236): every PR up to date with main, no git.
+      prs: { sync: async () => ({ kind: 'current' as const }), ...(o.prs ?? { read: async () => { throw new Error('no GitHub in e2e'); }, intervalMs: false }) },
     });
     // Past the first-run welcome sheet (it would cover the UI).
     await fetch(engine.url + '/api/settings', { method: 'PATCH', headers: json, body: JSON.stringify({ userName: 'Tester', userAbout: 'QA engineer running the Atlas end-to-end tests.' }) });

@@ -288,6 +288,36 @@ Statuses: `triage → todo → ready → running → (blocked | review) → done
   (`github.unreadable`), archived by itself when a read works again.
 - **Restart:** everything is in `card_prs` and `cards`; the first poll after a start resumes (a PR merged while Atlas
   was down → done; a head already reviewed is not reviewed twice).
+- **Merge queue** (#236, migration 0054, `prs.ts` `advance`, `prSync.ts`, `scripts/pr/migrations.mjs`). Why: on 18 Nov
+  five PRs were In review at once; every merge moved main, the others conflicted (twice the same migration number),
+  went back for a rebase, CI ran again and the new head needed a new review. Now, per project:
+  - **Order:** `cards.review_queued_at` (set by `task_request_review`, strictly increasing per project; leaving
+    `review` clears it, so a task sent back or blocked re-enters at the end; a card dragged to review is queued at the
+    next poll). The queue = the project's `review` tasks with a PR, in that order. A project without a repo has none.
+  - **Only the head is reviewed.** `decide()` still moves every task (merged → done, CI red / conflict / failed → ready),
+    but starts a reviewer run only for the head, and only when each of its open PRs has `card_prs.synced_sha` = its
+    head. `cards.review_head_at` is when it became the head. Why-line: « 2nd in the queue, behind #214 » for the
+    others; « 1st in the queue for 25 min · QA starts when CI is green » (or the run, or « can't bring PR #N up to date
+    with main: … (tried again every minute) ») for the head.
+  - **Up to date with main** (`syncBranch`, in the reviewer's clone of the repo, found in its workspace for the
+    project): fetch main and the branch by URL into `refs/atlas-queue/…` (the clone's own refs, branches and working
+    tree stay as they were), rebase in a throwaway detached worktree, rename the PR's clashing migrations
+    (`renumber`: in a folder where one of its new `NNNN_` numbers is not above main's highest, its new migrations take
+    the next numbers in name order) and replace their stems in every file the PR changes, one commit, then push
+    `--force-with-lease=<branch>:<head GitHub showed>`. Results: `current` (synced_sha = head), `pushed` (synced_sha =
+    the new head; thread note « Merge queue: PR #N rebased onto main abc1234; migration 0051_x renamed 0052_x. New head
+    … »; `queue_updated` event) and the review waits for the next read and CI on that head; `moved` (the branch moved:
+    read again); `conflict` (no push; `ready` with « PR #N conflicts with main in a.ts, b.ts », and the next task is
+    taken up in the same poll, so one stuck PR never blocks the queue). A git or push error goes to
+    `card_prs.sync_error`, is shown on the card and tried again at the next poll.
+  - **Main moved:** a merge seen by the poller (the queue's, or Master's terminal `validate.mjs --merge`, which may jump
+    the queue) clears `synced_sha` of every queued PR of the project, so the next head is checked again.
+  - **Never a clash on main:** the CI job `test` runs `scripts/pr/migrations.mjs check HEAD^1 HEAD` on pull requests
+    (HEAD = GitHub's merge of the PR into main): red when a new migration is not above every number on main in its
+    folder, and the gate only merges on green CI (#238). Rule 4 holds: only migrations new in the PR are renamed.
+  - **Restart:** order, head, synced heads and errors are in SQLite. A kill between the push and saving `synced_sha`
+    is harmless: the next poll reads the new head, finds it current and goes on (the thread note is then missing).
+  - Not done: GitHub's own merge queue (repo settings agents must not change), reviewing several PRs in parallel.
 - Any GitHub repo the gh login can read; no other forge.
 
 ## 8. Context management
