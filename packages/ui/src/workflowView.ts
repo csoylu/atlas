@@ -110,6 +110,7 @@ export function eventText(t: Extract<TriggerConfig, { kind: 'task' | 'pr' }>): s
 export function describeTrigger(t: TriggerConfig): string {
   if (t.kind === 'manual') return 'By hand only';
   if (t.kind === 'task' || t.kind === 'pr') return eventText(t);
+  if (t.kind === 'webhook') return 'On a webhook call';
   if (t.repeat === 'at') return t.at ? 'Once, ' + when(t.at) : 'Once';
   const p = patternOf(t.cron ?? '');
   if (!p) return `cron ${t.cron ?? ''}`.trim();
@@ -193,7 +194,9 @@ export function nodeMeta(n: WorkflowNode, nodes: WorkflowNode[] = []): string {
         ? `At set times · ${n.config.timezone}`
         : n.config.kind === 'task' || n.config.kind === 'pr'
           ? eventMeta(n.config)
-          : 'Run now, from here or a chat';
+          : n.config.kind === 'webhook'
+            ? ['Webhook', ...(n.config.filters.length ? n.config.filters.map((f) => `${f.field} ${OP_TEXT[f.op]} ${f.value}`.trim()) : ['any call'])].join(' · ')
+            : 'Run now, from here or a chat';
     case 'agent':
       return n.config.agentId ? `@${n.config.agentId} · ${n.config.newTaskEachRun ? 'new task' : 'one task'}` : 'Pick an agent and a prompt';
     case 'approval':
@@ -509,6 +512,7 @@ export const TRIGGER_KINDS: { kind: TriggerKind; label: string; help: string; is
   { kind: 'time', label: 'At set times', help: 'Every day, weekdays, weekly, hourly, once, or cron' },
   { kind: 'task', label: 'Task event', help: 'Created, status changed to…, blocked, asks for review', isNew: true },
   { kind: 'pr', label: 'Pull request event', help: 'Opened, CI green or red, conflict, merged', isNew: true },
+  { kind: 'webhook', label: 'Webhook', help: 'A secret URL; its JSON body is the payload', isNew: true },
   { kind: 'manual', label: 'Only by hand', help: 'Run now, from the workflow or on a task' },
 ];
 
@@ -555,8 +559,9 @@ export function withEvent(t: EventTrigger, choice: EventChoice): EventTrigger {
 
 /** A fresh trigger of a kind, keeping what can be kept (the loop guard). */
 export function blankTrigger(kind: TriggerKind, prev: TriggerConfig, tz = BROWSER_TZ): TriggerConfig {
-  const guard = prev.kind === 'task' || prev.kind === 'pr' ? prev.maxRunsPerHour : 5;
+  const guard = prev.kind === 'task' || prev.kind === 'pr' || prev.kind === 'webhook' ? prev.maxRunsPerHour : 5;
   if (kind === 'manual') return { kind: 'manual' };
+  if (kind === 'webhook') return { kind: 'webhook', filters: [], maxRunsPerHour: guard };
   if (kind === 'time') return { kind: 'time', repeat: 'cron', cron: '0 9 * * 1-5', at: null, timezone: tz };
   if (kind === 'task') return { kind: 'task', event: 'review_requested', from: [], status: [], assignee: [], maxRunsPerHour: guard };
   return { kind: 'pr', event: 'ci_finished', repo: '', base: '', result: 'failure', status: [], assignee: [], maxRunsPerHour: guard };
@@ -618,6 +623,7 @@ export function runGets(t: TriggerConfig, hasProject: boolean): string[] {
   if (t.kind === 'task') return ['project', 'task'];
   if (t.kind === 'pr') return ['project', 'pr', 'task'];
   if (t.kind === 'manual') return [...(hasProject ? ['project'] : []), 'task', 'pr'];
+  if (t.kind === 'webhook') return ['payload', 'payload.…', ...(hasProject ? ['project'] : [])];
   return hasProject ? ['project'] : [];
 }
 
@@ -626,6 +632,7 @@ export const FIELD_GROUPS: { key: string; label: string }[] = [
   { key: 'task', label: 'Task' },
   { key: 'pr', label: 'Pull request' },
   { key: 'event', label: 'Event' },
+  { key: 'payload', label: 'Payload' },
   { key: 'steps', label: 'Earlier steps' },
   { key: 'previous', label: 'Earlier steps' },
   { key: 'project', label: 'Project' },

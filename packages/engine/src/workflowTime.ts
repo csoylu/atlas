@@ -33,7 +33,7 @@ export function describeWhen(s: When): string {
 export function triggerWhen(t: TriggerConfig): When | null {
   return t.kind === 'time' ? { kind: t.repeat, cron: t.cron, at: t.at, timezone: t.timezone } : null;
 }
-export const describeTrigger = (t: TriggerConfig) => (t.kind === 'time' ? describeWhen(triggerWhen(t)!) : 'by hand only');
+export const describeTrigger = (t: TriggerConfig) => (t.kind === 'time' ? describeWhen(triggerWhen(t)!) : t.kind === 'webhook' ? 'on a webhook call' : 'by hand only');
 
 /** "Mon 10 Nov, 09:00" in a zone (date only with `short`). */
 export function stamp(d: Date, timeZone: string, short = false): string {

@@ -330,6 +330,8 @@ function WorkflowRow(props: { w: Workflow; cards: Card[]; onOpen(): void; onOpen
           <span>Only when you click ▶</span>
         ) : t?.kind === 'task' || t?.kind === 'pr' ? (
           <span>On each matching {t.kind === 'task' ? 'task' : 'PR'} event</span>
+        ) : t?.kind === 'webhook' ? (
+          <span>On each call of its URL</span>
         ) : null}
       </div>
       <div className="wfl-acts">
@@ -484,6 +486,7 @@ function NewWorkflow(props: { project: string | null; agents: Agent[]; onCancel(
       </div>
       <TriggerPick kind={trigger.kind} global={false} onPick={(k) => setTrigger(blankTrigger(k, trigger))} />
       {(trigger.kind === 'task' || trigger.kind === 'pr') && <EventFields t={trigger} projectId={projectId} agents={props.agents} set={(c) => setTrigger(c as TriggerConfig)} />}
+      {trigger.kind === 'webhook' && <p className="wf-sum">Its secret URL and its « Only if » tests on the JSON body are in the trigger's panel, once it is created.</p>}
       <RunGets t={trigger} hasProject={!!projectId} />
       </div>
       <div className="wf-form-foot">

@@ -2482,6 +2482,19 @@ button.wfl-ghead:hover { color: var(--text); background: var(--hover); }
 .wf-flt .lock { font-size: var(--fs-small); text-align: center; }
 .wf-flt .sd-btn { justify-self: center; }
 .wf-addflt { align-self: flex-start; }
+/* A payload filter: the field on its own line (paths are long), then the test, the value and ✕. */
+.wf-pflt { grid-template-columns: minmax(0, auto) minmax(0, 1fr) 40px; padding-bottom: 6px; border-bottom: 1px solid var(--line); }
+.wf-pflt > input:first-child { grid-column: 1 / -1; }
+.wf-pflt input, .wf-pflt select { min-width: 0; }
+.wf-hookhelp { overflow-wrap: anywhere; }
+/* Webhook trigger (#260): the secret URL, its port-change error, the last call's body. */
+.wf-hookurl { display: flex; align-items: center; gap: 8px; min-height: 36px; padding: 2px 4px 2px 10px; border: 1px solid var(--line-2); border-radius: 8px; background: var(--raised); font-weight: var(--fw-regular); }
+.wf-hookurl > span { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: var(--fs-base); color: var(--text); }
+.wf-hookurl > span.muted { color: var(--muted); white-space: normal; font-size: var(--fs-small); line-height: var(--lh-normal); }
+.wf-hookacts { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; font-weight: var(--fw-regular); }
+.wf-hookerr { padding: 10px 12px; border-radius: 8px; border: 1px solid var(--neg-ink); background: var(--neg-bg); color: var(--neg-ink); font-size: var(--fs-small); line-height: var(--lh-normal); overflow-wrap: anywhere; }
+.wf-hookerr b { font-weight: var(--fw-medium); }
+.wf-hookbody { margin: 0; max-height: 200px; overflow: auto; padding: 8px 10px; border-radius: 8px; background: var(--raised); border: 1px solid var(--line); color: var(--text); font-size: var(--fs-small); line-height: var(--lh-normal); font-weight: var(--fw-regular); white-space: pre-wrap; overflow-wrap: anywhere; }
 .wf-guardfld { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; color: var(--text); font-weight: var(--fw-regular); }
 .wf-guardfld input { width: 64px; }
 .wf-gets { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; font-weight: var(--fw-regular); }

@@ -43,12 +43,16 @@ export const SECRET_NAME = /^[A-Z][A-Z0-9_]{1,63}$/;
  * CLAUDE_TOKENS_<ID> / CHATGPT_TOKENS_<ID> for the others. Never in the engine env, the key list or the API.
  */
 export const isTokenEntry = (name: string) => /^(CLAUDE|CHATGPT)_TOKENS(_[A-Z0-9]+)?$/.test(name);
+/** Webhook tokens (#260, webhooks.ts): `hook:<id>`, a name no secret can have. Hidden from every output, given to no one. */
+export const isHookEntry = (name: string) => name.startsWith('hook:');
+/** Store entries that are not secrets of the Secrets list: plan sign-ins and webhook tokens. */
+const isInternalEntry = (name: string) => isTokenEntry(name) || isHookEntry(name);
 
 /** Engine env = process env + stored secrets; setting a secret updates it live (models read it at each call). */
 export function envWithSecrets(base: NodeJS.ProcessEnv, store?: SecretStore): NodeJS.ProcessEnv {
   const env = { ...base };
   if (isLocked(store)) return env; // a locked server store: its values arrive at the unlock (Secrets.unlock)
-  for (const n of store?.names() ?? []) if (!isTokenEntry(n)) env[n] = store!.get(n);
+  for (const n of store?.names() ?? []) if (!isInternalEntry(n)) env[n] = store!.get(n);
   return env;
 }
 
@@ -123,7 +127,7 @@ export class Secrets {
   private syncEnv(): void {
     const locked = this.locked();
     for (const n of this.store?.names() ?? []) {
-      if (isTokenEntry(n)) continue;
+      if (isInternalEntry(n)) continue;
       if (!locked) this.env[n] = this.store!.get(n);
       else if (this.base[n] !== undefined) this.env[n] = this.base[n];
       else delete this.env[n];
@@ -199,7 +203,7 @@ export class Secrets {
     let changed = false;
     this.db.transaction(() => {
       for (const n of names) {
-        if (isTokenEntry(n) || rows.has(n)) continue;
+        if (isInternalEntry(n) || rows.has(n)) continue;
         this.db
           .prepare("INSERT INTO secrets (name, kind, created_by, created_at, updated_at, updated_by) VALUES (?, 'model_key', 'user', ?, ?, 'user')")
           .run(n, now, now);
@@ -224,8 +228,8 @@ export class Secrets {
     return {
       store: this.store?.label ?? null,
       status: this.status(),
-      names: [...names].filter((n) => !isTokenEntry(n)),
-      secrets: rows.filter((r) => !isTokenEntry(r.name) && inFilter(r)).map((r) => toInfo(r, names.has(r.name))),
+      names: [...names].filter((n) => !isInternalEntry(n)),
+      secrets: rows.filter((r) => !isInternalEntry(r.name) && inFilter(r)).map((r) => toInfo(r, names.has(r.name))),
     };
   }
 
@@ -504,7 +508,7 @@ export class Secrets {
     for (const n of [...this.modelKeyNames(), ...ENGINE_ONLY]) delete env[n];
     const rows = this.db.prepare('SELECT * FROM secrets').all() as SecretRow[];
     for (const r of rows) if (r.kind === 'model_key') delete env[r.name];
-    for (const n of Object.keys(env)) if (isTokenEntry(n)) delete env[n];
+    for (const n of Object.keys(env)) if (isInternalEntry(n)) delete env[n];
     const mine = rows.filter((r) => r.kind === 'agent' && grantedTo(toInfo(r, false), agentId, projectId));
     // Not granted here: never in the env, whatever the base holds under that name.
     for (const r of rows) if (r.kind === 'agent' && !mine.includes(r)) delete env[r.name];
@@ -620,6 +624,10 @@ export class Secrets {
     for (const n of this.locked() ? [] : (this.store?.names() ?? [])) {
       const v = this.store!.get(n);
       if (v === undefined) continue;
+      if (isHookEntry(n)) {
+        add('WEBHOOK_TOKEN', v);
+        continue;
+      }
       if (!isTokenEntry(n)) {
         add(n, v);
         continue;
