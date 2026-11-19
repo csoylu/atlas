@@ -26,7 +26,7 @@ export type LiveEvent =
   | { type: 'memory'; memory: Memory }
   /** A cleanup proposal was filed or decided (key 'memories'). */
   | { type: 'proposal'; proposal: MemoryProposal }
-  /** A run of a workflow started, moved or ended (key 'workflow-runs:<workflow id>'). */
+  /** A run of a workflow started, moved or ended (key 'workflow-runs:<workflow id>', and 'workflow-runs' for every run). */
   | { type: 'workflowRun'; run: WorkflowRun }
   /** A secret was added, edited, rotated, deleted or used (key 'secrets'): reload Settings → Secrets. */
   | { type: 'secrets' };

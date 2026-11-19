@@ -1,11 +1,12 @@
 import { useCallback, useEffect, useLayoutEffect, useRef, useState, type PointerEvent as ReactPointerEvent, type ReactNode } from 'react';
-import type { Agent, Card, Workflow, WorkflowEdge, WorkflowNode, WorkflowNodeKind, WorkflowRun, WorkflowRunStep } from '@atlas/shared';
+import { WORKFLOW_FAILING_EXITS, type RunWorkflow, type Agent, type Card, type Workflow, type WorkflowEdge, type WorkflowNode, type WorkflowNodeKind, type WorkflowRun, type WorkflowRunStep } from '@atlas/shared';
 import { api } from './api.ts';
 import { AgentFace } from './AgentFace.tsx';
 import { HeaderActions } from './ScreenHeader.tsx';
 import type { MessageStream } from './useMessages.ts';
 import { useMedia } from './Inbox.tsx';
 import { KindIcon, StepPanel } from './WorkflowStepPanel.tsx';
+import { RunOnPicker, RunStart, RunKnows, LoopGuardBanner, PLAY } from './WorkflowRunParts.tsx';
 import {
   KIND_LABEL,
   NODE_W,
@@ -14,15 +15,18 @@ import {
   chipClass,
   draftPath,
   duration,
+  edgeLabelAt,
   edgePath,
   exitTarget,
   exitsOf,
   freeSpot,
+  loopGuardHit,
   newNodeId,
   nodeClass,
   nodeMeta,
   nodeRunState,
   nodeTitle,
+  prLabel,
   refOf,
   relative,
   stepOrder,
@@ -196,20 +200,24 @@ export function WorkflowCanvas(props: {
 
   /* ── Header: saved, Edit | Runs, on/off, Run now ── */
   const [starting, setStarting] = useState(false);
-  const runNow = () => {
+  /** « Run on a task… » / « Run on a PR… » (#259): an event workflow runs on what its event would bring. */
+  const [picking, setPicking] = useState(false);
+  const runNow = (on: RunWorkflow = {}) => {
     setStarting(true);
+    setPicking(false);
     api
-      .runWorkflow(w.id)
+      .runWorkflow(w.id, on)
       .then((r) => {
         if (r.state === 'skipped') onError(new Error(r.reason ?? 'skipped'));
         setDetail(r);
         setRuns((rs) => (rs?.some((x) => x.id === r.id) ? rs : [r, ...(rs ?? [])]));
         setSideOpen(true);
-        if (!phone) props.go(`${base}/runs/${r.id}`);
+        props.go(`${base}/runs/${r.id}`);
       }, onError)
       .finally(() => setStarting(false));
   };
   const trigger = g.nodes.find((n) => n.kind === 'trigger');
+  const runOn = trigger?.kind === 'trigger' && (trigger.config.kind === 'task' || trigger.config.kind === 'pr') ? trigger.config.kind : null;
   const pastOnce = trigger?.kind === 'trigger' && trigger.config.kind === 'time' && trigger.config.repeat === 'at' && !!trigger.config.at && new Date(trigger.config.at) < new Date();
   const runCount = runs?.[0]?.number ?? w.lastRun?.number ?? 0;
   const header = (
@@ -219,13 +227,13 @@ export function WorkflowCanvas(props: {
           {save.state === 'saving' ? 'saving…' : save.state === 'error' ? 'not saved' : `saved · edited ${relative(new Date(save.at).toISOString())}`}
         </span>
       )}
-      {!phone && (
+      {(
         <div className="segmented wf-seg">
           <button className={mode === 'edit' ? 'on' : ''} aria-pressed={mode === 'edit'} onClick={() => props.go(base)}>
-            Edit
+            {phone ? 'Steps' : 'Edit'}
           </button>
           <button className={mode === 'runs' ? 'on' : ''} aria-pressed={mode === 'runs'} onClick={() => props.go(`${base}/runs`)}>
-            Runs{runCount ? ` · ${runCount}` : ''}
+            Runs{runCount && !phone ? ` · ${runCount}` : ''}
           </button>
         </div>
       )}
@@ -236,13 +244,36 @@ export function WorkflowCanvas(props: {
           <span />
         </span>
       </label>
-      <button className="head-btn" disabled={starting} onClick={runNow} title="Start a run now (works when off too)">
-        {starting ? 'Starting…' : 'Run now'}
-      </button>
+      <span className="wf-runbtn">
+        <button
+          className="head-btn"
+          disabled={starting}
+          aria-expanded={runOn ? picking : undefined}
+          aria-label={phone ? (runOn ? `Run on a ${runOn === 'task' ? 'task' : 'PR'}…` : 'Run now') : undefined}
+          onClick={() => (runOn ? setPicking(!picking) : runNow())}
+          title={runOn ? `Start a run on a ${runOn === 'task' ? 'task' : 'pull request'} of your choice (works when off too)` : 'Start a run now (works when off too)'}
+        >
+          {phone ? PLAY : starting ? 'Starting…' : runOn === 'task' ? 'Run on a task…' : runOn === 'pr' ? 'Run on a PR…' : 'Run now'}
+        </button>
+        {picking && runOn && <RunOnPicker kind={runOn} w={w} cards={props.cards} onRun={runNow} onClose={() => setPicking(false)} />}
+      </span>
     </HeaderActions>
   );
 
-  const off = !w.enabled ? <div className="wf-off">Off: the trigger doesn't fire. Run now still works; runs already started finish.</div> : null;
+  const off = loopGuardHit(w) ? (
+    <LoopGuardBanner
+      w={w}
+      onLimit={() => {
+        const t = g.nodes.find((n) => n.kind === 'trigger');
+        setSel(t?.id ?? null);
+        setSideOpen(true);
+        props.go(base);
+      }}
+      onError={onError}
+    />
+  ) : !w.enabled ? (
+    <div className="wf-off">Off: the trigger doesn't fire. Run now still works; runs already started finish.</div>
+  ) : null;
 
   if (phone)
     return (
@@ -250,15 +281,18 @@ export function WorkflowCanvas(props: {
         {header}
         <div className="wf-phone">
           {off}
-          <h2 className="wf-h">Steps</h2>
+          {mode === 'runs' && (
+            <>
+              <RunsPanel w={w} g={g} runs={runs} run={shown} cards={props.cards} pick={(id) => props.go(`${base}/runs/${id}`)} onOpenCard={props.onOpenCard} onError={onError} />
+              {shown && <h2 className="wf-h">Run {shown.number} on the steps</h2>}
+            </>
+          )}
           <div className="wf-phone-steps">
             {stepOrder(g).map((n, i) => (
-              <NodeCard key={n.id} n={n} g={g} run={null} cards={props.cards} phone index={i} onOpenCard={props.onOpenCard} />
+              <NodeCard key={n.id} n={n} g={g} run={mode === 'runs' ? shown : null} cards={props.cards} phone index={i} onOpenCard={props.onOpenCard} />
             ))}
           </div>
-          <p className="wf-sum">Edit the steps on a wider screen.</p>
-          <h2 className="wf-h">Runs</h2>
-          <RunsPanel w={w} g={g} runs={runs} run={shown} cards={props.cards} pick={(id) => props.go(`${base}/runs/${id}`)} onOpenCard={props.onOpenCard} onError={onError} />
+          {mode === 'edit' && <p className="wf-sum">Edit the steps on a wider screen.</p>}
         </div>
       </div>
     );
@@ -498,17 +532,32 @@ function Plane(props: {
   };
 
   const paths: ReactNode[] = [];
+  /** Exit names on the edges that go back to an earlier column (#259): where they cross, a line needs its name. */
+  const labels: ReactNode[] = [];
+  // A selected step lights the edges coming into it and dims the others (colour tokens, no transparency).
+  const lit = edit && props.sel && !wiring ? props.sel : null;
   for (const e of g.edges) {
     const s = nodes.find((n) => n.id === e.from);
     const t = nodes.find((n) => n.id === e.to);
     const sp = s && ports[s.id]?.exits[e.exit];
     const tp = t && ports[t.id];
     if (!s || !t || !sp || !tp) continue;
-    const d = edgePath(abs(s, sp), abs(t, tp.input), s.y + (ports[s.id]?.h ?? 0), t.y, bottom);
-    const fail = e.exit === 'failed' || e.exit === 'rejected';
+    const a = abs(s, sp);
+    const b = abs(t, tp.input);
+    const srcBottom = s.y + (ports[s.id]?.h ?? 0);
+    const d = edgePath(a, b, srcBottom, t.y, bottom);
+    const fail = (WORKFLOW_FAILING_EXITS as readonly string[]).includes(e.exit);
     const k = `${e.from}:${e.exit}`;
-    const cls = [fail ? 'fail' : '', taken ? (taken.has(k) ? 'taken' : 'dim') : ''].filter(Boolean).join(' ');
+    const state = taken ? (taken.has(k) ? 'taken' : 'dim') : lit ? (e.to === lit ? 'lit' : 'dim') : '';
+    const cls = [fail ? 'fail' : '', state].filter(Boolean).join(' ');
     paths.push(<path key={k} className={cls || undefined} d={d} data-edge={k} />);
+    const at = edgeLabelAt(a, b, srcBottom, t.y, bottom);
+    if (at)
+      labels.push(
+        <span key={k + ':label'} className={'wf-elabel' + (cls ? ' ' + cls : '')} style={{ left: at[0], top: at[1] }} data-edge-label={k}>
+          {e.exit}
+        </span>,
+      );
     if (edit)
       paths.push(
         <path key={k + ':hit'} className="hit" d={d} data-edge-hit={k} onClick={() => props.change(wire(g, e.from, e.exit, null))}>
@@ -529,12 +578,13 @@ function Plane(props: {
     <div className="wf-canvas-wrap">
       {props.top}
       <div className="wf-stage">
-      <div className={'wf-canvas' + (edit ? ' edit' : ' runs') + (wiring ? ' wiring' : '')} ref={canvasRef} onPointerDown={deselect}>
+      <div className={'wf-canvas' + (edit ? ' edit' : ' runs') + (wiring ? ' wiring' : '') + (lit ? ' litmode' : '')} ref={canvasRef} onPointerDown={deselect}>
         <div className="wf-scale" style={{ width: width * zoom, height: height * zoom }} onPointerDown={deselect}>
           <div className="wf-plane" ref={planeRef} style={{ width, height, transform: zoom === 1 ? undefined : `scale(${zoom})` }} onPointerDown={deselect}>
             <svg className="wf-edges" width={width} height={height} aria-hidden="true">
               {paths}
             </svg>
+            {labels}
             {nodes.map((n) => (
               <NodeCard
                 key={n.id}
@@ -545,6 +595,7 @@ function Plane(props: {
                 selected={props.sel === n.id}
                 target={wiring?.over === n.id}
                 wiringExit={wiring && wiring.from === n.id ? wiring.exit : null}
+                litExits={lit ? g.edges.filter((e) => e.from === n.id && e.to === lit).map((e) => e.exit) : undefined}
                 onPointerDown={(e) => startNodeDrag(e, n)}
                 onSelect={edit ? () => props.onSelect(n.id) : undefined}
                 onExitDown={edit ? (e, exit) => startWire(e, n.id, exit) : undefined}
@@ -583,6 +634,8 @@ function NodeCard(props: {
   selected?: boolean;
   target?: boolean;
   wiringExit?: string | null;
+  /** Its exits that lead into the selected step (lit). */
+  litExits?: string[];
   onPointerDown?(e: ReactPointerEvent): void;
   /** Enter or Space on a focused node selects it. */
   onSelect?(): void;
@@ -623,12 +676,15 @@ function NodeCard(props: {
         {exitsOf(n, g.edges).map((x) => (
           <span
             key={x.exit}
-            className={'wf-out' + (x.failing ? ' fail' : '') + (x.to ? ' on' : '') + (props.wiringExit === x.exit ? ' drag' : '')}
+            className={'wf-out' + (x.failing ? ' fail' : '') + (x.to ? ' on' : ' end') + (props.wiringExit === x.exit ? ' drag' : '') + (props.litExits?.includes(x.exit) ? ' lit' : '') + (run && !phone && takenExit(run, n.id, x.exit) ? ' taken' : '')}
             data-exit={x.exit}
             onPointerDown={props.onExitDown ? (e) => props.onExitDown!(e, x.exit) : undefined}
             title={props.onExitDown ? `${x.exit} → ${exitTarget(x, g.nodes)}. Drag onto a step to wire it` : undefined}
           >
-            <span className="en">{x.exit}</span>
+            <span className="en">
+              {!x.to && !phone && <span className="ends">ends · </span>}
+              {x.exit}
+            </span>
             {phone && (
               <span className="pto">
                 <span aria-hidden="true">→ </span>
@@ -670,20 +726,34 @@ function NodeCard(props: {
   );
 }
 
+const takenExit = (run: WorkflowRun, node: string, exit: string) => (run.steps ?? []).some((s) => s.nodeId === node && s.exit === exit);
+
 /* ── Runs: the list and the chosen run's steps ── */
 
 function RunsPanel(props: { w: Workflow; g: Graph; runs: WorkflowRun[] | null; run: WorkflowRun | null; cards: Card[]; pick(id: string): void; onOpenCard(id: string): void; onError(e: unknown): void }) {
   const { runs, run, g } = props;
+  const [failedOnly, setFailedOnly] = useState(false);
   if (!runs) return <p className="wf-sum">Loading runs…</p>;
   if (!runs.length) return <p className="wf-sum">No runs yet. Run now starts one{props.w.enabled && props.w.nextRunAt ? `; the trigger fires ${when(props.w.nextRunAt)}` : ''}.</p>;
   const open = !!run && (run.state === 'running' || run.state === 'waiting');
+  const listed = failedOnly ? runs.filter((r) => r.state === 'failed' || r.state === 'skipped') : runs;
   return (
     <>
+      <div className="segmented wf-runfilter" role="group" aria-label="Which runs">
+        <button className={!failedOnly ? 'on' : ''} aria-pressed={!failedOnly} onClick={() => setFailedOnly(false)}>
+          All
+        </button>
+        <button className={failedOnly ? 'on' : ''} aria-pressed={failedOnly} onClick={() => setFailedOnly(true)}>
+          Failed
+        </button>
+      </div>
       <div className="wf-runs">
-        {runs.map((r) => (
+        {!listed.length && <p className="wf-sum">No failed or refused run.</p>}
+        {listed.map((r) => (
           <button key={r.id} className={r.id === run?.id ? 'on' : ''} aria-current={r.id === run?.id || undefined} onClick={() => props.pick(r.id)}>
             <span className={'st-chip ' + chipClass(r.state)}>{RUN_LABEL[r.state]}</span>
             <span className="nm">Run {r.number}</span>
+            {r.subject && <span className="sj">{r.subject.prUrl ? prLabel(r.subject.prUrl) : refOf(r.subject.cardId, props.cards)}</span>}
             <span className="when">{r.state === 'running' || r.state === 'waiting' ? relative(r.startedAt).replace(' ago', '') : when(r.startedAt)}</span>
           </button>
         ))}
@@ -691,7 +761,7 @@ function RunsPanel(props: { w: Workflow; g: Graph; runs: WorkflowRun[] | null; r
       {run && (
         <div className="wf-run-detail">
           <p className="wf-h2">
-            Run {run.number} · {run.trigger === 'manual' ? 'by hand' : 'by its trigger'} · {open ? `started ${relative(run.startedAt)}` : run.endedAt ? `took ${duration(run.startedAt, run.endedAt)}` : when(run.startedAt)}
+            Run {run.number} · started by <RunStart run={run} cards={props.cards} onOpenCard={props.onOpenCard} /> · {open ? relative(run.startedAt) : run.endedAt ? `took ${duration(run.startedAt, run.endedAt)}` : when(run.startedAt)}
           </p>
           <ol className="wf-steps-log">
             {(run.steps ?? []).map((s) => (
@@ -703,6 +773,7 @@ function RunsPanel(props: { w: Workflow; g: Graph; runs: WorkflowRun[] | null; r
               <b>{RUN_LABEL[run.state]}</b>: {run.reason}
             </p>
           )}
+          {run.state !== 'skipped' && <RunKnows run={run} onError={props.onError} />}
           {open && (
             <p className="wf-sum">
               Stop run closes its open tasks.{' '}

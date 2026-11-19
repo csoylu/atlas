@@ -6,7 +6,8 @@ import { HeaderActions } from './ScreenHeader.tsx';
 import { effectiveFilter, inFilter, ProjectFilterButton, ProjTag, projectForNew, useProjectFilter, useProjects } from './projects.tsx';
 import type { MessageStream } from './useMessages.ts';
 import { WorkflowCanvas } from './WorkflowCanvas.tsx';
-import { BROWSER_TZ, RUN_LABEL, chainOf, describeTrigger, listGroup, nodeTitle, refOf, relative, runStrip, runTask, STATE_LABEL, TEMPLATES, type ListGroup, type Template, when } from './workflowView.ts';
+import { EventFields, RunGets, TriggerIcon, TriggerPick } from './WorkflowStepPanel.tsx';
+import { BROWSER_TZ, RUN_LABEL, blankTrigger, chainOf, describeTrigger, listGroup, loopGuardHit, nodeTitle, refOf, relative, runStrip, runTask, STATE_LABEL, TEMPLATES, type ListGroup, type Template, when } from './workflowView.ts';
 
 /**
  * The Workflows page (#171, replaces Schedules; mockup /api/files/paris/pages/workflows-165.html): the list of workflows
@@ -112,7 +113,7 @@ function WorkflowList(props: {
         </HeaderActions>
       )}
       <div className="wfl-inner">
-        {props.creating && <NewWorkflow project={projectForNew(pf, pinfo)?.id ?? null} onCancel={() => props.setCreating(false)} onCreated={props.onCreated} onError={props.onError} />}
+        {props.creating && <NewWorkflow project={projectForNew(pf, pinfo)?.id ?? null} agents={props.agents} onCancel={() => props.setCreating(false)} onCreated={props.onCreated} onError={props.onError} />}
         {!props.workflows.length && !props.creating && <EmptyWorkflows agents={props.agents} onCreated={props.onCreated} onScratch={() => props.setCreating(true)} onError={props.onError} />}
         {props.workflows.length > 0 && !shown.length && !props.creating && <div className="empty-note">No workflow in this project yet.</div>}
         {groups.on.length > 0 && (
@@ -185,12 +186,12 @@ const PLAY = (
 );
 
 /** The trigger in plain words with its icon. */
-function TriggerText({ t }: { t: TriggerConfig | null }) {
+function TriggerText({ t, bare }: { t: TriggerConfig | null; bare?: boolean }) {
   if (!t) return <span className="part trig">no trigger</span>;
   const icon = t.kind !== 'time' ? TRIG_ICON.hand : t.repeat === 'at' ? TRIG_ICON.once : TRIG_ICON.clock;
   return (
     <span className="part trig">
-      {icon}
+      {!bare && icon}
       {t.kind === 'manual' ? 'By hand' : describeTrigger(t)}
       {t.kind === 'time' && t.repeat === 'cron' && t.timezone !== BROWSER_TZ && <span className="muted">({t.timezone})</span>}
     </span>
@@ -225,16 +226,20 @@ function WorkflowRow(props: { w: Workflow; cards: Card[]; onOpen(): void; onOpen
   const open = run && (run.state === 'running' || run.state === 'waiting');
   const current = open ? run.steps?.findLast((s) => s.state === 'running' || s.state === 'waiting') : undefined;
   const currentNode = current ? w.nodes.find((n) => n.id === current.nodeId) : undefined;
-  const failure = w.lastError ?? (run?.state === 'failed' ? run.reason : null);
+  const guard = loopGuardHit(w);
+  const failure = guard ? null : (w.lastError ?? (run?.state === 'failed' ? run.reason : null));
+  const needsYou = open && current?.state === 'waiting' && current.cardId ? current : null;
   const strip = runStrip(w.recentRuns ?? []);
   return (
     <div className={'wfl-row wf-row ' + group} tabIndex={0} onClick={(e) => !(e.target as HTMLElement).closest('button, label, a, input') && props.onOpen()} onKeyDown={(e) => e.key === 'Enter' && e.target === e.currentTarget && props.onOpen()}>
       <div className="wfl-main">
+        <TriggerIcon kind={t?.kind ?? 'manual'} />
+        <div className="wfl-mtext">
         <div className="wfl-name" title={w.name}>
           {w.name}
         </div>
         <div className="wfl-sub">
-          <TriggerText t={t} />
+          <TriggerText t={t} bare />
           <span className="part" aria-label="Steps">
             {chain.steps.map((n, i) => (
               <span key={n.id} className="tok">
@@ -258,6 +263,27 @@ function WorkflowRow(props: { w: Workflow; cards: Card[]; onOpen(): void; onOpen
             <b>{w.lastError ? 'Could not start.' : 'Last run failed.'}</b> {failure}
           </div>
         )}
+        {guard && (
+          <div className="wfl-alert bad" role="status">
+            <span>
+              <b>Stopped by the loop guard:</b> {w.lastError!.replace(/^loop guard: /, '')}
+            </span>
+            <button className="small" onClick={() => api.updateWorkflow(w.id, { enabled: true }).catch(onError)}>
+              Turn on again
+            </button>
+          </div>
+        )}
+        {needsYou && currentNode && (
+          <div className="wfl-alert need" role="status">
+            <span>
+              <b>Needs you:</b> {nodeTitle(currentNode, w.nodes)}
+            </span>
+            <button className="small" onClick={() => props.onOpenCard(needsYou.cardId!)}>
+              Review…
+            </button>
+          </div>
+        )}
+        </div>
       </div>
       <div className="wfl-runs">
         <div className="wfl-strip" role="img" aria-label={`Last ${w.recentRuns?.length ?? 0} runs`}>
@@ -278,11 +304,6 @@ function WorkflowRow(props: { w: Workflow; cards: Card[]; onOpen(): void; onOpen
                 → {refOf(task, props.cards)}
               </button>
             )}
-            {open && current?.state === 'waiting' && current.cardId && (
-              <button className="wfl-cta" onClick={() => props.onOpenCard(current.cardId!)}>
-                Review
-              </button>
-            )}
           </div>
         ) : (
           <div className="wfl-last">
@@ -293,6 +314,11 @@ function WorkflowRow(props: { w: Workflow; cards: Card[]; onOpen(): void; onOpen
       <div className="wfl-next">
         {group === 'past' ? (
           <span>Ran once, finished</span>
+        ) : guard ? (
+          <>
+            <b>Off</b>
+            <span>stopped by the loop guard</span>
+          </>
         ) : !w.enabled ? (
           <span>Off: turn it on to plan runs</span>
         ) : w.nextRunAt ? (
@@ -393,23 +419,23 @@ function EmptyWorkflows(props: { agents: Agent[]; onCreated(w: Workflow): void; 
   );
 }
 
-/** « New workflow »: a name and how it starts; then the canvas opens with one empty agent step selected. */
-function NewWorkflow(props: { project: string | null; onCancel(): void; onCreated(w: Workflow): void; onError(e: unknown): void }) {
+/** « New workflow » (#259): a name, its project, how it starts (four triggers, an event's filters); then the canvas opens with one empty agent step selected. */
+function NewWorkflow(props: { project: string | null; agents: Agent[]; onCancel(): void; onCreated(w: Workflow): void; onError(e: unknown): void }) {
   const pinfo = useProjects();
   const [projectId, setProjectId] = useState(props.project);
   const project = pinfo.byId(projectId);
   const [name, setName] = useState('');
-  const [starts, setStarts] = useState<'time' | 'manual'>('time');
+  const [trigger, setTrigger] = useState<TriggerConfig>(() => blankTrigger('time', { kind: 'manual' }));
   const [saving, setSaving] = useState(false);
   const create = () => {
     setSaving(true);
     const body: CreateWorkflow = {
       name: name.trim(),
       ...(pinfo.multi && projectId ? { projectId } : {}),
-      // Off until its step is filled in: a time trigger would otherwise fire an empty step (Run now still works).
-      enabled: starts === 'manual',
+      // Off until its step is filled in: a trigger would otherwise fire an empty step (Run now still works).
+      enabled: trigger.kind === 'manual',
       nodes: [
-        { id: 'trigger', kind: 'trigger', x: 40, y: 80, config: starts === 'time' ? { kind: 'time', repeat: 'cron', cron: '0 9 * * 1-5', at: null, timezone: BROWSER_TZ } : { kind: 'manual' } },
+        { id: 'trigger', kind: 'trigger', x: 40, y: 80, config: trigger },
         { id: 'step1', kind: 'agent', x: 300, y: 80, config: { title: '', agentId: null, prompt: '', newTaskEachRun: true } },
       ],
       edges: [{ from: 'trigger', exit: 'start', to: 'step1' }],
@@ -420,49 +446,57 @@ function NewWorkflow(props: { project: string | null; onCancel(): void; onCreate
       .finally(() => setSaving(false));
   };
   return (
+    <div className="modal-scrim" role="presentation" onMouseDown={(e) => e.target === e.currentTarget && props.onCancel()} onKeyDown={(e) => e.key === 'Escape' && props.onCancel()}>
     <form
-      className="model-row schedule-form wf-new"
+      className="modal wf-newdlg"
+      role="dialog"
+      aria-modal="true"
+      aria-labelledby="wf-new-title"
       onSubmit={(e) => {
         e.preventDefault();
         if (name.trim()) create();
       }}
     >
-      <label className="field">
-        Name
-        <input autoFocus value={name} onChange={(e) => setName(e.target.value)} placeholder="Weekly dependency check" />
-      </label>
-      {pinfo.multi && project && (
-        <label className="field">
-          Project
-          <select value={project.id} onChange={(e) => setProjectId(e.target.value)}>
-            {pinfo.active.map((p) => (
-              <option key={p.id} value={p.id}>
-                {p.name}
-              </option>
-            ))}
-          </select>
-        </label>
-      )}
-      <div className="field">
-        Starts
-        <div className="wf-trig-pick" role="radiogroup" aria-label="How it starts">
-          <button type="button" role="radio" aria-checked={starts === 'time'} className={starts === 'time' ? 'on' : ''} onClick={() => setStarts('time')}>
-            At set times<span>Every day, weekdays, weekly, hourly, once, or cron</span>
-          </button>
-          <button type="button" role="radio" aria-checked={starts === 'manual'} className={starts === 'manual' ? 'on' : ''} onClick={() => setStarts('manual')}>
-            Only by hand<span>Run now, from here</span>
-          </button>
-        </div>
+      <div className="wf-new-head">
+        <h2 id="wf-new-title">New workflow</h2>
+        <button type="button" className="sd-btn" aria-label="Close" onClick={props.onCancel}>
+          ×
+        </button>
       </div>
-      {starts === 'time' && <p className="wf-sum">It starts off: set the time and the step on the canvas, then turn it on.</p>}
+      <div className="wf-new-body">
+      <div className="form-grid">
+        <label className="field grow">
+          Name
+          <input autoFocus value={name} onChange={(e) => setName(e.target.value)} placeholder="Fix red CI" />
+        </label>
+        {pinfo.multi && project && (
+          <label className="field grow">
+            Project
+            <select value={project.id} onChange={(e) => setProjectId(e.target.value)}>
+              {pinfo.active.map((p) => (
+                <option key={p.id} value={p.id}>
+                  {p.name}
+                </option>
+              ))}
+            </select>
+          </label>
+        )}
+      </div>
+      <TriggerPick kind={trigger.kind} global={false} onPick={(k) => setTrigger(blankTrigger(k, trigger))} />
+      {(trigger.kind === 'task' || trigger.kind === 'pr') && <EventFields t={trigger} projectId={projectId} agents={props.agents} set={(c) => setTrigger(c as TriggerConfig)} />}
+      <RunGets t={trigger} hasProject={!!projectId} />
+      </div>
       <div className="wf-form-foot">
+        {trigger.kind !== 'manual' && <span className="wf-sum">It starts off: add its steps, then turn it on.</span>}
+        <span className="sp" />
         <button type="button" className="ghost" onClick={props.onCancel}>
           Cancel
         </button>
         <button className="primary small" disabled={!name.trim() || saving}>
-          {saving ? 'Creating…' : 'Create and open the canvas'}
+          {saving ? 'Creating…' : 'Create and open'}
         </button>
       </div>
     </form>
+    </div>
   );
 }

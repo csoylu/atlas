@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
-import type { Workflow, WorkflowEdge, WorkflowNode, WorkflowRun, WorkflowRunStep } from '@atlas/shared';
-import { chainOf, groupCount, listGroup, runStrip, TEMPLATES, cronOf, describeTrigger, edgePath, exitTarget, exitsOf, freeSpot, newNodeId, nodeRunState, nodeTitle, patternOf, runTask, stepOrder, takenEdges, timeDraftOf, triggerOf, wire, withoutNode } from './workflowView.ts';
+import type { TriggerConfig, Workflow, WorkflowEdge, WorkflowNode, WorkflowRun, WorkflowRunStep } from '@atlas/shared';
+import { chainOf, groupCount, listGroup, runStrip, TEMPLATES, cronOf, describeTrigger, edgePath, exitTarget, exitsOf, freeSpot, newNodeId, nodeRunState, nodeTitle, patternOf, runTask, stepOrder, takenEdges, timeDraftOf, triggerOf, wire, withoutNode , TRIGGER_KINDS, PR_EVENT_CHOICES, TASK_EVENT_CHOICES, blankTrigger, edgeLabelAt, eventChoiceOf, fieldParts, filterKeys, filterRows, groupFields, loopGuardHit, prLabel, runGets, startedBy, withEvent, withFilters } from './workflowView.ts';
 
 const trigger: WorkflowNode = { id: 'trigger', kind: 'trigger', x: 40, y: 120, config: { kind: 'time', repeat: 'cron', cron: '0 9 * * 1-5', at: null, timezone: 'Europe/Paris' } };
 const agent = (id: string, title: string, x = 300, y = 120): WorkflowNode => ({ id, kind: 'agent', x, y, config: { title, agentId: 'zurich', prompt: 'do it', newTaskEachRun: true } });
@@ -128,3 +128,84 @@ describe('workflow view helpers (#171)', () => {
   });
 });
 
+
+describe('Workflows v2 stage 1 (#259)', () => {
+  type Ev = Extract<TriggerConfig, { kind: 'task' | 'pr' }>;
+  const pr: Ev = { kind: 'pr', event: 'ci_finished', repo: '', base: '', result: 'failure', status: [], assignee: [], maxRunsPerHour: 5 };
+  const task: Ev = { kind: 'task', event: 'status_changed', from: ['ready'], status: ['review'], assignee: ['zurich'], maxRunsPerHour: 3 };
+
+  it('the trigger picker has the four stage-1 triggers in the mockup order, no webhook yet', () => {
+    expect(TRIGGER_KINDS.map((k) => k.kind)).toEqual(['time', 'task', 'pr', 'manual']);
+  });
+
+  it('CI buttons map to ci_finished with a result, and back', () => {
+    expect(eventChoiceOf(pr)).toBe('ci_red');
+    const green = withEvent(pr, PR_EVENT_CHOICES.find((c) => c.key === 'ci_green')!);
+    expect(green).toMatchObject({ event: 'ci_finished', result: 'success' });
+    expect(eventChoiceOf(green)).toBe('ci_green');
+    expect(withEvent(pr, PR_EVENT_CHOICES.find((c) => c.key === 'merged')!)).toMatchObject({ event: 'merged', result: '' });
+    expect(describeTrigger(pr)).toBe('When CI turns red on a PR');
+  });
+
+  it('a task event keeps its filters, drops « from » off status_changed', () => {
+    const blocked = withEvent(task, TASK_EVENT_CHOICES.find((c) => c.key === 'blocked')!);
+    expect(blocked).toMatchObject({ event: 'blocked', from: [], status: ['review'], assignee: ['zurich'], maxRunsPerHour: 3 });
+  });
+
+  it('a new trigger kind keeps the loop guard', () => {
+    expect(blankTrigger('pr', task)).toMatchObject({ kind: 'pr', maxRunsPerHour: 3 });
+    expect(blankTrigger('manual', task)).toEqual({ kind: 'manual' });
+  });
+
+  it('« Only if » rows round-trip, several values of one field, empty rows dropped', () => {
+    const rows = filterRows(task);
+    expect(rows).toEqual([
+      { key: 'from', value: 'ready' },
+      { key: 'status', value: 'review' },
+      { key: 'assignee', value: 'zurich' },
+    ]);
+    const more = withFilters(task, [...rows, { key: 'status', value: 'blocked' }, { key: 'assignee', value: '' }, { key: 'repo', value: 'x/y' }]);
+    expect(more).toMatchObject({ status: ['review', 'blocked'], assignee: ['zurich'], from: ['ready'] });
+    expect(more).not.toHaveProperty('repo');
+    expect(withFilters(pr, [{ key: 'base', value: 'main' }, { key: 'result', value: 'success' }])).toMatchObject({ base: 'main', result: 'failure' });
+    expect(filterKeys(task)).toContain('from');
+    expect(filterKeys({ ...task, event: 'created' })).not.toContain('from');
+  });
+
+  it('the run gets what its trigger brings', () => {
+    expect(runGets(pr, true)).toEqual(['project', 'pr', 'task']);
+    expect(runGets({ kind: 'manual' }, false)).toEqual(['task', 'pr']);
+  });
+
+  it('fields group in the picker order and split into chips', () => {
+    const g = groupFields([
+      { field: 'run.id', label: 'Run id' },
+      { field: 'task.title', label: 'Task title' },
+      { field: 'steps.v.summary', label: 'summary' },
+      { field: 'pr.url', label: 'PR link' },
+    ]);
+    expect(g.map((x) => x.label)).toEqual(['Task', 'Pull request', 'Earlier steps', 'This run']);
+    expect(groupFields([{ field: 'task.title', label: 'Task title' }, { field: 'pr.url', label: 'PR link' }], 'link').map((x) => x.label)).toEqual(['Pull request']);
+    expect(fieldParts('Review {{pr.url}} for {{ task.ref }}.')).toEqual([
+      { text: 'Review ', field: false },
+      { text: '{{pr.url}}', field: true },
+      { text: ' for ', field: false },
+      { text: '{{ task.ref }}', field: true },
+      { text: '.', field: false },
+    ]);
+  });
+
+  it('a backward edge gets a label in its lane, a forward one none', () => {
+    expect(edgeLabelAt([200, 50], [300, 50], 100, 0, 400)).toBeNull();
+    expect(edgeLabelAt([500, 50], [40, 300], 100, 260, 400)).toEqual([269, 180]);
+    expect(edgeLabelAt([500, 300], [40, 50], 400, 0, 400)?.[1]).toBe(422);
+  });
+
+  it('what started a run, the PR label, the loop guard', () => {
+    expect(startedBy({ trigger: 'task', event: 'review_requested' })).toBe('asks for review');
+    expect(startedBy({ trigger: 'manual', event: null })).toBe('by hand');
+    expect(prLabel('https://github.com/csoylu/atlas/pull/74')).toBe('PR #74');
+    expect(loopGuardHit({ enabled: false, lastError: 'loop guard: 6 runs on #12 in an hour' })).toBe(true);
+    expect(loopGuardHit({ enabled: true, lastError: null })).toBe(false);
+  });
+});

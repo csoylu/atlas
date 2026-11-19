@@ -484,6 +484,8 @@ export class Workflows {
         if (p.enabled && w.project_id) assertActive(this.db, w.project_id, `workflow « ${w.name} »`);
         const next = p.enabled ? this.firstRun(this.trigger(id)) : null;
         this.db.prepare('UPDATE workflows SET enabled = ?, next_run_at = ?, updated_at = ? WHERE id = ?').run(p.enabled ? 1 : 0, next, now, id);
+        // Turned back on after the loop guard (#259): its reason is answered, the list stops showing « stopped ».
+        if (p.enabled && w.last_error?.startsWith('loop guard')) this.db.prepare('UPDATE workflows SET last_error = NULL WHERE id = ?').run(id);
       }
       this.touched.workflows.add(id);
     });

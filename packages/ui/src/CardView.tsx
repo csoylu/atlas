@@ -15,6 +15,7 @@ import { PrRows } from './PrChips.tsx';
 import { ProjTag } from './projects.tsx';
 import { timeInState } from './boardView.ts';
 import { useMinute } from './useMinute.ts';
+import { TaskWorkflows } from './WorkflowRunParts.tsx';
 
 export interface CardViewProps {
   card: Card;
@@ -208,6 +209,7 @@ export const CardView = forwardRef<HTMLTextAreaElement, CardViewProps & { close:
           <PrRows card={card} />
         </header>
         <div className="cm-body">
+          <TaskWorkflows cardId={card.id} cards={props.cards} stream={stream} onOpenCard={props.onOpen} onError={onError} />
           <div className={'cm-desc-area drop-zone' + (drop.dragging ? ' dropping' : '')} {...drop.props} onPaste={onPaste}>
           {editing || !body.trim() ? (
             <textarea

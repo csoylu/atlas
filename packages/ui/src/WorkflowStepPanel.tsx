@@ -1,7 +1,27 @@
 import { useEffect, useRef, useState } from 'react';
-import type { Agent, Workflow, WorkflowEdge, WorkflowNode, WorkflowNodeKind } from '@atlas/shared';
+import { CARD_STATUSES, type Agent, type TriggerConfig, type Workflow, type WorkflowField, type WorkflowEdge, type WorkflowNode, type WorkflowNodeKind } from '@atlas/shared';
+import { useProjects } from './projects.tsx';
+import { STATUS_LABEL } from './StatusIcon.tsx';
 import { api } from './api.ts';
-import { BROWSER_TZ, DAYS, KIND_LABEL, cronOf, eventText, exitTarget, exitsOf, freeSpot, newNodeId, nodeMeta, nodeTitle, timeDraftOf, triggerOf, when, wire, withoutNode, type Repeat, type TimeDraft } from './workflowView.ts';
+import {
+  blankTrigger,
+  eventChoiceOf,
+  fieldParts,
+  groupFields,
+  FILTER_LABEL,
+  filterKeys,
+  filterRows,
+  PR_EVENT_CHOICES,
+  runGets,
+  TASK_EVENT_CHOICES,
+  TRIGGER_KINDS,
+  withEvent,
+  withFilters,
+  type FilterKey,
+  type FilterRow,
+  type TriggerKind,
+} from './workflowView.ts';
+import { BROWSER_TZ, DAYS, KIND_LABEL, cronOf, exitTarget, exitsOf, freeSpot, newNodeId, nodeMeta, nodeTitle, timeDraftOf, triggerOf, when, wire, withoutNode, type Repeat, type TimeDraft } from './workflowView.ts';
 
 /** The canvas's right panel in Edit mode: the selected step's settings and exits (#171). */
 
@@ -44,6 +64,7 @@ export function KindIcon({ kind }: { kind: WorkflowNodeKind }) {
 
 export function StepPanel(props: { n: WorkflowNode; g: Graph; w: Workflow; agents: Agent[]; change: Change; onClose(): void; onDeleted(): void; go(hash: string): void; onError(e: unknown): void }) {
   const { n, g } = props;
+  const fields = { workflowId: props.w.id, nodeId: n.id };
   const set: SetConfig = (config, key = null) =>
     props.change({ nodes: g.nodes.map((m) => (m.id === n.id ? ({ ...m, config } as WorkflowNode) : m)), edges: g.edges }, key && `${n.id}:${key}`);
   return (
@@ -57,9 +78,9 @@ export function StepPanel(props: { n: WorkflowNode; g: Graph; w: Workflow; agent
         </button>
       </div>
       <div className="wf-side-body">
-        {n.kind === 'trigger' && <TriggerFields n={n} w={props.w} set={set} />}
-        {n.kind === 'agent' && <AgentFields n={n} agents={props.agents} set={set} />}
-        {n.kind === 'approval' && <ApprovalFields n={n} set={set} />}
+        {n.kind === 'trigger' && <TriggerFields n={n} w={props.w} agents={props.agents} set={set} />}
+        {n.kind === 'agent' && <AgentFields n={n} agents={props.agents} fields={fields} set={set} />}
+        {n.kind === 'approval' && <ApprovalFields n={n} fields={fields} set={set} />}
         {n.kind === 'condition' && <ConditionFields n={n} g={g} set={set} />}
         {(n.kind === 'action' || n.kind === 'wait') && <p className="wf-sum">{nodeMeta(n, g.nodes)}</p>}
         <Exits n={n} g={g} change={props.change} />
@@ -99,45 +120,109 @@ export function StepPanel(props: { n: WorkflowNode; g: Graph; w: Workflow; agent
   );
 }
 
-const VARS = ['{{previous.summary}}', '{{previous.task}}', '{{run.id}}'];
-
-/** A textarea with the three variables to insert at the cursor. */
-function PromptField(props: { label: string; value: string; placeholder: string; onChange(v: string): void }) {
+/** A textarea whose {{fields}} show as chips (a mirror behind the text), with « Insert a field » (#259). */
+function PromptField(props: { label: string; value: string; placeholder: string; fields: FieldsOf; onChange(v: string): void }) {
   const ref = useRef<HTMLTextAreaElement>(null);
+  const mirror = useRef<HTMLDivElement>(null);
+  const [open, setOpen] = useState(false);
+  const [q, setQ] = useState('');
+  const insert = (field: string) => {
+    const t = ref.current;
+    let at = t ? t.selectionStart : props.value.length;
+    const end = t ? t.selectionEnd : at;
+    // Typed « {{ » opened the picker: the field replaces it.
+    if (props.value.slice(at - 2, at) === '{{') at -= 2;
+    const v = `{{${field}}}`;
+    props.onChange(props.value.slice(0, at) + v + props.value.slice(end));
+    setOpen(false);
+    setQ('');
+    requestAnimationFrame(() => {
+      t?.focus();
+      t?.setSelectionRange(at + v.length, at + v.length);
+    });
+  };
   return (
-    <>
-      <label className="field">
-        {props.label}
-        <textarea ref={ref} rows={5} value={props.value} placeholder={props.placeholder} onChange={(e) => props.onChange(e.target.value)} />
-      </label>
-      <div className="wf-vars">
-        <span>Insert</span>
-        {VARS.map((v) => (
-          <button
-            key={v}
-            type="button"
-            className="wf-var"
-            title={v === '{{previous.summary}}' ? "The previous step's summary" : v === '{{previous.task}}' ? "The previous step's task (#N)" : 'This run'}
-            onClick={() => {
-              const t = ref.current;
-              const at = t ? t.selectionStart : props.value.length;
-              const end = t ? t.selectionEnd : at;
-              props.onChange(props.value.slice(0, at) + v + props.value.slice(end));
-              requestAnimationFrame(() => {
-                t?.focus();
-                t?.setSelectionRange(at + v.length, at + v.length);
-              });
-            }}
-          >
-            <code>{v}</code>
-          </button>
-        ))}
+    <div className="field wf-prompt">
+      <label htmlFor={undefined}>{props.label}</label>
+      <div className="wf-ta">
+        <div className="wf-mirror" ref={mirror} aria-hidden="true">
+          {fieldParts(props.value).map((p, i) => (p.field ? <mark key={i}>{p.text}</mark> : <span key={i}>{p.text}</span>))}
+          {'\n'}
+        </div>
+        <textarea
+          ref={ref}
+          rows={6}
+          aria-label={props.label}
+          value={props.value}
+          placeholder={props.placeholder}
+          onScroll={(e) => mirror.current && (mirror.current.scrollTop = e.currentTarget.scrollTop)}
+          onChange={(e) => {
+            props.onChange(e.target.value);
+            const at = e.target.selectionStart;
+            if (e.target.value.slice(at - 2, at) === '{{') setOpen(true);
+          }}
+          onKeyDown={(e) => e.key === 'Escape' && open && (e.stopPropagation(), setOpen(false))}
+        />
       </div>
-    </>
+      <div className="wf-ins">
+        <button type="button" className={'tool' + (open ? ' on' : '')} aria-expanded={open} onClick={() => setOpen(!open)}>
+          {'{ }'} Insert a field
+        </button>
+        <span className="muted">or type {'{{'}</span>
+      </div>
+      {open && <FieldPicker of={props.fields} q={q} setQ={setQ} onPick={insert} onClose={() => setOpen(false)} />}
+    </div>
   );
 }
 
-function AgentFields({ n, agents, set }: { n: Extract<WorkflowNode, { kind: 'agent' }>; agents: Agent[]; set: SetConfig }) {
+type FieldsOf = { workflowId: string; nodeId: string };
+/** The fields a step can use, with values from the last run (GET /api/workflows/:id/fields?node=), read when the picker opens (the graph is saved by then). */
+function useFields(workflowId: string, nodeId: string): { list: WorkflowField[] | null; error: string | null } {
+  const [f, setF] = useState<{ list: WorkflowField[] | null; error: string | null }>({ list: null, error: null });
+  useEffect(() => {
+    let live = true;
+    api.workflowFields(workflowId, nodeId).then(
+      (list) => live && setF({ list, error: null }),
+      (e: Error) => live && setF({ list: null, error: e.message }),
+    );
+    return () => {
+      live = false;
+    };
+  }, [workflowId, nodeId]);
+  return f;
+}
+
+function FieldPicker({ of, q, setQ, onPick, onClose }: { of: FieldsOf; q: string; setQ(q: string): void; onPick(f: string): void; onClose(): void }) {
+  const fields = useFields(of.workflowId, of.nodeId);
+  const groups = groupFields(fields.list ?? [], q);
+  return (
+    <div className="wf-picker" role="dialog" aria-label="Insert a field" onKeyDown={(e) => e.key === 'Escape' && (e.stopPropagation(), onClose())}>
+      <input autoFocus value={q} onChange={(e) => setQ(e.target.value)} placeholder="Search fields" aria-label="Search fields" />
+      <div className="wf-picker-list" role="listbox">
+        {fields.error && <p className="wf-sum bad">{fields.error}</p>}
+        {!fields.list && !fields.error && <p className="wf-sum">Loading…</p>}
+        {fields.list && !groups.length && <p className="wf-sum">No field matches.</p>}
+        {groups.map((g) => (
+          <div key={g.label} className="grp">
+            <span className="gl">{g.label}</span>
+            {g.fields.map((f) => (
+              <button key={f.field} type="button" role="option" aria-selected={false} onClick={() => onPick(f.field)} title={`{{${f.field}}}`}>
+                <span className="fl">
+                  {f.label}
+                  {f.optional && <span className="muted"> · may be empty</span>}
+                </span>
+                <span className="fv">{f.example ? f.example.split('\n')[0] : <code>{`{{${f.field}}}`}</code>}</span>
+              </button>
+            ))}
+          </div>
+        ))}
+      </div>
+      {fields.list && <span className="help">Values from the last run.</span>}
+    </div>
+  );
+}
+
+function AgentFields({ n, agents, fields, set }: { n: Extract<WorkflowNode, { kind: 'agent' }>; agents: Agent[]; fields: FieldsOf; set: SetConfig }) {
   const c = n.config;
   return (
     <>
@@ -158,6 +243,7 @@ function AgentFields({ n, agents, set }: { n: Extract<WorkflowNode, { kind: 'age
         </select>
       </label>
       <PromptField
+        fields={fields}
         label="Prompt"
         value={c.prompt}
         placeholder="What the agent should do, e.g. « Check the dependencies and open a PR for the safe updates. »"
@@ -178,7 +264,7 @@ function AgentFields({ n, agents, set }: { n: Extract<WorkflowNode, { kind: 'age
   );
 }
 
-function ApprovalFields({ n, set }: { n: Extract<WorkflowNode, { kind: 'approval' }>; set: SetConfig }) {
+function ApprovalFields({ n, fields, set }: { n: Extract<WorkflowNode, { kind: 'approval' }>; fields: FieldsOf; set: SetConfig }) {
   const c = n.config;
   return (
     <>
@@ -186,7 +272,7 @@ function ApprovalFields({ n, set }: { n: Extract<WorkflowNode, { kind: 'approval
         Title
         <input value={c.title} placeholder="Merge it?" onChange={(e) => set({ ...c, title: e.target.value }, 'title')} />
       </label>
-      <PromptField label="Question" value={c.question} placeholder="What you decide, e.g. « Merge the PR? Its summary: {{previous.summary}} »" onChange={(v) => set({ ...c, question: v }, 'question')} />
+      <PromptField fields={fields} label="Question" value={c.question} placeholder="What you decide, e.g. « Merge the PR? Its summary: {{previous.summary}} »" onChange={(v) => set({ ...c, question: v }, 'question')} />
       <p className="wf-sum">A task blocked on you shows in the Inbox with Approve and Reject.</p>
     </>
   );
@@ -248,7 +334,7 @@ function ConditionFields({ n, g, set }: { n: Extract<WorkflowNode, { kind: 'cond
   );
 }
 
-function TriggerFields({ n, w, set }: { n: Extract<WorkflowNode, { kind: 'trigger' }>; w: Workflow; set: SetConfig }) {
+function TriggerFields({ n, w, agents, set }: { n: Extract<WorkflowNode, { kind: 'trigger' }>; w: Workflow; agents: Agent[]; set: SetConfig }) {
   const c = n.config;
   const [d, setD] = useState<TimeDraft>(() => timeDraftOf(c));
   const [preview, setPreview] = useState<{ next: string[] } | { error: string } | null>(null);
@@ -273,19 +359,9 @@ function TriggerFields({ n, w, set }: { n: Extract<WorkflowNode, { kind: 'trigge
   }, [time, d.kind, cron, at, d.timezone]);
   return (
     <>
-      <div className="field">
-        Starts
-        <div className="segmented">
-          <button type="button" className={time ? 'on' : ''} aria-pressed={time} onClick={() => !time && set(triggerOf(d))}>
-            At set times
-          </button>
-          <button type="button" className={!time ? 'on' : ''} aria-pressed={!time} onClick={() => time && set({ kind: 'manual' })}>
-            Only by hand
-          </button>
-        </div>
-      </div>
-      {c.kind === 'manual' && <p className="wf-sum">It runs only when you press Run now (here, or an agent's run tool).</p>}
-      {(c.kind === 'task' || c.kind === 'pr') && <p className="wf-sum">{eventText(c)}. Its filters are edited through the API for now.</p>}
+      <TriggerPick kind={c.kind} global={!w.projectId} compact onPick={(k) => set(k === 'time' ? triggerOf(d) : blankTrigger(k, c))} />
+      {c.kind === 'manual' && <p className="wf-sum">It runs only when you press Run now (here, on a task, or an agent's run tool).</p>}
+      {(c.kind === 'task' || c.kind === 'pr') && <EventFields t={c} projectId={w.projectId} agents={agents} set={set} />}
       {time && (
         <>
           <div className="field">
@@ -362,10 +438,222 @@ function TriggerFields({ n, w, set }: { n: Extract<WorkflowNode, { kind: 'trigge
           <div className={'schedule-preview ' + (preview && 'error' in preview ? 'bad' : '')}>
             {!preview ? '…' : 'error' in preview ? preview.error : <>Next: {preview.next.map((x) => when(x)).join(' · ')}</>}
           </div>
-          {!w.enabled && <p className="wf-sum">The workflow is off: turn it on (top right) for the trigger to fire.</p>}
         </>
       )}
+      {c.kind !== 'manual' && <RunGets t={c} hasProject={!!w.projectId} />}
+      {c.kind !== 'manual' && !w.enabled && <p className="wf-sum">The workflow is off: turn it on (top right) for the trigger to fire.</p>}
     </>
+  );
+}
+
+type EventTrigger = Extract<TriggerConfig, { kind: 'task' | 'pr' }>;
+
+/**
+ * « Starts »: the four triggers (#259; Webhook comes with 3/6). `compact` (the side panel): one per line, the help
+ * only under the chosen one. A Global workflow (no project) starts at set times or by hand only.
+ */
+export function TriggerPick({ kind, global, compact, onPick }: { kind: TriggerKind; global: boolean; compact?: boolean; onPick(k: TriggerKind): void }) {
+  return (
+    <div className="field">
+      Starts
+      <div className={'wf-tks' + (compact ? ' compact' : '')} role="radiogroup" aria-label="How it starts">
+        {TRIGGER_KINDS.map((k) => {
+          const off = global && (k.kind === 'task' || k.kind === 'pr') && kind !== k.kind;
+          return (
+            <button
+              key={k.kind}
+              type="button"
+              role="radio"
+              aria-checked={kind === k.kind}
+              disabled={off}
+              title={off ? 'A Global workflow starts at set times or by hand: give it a project for task and PR events' : undefined}
+              className={'wf-tk' + (kind === k.kind ? ' on' : '')}
+              onClick={() => kind !== k.kind && onPick(k.kind)}
+            >
+              <TriggerIcon kind={k.kind} />
+              <span className="tkx">
+                <span className="tkt">
+                  <b>{k.label}</b>
+                  {k.isNew && <span className="wf-new">new</span>}
+                </span>
+                {(!compact || kind === k.kind) && <span className="help">{k.help}</span>}
+              </span>
+            </button>
+          );
+        })}
+      </div>
+    </div>
+  );
+}
+
+/** A task or PR trigger (#259): its event, « Only if » filters (the project fixed to the workflow's), the loop guard. */
+export function EventFields({ t, projectId, agents, set }: { t: EventTrigger; projectId: string | null; agents: Agent[]; set: SetConfig }) {
+  const { byId } = useProjects();
+  const choices = t.kind === 'task' ? TASK_EVENT_CHOICES : PR_EVENT_CHOICES;
+  const on = eventChoiceOf(t);
+  // Rows being edited, an empty value included (a new filter); the trigger keeps only the filled ones.
+  const [rows, setRows] = useState<FilterRow[]>(() => filterRows(t));
+  useEffect(() => {
+    setRows((r) => {
+      const filled = r.filter((x) => x.value);
+      const now = filterRows(t);
+      return JSON.stringify(filled) === JSON.stringify(now) ? r : now;
+    });
+  }, [t]);
+  const keys = filterKeys(t);
+  const put = (next: FilterRow[], key: string | null = null) => {
+    setRows(next);
+    set(withFilters(t, next), key);
+  };
+  const project = projectId ? (byId(projectId)?.name ?? projectId) : null;
+  return (
+    <>
+      <div className="field">
+        When a {t.kind === 'task' ? 'task' : 'pull request'}
+        <div className="wf-events" role="radiogroup" aria-label="Event">
+          {choices.map((x) => (
+            <button key={x.key} type="button" role="radio" aria-checked={on === x.key} className={on === x.key ? 'on' : ''} onClick={() => set(withEvent(t, x))}>
+              {x.label}
+            </button>
+          ))}
+        </div>
+      </div>
+      <div className="field">
+        Only if
+        <div className="wf-filters">
+          <div className="wf-flt">
+            <span className="fx">Project</span>
+            <span className="muted">is</span>
+            <span className="fx">{project ?? 'any (Global)'}</span>
+            <span className="muted lock" title="A workflow sees only its project's tasks and pull requests">
+              fixed
+            </span>
+          </div>
+          {rows.map((r, i) => (
+            <div key={i} className="wf-flt">
+              <select aria-label="Filter on" value={r.key} onChange={(e) => put(rows.map((x, j) => (j === i ? { key: e.target.value as FilterKey, value: '' } : x)))}>
+                {keys.map((k) => (
+                  <option key={k} value={k}>
+                    {FILTER_LABEL[k]}
+                  </option>
+                ))}
+              </select>
+              <span className="muted">is</span>
+              <FilterValue row={r} agents={agents} onChange={(v, typing) => put(rows.map((x, j) => (j === i ? { ...x, value: v } : x)), typing ? `filter${i}` : null)} />
+              <button type="button" className="sd-btn" aria-label="Remove filter" onClick={() => put(rows.filter((_, j) => j !== i))}>
+                ✕
+              </button>
+            </div>
+          ))}
+          <button type="button" className="ghost small wf-addflt" onClick={() => setRows([...rows, { key: keys.find((k) => !rows.some((r) => r.key === k)) ?? keys[0]!, value: '' }])}>
+            + Add a filter
+          </button>
+        </div>
+        <span className="help">Exact tests, no model. Several values of one field: any of them.</span>
+      </div>
+      <label className="field">
+        Loop guard
+        <span className="wf-guardfld">
+          At most
+          <input
+            type="number"
+            min={1}
+            max={100}
+            aria-label="Runs per hour at most"
+            value={t.maxRunsPerHour}
+            onChange={(e) => set({ ...t, maxRunsPerHour: Math.min(100, Math.max(1, Math.round(+e.target.value) || 1)) }, 'guard')}
+          />
+          runs on the same {t.kind === 'task' ? 'task' : 'task or PR'} per hour
+        </span>
+      </label>
+    </>
+  );
+}
+
+function FilterValue({ row, agents, onChange }: { row: FilterRow; agents: Agent[]; onChange(v: string, typing?: boolean): void }) {
+  if (row.key === 'status' || row.key === 'from')
+    return (
+      <select aria-label="Value" value={row.value} onChange={(e) => onChange(e.target.value)}>
+        <option value="">Pick a status</option>
+        {CARD_STATUSES.filter((x) => x !== 'archived').map((x) => (
+          <option key={x} value={x}>
+            {STATUS_LABEL[x]}
+          </option>
+        ))}
+      </select>
+    );
+  if (row.key === 'assignee')
+    return (
+      <select aria-label="Value" value={row.value} onChange={(e) => onChange(e.target.value)}>
+        <option value="">Pick an agent</option>
+        {agents.map((a) => (
+          <option key={a.id} value={a.id}>
+            @{a.id}
+          </option>
+        ))}
+      </select>
+    );
+  if (row.key === 'result')
+    return (
+      <select aria-label="Value" value={row.value} onChange={(e) => onChange(e.target.value)}>
+        <option value="">Pick a result</option>
+        <option value="success">validated</option>
+        <option value="failure">refused</option>
+      </select>
+    );
+  return <input aria-label="Value" value={row.value} placeholder={row.key === 'repo' ? 'owner/name' : 'main'} onChange={(e) => onChange(e.target.value.trim(), true)} />;
+}
+
+/** « The run gets »: what its steps can use with « Insert a field ». */
+export function RunGets({ t, hasProject }: { t: TriggerConfig; hasProject: boolean }) {
+  const gets = runGets(t, hasProject);
+  if (!gets.length) return null;
+  return (
+    <div className="field">
+      The run gets
+      <span className="wf-gets">
+        {gets.map((g) => (
+          <code key={g}>{`{{${g}}}`}</code>
+        ))}
+        {t.kind === 'pr' && <span className="help">the PR's task, when it has one</span>}
+      </span>
+      <span className="help">Usable in every step's prompt and question, with « Insert a field ».</span>
+    </div>
+  );
+}
+
+const TRIGGER_ICON: Record<TriggerKind, React.ReactNode> = {
+  time: (
+    <>
+      <circle cx="8" cy="8" r="6" />
+      <path d="M8 4.8V8l2.2 1.4" />
+    </>
+  ),
+  task: (
+    <>
+      <rect x="2" y="2.5" width="3.2" height="11" rx="1" />
+      <rect x="6.6" y="2.5" width="3.2" height="7" rx="1" />
+      <rect x="11.2" y="2.5" width="2.8" height="4.5" rx="1" />
+    </>
+  ),
+  pr: (
+    <>
+      <circle cx="4" cy="3.5" r="1.6" />
+      <circle cx="4" cy="12.5" r="1.6" />
+      <circle cx="12" cy="12.5" r="1.6" />
+      <path d="M4 5.1v5.8M12 10.9V6.5a2 2 0 0 0-2-2H7.5M9 3l-1.5 1.5L9 6" />
+    </>
+  ),
+  manual: <path d="M5.5 8V3.5a1.2 1.2 0 0 1 2.4 0V7.5M7.9 7V2.8a1.2 1.2 0 0 1 2.4 0V7.5M10.3 7.2V4.3a1.2 1.2 0 0 1 2.4 0v5.2a4.6 4.6 0 0 1-4.6 4.6H7.6a4 4 0 0 1-3.1-1.5L2.6 10.2a1.2 1.2 0 0 1 1.9-1.5L5.5 10" />,
+};
+/** The trigger's icon (#259): clock, tasks, pull request, hand. */
+export function TriggerIcon({ kind }: { kind: TriggerKind }) {
+  return (
+    <span className={'wf-ico trig-' + kind}>
+      <svg viewBox="0 0 16 16" width="14" height="14" fill="none" stroke="currentColor" strokeWidth="1.4" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+        {TRIGGER_ICON[kind]}
+      </svg>
+    </span>
   );
 }
 

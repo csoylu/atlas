@@ -201,6 +201,8 @@ describe('workflow task and PR events (#258, design §9)', () => {
     flip(6);
     const items = engine.db.prepare("SELECT title, card_id FROM notifications WHERE kind = 'workflow.stopped'").all();
     expect(items).toEqual([{ title: 'Workflow « Pinger » turned off', card_id: c.id }]);
+    // Turned back on (#259): the loop guard's reason is answered and cleared.
+    expect(wf.update(w.id, { enabled: true })).toMatchObject({ enabled: true, lastError: null });
   });
 
   it('a per-workflow guard number, counted per task: another task still runs', async () => {
