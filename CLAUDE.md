@@ -198,7 +198,8 @@ read or write another project's workspace. A lead crosses projects through the t
   sets, per repo, branch protection on main: required status `qa/validated`, plus the required CI check if there is one
   (agents never change a repo's settings).
 - **Done means on main** (#126, #189): a task with a PR ends with `task_request_review` and becomes Done when the PR
-  merges, by itself. A task with several branches links every PR. A task with no code (mockup, audit, report)
+  merges, by itself. One PR per task where the project has a Review workflow (#263: one run, one verdict, one merge):
+  work that needs two PRs is two tasks. A task with no code (mockup, audit, report)
   finishes with `task_complete` as usual.
 - **Agents never install the app.** No `install:mac`: Master's Atlas shows "Update available" and installs on
   Master's click (it restarts; running tasks resume). `install:mac` stays for a manual build from source.
