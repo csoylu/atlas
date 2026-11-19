@@ -236,7 +236,7 @@ describe('pull requests linked to tasks (#189)', () => {
 
   it('a review run that ends without a verdict is started once more, then shown on the card and in the Inbox; Retry starts it again (#221)', async () => {
     const gh = fakeGitHub();
-    const { e, idle } = await setup({ gh, script: [text('one'), text('two'), text('three'), () => ((gh.pr.qa = 'success'), text('validated'))] });
+    const { e, idle } = await setup({ gh, script: [text('one'), text('two'), text('lead: noted'), text('three'), () => ((gh.pr.qa = 'success'), text('validated'))] });
     const c = card(e);
     e.kanban.requestReview(c.id, [URL], 'atlas', 'x');
     gh.pr.ci = 'success';
@@ -256,16 +256,24 @@ describe('pull requests linked to tasks (#189)', () => {
     await e.prs.poll();
     expect(e.runner.runs(c.id)).toHaveLength(2);
     expect(e.kanban.get(c.id)).toMatchObject({ status: 'review', waiting: '1st in the queue for 0 min · review by @zurich ended without a verdict on aaaaaaa (2 runs): Retry starts it again' });
-    const stalled = () => e.notifications.inbox().updates.filter((u) => u.kind === 'review.stalled');
-    expect(stalled()).toMatchObject([
-      { title: 'Review by @zurich ended without a verdict', cardId: c.id, body: expect.stringContaining('PR #41 (aaaaaaa) of “Workflows”: 2 review runs ended without validating or failing it') },
-    ]);
-    // Retry: the reviewer checks the same head again; it ends the same way: shown again.
+    // The stall mark (#237, one mechanism for every stuck task): on the card and one Inbox item, at once.
+    e.stalls.check();
+    e.stalls.check();
+    const stalled = () => e.db.prepare("SELECT body, archived_at FROM notifications WHERE kind = 'card.stalled' AND card_id = ? ORDER BY id").all(c.id) as { body: string; archived_at: string | null }[];
+    expect(e.kanban.get(c.id).stall).toMatchObject({ rule: 'review', reason: 'the review by @zurich ended without a verdict on aaaaaaa (2 runs)', action: 'retry_review' });
+    expect(stalled()).toMatchObject([{ body: expect.stringContaining('the review by @zurich ended without a verdict on aaaaaaa (2 runs). Retry the review starts the reviewer again.'), archived_at: null }]);
+    // The project's lead got a note in its main chat (its run answers it).
+    const lead = e.kanban.mainChat(e.kanban.leadOf(c.projectId)!, c.projectId);
+    expect(JSON.stringify(e.kanban.messages(lead.id))).toContain('is stuck: In review for');
+    await idle(lead.id);
+    // Retry: the reviewer checks the same head again; it ends the same way: still the one item, the reason updated.
     await e.dispatcher.retry(c.id);
     await eventually(() => e.runner.runs(c.id).length === 3, { what: 'a third reviewer run' });
     await idle(c.id);
     await e.prs.poll();
-    expect(stalled()).toHaveLength(2);
+    e.stalls.check();
+    expect(e.kanban.get(c.id).stall?.reason).toBe('the review by @zurich ended without a verdict on aaaaaaa (3 runs)');
+    expect(stalled()).toMatchObject([{ archived_at: null }]);
     expect(e.runner.runs(c.id)).toHaveLength(3);
     // A new head is a new review: it starts, and its verdict ends the stall.
     gh.pr = { ...gh.pr, headSha: 'bbbbbbb2222' };
@@ -274,6 +282,9 @@ describe('pull requests linked to tasks (#189)', () => {
     await idle(c.id);
     await e.prs.poll();
     expect(e.kanban.get(c.id).waiting).toBe('1st in the queue for 0 min · validated: waiting for the merge');
+    e.stalls.check();
+    expect(e.kanban.get(c.id).stall).toBe(null);
+    expect(stalled()).toMatchObject([{ archived_at: expect.any(String) }]);
   });
 
   it("the reviewer's model sees the builder's turns as the builder's, not as its own (#221)", async () => {

@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import type { Card } from '@atlas/shared';
-import { columnsFor, filterCount, matches, parseView, phoneColumn, showAfterLabel, whyLine } from './boardView.ts';
+import { columnsFor, filterCount, matches, parseView, phoneColumn, showAfterLabel, timeInState, whyLine } from './boardView.ts';
 
 const card = (p: Partial<Card>): Card =>
   ({ id: 'c', number: 1, title: 't', body: '', status: 'ready', assignee: 'atlas', priority: 0, board: 'main', parents: [], block: null, waiting: null, ...p }) as Card;
@@ -28,6 +28,20 @@ describe('board view', () => {
     expect(whyLine(card({ status: 'blocked', block: { kind: 'capability', reason: '', options: [], until: null } }))).toEqual({ text: 'Missing access', blocked: true });
     expect(whyLine(card({ waiting: 'Waits for #12' }))).toEqual({ text: 'Waits for #12', blocked: false });
     expect(whyLine(card({}))).toBeNull();
+  });
+  it('time in state (#237): shown for todo, ready, working, blocked and in review; a stuck task says why, in its own style', () => {
+    const now = Date.parse('2026-11-19T12:00:00Z');
+    expect(timeInState(card({ status: 'review', statusSince: '2026-11-19T10:00:00Z' }), now)).toBe('2 h');
+    expect(timeInState(card({ status: 'running', statusSince: '2026-11-19T11:25:00Z' }), now)).toBe('35 min');
+    expect(timeInState(card({ status: 'blocked', statusSince: '2026-11-18T11:00:00Z' }), now)).toBe('1 d');
+    for (const status of ['done', 'closed', 'triage', 'archived'] as const) expect(timeInState(card({ status, statusSince: '2026-11-19T10:00:00Z' }), now)).toBeNull();
+    expect(timeInState(card({ status: 'ready', statusSince: null }), now)).toBeNull();
+    const stall = { rule: 'review' as const, reason: 'CI is green, no review is running', since: '2026-11-19T10:00:00Z', action: 'retry_review' as const };
+    expect(whyLine(card({ status: 'review', statusSince: '2026-11-19T10:00:00Z', waiting: 'waiting for @zurich', stall }), now)).toEqual({
+      text: 'In review for 2 h: CI is green, no review is running',
+      blocked: false,
+      stuck: true,
+    });
   });
   it('« after #N » label: hidden while the why-line already names every parent, shown otherwise', () => {
     expect(showAfterLabel(card({ status: 'todo', waiting: 'waiting on #61 (running)' }), ['#61'])).toBe(false);

@@ -13,6 +13,8 @@ import { RewindConfirm, RewindNote, useRewind } from './Rewind.tsx';
 import { StatusIcon, STATUS_LABEL } from './StatusIcon.tsx';
 import { PrRows } from './PrChips.tsx';
 import { ProjTag } from './projects.tsx';
+import { timeInState } from './boardView.ts';
+import { useMinute } from './useMinute.ts';
 
 export interface CardViewProps {
   card: Card;
@@ -50,6 +52,7 @@ export const CardView = forwardRef<HTMLTextAreaElement, CardViewProps & { close:
     const convo = useCardConversation(card, stream, onError);
     const rw = useRewind(card, convo.run, onError, { globalEsc: false });
     const [title, setTitle] = useState(card.title);
+    const now = useMinute();
     const [body, setBody] = useState(card.body);
     // The description reads as rendered markdown; a click (or Edit) switches to the raw text.
     const [editing, setEditing] = useState(false);
@@ -106,6 +109,7 @@ export const CardView = forwardRef<HTMLTextAreaElement, CardViewProps & { close:
     const children = props.cards.filter((c) => c.parents.includes(card.id));
     const linkable = props.cards.filter((c) => c.id !== card.id && !card.parents.includes(c.id));
     const origin = card.originCard ? props.chats.find((c) => c.id === card.originCard) : undefined;
+    const since = timeInState(card, now);
     const finished = card.status === 'closed' || card.status === 'done' || card.status === 'archived';
     const leaveEditing = () => {
       setEditing(false);
@@ -126,6 +130,11 @@ export const CardView = forwardRef<HTMLTextAreaElement, CardViewProps & { close:
               <span className={'cm-pill ' + status} title="Status (live)">
                 <StatusIcon status={status === 'stopped' ? 'failed' : status} />
                 {status === 'stopped' ? 'Stopped by you' : STATUS_LABEL[status]}
+              </span>
+            )}
+            {since && (
+              <span className={'st-since' + (card.stall ? ' stuck' : '')} title={`${STATUS_LABEL[card.status]} for ${since}, since ${new Date(card.statusSince!).toLocaleString()}`}>
+                {since}
               </span>
             )}
             <label className="prop-pill" title="Assignee">

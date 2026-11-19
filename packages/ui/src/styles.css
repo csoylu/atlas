@@ -2136,6 +2136,11 @@ a.pop-row[aria-disabled='true'] { opacity: 0.5; pointer-events: none; }
 .prc-info { color: var(--accent); }
 .prc-muted { color: var(--muted); }
 .why.prc-unreadable { color: var(--warn-ink); }
+/* Time in state and stuck tasks (#237): « In review · 2 h » in secondary text; a stuck task's line in the warning ink. */
+.st-since { font-size: var(--fs-small); line-height: var(--lh-tight); color: var(--faint); white-space: nowrap; flex: none; font-variant-numeric: tabular-nums; }
+.st-since.stuck, .why.stuck { color: var(--warn-ink); }
+.why.stuck { font-weight: var(--fw-medium); }
+.waiting-line.stuck { color: var(--warn-ink); }
 .card-top .rv-face { margin-left: 0; }
 .card-top .rv-face .dot-avatar, .rv-face .dot-avatar { box-shadow: 0 0 0 2px var(--raised), 0 0 0 3px var(--accent); }
 .card-top .rv-face { display: inline-flex; }

@@ -291,8 +291,9 @@ Statuses: `triage → todo → ready → running → (blocked | review) → done
     `qa/validated` success or failure) is not a review: `reviewed_sha` is cleared and the reviewer starts once more,
     told why (`review_retry` event; `REVIEW_TRIES` = 2 runs per head, counted from `review_started` events, which
     carry the run id). After the second, the card's why-line says « review by @zurich ended without a verdict on
-    abc1234 (2 runs): Retry starts it again » and one Inbox item (`review.stalled`, once per run: `review_stalled`
-    event); the task stays In review. Retry runs it again; a new head is a new review.
+    abc1234 (2 runs): Retry starts it again »; the task stays In review and is marked stuck at once (§7.2: the stall
+    mark and its one Inbox item, `card.stalled`, replaced `review.stalled` in #237). Retry runs it again; a new head
+    is a new review.
 - **GitHub unreadable** (gh missing, logged out, offline): nothing moves on old data; the card's why-line and the task
   view's banner say « can't read PR #N from GitHub since 10:42: gh: not logged in »; after 15 min one Inbox item
   (`github.unreadable`), archived by itself when a read works again.
@@ -329,6 +330,34 @@ Statuses: `triage → todo → ready → running → (blocked | review) → done
     is harmless: the next poll reads the new head, finds it current and goes on (the thread note is then missing).
   - Not done: GitHub's own merge queue (repo settings agents must not change), reviewing several PRs in parallel.
 - Any GitHub repo the gh login can read; no other forge.
+
+### 7.2 Time in state and stuck tasks (#237, 19 Nov 2026, `engine/src/stalls.ts`, migration 0056)
+- **Time in state:** `cards.status_since`, set by SQLite triggers in the same statement as every status change (and at
+  insert), so no code path can forget it; backfilled from the last `status`/`blocked` event to the current status,
+  else `updated_at`. The UI shows it next to the status for Todo, Ready, Working, Blocked and In review: « In review ·
+  2 h » on the board tile, « 2 h » at the end of a list row and after the task view's status pill. Not for Triage,
+  Done, Closed, Archived.
+- **Stuck** = in a state longer than its limit with nothing moving it (`STALL_LIMITS`, constants, no setting):
+  - In review, 45 min: CI green on every open PR, no run on the task, no verdict (counted from the request or the end
+    of the last run). A review that ended twice without a verdict (§7.1, #221) is stuck at once. GitHub unreadable,
+    CI pending or red, or validated: not stuck (other paths move it). Once #236's merge queue is on main, a task behind
+    others counts from when it reaches the head.
+  - Working, 10 min: no run running or queued on it (a run died without the task moving).
+  - Ready with an assignee, 30 min: no run started while the agent has a free slot (the dispatcher's `startProblem`
+    is null).
+  - Todo whose parents are all Done or Closed, 10 min (counted from the last parent's change). A closed parent is
+    said so (« remove it from the parents, or close this task »); action Open.
+  - Blocked is never stuck: it already waits for Master.
+- **Computed** by the dispatcher's tick (every `STALL_CHECK_MS` = 30 s), **stored** in `card_stalls` (one row per task:
+  rule, reason, action, since, its Inbox item, when the lead was told). `Card.stall` is read from it. A new row (or a
+  new rule) = one `card.stalled` Inbox item for Master (« Stuck: <title> », « In review for 2 h: CI is green, no review
+  is running ») with the action of the reason (Retry the review, Restart the run, Move to Ready, Open) and one system
+  note in the project lead's main chat (which wakes it, so it can act first). The same rule with new words updates the
+  row in place, no new item. When the task moves or the reason clears, the row goes and its item is archived. A
+  restart reads the rows: no second item, no second note.
+- **Restart the run** = Retry on a Working task with no run: back to Ready, the dispatcher starts a fresh work run.
+- The card shows the stall instead of its why-line, in the warning ink (the same `.prc-unreadable` style as GitHub
+  unreadable); the task view's notice line carries the action button.
 
 ## 8. Context management
 - **Several agents in one thread** (#221). The provider knows only « user » and « assistant », so another agent's turns

@@ -3,8 +3,10 @@ import { Fragment, forwardRef, useCallback, useEffect, useMemo, useRef, useState
 import { AgentFace } from './AgentFace.tsx';
 import Markdown from 'react-markdown';
 import remarkGfm from 'remark-gfm';
-import { USER, parseDocRef, type Agent, type Card, type ImageBlock, type Message, type Model, type Run, type Timeline, type ToolCallTiming } from '@atlas/shared';
+import { USER, parseDocRef, stallText, type Agent, type Card, type ImageBlock, type Message, type Model, type Run, type Timeline, type ToolCallTiming } from '@atlas/shared';
 import { api } from './api.ts';
+import { useMinute } from './useMinute.ts';
+import { stallAction } from './stallView.ts';
 import type { MessageStream } from './useMessages.ts';
 import { submitOnEnter } from './composerKeys.ts';
 import { ComposerMeta, useChatUsage } from './Usage.tsx';
@@ -199,6 +201,21 @@ export function CardPanel(props: {
 
 /** The plain-words reason a card isn't moving (a question shows in the conversation, see AskMessage). */
 export function CardNotices({ card, onError }: { card: Card; onError(e: unknown): void }) {
+  const now = useMinute();
+  // Stuck (#237): what it is stuck on, and the action that unsticks it.
+  if (card.stall && !card.block) {
+    const act = stallAction(card.stall);
+    return (
+      <div className="waiting-line stuck">
+        {stallText(card.stall, card.statusSince, now)}
+        {act && (
+          <button className="ghost retry" onClick={() => act.run(card.id).catch(onError)}>
+            {act.label}
+          </button>
+        )}
+      </div>
+    );
+  }
   // GitHub unreadable: the task view's banner already says it (PrRows).
   if (!card.waiting || card.block || (card.status === 'review' && card.prs.some((p) => p.error))) return null;
   return (
