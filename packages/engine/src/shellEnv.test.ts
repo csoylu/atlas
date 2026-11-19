@@ -54,12 +54,17 @@ describe('agentEnv', () => {
   });
 
   it('a git commit made with it carries the agent name and the configured email', () => {
+    // Isolated from the machine (#247): its own HOME and global git config, no system config, and none of the
+    // GIT_* variables of the shell running the tests (an agent shell already sets GIT_AUTHOR_NAME).
+    const home = mkdtempSync(join(tmpdir(), 'atlas-home-'));
+    const gitconfig = join(home, '.gitconfig');
+    writeFileSync(gitconfig, '[user]\n\tname = Can Soylu\n\temail = can@example.com\n');
+    const clean: NodeJS.ProcessEnv = Object.fromEntries(Object.entries(process.env).filter(([k]) => !k.startsWith('GIT_') && k !== 'EMAIL'));
+    const userEnv: NodeJS.ProcessEnv = { ...clean, HOME: home, XDG_CONFIG_HOME: join(home, '.config'), GIT_CONFIG_GLOBAL: gitconfig, GIT_CONFIG_NOSYSTEM: '1' };
     const repo = mkdtempSync(join(tmpdir(), 'atlas-git-'));
-    const git = (args: string[], env: NodeJS.ProcessEnv = process.env) => execFileSync('git', args, { cwd: repo, env, encoding: 'utf8' });
+    const git = (args: string[], env: NodeJS.ProcessEnv = userEnv) => execFileSync('git', args, { cwd: repo, env, encoding: 'utf8' });
     git(['init', '-q']);
-    git(['config', 'user.name', 'Can Soylu']);
-    git(['config', 'user.email', 'can@example.com']);
-    git(['commit', '-q', '--allow-empty', '-m', 'by the agent'], agentEnv(process.env, process.env.PATH ?? '', 'munih'));
+    git(['commit', '-q', '--allow-empty', '-m', 'by the agent'], agentEnv(userEnv, userEnv.PATH ?? '', 'munih'));
     git(['commit', '-q', '--allow-empty', '-m', 'by the user']);
     expect(git(['log', '--format=%an <%ae> | %cn <%ce> | %s']).trim().split('\n')).toEqual([
       'Can Soylu <can@example.com> | Can Soylu <can@example.com> | by the user',
