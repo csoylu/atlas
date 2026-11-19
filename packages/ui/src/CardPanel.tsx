@@ -18,6 +18,7 @@ import type { ToolOutcome } from './toolRows.ts';
 import { sysLine } from './chatPins.ts';
 import { webSearchResult } from './webRows.ts';
 import { ChatPins } from './ChatPins.tsx';
+import { useKeepBottom } from './useKeepBottom.ts';
 import { ChatRow } from './ChatRow.tsx';
 import { parseReport, rowTime } from './chatRow.ts';
 import { taskKey } from './inboxView.ts';
@@ -148,6 +149,8 @@ export function CardPanel(props: {
   const { card, stream, onError } = props;
   const convo = useCardConversation(card, stream, onError);
   const rw = useRewind(card, convo.run, onError, { globalEsc: true });
+  const chatBox = useRef<HTMLDivElement>(null);
+  useKeepBottom(chatBox);
   return (
     <aside className={'panel chat-pane' + (props.hiddenDocs ? ' has-docs' : '')}>
       <HeaderActions>
@@ -176,7 +179,7 @@ export function CardPanel(props: {
       </HeaderActions>
       <ChatPins chatId={card.id} cards={props.cards} stream={stream} onOpen={props.onOpen} onError={onError} />
       <CardNotices card={card} onError={onError} />
-      <div className="chat">
+      <div className="chat" ref={chatBox}>
         <Activity
           convo={convo}
           card={card}

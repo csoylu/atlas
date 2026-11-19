@@ -247,10 +247,11 @@ input::placeholder, textarea::placeholder { color: var(--faint); }
 .state-err.bar > span { flex: 1 1 240px; }
 .state-err.inline { display: block; padding: 0; border: 0; border-radius: 0; background: none; color: var(--neg-ink); }
 .app-error { margin: 12px 16px 0; flex: none; }
-/* Toast: something that just happened, with Open (one at a time, 6 s). Wide: over the sidebar's foot, never over the
-   chat or its composer; narrow: in the flow under the header. */
+/* Toast: something that just happened, with Open (one at a time, 6 s). Wide: in the sidebar, just above its foot row
+   (the user and Settings stay clickable), never over the chat or its composer; narrow: in the flow under the header
+   (the chat keeps its bottom, useKeepBottom). */
 .toast {
-  position: fixed; left: 12px; bottom: 12px; z-index: 60; width: calc(var(--sidebar) - 24px); display: flex; align-items: center; gap: 8px;
+  position: fixed; left: 12px; bottom: 62px; z-index: 60; width: calc(var(--sidebar) - 24px); display: flex; align-items: center; gap: 8px;
   padding: 6px 6px 6px 12px; border: 1px solid var(--line-2); border-radius: 10px; background: var(--raised); box-shadow: var(--float-shadow);
   font-size: var(--fs-small); line-height: var(--lh-tight); color: var(--text); animation: pin-in 0.2s ease;
 }
