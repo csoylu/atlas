@@ -3,6 +3,7 @@ import { CARD_STATUSES, type Agent, type TriggerConfig, type Workflow, type Work
 import { useProjects } from './projects.tsx';
 import { STATUS_LABEL } from './StatusIcon.tsx';
 import { api } from './api.ts';
+import { WebhookFields } from './WorkflowWebhook.tsx';
 import {
   blankTrigger,
   eventChoiceOf,
@@ -362,6 +363,7 @@ function TriggerFields({ n, w, agents, set }: { n: Extract<WorkflowNode, { kind:
       <TriggerPick kind={c.kind} global={!w.projectId} compact onPick={(k) => set(k === 'time' ? triggerOf(d) : blankTrigger(k, c))} />
       {c.kind === 'manual' && <p className="wf-sum">It runs only when you press Run now (here, on a task, or an agent's run tool).</p>}
       {(c.kind === 'task' || c.kind === 'pr') && <EventFields t={c} projectId={w.projectId} agents={agents} set={set} />}
+      {c.kind === 'webhook' && <WebhookFields t={c} w={w} set={set} />}
       {time && (
         <>
           <div className="field">
@@ -449,7 +451,7 @@ function TriggerFields({ n, w, agents, set }: { n: Extract<WorkflowNode, { kind:
 type EventTrigger = Extract<TriggerConfig, { kind: 'task' | 'pr' }>;
 
 /**
- * « Starts »: the four triggers (#259; Webhook comes with 3/6). `compact` (the side panel): one per line, the help
+ * « Starts »: the five triggers (#259; Webhook #260). `compact` (the side panel): one per line, the help
  * only under the chosen one. A Global workflow (no project) starts at set times or by hand only.
  */
 export function TriggerPick({ kind, global, compact, onPick }: { kind: TriggerKind; global: boolean; compact?: boolean; onPick(k: TriggerKind): void }) {
@@ -644,9 +646,17 @@ const TRIGGER_ICON: Record<TriggerKind, React.ReactNode> = {
       <path d="M4 5.1v5.8M12 10.9V6.5a2 2 0 0 0-2-2H7.5M9 3l-1.5 1.5L9 6" />
     </>
   ),
+  webhook: (
+    <>
+      <circle cx="8" cy="4" r="2" />
+      <circle cx="3.5" cy="12" r="2" />
+      <circle cx="12.5" cy="12" r="2" />
+      <path d="M7 5.8 4.6 10.2M5.5 12h5M9 5.8l2.4 4.2" />
+    </>
+  ),
   manual: <path d="M5.5 8V3.5a1.2 1.2 0 0 1 2.4 0V7.5M7.9 7V2.8a1.2 1.2 0 0 1 2.4 0V7.5M10.3 7.2V4.3a1.2 1.2 0 0 1 2.4 0v5.2a4.6 4.6 0 0 1-4.6 4.6H7.6a4 4 0 0 1-3.1-1.5L2.6 10.2a1.2 1.2 0 0 1 1.9-1.5L5.5 10" />,
 };
-/** The trigger's icon (#259): clock, tasks, pull request, hand. */
+/** The trigger's icon (#259): clock, tasks, pull request, webhook, hand. */
 export function TriggerIcon({ kind }: { kind: TriggerKind }) {
   return (
     <span className={'wf-ico trig-' + kind}>

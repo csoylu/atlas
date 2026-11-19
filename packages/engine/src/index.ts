@@ -18,6 +18,7 @@ import { Memories } from './memory.ts';
 import { MemoryCleanup } from './cleanup.ts';
 import { MemoryReview } from './memoryReview.ts';
 import { envWithSecrets, Secrets, type SecretStore } from './secrets.ts';
+import { HookTokens } from './webhooks.ts';
 import { createApi } from './api.ts';
 import { ghBinary, ghClient } from '../../../scripts/pr/validate.mjs';
 import { Workflows } from './workflows.ts';
@@ -164,7 +165,13 @@ export async function startEngine(opts: EngineOptions): Promise<Engine> {
   const usage = new Usage(db, bus);
   const memories = new Memories(db, bus);
   // Merge steps (#261) use the user's own gh login, with the login shell's PATH (shellEnv is made below, read when a step runs).
+  // Webhook tokens (#260) live in the secret store; the port, once listening, makes the desktop URL.
+  let listening: number | null = null;
+  const hookTokens = new HookTokens(db, opts.secrets);
+  hookTokens.sweep();
   const workflows = new Workflows(db, bus, kanban, undefined, {
+    hooks: hookTokens,
+    port: () => listening,
     gh: opts.prs?.validate?.gh ? () => opts.prs!.validate!.gh! : async () => ghClient({ bin: ghBinary(), env: await shellEnv.engineEnv() }),
     // Command steps (#273): the engine's login-shell env is the base, scrubbed by Secrets.envForStep.
     command: { dataDir: opts.dataDir, secrets: () => secrets, env: () => shellEnv.engineEnv(), clone: opts.workflowCommand?.clone, minuteMs: opts.workflowCommand?.minuteMs },
@@ -298,6 +305,7 @@ export async function startEngine(opts: EngineOptions): Promise<Engine> {
   updater.start();
   const { port } = server.address() as AddressInfo;
   url = `http://127.0.0.1:${port}`;
+  listening = port;
   return {
     db,
     secrets,

@@ -134,8 +134,8 @@ describe('Workflows v2 stage 1 (#259)', () => {
   const pr: Ev = { kind: 'pr', event: 'ci_finished', repo: '', base: '', result: 'failure', status: [], assignee: [], maxRunsPerHour: 5 };
   const task: Ev = { kind: 'task', event: 'status_changed', from: ['ready'], status: ['review'], assignee: ['zurich'], maxRunsPerHour: 3 };
 
-  it('the trigger picker has the four stage-1 triggers in the mockup order, no webhook yet', () => {
-    expect(TRIGGER_KINDS.map((k) => k.kind)).toEqual(['time', 'task', 'pr', 'manual']);
+  it('the trigger picker has the five triggers in the mockup order, webhook before by hand (#260)', () => {
+    expect(TRIGGER_KINDS.map((k) => k.kind)).toEqual(['time', 'task', 'pr', 'webhook', 'manual']);
   });
 
   it('CI buttons map to ci_finished with a result, and back', () => {

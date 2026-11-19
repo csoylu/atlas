@@ -813,7 +813,34 @@ export const PrTrigger = z.object({
   result: z.enum(['', 'success', 'failure']).default(''),
   ...eventTriggerBase,
 });
-export const TriggerConfig = z.discriminatedUnion('kind', [TimeTrigger, z.object({ kind: z.literal('manual') }), TaskTrigger, PrTrigger]);
+/** Exact tests on a field (#261), nothing judged by a model. gt / lt compare numbers (a value that isn't one: false). */
+export const FIELD_TEST_OPS = ['is', 'isNot', 'contains', 'notContains', 'isEmpty', 'isNotEmpty', 'gt', 'lt'] as const;
+export type FieldTestOp = (typeof FIELD_TEST_OPS)[number];
+export const FieldTest = z.object({
+  /** A run field: task.status, pr.ci, payload.after, event.result, steps.<node>.exit… (GET /api/workflows/:id/fields). */
+  field: z.string().trim().min(1).max(200),
+  op: z.enum(FIELD_TEST_OPS),
+  /** Compared as text, case-sensitive (is, isNot, contains) or as a number (gt, lt); unused by isEmpty / isNotEmpty. */
+  value: z.string().max(1_000).default(''),
+});
+export type FieldTest = z.infer<typeof FieldTest>;
+/** The largest webhook body Atlas reads (#260): a bigger one is refused with 413 and nothing of it is kept. */
+export const WEBHOOK_MAX_BYTES = 64 * 1024;
+/**
+ * On a call of its secret URL (#260): POST /hook/<token> with a JSON object; the body is the run's payload.* fields.
+ * filters: exact tests on payload fields, all must pass (else the call is « skipped by a filter »). The token is not
+ * in the config (GET /api/workflows/:id/hook, Master only).
+ */
+export const WebhookTrigger = z.object({
+  kind: z.literal('webhook'),
+  filters: z
+    .array(FieldTest.refine((t) => /^payload(\.[^.\s]+)+$/.test(t.field), 'a webhook filter tests a payload field, like payload.ref'))
+    .max(20)
+    .default([]),
+  /** The loop guard: runs in one hour; one more turns the workflow off. */
+  maxRunsPerHour: z.number().int().min(1).max(100).default(LOOP_GUARD_DEFAULT),
+});
+export const TriggerConfig = z.discriminatedUnion('kind', [TimeTrigger, z.object({ kind: z.literal('manual') }), TaskTrigger, PrTrigger, WebhookTrigger]);
 export type TriggerConfig = z.infer<typeof TriggerConfig>;
 /**
  * An agent gets the prompt as a task: a new task each run, or one task reopened each run that keeps the history; or
@@ -834,17 +861,6 @@ export const AgentStepConfig = z.object({
 });
 /** A task blocked on Master in the Inbox, with Approve / Reject. */
 export const ApprovalConfig = z.object({ title: z.string().trim().max(200).default(''), question: z.string().max(5_000).default('') });
-/** Exact tests on a field (#261), nothing judged by a model. gt / lt compare numbers (a value that isn't one: false). */
-export const FIELD_TEST_OPS = ['is', 'isNot', 'contains', 'notContains', 'isEmpty', 'isNotEmpty', 'gt', 'lt'] as const;
-export type FieldTestOp = (typeof FIELD_TEST_OPS)[number];
-export const FieldTest = z.object({
-  /** A run field: task.status, pr.ci, payload.after, event.result, steps.<node>.exit… (GET /api/workflows/:id/fields). */
-  field: z.string().trim().min(1).max(200),
-  op: z.enum(FIELD_TEST_OPS),
-  /** Compared as text, case-sensitive (is, isNot, contains) or as a number (gt, lt); unused by isEmpty / isNotEmpty. */
-  value: z.string().max(1_000).default(''),
-});
-export type FieldTest = z.infer<typeof FieldTest>;
 /**
  * Nothing judged by a model. ranFewer: « step `node` ran fewer than N times » (a loop guard); summaryContains: the
  * previous summary; fields (#261): tests on the run's fields, all or any of them true → yes.
@@ -973,7 +989,7 @@ export interface WorkflowRun {
   steps?: WorkflowRunStep[];
 }
 
-export type WorkflowRunTrigger = 'time' | 'manual' | 'task' | 'pr';
+export type WorkflowRunTrigger = 'time' | 'manual' | 'task' | 'pr' | 'webhook';
 export interface WorkflowRunSubject {
   /** The task (a PR's: the task it is linked to). */
   cardId: string;
@@ -1064,6 +1080,34 @@ export interface WorkflowCommandStep {
 /** POST /api/workflows/:id/approve: approves every command step of that revision (a stale one: 409). */
 export const ApproveWorkflow = z.object({ revision: z.number().int().min(1) });
 export type ApproveWorkflow = z.input<typeof ApproveWorkflow>;
+/** A call of a webhook trigger's URL (#260), as the trigger panel shows it. */
+export interface WebhookCall {
+  at: string;
+  /** ran: a run started (or was skipped: a run was still going); skipped: a filter did not pass; refused: not run. */
+  result: 'ran' | 'skipped' | 'refused';
+  /** What happened, in a sentence: « run 3 started », « payload.ref is refs/heads/x », « the workflow is off »… */
+  reason: string;
+  runId: string | null;
+  /** The JSON body (cut), null when it was refused unread (too large, not JSON). */
+  body: string | null;
+}
+/**
+ * GET /api/workflows/:id/hook (#260): the webhook trigger's secret URL and its last call. Master only: never in a
+ * workflow list, an event, an agent tool or a log.
+ */
+export interface WebhookInfo {
+  /** /hook/<token>; null when the secret store is locked (server mode: unlock it in Settings → Secrets). */
+  path: string | null;
+  /** Server mode (a login): the URL is this page's origin + path. Desktop: the engine's local address. */
+  server: boolean;
+  /** Desktop: http://127.0.0.1:<port> now; null in server mode. */
+  localUrl: string | null;
+  /** Desktop: the port of the URL you last saw or copied when it is not today's (callers of the old URL get no answer). */
+  movedFrom: number | null;
+  port: number | null;
+  createdAt: string;
+  lastCall: WebhookCall | null;
+}
 
 /** POST /api/workflows/preview: the next firings of a draft time trigger (time zone: the engine's if not given). */
 export const TriggerPreview = z.object({

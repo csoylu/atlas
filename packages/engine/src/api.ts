@@ -15,6 +15,7 @@ import type { Settings } from './settings.ts';
 import { parseMemoryRef, type Memories } from './memory.ts';
 import type { MemoryCleanup } from './cleanup.ts';
 import { localTimeZone, upcoming, type Workflows } from './workflows.ts';
+import { readHookBody } from './webhooks.ts';
 import type { Secrets } from './secrets.ts';
 import { SecretsPasswordError } from './secretFile.ts';
 import type { Documents } from './documents.ts';
@@ -103,6 +104,24 @@ export function createApi(deps: {
     if (why) return void res.status(403).json({ error: why });
     next();
   });
+  // ── Webhook calls (#260): public, the secret token in the path is the credential ──────────────────────────────
+  // Before the JSON parser: the body is read here (JSON only, WEBHOOK_MAX_BYTES at most), and only once the token is
+  // known: a wrong one gets 404 with the body unread, and nothing is kept or logged. Only POST /hook/<token> is
+  // reachable this way; every other route keeps the login (server mode) and the localhost rule (desktop).
+  app.all('/hook/:token', (req, res, next) => {
+    const id = req.method === 'POST' ? workflows.hookWorkflow(req.params.token) : null;
+    if (!id) {
+      req.resume();
+      return void res.status(404).json({ error: 'not found' });
+    }
+    readHookBody(req)
+      .then((read) => {
+        const r = workflows.hookCall(id, read);
+        res.status(r.status).json(r.body);
+      })
+      .catch((e: unknown) => next(e));
+  });
+
   app.use(express.json({ limit: '2mb' }));
 
   // ── Health is always public ──────────────────────────────────────────
@@ -912,6 +931,18 @@ export function createApi(deps: {
     res.json(workflows.followNegative(req.params.id, 'user'));
   });
   /** A condition's tests on a past run, before saving (#261): body { run, config }. */
+  // The webhook trigger's secret URL (#260): Master's UI only (an agent's tools never read it).
+  app.get('/api/workflows/:id/hook', (req, res) => {
+    res.set('Cache-Control', 'no-store').json(workflows.hookInfo(req.params.id, { server: auth.enabled }));
+  });
+  app.post('/api/workflows/:id/hook/seen', (req, res) => {
+    workflows.hookSeen(req.params.id);
+    res.json({ ok: true });
+  });
+  app.post('/api/workflows/:id/hook/regenerate', (req, res) => {
+    workflows.hookRegenerate(req.params.id);
+    res.set('Cache-Control', 'no-store').json(workflows.hookInfo(req.params.id, { server: auth.enabled }));
+  });
   app.post('/api/workflows/:id/try-condition', (req, res) => {
     res.json(workflows.tryCondition(req.params.id, req.body));
   });
