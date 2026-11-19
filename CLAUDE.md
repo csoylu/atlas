@@ -122,6 +122,9 @@ system PATH, 15 s timeout), plus `GIT_AUTHOR_NAME`/`GIT_COMMITTER_NAME` = the ag
 git config). Desktop and `main.ts` without a password use the login shell; server mode, Windows and tests keep the
 engine's PATH. A failure is logged and shown in Settings → About & data, never silent. Never spawn an agent command
 with `process.env` directly: take `ctx.env()`.
+The shell is **not confined to a project** (#248): file tools, secrets, memory and instructions are isolated by the
+engine, but a command can reach any path by absolute path. Stay in your project's clone and the temp folders; never
+read or write another project's workspace. A lead crosses projects through the tools' `project` parameter, not by path.
 
 ## Releases (#123, docs/updater.md)
 - **One push to main = one changelog entry = one release; one file per PR** (#223). Each PR adds exactly one new file
