@@ -45,7 +45,7 @@ import type { ShellEnv } from './shellEnv.ts';
 import { REDACT_OVERLAP, type Secrets } from './secrets.ts';
 import { isSecretTool, redactSecretCalls, runSecretTool, secretToolSpecs } from './secretTools.ts';
 import { isPrTool, prToolSpecs, runPrTool, type PrToolContext } from './prTools.ts';
-import { filesRoot, projectRow, workspaceOf } from './projects.ts';
+import { filesRoot, isMember, projectRow, workspaceOf } from './projects.ts';
 import { afterTools, ceilingReason, freshGuard, MAX_TURNS, stopNote, type GuardCall, type GuardState } from './loopGuard.ts';
 
 interface RunRow {
@@ -420,10 +420,12 @@ export class Runner {
         .prepare("SELECT id, pid FROM tool_calls WHERE run_id = ? AND status = 'running'")
         .all(r.id) as { id: number; pid: number | null }[];
       const notes = new Map(orphans.map((o) => [o.id, killOrphan(o.pid)]));
+      // Its agent left the card's project, or the project was archived, before the run ended (#246): stopped, never resumed.
+      const gone = this.leftProject(r.card_id, r.agent_id);
       this.db.transaction(() => {
         this.db
-          .prepare("UPDATE runs SET status = 'interrupted', error = 'engine stopped during the run', ended_at = ? WHERE id = ?")
-          .run(now, r.id);
+          .prepare('UPDATE runs SET status = ?, error = ?, ended_at = ? WHERE id = ?')
+          .run(gone ? 'stopped' : 'interrupted', gone ?? 'engine stopped during the run', now, r.id);
         for (const o of orphans)
           this.db
             .prepare("UPDATE tool_calls SET status = 'error', output = ?, ended_at = ? WHERE id = ?")
@@ -432,12 +434,33 @@ export class Runner {
       this.emitCalls(orphans.map((o) => o.id));
       this.emitRun(r.id);
     }
-    const toResume = this.db
+    // Tool calls still 'running' under a run that ended without its loop finishing: a member removal or an archive
+    // stopped its row in a transaction and the engine died before the abort (#246). Not a run of this engine's.
+    const live = new Set([...this.active.values()].map((a) => a.runId));
+    const cut = (
+      this.db
+        .prepare("SELECT t.id, t.run_id, t.pid FROM tool_calls t JOIN runs r ON r.id = t.run_id WHERE t.status = 'running' AND r.status != 'running'")
+        .all() as { id: number; run_id: string; pid: number | null }[]
+    ).filter((t) => !live.has(t.run_id));
+    for (const t of cut)
+      this.db
+        .prepare("UPDATE tool_calls SET status = 'error', output = ?, ended_at = ? WHERE id = ? AND status = 'running'")
+        .run(`interrupted: the run was stopped${killOrphan(t.pid)}`, now, t.id);
+    this.emitCalls(cut.map((t) => t.id));
+    const interrupted = this.db
       .prepare(
-        `SELECT card_id, agent_id, kind FROM runs r WHERE status = 'interrupted'
+        `SELECT id, card_id, agent_id, kind FROM runs r WHERE status = 'interrupted'
            AND rowid = (SELECT rowid FROM runs WHERE card_id = r.card_id ORDER BY started_at DESC, rowid DESC LIMIT 1)`,
       )
-      .all() as { card_id: string; agent_id: string; kind: RunKind }[];
+      .all() as { id: string; card_id: string; agent_id: string; kind: RunKind }[];
+    const toResume = interrupted.filter((r) => {
+      const gone = this.leftProject(r.card_id, r.agent_id);
+      if (!gone) return true;
+      // No kick, no new run: the card stays where the removal (or the archive) left it.
+      this.db.prepare("UPDATE runs SET status = 'stopped', error = ? WHERE id = ? AND status = 'interrupted'").run(gone, r.id);
+      this.emitRun(r.id);
+      return false;
+    });
     return toResume.flatMap(({ card_id, agent_id, kind }) =>
       // Chat runs resume only if a reply is still owed; work and triage runs continue their task.
       this.wake(card_id, {
@@ -448,6 +471,19 @@ export class Runner {
         ? [card_id]
         : [],
     );
+  }
+
+  /**
+   * Why a run of `agentId` on the card may not go on (#246): the agent is no longer a member of the card's project, or
+   * the project is archived. null = it may.
+   */
+  private leftProject(cardId: string, agentId: string): string | null {
+    const c = this.db.prepare('SELECT project_id FROM cards WHERE id = ?').get(cardId) as { project_id: string | null } | undefined;
+    if (!c?.project_id) return null;
+    const p = projectRow(this.db, c.project_id);
+    if (p.status === 'archived') return `project ${p.name} archived`;
+    if (!isMember(this.db, p.id, agentId)) return `@${agentId} left project ${p.name}`;
+    return null;
   }
 
   /** Graceful stop: abort runs (they end 'interrupted' and resume at next start), stop timers. */
@@ -746,7 +782,10 @@ export class Runner {
     const ended = new Date().toISOString();
     const cut = (this.db.prepare("SELECT id FROM tool_calls WHERE run_id = ? AND status = 'running'").all(runId) as { id: number }[]).map((c) => c.id);
     this.db.transaction(() => {
-      this.db.prepare('UPDATE runs SET status = ?, error = ?, ended_at = ? WHERE id = ?').run(status, error, ended, runId);
+      // A row a member removal or an archive already stopped in its transaction stays stopped with that reason (#246).
+      this.db
+        .prepare("UPDATE runs SET status = ?, error = ?, ended_at = ? WHERE id = ? AND status != 'stopped'")
+        .run(status, error, ended, runId);
       // Tool calls cut short by a stop or a shutdown (their processes were killed with the abort).
       this.db
         .prepare("UPDATE tool_calls SET status = 'error', output = ?, ended_at = ? WHERE run_id = ? AND status = 'running'")

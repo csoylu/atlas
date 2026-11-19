@@ -3,7 +3,7 @@ import { execFileSync } from 'node:child_process';
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import type { ContentBlock, Project } from '@atlas/shared';
+import { RESUME_KICK, type ContentBlock, type Project } from '@atlas/shared';
 import { eventually, launch, until, type Launched } from '../test/kit/index.ts';
 import { spawnClone, type CloneRun } from './projects.ts';
 import type { ModelRequest } from './providers/types.ts';
@@ -259,7 +259,7 @@ describe('project workspaces (#214)', () => {
     const after = (await l.call<Project>('PATCH', '/projects/datinel', { members: ['dina'] })).body;
     expect(after.members.map((m) => m.agentId)).toEqual(['dina']);
     expect(after.kept).toEqual([expect.objectContaining({ agentId: 'zurich', path: join(l.dataDir, 'workspaces', 'zurich', 'datinel'), home: false })]);
-    await l.idle(t.id);
+    await l.engine.runner.settled(t.id); // the row is stopped with the removal (#246); wait for the loop itself
     expect(l.engine.db.prepare('SELECT status FROM runs WHERE card_id = ?').get(t.id)).toEqual({ status: 'stopped' });
     expect(l.engine.kanban.get(other.id)).toMatchObject({ status: 'triage', assignee: null });
     expect(l.engine.kanban.get(dChat.id).status).toBe('archived');
@@ -345,5 +345,119 @@ describe('project workspaces (#214)', () => {
     await ready(b, 'notes', 'munih');
     expect(cloned).toBe(0);
     expect(readdirSync(ws)).toEqual(['done']);
+  });
+  /* ── #246: a restart never resumes the run of an agent that left the card's project ── */
+
+  const kicks = (l: Launched, cardId: string) =>
+    (l.engine.db.prepare('SELECT content FROM messages m JOIN cards c ON c.conversation_id = m.conversation_id WHERE c.id = ?').all(cardId) as { content: string }[]).filter((m) =>
+      m.content.includes(RESUME_KICK),
+    ).length;
+  const runsOf = (l: Launched, cardId: string) => l.engine.db.prepare('SELECT status, error FROM runs WHERE card_id = ? ORDER BY started_at, rowid').all(cardId);
+  const mkdirClone: CloneRun = async (_r, dir) => void mkdirSync(dir, { recursive: true });
+
+  it("the removal stops the member's run row in its own transaction: a stop right after it resumes nothing", async () => {
+    const dataDir = mkdtempSync(join(tmpdir(), 'atlas-t-'));
+    const dbFile = join(dataDir, 'atlas.db');
+    let started = () => {};
+    const inRun = new Promise<void>((r) => (started = r));
+    const a = await setup({
+      dbFile,
+      dataDir,
+      clone: mkdirClone,
+      script: [
+        () => {
+          started();
+          return use('t1', 'shell', { command: 'sleep 30' });
+        },
+        text('after'),
+      ],
+    });
+    a.engine.projects.create({ name: 'Datinel', repo: 'datinel/datinel', lead: 'dina', members: ['zurich'] });
+    await ready(a, 'datinel', 'zurich');
+    const t = a.engine.kanban.create({ title: 'datinel work', projectId: 'datinel', assignee: 'zurich', status: 'todo' }, 'user');
+    a.engine.kanban.appendMessage(t.id, 'user', 'user', text('go'));
+    a.engine.runner.wake(t.id, { kind: 'work' });
+    await inRun;
+    // As if the engine died between the removal's commit and the abort of the run.
+    a.engine.projects.onRelease = () => {};
+    await a.call('PATCH', '/projects/datinel', { members: ['dina'] });
+    expect(runsOf(a, t.id)).toEqual([{ status: 'stopped', error: '@zurich left project Datinel' }]);
+    await a.engine.stop(); // the loop ends 'engine shutting down': the stopped row keeps its reason
+
+    const b = await setup({ dbFile, dataDir, clone: mkdirClone });
+    expect(runsOf(b, t.id)).toEqual([{ status: 'stopped', error: '@zurich left project Datinel' }]);
+    expect(kicks(b, t.id)).toBe(0);
+    expect(b.engine.kanban.get(t.id)).toMatchObject({ status: 'triage', assignee: null });
+    expect(b.engine.db.prepare("SELECT status, output FROM tool_calls WHERE run_id IN (SELECT id FROM runs WHERE card_id = ?)").all(t.id)).toEqual([
+      { status: 'error', output: expect.stringContaining('interrupted') },
+    ]);
+  });
+
+  it('archiving a project stops its running run rows in the same transaction', async () => {
+    let started = () => {};
+    const inRun = new Promise<void>((r) => (started = r));
+    const l = await setup({
+      clone: mkdirClone,
+      script: [
+        () => {
+          started();
+          return use('t1', 'shell', { command: 'sleep 30' });
+        },
+        text('after'),
+      ],
+    });
+    l.engine.projects.create({ name: 'Datinel', repo: 'datinel/datinel', lead: 'dina', members: ['zurich'] });
+    await ready(l, 'datinel', 'zurich');
+    const t = l.engine.kanban.create({ title: 'datinel work', projectId: 'datinel', assignee: 'zurich', status: 'todo' }, 'user');
+    l.engine.kanban.appendMessage(t.id, 'user', 'user', text('go'));
+    l.engine.runner.wake(t.id, { kind: 'work' });
+    await inRun;
+    l.engine.projects.archive('datinel'); // the API aborts the live runs after this; the rows are already stopped
+    expect(runsOf(l, t.id)).toEqual([{ status: 'stopped', error: 'project Datinel archived' }]);
+    l.engine.runner.stop(t.id, 'project Datinel archived');
+    await eventually(() => expect(l.engine.db.prepare("SELECT status FROM tool_calls WHERE status = 'running'").all()).toEqual([]), { what: 'the shell cut' });
+  });
+
+  it.each([
+    ['a removed member', 'running'],
+    ['a removed member', 'interrupted'],
+    ['an archived project', 'running'],
+  ] as const)('a restart stops, never resumes, a run of %s left %s: no kick, the card stays where it was', async (why, left) => {
+    const dataDir = mkdtempSync(join(tmpdir(), 'atlas-t-'));
+    const dbFile = join(dataDir, 'atlas.db');
+    const a = await setup({ dbFile, dataDir, clone: mkdirClone });
+    a.engine.projects.create({ name: 'Datinel', repo: 'datinel/datinel', lead: 'dina', members: ['zurich'] });
+    await ready(a, 'datinel', 'zurich');
+    const t = a.engine.kanban.create({ title: 'datinel work', projectId: 'datinel', assignee: 'zurich', status: 'todo' }, 'user');
+    const mine = a.engine.kanban.create({ title: 'atlas work', assignee: 'zurich', status: 'todo' }, 'user');
+    await a.engine.stop();
+    // What an engine killed mid-run leaves (or an older build that did not stop the row with the removal).
+    const Database = (await import('better-sqlite3')).default;
+    const db = new Database(dbFile);
+    const run = db.prepare(
+      "INSERT INTO runs (id, card_id, agent_id, kind, status, started_at, owner, lease_until) VALUES (?, ?, 'zurich', 'work', ?, ?, 'dead', ?)",
+    );
+    const past = new Date(Date.now() - 60_000).toISOString();
+    run.run('r_gone', t.id, left, past, past);
+    run.run('r_mine', mine.id, left, past, past);
+    if (why === 'an archived project') db.prepare("UPDATE projects SET status = 'archived', archived_at = ? WHERE id = 'datinel'").run(past);
+    else {
+      db.prepare("DELETE FROM project_members WHERE project_id = 'datinel' AND agent_id = 'zurich'").run();
+      db.prepare("UPDATE cards SET status = 'triage', assignee = NULL WHERE id = ?").run(t.id);
+    }
+    db.close();
+
+    const b = await setup({ dbFile, dataDir, clone: mkdirClone, script: [text('resumed')] });
+    const reason = why === 'an archived project' ? 'project Datinel archived' : '@zurich left project Datinel';
+    expect(runsOf(b, t.id)).toEqual([{ status: 'stopped', error: reason }]);
+    expect(kicks(b, t.id)).toBe(0);
+    expect(b.engine.kanban.get(t.id)).toMatchObject(why === 'an archived project' ? { status: 'todo', assignee: 'zurich' } : { status: 'triage', assignee: null });
+    // A run in a project the agent is still in resumes as before.
+    expect(kicks(b, mine.id)).toBe(1);
+    await b.idle(mine.id);
+    expect(runsOf(b, mine.id)).toEqual([
+      { status: 'interrupted', error: left === 'running' ? 'engine stopped during the run' : null },
+      { status: 'done', error: null },
+    ]);
   });
 });

@@ -116,6 +116,16 @@ export function projectRow(db: Db, id: string): ProjectRow {
   return r;
 }
 
+/**
+ * Mark the running runs matching `where` (over runs r JOIN cards c) stopped with `why`, inside the caller's transaction
+ * (#246). Their tool calls are left to the run that ends them (or to the next start's recovery).
+ */
+function stopRunRows(db: Db, where: string, params: unknown[], why: string): void {
+  db.prepare(
+    `UPDATE runs SET status = 'stopped', error = ?, ended_at = ? WHERE status = 'running' AND id IN (SELECT r.id FROM runs r JOIN cards c ON c.id = r.card_id WHERE ${where})`,
+  ).run(why, new Date().toISOString(), ...params);
+}
+
 export const isMember = (db: Db, projectId: string, agentId: string): boolean =>
   !!db.prepare('SELECT 1 FROM project_members WHERE project_id = ? AND agent_id = ?').get(projectId, agentId);
 
@@ -355,6 +365,8 @@ export class Projects {
       .transaction(() => {
         this.db.prepare("UPDATE projects SET status = 'archived', archived_at = ? WHERE id = ?").run(new Date().toISOString(), p.id);
         this.db.prepare('UPDATE workflows SET enabled = 0, next_run_at = NULL, updated_at = ? WHERE project_id = ? AND enabled = 1').run(new Date().toISOString(), p.id);
+        // Its running runs stop in the same transaction (#246); the caller aborts the live ones after.
+        stopRunRows(this.db, 'c.project_id = ?', [p.id], `project ${p.name} archived`);
         if (!this.db.prepare("SELECT 1 FROM projects WHERE status = 'active'").get()) throw new ConflictError(`${p.name} is the last active project: create or restore another one first`);
       })
       .immediate();
@@ -571,7 +583,10 @@ export class Projects {
       .prepare("SELECT DISTINCT r.card_id FROM runs r JOIN cards c ON c.id = r.card_id WHERE r.agent_id = ? AND r.status = 'running' AND c.project_id = ?")
       .all(agentId, projectId) as { card_id: string }[];
     for (const r of running) if (!ids.includes(r.card_id)) ids.push(r.card_id);
-    this.released.push({ key: `${projectId}/${agentId}`, ids, why: `@${agentId} left project ${projectRow(this.db, projectId).name}` });
+    const why = `@${agentId} left project ${projectRow(this.db, projectId).name}`;
+    // Their rows stop in this transaction (#246): a kill before the abort below leaves nothing to resume.
+    stopRunRows(this.db, "r.agent_id = ? AND c.project_id = ?", [agentId, projectId], why);
+    this.released.push({ key: `${projectId}/${agentId}`, ids, why });
     const path = m.home ? homeDir(this.db, this.o.dataDir, agentId) : m.workspace;
     if (path && (m.home || m.clone_state === 'ready'))
       this.db
