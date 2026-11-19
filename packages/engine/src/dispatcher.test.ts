@@ -8,7 +8,7 @@ import { startEngine, type Engine } from './index.ts';
 import { FakeProvider } from './providers/fake.ts';
 import { realProviders } from './models.ts';
 import { TRIAGE_KICK, WORK_KICK } from './dispatcher.ts';
-import { pausedNote } from './runner.ts';
+import { stopNote } from './loopGuard.ts';
 import { ModelError } from './providers/types.ts';
 import { until } from '../test/kit/index.ts';
 
@@ -89,12 +89,12 @@ describe('dispatcher', () => {
     expect(fake.calls[1]!.messages.at(-1)!.content).toEqual(text('blue'));
   });
 
-  it('a work run reaching the turn limit pauses (asks to reply, not failed) and the reply resumes it', async () => {
+  it("the lead's own work run reaching the safety ceiling asks Master (not failed) and the reply resumes it", async () => {
     const fake = new FakeProvider([[use('shell', { command: 'echo 1' })], [use('shell', { command: 'echo 2' })], [use('task_complete', { summary: 'finished after the pause' })]]);
     const e = await setup(fake, 2);
     const card = e.kanban.create({ title: 'Long', status: 'ready', assignee: 'atlas' }, 'user');
     await until(() => e.kanban.get(card.id).status === 'blocked', 'paused');
-    expect(e.kanban.get(card.id).block).toMatchObject({ kind: 'needs_input', reason: pausedNote(2) });
+    expect(e.kanban.get(card.id).block).toMatchObject({ kind: 'needs_input', reason: `${stopNote('reached the safety ceiling of 2 turns in one run')} Write what to do next: a reply resumes the task.` });
     expect(e.runner.runs(card.id)[0]).toMatchObject({ status: 'done', error: null });
 
     e.kanban.appendMessage(card.id, 'user', 'user', text('continue'));

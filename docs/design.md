@@ -72,9 +72,19 @@ loop:
   check: abort requested? budget exceeded? → stop cleanly
 ```
 - Streaming to the UI over WebSocket; the stored message is written once the block completes.
-- Limits per run: max turns, max tokens, max wall time. Hitting one ends the run as `waiting` with a note, never
-  silently. Built: the turn limit (150, `MAX_TURNS`) ends the run `done` with a `system` note « Paused after N turns:
-  reply to continue. » (a work card blocks needs_input with it); a reply resumes.
+- No pause at a fixed number of turns (#239): a run that is progressing goes on. The **loop guard** (`loopGuard.ts`)
+  stops a run that repeats itself, with cheap deterministic rules over the tool results: the same call with the same
+  input and the same result 5 times in a row (`REPEAT_LIMIT`), or 30 turns in a row where every tool call failed
+  (`FAIL_TURNS_LIMIT`); a **safety ceiling** of 600 model calls per run (`MAX_TURNS`) stops the rest. The counters live
+  on the run's row (migration 0055: `turns`, `fail_streak`, `repeat_streak`, `repeat_key`) and a run resumed after a
+  restart inherits them, so a kill never restarts a loop from zero. A stop ends the run `done` with `limit_reason` set
+  and a `system` note « Stopped: <what repeated>. », written in one transaction (a run killed after it is not resumed:
+  `recover` routes the stop instead, no second stop). Who is asked: in a task, the project's lead is woken in the
+  thread (event `run_limited`); it continues (its message goes to the assignee, who resumes), re-scopes
+  (`task_update`) or blocks for Master (`task_block`). Only when the stopped agent is the lead itself (or there is no
+  lead) does the task block `needs_input` for Master. In a direct chat the note is the stop; Master's reply resumes.
+  Budget: the only usage limit is the plan's (every subscription paused → transient, waits for the reset, §5); there is
+  no token or wall-time budget per run.
 - Independent tool calls in one response may run in parallel.
 - A card run ends only through a tool: `card_complete(summary)`, `card_block(kind, question)`,
   `card_request_review(summary)`. A run that stops without one → card back to `ready` with the last output as a

@@ -303,6 +303,8 @@ export interface Run {
   error: string | null;
   startedAt: string;
   endedAt: string | null;
+  /** Why the loop guard or the safety ceiling stopped it (#239); absent when they didn't. */
+  limit?: string;
 }
 
 /** The prompts that start an agent without a user message (author 'system'): the chat shows them as rows (#66). */
