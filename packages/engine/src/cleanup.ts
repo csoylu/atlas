@@ -7,6 +7,7 @@ import { ConflictError, InvalidError, NotFoundError, type Kanban } from './kanba
 import { GLOBAL, kindTag, memoryRef, parseMemoryRef, SHARED, type Memories } from './memory.ts';
 import { localTimeZone, type Workflows } from './workflows.ts';
 import type { ToolSpec } from './providers/types.ts';
+import { specsOf } from './toolSpec.ts';
 
 /**
  * Weekly memory cleanup (#83, design §8). A built-in schedule gives an agent a fresh card each week; on that card it
@@ -298,10 +299,7 @@ const TOOLS = {
 };
 
 export function cleanupToolSpecs(): ToolSpec[] {
-  return Object.entries(TOOLS).map(([name, t]) => {
-    const { $schema: _s, ...schema } = z.toJSONSchema(t.input, { io: 'input' }) as Record<string, unknown>;
-    return { name, description: t.description, input_schema: schema };
-  });
+  return specsOf(TOOLS);
 }
 
 export const isCleanupTool = (name: string) => name in TOOLS;

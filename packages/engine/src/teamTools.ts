@@ -6,6 +6,7 @@ import { agentScope, GLOBAL, inView, kindTag, memoryRef, parseMemoryRef, SHARED,
 import { describeTrigger, oneStep, type Workflows } from './workflows.ts';
 import type { ToolSpec } from './providers/types.ts';
 import { ProjectArg } from './cardTools.ts';
+import { specsOf } from './toolSpec.ts';
 
 export interface TeamToolContext {
   kanban: Kanban;
@@ -21,7 +22,7 @@ export interface TeamToolContext {
   deliver(cardId: string): void;
 }
 
-const memoryId = z.union([z.string(), z.number().int()]).describe('memory id, e.g. m12');
+const memoryId = z.union([z.string(), z.number().int()]).describe('e.g. m12');
 const scopeName = (m: Memory) => (m.scope === SHARED ? 'shared' : m.scope === GLOBAL ? 'global' : 'yours');
 const memoryLine = (m: Memory) =>
   `- [${memoryRef(m.id)} · ${kindTag(m.kind)} · ${scopeName(m)}${m.status !== 'active' ? ` · ${m.status}` : ''} · ${m.confirmedAt.slice(0, 10)}] ${m.text}`;
@@ -44,7 +45,7 @@ const budgetNote = (ctx: TeamToolContext) =>
   ` · always-on ${ctx.memories.used(viewOf(ctx))}/${MEMORY_BUDGET} chars (global ${ctx.memories.usedGlobal()}/${MEMORY_BUDGET_GLOBAL})`;
 const ScopeArg = z
   .enum(['self', 'shared', 'global'])
-  .describe("self: you in this project; shared: every agent of this project; global: the user's own rules and preferences, for every project");
+  .describe("self: you in this project; shared: this project's agents; global: every project (the user's own rules and preferences only)");
 
 interface TeamTool<S extends z.ZodType> {
   description: string;
@@ -56,9 +57,8 @@ const tool = <S extends z.ZodType>(t: TeamTool<S>) => t;
 export const TEAM_TOOLS = {
   todo_write: tool({
     description:
-      'Your todo list for this conversation: plan multi-step work and track it. Send the FULL list each call (it replaces ' +
-      'the previous one): items {content, status: pending | in_progress | completed}, one in_progress at a time. Mark ' +
-      'items completed as you finish them. It survives context compaction. Skip it for small, one-step tasks.',
+      'Your todo list for multi-step work here (survives compaction). Send the FULL list each call (it replaces the last); ' +
+      'one in_progress at a time; mark completed as you go. Skip it for one-step tasks.',
     input: z.object({ todos: z.array(TodoItem).max(TODO_LIMIT) }),
     run: ({ todos }, { kanban, cardId }) => {
       kanban.setTodos(cardId, todos);
@@ -69,20 +69,16 @@ export const TEAM_TOOLS = {
   }),
   memory_add: tool({
     description:
-      `Save one durable memory (one idea, ≤ ${MEMORY_TEXT_MAX} chars). kind: rule (how to work) and preference (the user's) are ` +
-      `always in your instructions (budget ${MEMORY_BUDGET} chars: global + this project + yours, global at most ${MEMORY_BUDGET_GLOBAL}); ` +
-      'fact (where things are, how things work) and project (task notes: about the current task, stale when it ends) are ' +
-      'recalled when a conversation matches them. scope: self (you, in this project) or shared (every agent of this ' +
-      "project: its repo, setup, conventions); global only for the user's own rules and preferences that hold in every " +
-      'project (how they want to be addressed, how they like to work), never for facts about one repo. Not progress or ' +
-      'logs. If similar memories exist, nothing is saved and they are listed: call again with update: <id> to change one, ' +
-      'or new: true if yours is really different.',
+      `Save one durable memory (one idea; no progress or logs). rule (how to work), preference (the user's): always in ` +
+      `your instructions (${MEMORY_BUDGET} chars for global + project + yours, global ≤ ${MEMORY_BUDGET_GLOBAL}); fact, project (task notes, ` +
+      "stale when it ends): recalled when relevant. shared: repo, setup, conventions; global: the user's own ways, never " +
+      'repo facts. Similar ones exist: nothing saved, they are listed; retry with update: <id> or new: true.',
     input: z.object({
       kind: MemoryKind,
       scope: ScopeArg.default('self'),
       text: z.string().trim().min(1).max(MEMORY_TEXT_MAX),
-      update: memoryId.optional().describe('id of a similar memory to replace with this text'),
-      new: z.boolean().optional().describe('true: save even though similar memories exist'),
+      update: memoryId.optional().describe('a similar memory to replace'),
+      new: z.boolean().optional().describe('save despite similar ones'),
     }),
     run: (i, ctx) => {
       const view = viewOf(ctx);
@@ -108,10 +104,8 @@ export const TEAM_TOOLS = {
   }),
   memory_update: tool({
     description:
-      'Rewrite one of your, this project\'s shared or the global memories (id like m12). The same text again just confirms ' +
-      "it is still true. scope moves it: self (you in this project), shared (this project), global (only the user's own " +
-      'rules and preferences that hold in every project).',
-    input: z.object({ id: memoryId, text: z.string().trim().min(1).max(MEMORY_TEXT_MAX), kind: MemoryKind.optional(), scope: ScopeArg.optional() }),
+      'Rewrite a memory you can see (yours, shared, global); the same text confirms it; scope moves it.',
+    input: z.object({ id: memoryId, text: z.string().trim().min(1).max(MEMORY_TEXT_MAX), kind: MemoryKind.optional(), scope: z.enum(['self', 'shared', 'global']).optional() }),
     run: ({ id, text, kind, scope }, ctx) => {
       const before = ownMemory(ctx, id);
       const to = scope ? scopeOf(scope, ctx.agentId) : before.scope;
@@ -122,7 +116,7 @@ export const TEAM_TOOLS = {
     },
   }),
   memory_forget: tool({
-    description: 'Forget a memory that is wrong or outdated (id like m12). It is archived, the user can restore it.',
+    description: 'Forget (archive) a wrong or outdated memory; the user can restore it.',
     input: z.object({ id: memoryId }),
     run: ({ id }, ctx) => {
       const m = ctx.memories.forget(ownMemory(ctx, id).id, ctx.agentId);
@@ -130,7 +124,7 @@ export const TEAM_TOOLS = {
     },
   }),
   memory_search: tool({
-    description: "Search your, this project's shared and the global memories by keywords (facts and task notes not recalled in your instructions, stale ones too).",
+    description: "Search your, this project's and the global memories by keywords, stale ones and those not in your instructions too.",
     input: z.object({ query: z.string().trim().min(1) }),
     run: ({ query }, ctx) => {
       const found = ctx.memories.search(viewOf(ctx), query);
@@ -139,9 +133,8 @@ export const TEAM_TOOLS = {
   }),
   task_message: tool({
     description:
-      'Write in another task\'s chat (e.g. to ask the agent working on it a question or hand over information). ' +
-      'Its agent reads it and replies there; the reply does not come back to you automatically.',
-    input: z.object({ id: z.union([z.string(), z.number().int()]).transform(String).describe('task number (#12 or 12) or id'), text: z.string().min(1) }),
+      "Write in another task's chat (a question, a handover). Its agent replies there, not back to you.",
+    input: z.object({ id: z.union([z.string(), z.number().int()]).transform(String).describe('#12 or id'), text: z.string().min(1) }),
     run: ({ id: ref, text }, ctx) => {
       const id = ctx.kanban.reach(ctx.agentId, ctx.cardId, ctx.kanban.resolve(ref)).id;
       if (id === ctx.cardId) throw new Error('that is your own task: just answer here');
@@ -152,9 +145,9 @@ export const TEAM_TOOLS = {
   }),
   agent_message: tool({
     description:
-      'Write to another agent, even one with no task. It lands in its one active task if it has exactly one, else in ' +
-      'its main chat, and wakes it. When it has answered, its answer comes back here as a note ("reply from @agent: …").',
-    input: z.object({ agent: z.string().trim().min(1).describe('agent id, e.g. zurich'), text: z.string().trim().min(1) }),
+      'Write to another agent, even one with no task: it lands in its only active task, else its main chat, and wakes ' +
+      'it. Its answer comes back here as a note.',
+    input: z.object({ agent: z.string().trim().min(1).describe('e.g. zurich'), text: z.string().trim().min(1) }),
     run: ({ agent, text }, ctx) => {
       const to = agent.replace(/^@/, '');
       ctx.kanban.reachAgent(ctx.agentId, ctx.cardId, to);
@@ -165,7 +158,7 @@ export const TEAM_TOOLS = {
   }),
   // Schedules are one-step workflows since #170 (« trigger → one agent step »): same tools, same inputs.
   schedule_list: tool({
-    description: "List this project's schedules (and global ones): what runs when, for which agent, and the task each one last posted on.",
+    description: "List this project's and global schedules: when, agent, last task.",
     input: z.object({ project: ProjectArg }),
     run: ({ project }, { workflows, kanban, agentId, cardId }) => {
       const all = workflows.list({ project: kanban.scope(agentId, cardId, project) });
@@ -195,10 +188,9 @@ export const TEAM_TOOLS = {
   }),
   schedule_create: tool({
     description:
-      'Schedule a prompt for an agent (yourself by default): cron for repeating (5 fields, e.g. "0 9 * * 1-5" = ' +
-      'weekdays 09:00, in timezone; default the engine\'s zone) or at for once (ISO time with offset). ' +
-      'new_task_each_time: true = a fresh task per run; false (default) = one task for the schedule, reopened each run, ' +
-      'so the agent sees what earlier runs did. Tell the user what you scheduled.',
+      'Schedule a prompt for an agent (default you): cron to repeat (5 fields, "0 9 * * 1-5" = weekdays 09:00, in ' +
+      "timezone, default the engine's) or at once (ISO time with offset). new_task_each_time: false = one task reopened " +
+      'each run (sees earlier runs), true = a fresh one. Tell the user what you scheduled.',
     input: z.object({
       prompt: z.string().min(1),
       title: z.string().max(200).optional(),
@@ -230,7 +222,7 @@ export const TEAM_TOOLS = {
     },
   }),
   schedule_delete: tool({
-    description: 'Delete a schedule by id. Its tasks stay.',
+    description: 'Delete a schedule (its tasks stay).',
     input: z.object({ id: z.string() }),
     run: ({ id }, { workflows, agentId, kanban, cardId }) => {
       const w = workflows.get(id);
@@ -243,10 +235,7 @@ export const TEAM_TOOLS = {
 } satisfies Record<string, TeamTool<z.ZodType>>;
 
 export function teamToolSpecs(): ToolSpec[] {
-  return Object.entries(TEAM_TOOLS).map(([name, t]) => {
-    const { $schema: _s, ...schema } = z.toJSONSchema(t.input, { io: 'input' }) as Record<string, unknown>;
-    return { name, description: t.description, input_schema: schema };
-  });
+  return specsOf(TEAM_TOOLS);
 }
 
 export const isTeamTool = (name: string) => currentToolName(name) in TEAM_TOOLS;

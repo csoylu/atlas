@@ -5,6 +5,7 @@ import type { Db } from './store/db.ts';
 import type { Kanban } from './kanban.ts';
 import { projectRow } from './projects.ts';
 import { ghBinary, ghClient, validate, type Gh } from '../../../scripts/pr/validate.mjs';
+import { specsOf } from './toolSpec.ts';
 
 /**
  * pr_validate (#216): the PR validation gate, shipped with the engine so a reviewer can run it from any project's
@@ -54,10 +55,7 @@ export const isPrTool = (name: string): boolean => name in SPECS;
 /** The tool, offered in a run on a task In review whose reviewer is this agent. */
 export function prToolSpecs(card: Card, agentId: string): ToolSpec[] {
   if (card.status !== 'review' || card.reviewer !== agentId || !card.prs.length) return [];
-  return Object.entries(SPECS).map(([name, t]) => {
-    const { $schema: _s, ...schema } = z.toJSONSchema(t.input, { io: 'input' }) as Record<string, unknown>;
-    return { name, description: t.description, input_schema: schema };
-  });
+  return specsOf(SPECS);
 }
 
 export async function runPrTool(name: string, input: unknown, ctx: PrToolContext): Promise<{ output: string; isError: boolean }> {

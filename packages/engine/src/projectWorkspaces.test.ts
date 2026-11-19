@@ -169,6 +169,7 @@ describe('project workspaces (#214)', () => {
     }
     expect(l.fake.calls).toHaveLength(2);
     for (const call of l.fake.calls) {
+      expect(call.system).toContain('file tools read it and the temp folders (/tmp, $TMPDIR) and write only in it');
       expect(call.system).toContain('Shell commands stay inside this working directory and the temp folders');
       expect(call.system).toContain("never read or write another project's workspace by path");
       expect(call.system).toContain("through the tools' explicit `project` parameter, not by path");

@@ -5,6 +5,7 @@ import { BLOCK_KINDS, cardRef, currentToolName, type Card } from '@atlas/shared'
 import type { Kanban } from './kanban.ts';
 import type { ToolSpec } from './providers/types.ts';
 import type { Secrets } from './secrets.ts';
+import { specsOf } from './toolSpec.ts';
 
 /** How a card tool ended the run, if it did (design §4: a work run ends only through one of these). */
 export type Terminal = 'complete' | 'block' | 'review' | null;
@@ -39,14 +40,14 @@ export function describeCard(c: Card, refOf: (id: string) => string = (id) => id
 export const describeWith = (kanban: Kanban) => (c: Card) => describeCard(c, (id) => kanban.ref(id));
 
 /** The project a tool acts on (#213): omitted = the run's own; another one only for a lead. */
-export const ProjectArg = z.string().min(1).optional().describe("project id or name; omitted = this run's project (another project: leads only)");
+export const ProjectArg = z.string().min(1).optional().describe("default: this run's; another: leads only");
 
 /** Card ids the tools take: "#12", "12" or the internal id. */
-const CardId = z.union([z.string(), z.number().int()]).transform(String).describe('task number (#12 or 12) or id');
+const CardId = z.union([z.string(), z.number().int()]).transform(String).describe('#12 or id');
 
 export const CARD_TOOLS = {
   task_list: tool({
-    description: "List this project's tasks (archived excluded), optionally filtered by status.",
+    description: "List this project's tasks (not archived), optionally by status.",
     input: z.object({ status: z.string().optional(), project: ProjectArg }),
     run: ({ status, project }, { kanban, agentId, cardId }) => {
       const cards = kanban.list({ project: kanban.scope(agentId, cardId, project) }).filter((c) => !status || c.status === status);
@@ -65,9 +66,8 @@ export const CARD_TOOLS = {
   }),
   task_create: tool({
     description:
-      'Create a task. Give a clear title, a body with context and acceptance criteria, an assignee, and parents for ' +
-      'tasks that must finish first. Status defaults to ready (it waits in todo automatically while a parent is open). ' +
-      'Created from a direct chat, the chat is told when the task finishes, closes, is stopped or needs the user.',
+      'Create a task: clear title, body with context and acceptance criteria, assignee, parents (tasks to finish first; ' +
+      'it waits in todo). Made from a direct chat, it reports there when it ends, stops or needs the user.',
     input: z.object({
       title: z.string().min(1).max(200),
       body: z.string().default(''),
@@ -86,9 +86,7 @@ export const CARD_TOOLS = {
   }),
   task_update: tool({
     description:
-      'Edit a task: title, body, assignee, priority, parents, or status (triage, todo, ready, closed, archived). closed = ' +
-      'cancelled, nothing more is done (stops its run; e.g. the user changed their mind). It does not count as done for ' +
-      'child tasks.',
+      'Edit a task. status closed = cancelled (e.g. the user changed their mind): run stopped, nothing more done, not done for child tasks.',
     input: z.object({
       id: CardId,
       title: z.string().min(1).max(200).optional(),
@@ -101,7 +99,7 @@ export const CARD_TOOLS = {
     run: ({ id, ...patch }, { kanban, agentId, cardId }) => `updated ${describeWith(kanban)(kanban.update(kanban.reach(agentId, cardId, kanban.resolve(id)).id, patch, agentId))}`,
   }),
   task_complete: tool({
-    description: 'Finish your current task: the work is done and verified. The summary is the handoff (what changed, how it was checked).',
+    description: 'Finish your task: done and verified. summary: the handoff (what changed, how it was checked).',
     input: z.object({ summary: z.string().min(1) }),
     terminal: 'complete',
     run: ({ summary }, { kanban, agentId, cardId }) => {
@@ -117,21 +115,18 @@ export const CARD_TOOLS = {
   }),
   task_block: tool({
     description:
-      'Stop and wait. kind: needs_input (a question for the user; give options, recommended first), capability (missing ' +
-      'access or tool), dependency (waiting on other Atlas tasks: give waits_on, e.g. ["#12"]; the task waits in todo and ' +
-      'restarts by itself when they are done), transient (retry later by itself; set retry_in_minutes). Only needs_input ' +
-      'and capability reach the user: if the work you wait on is not a task yet, create it (task_create) first; if only ' +
-      'the user can clear it, use needs_input. Missing a secret (API key, token) only the user can give: kind capability ' +
-      'with secret: "NAME" (and secret_description): the user sees it in Settings → Secrets, and the task restarts by ' +
-      'itself once they add the value.',
+      'Stop and wait. kind: needs_input (question for the user; options, recommended first), capability (missing access ' +
+      'or tool; a secret only the user can give: set secret, they add it in Settings → Secrets and the task restarts), ' +
+      'dependency (in todo until the waits_on tasks are done; create missing ones first), transient (retries after ' +
+      'retry_in_minutes). Only needs_input and capability reach the user.',
     input: z.object({
       kind: z.enum(BLOCK_KINDS),
       question: z.string().min(1),
       options: z.array(z.string()).max(4).default([]),
       retry_in_minutes: z.number().positive().max(24 * 60).optional(),
       waits_on: z.array(CardId).optional(),
-      secret: z.string().optional().describe('the env var name of a secret you need and cannot make (A-Z, 0-9, _), e.g. DUNE_API_KEY'),
-      secret_description: z.string().max(500).optional().describe('what the secret is, shown to the user'),
+      secret: z.string().optional().describe('its env var name (A-Z, 0-9, _), e.g. DUNE_API_KEY'),
+      secret_description: z.string().max(500).optional().describe('what it is, shown to the user'),
     }),
     terminal: 'block',
     run: ({ kind, question, options, retry_in_minutes, waits_on, secret, secret_description }, { kanban, agentId, cardId, secrets }) => {
@@ -162,13 +157,11 @@ export const CARD_TOOLS = {
   }),
   task_request_review: tool({
     description:
-      'Hand your open pull request(s) to QA: the task goes In review, the reviewer agent checks it once CI is green, and ' +
-      'the task moves by itself: merged → done, CI red / conflict / validation failed → back to you with the reason. ' +
-      'prs: the GitHub PR urls. Work with no pull request (mockup, report) ends with task_complete instead; a question ' +
-      'for the user is task_block.',
+      'Hand your open pull request(s) to QA: the task goes In review, the reviewer checks it once CI is green; merged → ' +
+      'done, CI red / conflict / failed → back to you with the reason. No PR (mockup, report): task_complete.',
     input: z.object({
       summary: z.string().min(1),
-      prs: z.array(z.string()).min(1, 'give the url of your open pull request (no PR: use task_complete)').describe('GitHub pull request urls, e.g. https://github.com/owner/repo/pull/12'),
+      prs: z.array(z.string()).min(1, 'give the url of your open pull request (no PR: use task_complete)').describe('GitHub PR urls'),
     }),
     terminal: 'review',
     run: ({ summary, prs }, { kanban, agentId, cardId }) => {
@@ -178,10 +171,8 @@ export const CARD_TOOLS = {
   }),
   history_search: tool({
     description:
-      "Read your own conversation's full transcript, including parts summarized or omitted from your context to save " +
-      'room, and in a chat the threads of the tasks created from it. query: find messages containing the text ' +
-      '(case-insensitive), here and in those threads. seq: read one message in full (seq numbers appear in search ' +
-      'results and in "#n" references of the summary). task: a task id (#12) to read or search that thread only.',
+      "Your conversation's full transcript, summarized or dropped parts included, and in a chat the threads of tasks made " +
+      'from it. query: messages containing it (any case); seq: one message in full (seq from results or "#n"); task: that thread only.',
     input: z
       .object({ query: z.string().min(2).optional(), seq: z.number().int().positive().optional(), task: z.string().optional() })
       .refine((i) => i.query || i.seq, 'give a query or a seq'),
@@ -241,10 +232,7 @@ export const CARD_TOOLS = {
 } satisfies Record<string, CardTool<z.ZodType>>;
 
 export function cardToolSpecs(): ToolSpec[] {
-  return Object.entries(CARD_TOOLS).map(([name, t]) => {
-    const { $schema: _s, ...schema } = z.toJSONSchema(t.input, { io: 'input' }) as Record<string, unknown>;
-    return { name, description: t.description, input_schema: schema };
-  });
+  return specsOf(CARD_TOOLS);
 }
 
 export function isCardTool(name: string): boolean {
