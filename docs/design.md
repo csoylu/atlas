@@ -436,7 +436,8 @@ A workflow is a small graph: one **trigger** wired to **steps**. Mockup: paris's
   last_fired_at, last_error), `workflow_nodes` (kind trigger | agent | approval | condition, x, y, config JSON,
   `own_card_id` = an agent step's kept task, runtime state outside the revision), `workflow_edges` (from node + named
   exit → to node, one edge per exit), `workflow_runs` (number, state running | waiting | done | failed | stopped |
-  skipped, trigger time | manual, reason, times), `workflow_run_steps` (node, kind, round, state, exit, task, summary,
+  skipped, trigger time | manual | task | pr, reason, times; since 0059 its subject task and PR, the event, its
+  context JSON), `workflow_run_steps` (node, kind, round, state, exit, task, summary,
   times). Every change is one transaction; `workflow.updated` / `workflow.deleted` / `workflow.run` go on the WebSocket
   after commit.
 - **Graph rules** (checked on every save, refused with the reason): exactly one trigger, which can't be deleted; every
@@ -444,11 +445,43 @@ A workflow is a small graph: one **trigger** wired to **steps**. Mockup: paris's
   agent steps name an existing agent; a cron and a time zone that parse; a one-shot date not in the past. Exits: trigger
   `start`; agent `done` / `failed`; approval `approved` / `rejected`; condition `yes` / `no`. A graph save carries the
   revision it was read at: a stale one is refused (409).
-- **Triggers** (v1): *time*, a cron in a time zone or once at a date (what schedules were), and *manual*. Run now works
-  on any workflow, even off. GitHub events and webhooks: later.
+- **Triggers**: *time*, a cron in a time zone or once at a date (what schedules were), *manual*, and since #258
+  (Workflows v2 stage 1) *task* and *pr* events. Run now works on any workflow, even off, and can take a task (#12)
+  or a linked PR (its url) as the run's subject (`POST /api/workflows/:id/run {task | pr}`). Webhooks: stage 3/6.
+- **Task and PR events** (#258, migration 0059, `workflowEvents.ts`). Task events: `created`, `status_changed`
+  (filters `from`, `status` = the new one), `assignee_changed`, `review_requested`, `blocked`, `done`; they come from
+  the card events Kanban writes (`Kanban.event` calls `recordTaskEvent`). PR events of a task's linked PR: `opened`
+  (linked by task_request_review), `pushed` (a new head), `ci_finished` and `validated` (result success | failure),
+  `conflict`, `merged`, `closed`, from the difference between two GitHub reads (`prEvents` in prs.ts, the first read
+  counts what is already done). Filters on both: the task's `status` and `assignee` (empty = any); PR also `repo`,
+  `base`, `result`. Direct chats have no events.
+  - **Exactly once, kill-safe**: an event row goes into `workflow_events` in the transaction of the change itself (only
+    while an enabled workflow has a trigger of that kind, so the table stays empty otherwise). The tick takes them in
+    order and deletes each one in the transaction that starts its runs (a savepoint per workflow: one that fails to
+    start gets `last_error`, the others start). A kill before leaves the event for the next start; after, nothing to
+    redo. The crash test (§6) has an event-started workflow.
+  - **Project**: a workflow with a `projectId` fires only on its project's tasks; a global one on every active project's.
+  - **Not itself**: an event caused by the workflow's own run (by `workflow:<id>`) or about one of its own step tasks
+    never fires that workflow. Another workflow's step task does fire (chains are allowed), with the guards below.
+  - **One run at a time per subject**: a run on task A doesn't stop one on task B; an event for a task whose run is
+    still open records a skipped run. Several workflows can run on one task at once:
+    `GET /api/cards/:id/workflows` lists the workflows acting on a task now (open runs about it, or at a step whose
+    task it is) with their current step.
+  - **Loop guard**: at most `maxRunsPerHour` runs (default 5, a number per trigger, 1–100) on the same task (task
+    trigger) or PR (pr trigger) in a rolling hour, skipped runs not counted; and a chain of event runs, each on a task
+    the previous one's step made, at most `MAX_CHAIN` (5) deep. Hit: the workflow turns itself off, `last_error`
+    says why, and Master gets one Inbox item (`workflow.stopped`, linked to the task). Turning it back on is Master's.
+- **Run context** (#258): stored per run when it starts (`workflow_runs.context`): `task.*` (id, ref, title, body,
+  status, assignee, priority), `pr.*` (url, number, repo, branch, base, head, state, ci), `project.*` (id, name, repo),
+  `event.*` (name, by, from, to, result, text), plus `run.*` / `workflow.*` and, as steps end, `steps.<node>.exit |
+  summary | task`. `{{field}}` in an agent prompt or an approval question is replaced from it; an unknown field, or one
+  this run doesn't have (no PR on a task run, a step that hasn't ended), fails the step and the run with the reason
+  (rule 3). `GET /api/workflow-runs/:id/context` gives a run's fields; `GET /api/workflows/:id/fields?node=` the fields
+  a step can use (the steps that can come before it), with an example value from recent runs, for the editor's
+  « Insert a field ».
 - **Agent step**: the prompt goes to the agent as a new dated task each run, or onto the step's own task, reopened each
-  run so it keeps the history (done/todo/closed → ready; running: read at the next turn). Variables: `{{run.id}}`,
-  `{{previous.summary}}` (the handoff of the last agent step that ended), `{{previous.task}}`. The task's state picks
+  run so it keeps the history (done/todo/closed → ready; running: read at the next turn). Fields: the run context
+  above, and `{{previous.summary}}` (the handoff of the last agent step that ended), `{{previous.task}}`. The task's state picks
   the exit: done → `done` (summary: the agent's task_complete / request_review text); closed, archived, deleted, or
   blocked with kind `capability` (the agent can't do it; the task is then closed) → `failed`. Blocked on Master or in
   review: the run is *waiting*.
@@ -458,7 +491,8 @@ A workflow is a small graph: one **trigger** wired to **steps**. Mockup: paris's
   and « the previous step's summary contains <text> ».
 - **Ends**: an unwired exit ends the run. done / approved / yes / no end it Done; failed / rejected end it Failed with
   the reason. A run reaching a deleted agent or a missing node fails with the reason (it never crashes the tick).
-- **One run at a time**: a trigger firing (time or Run now) while a run is open records a *skipped* run with the reason.
+- **One run at a time** (per subject for task, PR and manual runs on a task): a trigger firing while a run is open
+  records a *skipped* run with the reason.
   Stop run closes the run's open tasks and ends it Stopped. Deleting a workflow stops its open run; tasks stay.
 - **Durability**: the tick (every 15 s, and right after card or message events) fires due triggers, then moves every
   open run from the stored state of its current step's task. A firing claims its slot (compare-and-set on
@@ -470,8 +504,9 @@ A workflow is a small graph: one **trigger** wired to **steps**. Mockup: paris's
   its last task. Agents keep `schedule_create` / `schedule_list` / `schedule_delete` (same inputs), now on one-step
   workflows (`schedule_delete` refuses a multi-step one). Task `created_by` is `workflow:<id>`.
 - **API**: `GET/POST /api/workflows`, `GET/PATCH/DELETE /api/workflows/:id` (PATCH: name, enabled),
-  `PUT /api/workflows/:id/graph` (revision check), `POST /api/workflows/:id/run`, `GET /api/workflows/:id/runs`,
-  `GET /api/workflow-runs/:id` (with steps), `POST /api/workflow-runs/:id/stop`, `POST /api/workflows/preview` (next
+  `PUT /api/workflows/:id/graph` (revision check), `POST /api/workflows/:id/run` (`{task?, pr?}`),
+  `GET /api/workflows/:id/runs`, `GET /api/workflows/:id/fields?node=`, `GET /api/workflow-runs/:id` (with steps),
+  `GET /api/workflow-runs/:id/context`, `POST /api/workflow-runs/:id/stop`, `GET /api/cards/:id/workflows`, `POST /api/workflows/preview` (next
   firings of a draft time trigger).
 
 ## 10. Tools (v1)

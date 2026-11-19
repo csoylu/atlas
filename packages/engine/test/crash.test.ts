@@ -33,8 +33,21 @@ describe('durability (design §6)', () => {
     // Final engine: resumes everything once the dead owners' leases expire.
     const engine = await startEngine({ dbFile, dataDir, port: 0, dispatch: false, leaseMs: LEASE_MS, providers: () => new SlowProvider(marker), env: {} });
     try {
-      const cards = engine.kanban.list();
+      const cards = engine.kanban.list().filter((c) => c.title.startsWith('crash '));
       expect(cards).toHaveLength(3);
+      // The event-started workflow (#258): every created task fired exactly one run, with exactly one step task.
+      engine.workflows.tick();
+      const [w] = engine.workflows.list();
+      const runs = engine.workflows.runs(w!.id);
+      expect(runs.map((r) => r.subject!.cardId).sort()).toEqual(cards.map((c) => c.id).sort());
+      expect(engine.db.prepare('SELECT COUNT(*) AS n FROM workflow_events').get()).toEqual({ n: 0 });
+      for (const r of runs) {
+        const steps = engine.workflows.run(r.id).steps!.filter((s) => s.nodeId === 'look');
+        expect(steps).toHaveLength(1);
+        expect(engine.kanban.get(steps[0]!.cardId!).body).toContain(`Look at ${engine.kanban.ref(r.subject!.cardId)}`);
+      }
+      const stepTasks = engine.kanban.list().filter((c) => !c.title.startsWith('crash '));
+      expect(stepTasks).toHaveLength(3);
       const deadline = Date.now() + 30_000;
       const finished = () =>
         cards.every((c) => {

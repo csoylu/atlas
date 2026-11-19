@@ -187,7 +187,7 @@ const PLAY = (
 /** The trigger in plain words with its icon. */
 function TriggerText({ t }: { t: TriggerConfig | null }) {
   if (!t) return <span className="part trig">no trigger</span>;
-  const icon = t.kind === 'manual' ? TRIG_ICON.hand : t.repeat === 'at' ? TRIG_ICON.once : TRIG_ICON.clock;
+  const icon = t.kind !== 'time' ? TRIG_ICON.hand : t.repeat === 'at' ? TRIG_ICON.once : TRIG_ICON.clock;
   return (
     <span className="part trig">
       {icon}

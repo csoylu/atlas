@@ -277,6 +277,10 @@ export function createApi(deps: {
       else if (err) next(err);
     });
   });
+  /** The workflows acting on a task now, with their current step (#258). */
+  app.get('/api/cards/:id/workflows', (req, res) => {
+    res.json(workflows.onTask(kanban.resolve(req.params.id)));
+  });
   app.get('/api/cards/:id/runs', (req, res) => {
     kanban.get(req.params.id);
     res.json(runner.runs(req.params.id));
@@ -873,7 +877,11 @@ export function createApi(deps: {
   });
   /** Run now (also when off). A run still going makes it a skipped run, returned as such. */
   app.post('/api/workflows/:id/run', (req, res) => {
-    res.json(workflows.runNow(req.params.id));
+    res.json(workflows.runNow(req.params.id, req.body ?? {}));
+  });
+  /** The fields a step can use as {{field}} (#258); `?node=` narrows to what can come before that step. */
+  app.get('/api/workflows/:id/fields', (req, res) => {
+    res.json(workflows.fields(req.params.id, typeof req.query.node === 'string' && req.query.node ? req.query.node : undefined));
   });
   app.get('/api/workflows/:id/runs', (req, res) => {
     res.json(workflows.runs(req.params.id));
@@ -881,6 +889,10 @@ export function createApi(deps: {
   /** One run with its steps. */
   app.get('/api/workflow-runs/:id', (req, res) => {
     res.json(workflows.run(req.params.id));
+  });
+  /** What a run knows: its task, PR, project, event and the ended steps' exit, summary and task (#258). */
+  app.get('/api/workflow-runs/:id/context', (req, res) => {
+    res.json(workflows.context(req.params.id));
   });
   app.post('/api/workflow-runs/:id/stop', (req, res) => {
     res.json(workflows.stopRun(req.params.id, 'user'));

@@ -1,7 +1,7 @@
 import { useEffect, useRef, useState } from 'react';
 import type { Agent, Workflow, WorkflowEdge, WorkflowNode, WorkflowNodeKind } from '@atlas/shared';
 import { api } from './api.ts';
-import { BROWSER_TZ, DAYS, KIND_LABEL, cronOf, exitTarget, exitsOf, freeSpot, newNodeId, nodeTitle, timeDraftOf, triggerOf, when, wire, withoutNode, type Repeat, type TimeDraft } from './workflowView.ts';
+import { BROWSER_TZ, DAYS, KIND_LABEL, cronOf, eventText, exitTarget, exitsOf, freeSpot, newNodeId, nodeTitle, timeDraftOf, triggerOf, when, wire, withoutNode, type Repeat, type TimeDraft } from './workflowView.ts';
 
 /** The canvas's right panel in Edit mode: the selected step's settings and exits (#171). */
 
@@ -274,7 +274,8 @@ function TriggerFields({ n, w, set }: { n: Extract<WorkflowNode, { kind: 'trigge
           </button>
         </div>
       </div>
-      {!time && <p className="wf-sum">It runs only when you press Run now (here, or an agent's run tool).</p>}
+      {c.kind === 'manual' && <p className="wf-sum">It runs only when you press Run now (here, or an agent's run tool).</p>}
+      {(c.kind === 'task' || c.kind === 'pr') && <p className="wf-sum">{eventText(c)}. Its filters are edited through the API for now.</p>}
       {time && (
         <>
           <div className="field">
