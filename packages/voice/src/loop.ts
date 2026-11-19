@@ -73,9 +73,20 @@ const QUIET = new Set(
 /** A follow-up (no barge-in) that only closes the exchange: not sent. « No » / « hayır » here may answer a question: sent. */
 const STOP = /^\W*(?:stop(?: it| talking| there)?|quiet|be quiet|shut up|enough|that's enough|cancel|never ?mind|forget it|thanks|thank you|okay|ok)\W*$/i;
 
+/**
+ * Whether a barge-in only means « be quiet »: every word is a stop word (+ Whisper's « Душ », « СУС »), or the start of
+ * the stop word right before it, repeated when the audio was cut (« Yeter. Y », « Hayyuz. Hayy »; #257). Any other
+ * word makes it a command: « stop, go on », « dur, bak ».
+ */
 export function isQuiet(text: string): boolean {
   const words = text.toLocaleLowerCase('tr').match(/[\p{L}']+/gu) ?? [];
-  return words.length > 0 && words.every((w) => QUIET.has(w) || QUIET.has(w.toLowerCase()) || stopWord(w) !== undefined); // + Whisper's « Душ », « СУС »
+  const quiet = (w: string) => QUIET.has(w) || QUIET.has(w.toLowerCase()) || stopWord(w) !== undefined;
+  return words.length > 0 && words.every((w, i) => quiet(w) || (i > 0 && isCutRepeat(w, words[i - 1]!) && quiet(words[i - 1]!)));
+}
+
+/** `w` is the beginning of `before` (the word said again, cut off by the end of the audio). */
+function isCutRepeat(w: string, before: string): boolean {
+  return w.length < before.length && before.startsWith(w);
 }
 
 /** How long a played sentence still counts as « just said » for the echo filter (room echo, VAD lag). */
@@ -305,7 +316,8 @@ export class VoiceLoop {
 
   /** Master's sentence → the Voice chat → the reply, spoken as it streams. */
   private async reply(cmd: Extract<VoiceEvent, { type: 'command' }>) {
-    const text = stripAck(cmd.text, this.opts.userName());
+    const ackEnd = this.said.get(this.ackText());
+    const text = stripAck(cmd.text, this.opts.userName(), ackEnd !== undefined && ackEnd + ECHO_MS >= performance.now());
     if (!text) return this.pipeline.startCapture(); // only our own « Yes, Master? » came back: keep listening
     const tCmd = performance.now();
     const speechEnd = tCmd - cmd.sttMs - cmd.tailMs;
@@ -460,12 +472,18 @@ export class VoiceLoop {
 }
 
 /** Removes Atlas's own « Yes, Master? » (heard back through the speakers) from a command. */
-export function stripAck(text: string, userName: string): string {
+export function stripAck(text: string, userName: string, ackJustSaid = false): string {
   const name = userName && userName !== 'the user' ? userName.replace(/[.*+?^${}()|[\]\\]/g, '\\$&') : 'master';
-  return text
-    .replace(new RegExp(`^\\W*yes\\W+(?:${name}|master)\\b\\W*`, 'i'), '')
-    .replace(/^\W*yes\W*$/i, '')
-    .trim();
+  const rest = text.replace(new RegExp(`^\\W*yes\\W+(?:${name}|master)\\b\\W*`, 'i'), '').trim();
+  // the ack was just spoken: a short « yes … » is its echo misheard (« Yesta. », « Yes must », « Yes, Moss. »; #257).
+  // Later, « yes » is Master's answer: sent.
+  return ackJustSaid && isAckEcho(rest) ? '' : rest;
+}
+
+/** At most 2 words, the first starting with « yes », none longer than 7 letters (« yes do it »: 3 words, a command). */
+function isAckEcho(text: string): boolean {
+  const words = text.match(/[\p{L}']+/gu) ?? [];
+  return words.length > 0 && words.length <= 2 && /^yes/i.test(words[0]!) && words.every((w) => w.length <= 7);
 }
 
 /**
