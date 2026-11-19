@@ -510,7 +510,50 @@ A workflow is a small graph: one **trigger** wired to **steps**. Mockup: paris's
   when it was already merged) / `refused` with GitHub's reason (CI red, head moved, conflict, GitHub's own 405/409/422).
   The GitHub call runs outside the transaction; the pinned PR is stored first, so a kill mid-call retries it (merging is
   idempotent). An action on a run with no task, a PR not linked, a refused status change: the step fails with the
-  reason (rule 3). Actions are `workflow:<id>`: they never fire their own workflow. « Run a command »: #273.
+  reason (rule 3). Actions are `workflow:<id>`: they never fire their own workflow.
+- **Run a command** (#273, `engine/src/workflowCommand.ts`, migration 0061): `{do: "command", title, command (≤ 10 000
+  chars), secrets: names (≤ 20), limitMin 1–120}`, exits `exit 0` / `other exit` (a non-zero code, a signal or the time
+  limit; the summary says which). Only in a workflow of a project with a GitHub repo (refused at save otherwise, and for
+  a global workflow). It runs `bash -c` in its own process group, in a **clean checkout of the repo's default branch**
+  (never a PR head or another branch): `<data>/checkouts/<project>/repo` is cloned once (`gh repo clone`, Master's
+  login), fetched at each step, and each step gets a fresh detached worktree in `runs/<run>-<node>-<round>`, removed
+  when it ends (and every leftover one at start). `$ATLAS_CHECKOUT_SHA` / `$ATLAS_CHECKOUT_BRANCH` say what it got.
+  **Run fields are env vars, never command text**: `{{…}}` in a command is refused at save; every field the run knows
+  is passed as `PAYLOAD_*`, `TASK_*`, `PR_*`, `STEPS_*` (`task.body` → `$TASK_BODY`), so `"; rm -rf …` in a title stays
+  a value. Caps: 16 KB per value (cut), 128 KB in total (the longest dropped first); a field never overrides a secret
+  or a shell basic (PATH, HOME…); the summary names each field cut or dropped. Time limit: SIGTERM to the process group,
+  SIGKILL 10 s later. Output (stdout + stderr) is redacted before any cut; the summary keeps its last 4 000 chars, the
+  full redacted log goes to `<data>/outputs/workflows/<run>-<node>-<round>.log`. The pid and its start time (`ps
+  lstart`) are stored on the step before the process can do anything; the spawn runs outside any transaction.
+- **Command approval** (#273): what a command step runs is Master's decision. Table `workflow_command_approvals` keeps,
+  per workflow and node, a digest of command + secrets + limit + project + repo, who approved it and when. Master's own
+  create or edit (UI, `by = user`) approves what it saves; an agent's create or edit of a command step (a changed
+  digest) does not, and Master gets one Inbox item (`workflow.approval`, its id in `workflows.approval_note`, archived
+  on approve or reject; moving a node changes nothing). Until it is approved, a firing records a *skipped* run
+  (« waiting for your approval of « X » ») and no item more. `POST /api/workflows/:id/approve {revision}` approves the
+  revision Master saw (another revision: 409); `POST /api/workflows/:id/reject` turns the workflow off. Steps waiting
+  « not approved » go on at once after an approval. The step re-checks the stored digest itself right before it
+  spawns: an agent's edit after the run started stops it there (couldn't run « not approved since the last edit »).
+  **No agent tool can approve or reject** (only `api.ts` calls them, pinned by a test); the instructions say never to
+  call those routes. Known limit: an agent can reach the loopback API with curl, and the engine can't tell it from
+  Master (no per-caller auth on 127.0.0.1); the gate guards against an agent's mistake, not against misuse.
+- **Couldn't run, for a command**: a locked or unreadable secret store, a listed secret with no value, the checkout
+  failing (gh logged out, offline) are couldn't run (retried every minute, the 4a rule): the command never started.
+  A **kill mid-command** (the engine stopped while the step was *running*) is couldn't run « Atlas stopped while the
+  command ran: it may have run in part »: at the next start the process group is killed only if the stored pid still has
+  the stored start time (a reused pid is left alone), the worktree is removed, Master gets the Inbox item at once, and it
+  is **never retried by itself** (a deploy run twice is worse than one cut off): Retry now or Follow « other exit ».
+- **Agent in the task thread** (#273, `inThread: true`): the agent works in the run's task thread instead of a task of
+  its own (a run on no task fails, saying why). Its run is woken there like a reviewer's (#221: `kickAlways`), the prompt
+  is posted in the thread by `workflow`, and it reads every earlier turn with who wrote it: another agent's turns come
+  as « [@x, another agent, wrote this in the thread (not you):] » (`context.ts`). Exits `done` (its run ended done; the
+  summary is what it last wrote) / `not done` (failed or stopped, with why). `reviewAgent: true` (thread only) picks the
+  project's review agent: the task's reviewer when it is In review, else Settings → review agent, or the project's lead
+  on the review agent's own task (today's rule). For a review the verdict is the exit: the reviewer's `pr_validate`
+  (it records a `pr_verdict` task event) ok → `approved`, fail → `changes asked` with the reason as the summary. A
+  review run that ends with no verdict is couldn't run, not retried by itself (each try is a model run), Master told.
+  `pr_validate` is offered only on a task In review whose reviewer is that agent (#216): a review step on another task
+  has no verdict to give.
 - **Wait** (#261): until an event about the run's task or PR, at most `limitMin` (1 min – 30 days): CI finished
   (success or failure on the head), CI green, a conflict, the PR merged, the task unblocked (out of Blocked), the task
   in a given status. Read from the stored task and PR, so already true at the start goes on at once; no model, no
@@ -525,8 +568,8 @@ A workflow is a small graph: one **trigger** wired to **steps**. Mockup: paris's
   `POST /api/workflow-runs/:id/follow` takes the step's negative exit (agent `failed`, approval `rejected`, merge
   `refused`, wait `timed out`; none for the other actions: Retry or Stop run), the summary says Master chose it. An
   answer arriving after Follow or Stop changes nothing. Never silent: the reason is on the step and in the run.
-- **Ends**: an unwired exit ends the run. done / approved / yes / no / merged / event end it Done; failed / rejected /
-  refused / timed out end it Failed with the reason. A missing node fails the run with the reason (it never crashes the
+- **Ends**: an unwired exit ends the run. done / approved / yes / no / merged / event / exit 0 end it Done; failed /
+  rejected / refused / timed out / not done / changes asked / other exit end it Failed with the reason. A missing node fails the run with the reason (it never crashes the
   tick).
 - **One run at a time** (per subject for task, PR and manual runs on a task): a trigger firing while a run is open
   records a *skipped* run with the reason.
@@ -545,7 +588,9 @@ A workflow is a small graph: one **trigger** wired to **steps**. Mockup: paris's
   `GET /api/workflows/:id/runs`, `GET /api/workflows/:id/fields?node=`, `GET /api/workflow-runs/:id` (with steps),
   `GET /api/workflow-runs/:id/context`, `POST /api/workflow-runs/:id/stop`, `GET /api/cards/:id/workflows`, `POST /api/workflows/preview` (next
   firings of a draft time trigger), since #261 `POST /api/workflow-runs/:id/retry`, `POST /api/workflow-runs/:id/follow`
-  and `POST /api/workflows/:id/try-condition`.
+  and `POST /api/workflows/:id/try-condition`, since #273 `POST /api/workflows/:id/approve` (`{revision}`) and
+  `POST /api/workflows/:id/reject` (Master only: no agent tool calls them). A workflow carries `needsApproval` and
+  `commandSteps` (per command node: checkout, secrets, limit, approved, by, at).
 
 ## 10. Tools (v1)
 | Tool | Notes |
@@ -637,6 +682,16 @@ the diagram « Secrets in Atlas: flow » and the mockup « Settings → Secrets 
   secrets read from the store at that command (a rotation applies to the next command). A command that mentions
   (`$NAME`/`${NAME}`) a secret not granted to it, or a granted one with no value, does not run and says why; an
   unreadable store stops the command. `last_used` is set when a command mentions the name.
+- **A workflow command step is a secret holder of its own** (#273, `Secrets.envForStep`): not an agent, and no
+  grant. Its env is built like `envFor` (no model key, plan token, engine password, nor any agent secret it does not
+  list, whatever the engine env holds), plus exactly the secrets the step lists, read from the store when it starts.
+  A listed name must be an agent secret, global or of the workflow's project (refused at save; a model key or sign-in
+  is refused by name, another project's secret reads as unknown). The list is part of the approved digest: an agent
+  adding a secret to a step needs Master's approval again. A locked or unreadable store, or a listed secret with no
+  value, means the step couldn't run (the command never starts). Its output passes the redactor before any cut, so the
+  summary, the log in `outputs/workflows/`, the run's events and the API show `[secret NAME]`; `last_used_by` is
+  `workflow:<id>/<node>`. The canary test checks the value appears nowhere on disk (SQLite + WAL, outputs) nor in the
+  API or the event stream. Same known limit as the routes: an agent calling the loopback API looks like Master.
 - **Instructions**: a « # Secrets » block lists the granted names and descriptions (never values), says to use `$NAME`
   and never to print them.
 - **Redactor** (best effort: an encoded or split value slips through): one choke point in the runner, after every

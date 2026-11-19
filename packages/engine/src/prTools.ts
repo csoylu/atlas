@@ -82,6 +82,8 @@ export async function runPrTool(name: string, input: unknown, ctx: PrToolContext
       { pr: pr.number, verdict, sha: i.sha ?? null, as: ctx.agentId, reason: i.reason, merge: verdict === 'success' && i.merge !== false, base: null, repo: project.repo, ciJob: project.ci_job },
       gh,
     );
+    // The verdict, in the task's history: a workflow review step in this thread takes its exit from it (#273).
+    ctx.kanban.event(card.id, 'pr_verdict', { by: ctx.agentId, verdict: i.verdict, pr: pr.number, sha: i.sha ?? null, reason: i.reason });
     return { output: out.join('\n'), isError: false };
   } catch (e) {
     return { output: e instanceof Error ? e.message : String(e), isError: true };

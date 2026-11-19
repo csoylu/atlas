@@ -1,9 +1,20 @@
 // Child engine for crash.test.ts: started and SIGKILLed repeatedly.
+import { execFileSync } from 'node:child_process';
 import { startEngine } from '../src/index.ts';
 import { LEASE_MS, SlowProvider } from './crash-fixture.ts';
 
-const [dbFile, dataDir, marker] = process.argv.slice(2) as [string, string, string];
-const engine = await startEngine({ dbFile, dataDir, port: 0, dispatch: false, leaseMs: LEASE_MS, providers: () => new SlowProvider(marker), env: {} });
+const [dbFile, dataDir, marker, origin] = process.argv.slice(2) as [string, string, string, string];
+const engine = await startEngine({
+  dbFile,
+  dataDir,
+  port: 0,
+  dispatch: false,
+  leaseMs: LEASE_MS,
+  providers: () => new SlowProvider(marker),
+  env: {},
+  // A command step (#273) clones a local bare repo standing in for GitHub.
+  workflowCommand: { clone: async (_repo, dir) => void execFileSync('git', ['clone', '-q', origin, dir]) },
+});
 if (engine.kanban.list().length === 0) {
   // An event-started workflow (#258): each task created fires one run, whose step makes one task per run.
   engine.workflows.create(
@@ -39,6 +50,21 @@ if (engine.kanban.list().length === 0) {
     'user',
   );
   engine.workflows.runNow(w.id, { task: engine.kanban.list().find((c) => c.title === 'crash 0')!.id });
+  // A command step killed at a random instant (#273): it runs at most once by itself, never again after a cut.
+  const p = engine.projects.create({ name: 'Crash', repo: 'crash/crash', lead: 'atlas', members: [] });
+  const c = engine.workflows.create(
+    {
+      name: 'Command',
+      projectId: p.id,
+      nodes: [
+        { id: 'trigger', kind: 'trigger', x: 0, y: 0, config: { kind: 'manual' } },
+        { id: 'c', kind: 'action', x: 0, y: 0, config: { do: 'command', title: 'Count', command: `echo ran >> ${dataDir}/command-runs; sleep 0.3 # ${marker}`, secrets: [], limitMin: 5 } },
+      ],
+      edges: [{ from: 'trigger', exit: 'start', to: 'c' }],
+    },
+    'user',
+  );
+  engine.workflows.runNow(c.id);
 }
 // Events consumed and step tasks made at a random instant too: the kill may come before, during or after.
 setTimeout(() => engine.workflows.start(5), Math.random() * 300);

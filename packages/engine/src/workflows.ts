@@ -1,5 +1,6 @@
 import { randomUUID } from 'node:crypto';
 import {
+  ApproveWorkflow,
   cardRef,
   CreateWorkflow,
   LOOP_GUARD_DEFAULT,
@@ -30,15 +31,19 @@ import {
   type WorkflowRunState,
   type WorkflowRunStep,
   type WorkflowStepState,
+  type WorkflowCommandStep,
 } from '@atlas/shared';
 import type { Db } from './store/db.ts';
 import type { Bus } from './events.ts';
 import { ConflictError, InvalidError, NotFoundError, type Kanban } from './kanban.ts';
-import { assertActive, defaultProjectId, projectRow, resolveProject } from './projects.ts';
+import { assertActive, defaultProjectId, leadOf, projectRow, resolveProject } from './projects.ts';
 import { insertNotification, type NewNotification } from './notifications.ts';
 import { parsePrUrl } from './prs.ts';
 import type { EventData } from './workflowEvents.ts';
 import { validate, type Gh } from '../../../scripts/pr/validate.mjs';
+import { SecretsUnavailable, type Secrets } from './secrets.ts';
+import { commandDigest, fieldsEnv, killIfSame, prepareCheckout, processStart, removeStaleWorktrees, removeWorktree, signalGroup, spawnCommand, SUMMARY_TAIL, checkoutRoot, writeLog, type CheckoutOptions } from './workflowCommand.ts';
+import { join } from 'node:path';
 import { APPROVE, REJECT, cut, describeTrigger, firstLine, localTimeZone, stamp, stepTitle, triggerWhen, upcoming } from './workflowTime.ts';
 
 export { describeTrigger, describeWhen, localTimeZone, oneStep, upcoming } from './workflowTime.ts';
@@ -68,6 +73,7 @@ interface WfRow {
   created_at: string;
   updated_at: string;
   project_id: string | null;
+  approval_note: number | null;
 }
 interface NodeRow {
   workflow_id: string;
@@ -128,7 +134,35 @@ interface StepRow {
   retry_at: string | null;
   tries: number;
   notified_at: string | null;
+  manual_retry: number;
 }
+type CommandNode = WorkflowNode & { kind: 'action'; config: Extract<WorkflowNode, { kind: 'action' }>['config'] & { do: 'command' } };
+type AgentNode = Extract<WorkflowNode, { kind: 'agent' }>;
+const isCommand = (n: WorkflowNode | null): n is CommandNode => !!n && n.kind === 'action' && n.config.do === 'command';
+/** A command step's state (workflow_run_steps.data, #273): queued for the driver, or running with its process. */
+interface CommandData {
+  cmd: true;
+  phase: 'queued' | 'running';
+  pid?: number;
+  /** The process start time `ps` gave right after the spawn: a restart kills the group only if it still matches. */
+  started?: string | null;
+  dir?: string;
+}
+/** An agent step in the task thread (#273): the agent it woke (once woken) and when. */
+interface ThreadData {
+  thread: true;
+  /** The prompt, filled when the step started; posted in the thread just before the agent is woken. */
+  prompt: string;
+  posted: boolean;
+  /** Runs on the task when the prompt was posted: a kill before runId was stored adopts the run started since. */
+  runsBefore: number;
+  agent: string | null;
+  runId: string | null;
+  /** card_events id and message seq when the agent was woken: its verdict and its words come after them. */
+  eventsBefore: number;
+  seqBefore: number;
+}
+const dataOf = (s: StepRow): Partial<CommandData & ThreadData> => (s.data ? JSON.parse(s.data) : {});
 /** What a merge step acts on (workflow_run_steps.data): the PR, and the head it pins (the one CI and the review saw). */
 interface MergeData {
   repo: string;
@@ -153,6 +187,17 @@ class CouldntRun extends Error {}
 /** Options for tests and the engine: the GitHub client a merge step uses (the user's gh login, login-shell PATH). */
 export interface WorkflowOptions {
   gh?: () => Gh | Promise<Gh>;
+  /**
+   * « Run a command » steps (#273): where checkouts and logs go, the secret store, the engine's login-shell env (the
+   * base of the command's env, #136), and how the repo is first cloned (default: gh repo clone). None: a command step
+   * couldn't run.
+   */
+  command?: { dataDir: string; secrets: () => Secrets; env: () => Promise<NodeJS.ProcessEnv>; clone?: CheckoutOptions['clone']; minuteMs?: number };
+}
+/** Agent steps in the task thread (#273): the runner, set once it exists. wake: the run id, null if one is going. */
+export interface Threads {
+  /** Start the agent's run on the task, `prompt` posted in the thread as the run starts. Null: a run is going there. */
+  wake(cardId: string, agentId: string, prompt: string): string | null;
 }
 
 const toNode = (r: NodeRow): WorkflowNode => ({ id: r.id, kind: r.kind, x: r.x, y: r.y, config: JSON.parse(r.config) }) as WorkflowNode;
@@ -181,7 +226,7 @@ const toStep = (r: StepRow, node: WorkflowNode | null): WorkflowRunStep => ({
   endedAt: r.ended_at,
   deadlineAt: r.deadline_at,
   couldntRun: r.couldnt
-    ? { reason: r.couldnt, since: r.couldnt_since ?? r.started_at, nextTryAt: r.retry_at ?? r.started_at, tries: r.tries, notified: !!r.notified_at, negativeExit: node ? negativeExit(node) : null }
+    ? { reason: r.couldnt, since: r.couldnt_since ?? r.started_at, nextTryAt: r.retry_at ?? r.started_at, tries: r.tries, notified: !!r.notified_at, negativeExit: node ? negativeExit(node) : null, autoRetry: !r.manual_retry }
     : null,
 });
 const errText = (e: unknown) => (e instanceof Error ? e.message : String(e));
@@ -269,8 +314,10 @@ export class Workflows {
   start(intervalMs = 15_000): void {
     this.stop();
     this.unsubscribe = this.bus.on((e) => {
-      if (e.type === 'card.updated' || e.type === 'card.deleted' || e.type === 'message.appended') this.soon();
+      if (e.type === 'card.updated' || e.type === 'card.deleted' || e.type === 'message.appended' || e.type === 'run.updated') this.soon();
     });
+    this.stopping = false;
+    this.recoverCommands();
     this.tick();
     this.timer = setInterval(() => this.tick(), intervalMs);
     this.timer.unref();
@@ -281,7 +328,15 @@ export class Workflows {
     this.timer = undefined;
     this.unsubscribe?.();
     this.unsubscribe = undefined;
+    // Like a kill: each command's group goes now, its step stays running in the store and the next start says so.
+    this.stopping = true;
+    for (const pid of this.children.values()) signalGroup(pid, 'SIGKILL');
   }
+  private stopping = false;
+  /** Command steps whose process runs now: step id → pid (its process group). */
+  private children = new Map<number, number>();
+  /** Set once the runner exists (index.ts). */
+  threads: Threads | null = null;
 
   /** Coalesce a burst of card events into one tick. */
   private soon(): void {
@@ -327,6 +382,12 @@ export class Workflows {
   async idle(): Promise<void> {
     while (this.inflight.size) await Promise.all([...this.inflight.values()]);
   }
+
+  /** Resolves once no command step runs (tests, and engine stop). */
+  async commandsIdle(): Promise<void> {
+    while (this.running.size) await Promise.all([...this.running.values()]);
+  }
+  private running = new Map<number, Promise<void>>();
 
   /** What a run knows (#258): its stored fields (task, PR, project, event…) and the exit, summary and task of its ended steps. */
   context(runId: string): WorkflowRunContext {
@@ -425,12 +486,13 @@ export class Workflows {
       // Its project (#213): omitted = the default one, null = global.
       const project = c.projectId === undefined ? defaultProjectId(this.db) : c.projectId === null ? null : resolveProject(this.db, c.projectId);
       if (project) assertActive(this.db, project, 'it takes no new workflow');
-      const trigger = this.check(c);
+      const trigger = this.check(c, project);
       const next = c.enabled ? this.firstRun(trigger) : null;
       this.db
         .prepare('INSERT INTO workflows (id, name, enabled, origin, revision, next_run_at, created_by, created_at, updated_at, project_id) VALUES (?, ?, ?, NULL, 1, ?, ?, ?, ?, ?)')
         .run(id, c.name, c.enabled ? 1 : 0, next, by, now, now, project);
       this.writeGraph(id, c);
+      this.afterEdit(id, by);
       this.touched.workflows.add(id);
     });
     return this.get(id);
@@ -456,18 +518,22 @@ export class Workflows {
     );
   }
 
-  /** Replace the graph. Refused if `revision` is not the stored one (saved since by someone else) or the graph is invalid. */
-  saveGraph(id: string, input: SaveWorkflowGraph): Workflow {
+  /**
+   * Replace the graph. Refused if `revision` is not the stored one (saved since by someone else) or the graph is invalid.
+   * `by`: who saves (#273): Master's own save approves its command steps, an agent's asks Master again.
+   */
+  saveGraph(id: string, input: SaveWorkflowGraph, by = 'user'): Workflow {
     const g = SaveWorkflowGraph.parse(input);
     this.tx(() => {
       const w = this.row(id);
       if (g.revision !== w.revision) throw new ConflictError(`workflow "${w.name}" was saved since you opened it (revision ${w.revision}, yours ${g.revision}): reload it`);
-      const trigger = this.check(g);
+      const trigger = this.check(g, w.project_id);
       const before = this.nodes(id).find((n) => n.kind === 'trigger');
       const timingChanged = !before || before.config !== JSON.stringify(trigger);
       const next = !w.enabled ? null : timingChanged ? this.firstRun(trigger) : w.next_run_at;
       this.writeGraph(id, g);
       this.db.prepare('UPDATE workflows SET revision = revision + 1, next_run_at = ?, updated_at = ? WHERE id = ?').run(next, this.now().toISOString(), id);
+      this.afterEdit(id, by);
       this.touched.workflows.add(id);
     });
     return this.get(id);
@@ -487,6 +553,40 @@ export class Workflows {
         // Turned back on after the loop guard (#259): its reason is answered, the list stops showing « stopped ».
         if (p.enabled && w.last_error?.startsWith('loop guard')) this.db.prepare('UPDATE workflows SET last_error = NULL WHERE id = ?').run(id);
       }
+      this.touched.workflows.add(id);
+    });
+    return this.get(id);
+  }
+
+  /**
+   * Master approves every command step of `revision` (#273, design §5): exactly the command, secrets, limit, project and
+   * repo shown. A stale revision (saved since) is refused, so what was approved is what was shown. Only the HTTP
+   * route calls this: no agent tool does (pinned by a test).
+   */
+  approve(id: string, input: ApproveWorkflow): Workflow {
+    const { revision } = ApproveWorkflow.parse(input);
+    this.tx(() => {
+      const w = this.row(id);
+      if (revision !== w.revision) throw new ConflictError(`workflow "${w.name}" was saved since you looked at it (revision ${w.revision}, yours ${revision}): reload it and check its commands again`);
+      if (!this.commandNodes(id).length) throw new InvalidError(`workflow "${w.name}" has no command step to approve`);
+      this.writeApprovals(id, 'user');
+      this.closeApprovalNote(w);
+      // A step that couldn't run « not approved » goes on now.
+      this.db
+        .prepare(`UPDATE workflow_run_steps SET retry_at = ? WHERE ended_at IS NULL AND couldnt LIKE 'not approved%' AND run_id IN (SELECT id FROM workflow_runs WHERE workflow_id = ? AND ${OPEN_RUN})`)
+        .run(this.now().toISOString(), id);
+      this.touched.workflows.add(id);
+    });
+    this.tick();
+    return this.get(id);
+  }
+
+  /** Master says no (#273): the workflow is turned off, its approval item leaves the Inbox; nothing is approved. */
+  reject(id: string): Workflow {
+    this.tx(() => {
+      const w = this.row(id);
+      this.db.prepare('UPDATE workflows SET enabled = 0, next_run_at = NULL, last_error = ?, updated_at = ? WHERE id = ?').run('its command step was rejected by you: edit it, then approve it', this.now().toISOString(), id);
+      this.closeApprovalNote(w);
       this.touched.workflows.add(id);
     });
     return this.get(id);
@@ -536,7 +636,7 @@ export class Workflows {
   retryNow(runId: string): WorkflowRun {
     this.tx(() => {
       const step = this.couldntStep(runId);
-      this.db.prepare('UPDATE workflow_run_steps SET retry_at = ? WHERE id = ?').run(this.now().toISOString(), step.id);
+      this.db.prepare('UPDATE workflow_run_steps SET retry_at = ?, manual_retry = 0 WHERE id = ?').run(this.now().toISOString(), step.id);
       this.touched.runs.add(runId);
     });
     this.tick();
@@ -595,7 +695,14 @@ export class Workflows {
     } finally {
       this.ticking = false;
     }
+    this.drive();
+  }
+
+  /** Steps that work outside a transaction: merges (GitHub), commands (a process), agents in a task thread (the runner). */
+  private drive(): void {
     this.driveMerges();
+    this.driveCommands();
+    this.driveThreads();
   }
 
   /**
@@ -616,7 +723,7 @@ export class Workflows {
           if (step.notified_at === null && step.couldnt_since && now.getTime() - Date.parse(step.couldnt_since) >= COULDNT_NOTIFY_MS) {
             const w = this.row(run.workflow_id);
             const neg = node ? negativeExit(node) : null;
-            this.notify({
+            if (!step.manual_retry) this.notify({
               kind: 'workflow.couldnt_run',
               title: `Workflow « ${w.name} » is stuck on « ${node ? stepTitle(node) : step.node_id} »`,
               body: `Run ${run.number}: the step couldn't run for ${Math.round((now.getTime() - Date.parse(step.couldnt_since)) / 60_000)} min (${step.couldnt}). Atlas retries it every minute and goes on by itself once it can. In the run: Retry now${neg ? `, or Follow « ${neg} »` : ''}.`,
@@ -626,7 +733,8 @@ export class Workflows {
             this.touched.runs.add(run.id);
           }
           if (!node || (step.retry_at && step.retry_at > iso)) return;
-          if (node.kind === 'action' && node.config.do === 'mergePr') return; // driveMerges
+          if (node.kind === 'action' && (node.config.do === 'mergePr' || node.config.do === 'command')) return; // driveMerges, driveCommands
+          if (step.manual_retry) return; // only Master moves it on
           this.attempt(run, step, node);
         });
       } catch (e) {
@@ -819,6 +927,17 @@ export class Workflows {
         : this.db.prepare(`SELECT number FROM workflow_runs WHERE workflow_id = ? AND ${OPEN_RUN} AND subject_card IS NULL ORDER BY number LIMIT 1`).get(w.id)
     ) as { number: number } | undefined;
     const about = [subject?.cardId ?? null, subject?.prUrl ?? null, on.event?.name ?? null] as const;
+    // A command step Master has not approved (#273): no run starts; the firing is recorded, Master asked once.
+    const unapproved = this.commandNodes(w.id).filter((n) => !this.approval(w.id, n));
+    if (unapproved.length) {
+      const reason = `skipped: waiting for your approval of ${unapproved.map((n) => `« ${stepTitle(n)} »`).join(', ')}`;
+      this.db
+        .prepare("INSERT INTO workflow_runs (id, workflow_id, number, state, trigger, reason, started_at, ended_at, subject_card, subject_pr, event) VALUES (?, ?, ?, 'skipped', ?, ?, ?, ?, ?, ?, ?)")
+        .run(id, w.id, n, trigger, reason, iso, iso, ...about);
+      this.db.prepare('UPDATE workflows SET last_error = ? WHERE id = ?').run(reason.replace(/^skipped: /, ''), w.id);
+      this.askApproval(this.row(w.id));
+      return id;
+    }
     if (open) {
       this.db
         .prepare("INSERT INTO workflow_runs (id, workflow_id, number, state, trigger, reason, started_at, ended_at, subject_card, subject_pr, event) VALUES (?, ?, ?, 'skipped', ?, ?, ?, ?, ?, ?, ?)")
@@ -899,8 +1018,22 @@ export class Workflows {
 
     if (node.kind === 'agent') {
       const c = node.config;
-      if (!c.agentId) return this.endRun(runId, 'failed', `${name} has no agent chosen`);
       if (!c.prompt.trim()) return this.endRun(runId, 'failed', `${name} has no prompt`);
+      if (c.inThread) {
+        // In the thread of the run's task (#273): the step's task is that one; driveThreads posts the prompt and wakes the agent.
+        const card = run.subject_card ? this.cardOrNull(run.subject_card) : null;
+        if (!card) {
+          this.insertStep(runId, node.id, 'agent', 'failed', { exit: negativeExit(node)!, summary: 'no task thread', ended: true });
+          return this.endRun(runId, 'failed', `${name} works in the run's task thread, and ${run.subject_card ? `task ${run.subject_card} was deleted` : `this run has none (started ${this.startedHow(run)})`}`);
+        }
+        if (!c.reviewAgent && !c.agentId) return this.endRun(runId, 'failed', `${name} has no agent chosen`);
+        const id = this.insertStep(runId, node.id, 'agent', 'running', { card: card.id });
+        const data: ThreadData = { thread: true, prompt: fill(c.prompt) + why, posted: false, runsBefore: 0, agent: null, runId: null, eventsBefore: 0, seqBefore: 0 };
+        this.db.prepare('UPDATE workflow_run_steps SET data = ? WHERE id = ?').run(JSON.stringify(data), id);
+        this.setRunState(runId, 'running');
+        return;
+      }
+      if (!c.agentId) return this.endRun(runId, 'failed', `${name} has no agent chosen`);
       // Its agent was deleted since the save: no answer, not an outcome (#261). The run waits; Atlas retries.
       if (!this.db.prepare('SELECT 1 FROM agents WHERE id = ?').get(c.agentId)) {
         const id = this.insertStep(runId, node.id, 'agent', 'waiting', {});
@@ -976,6 +1109,14 @@ export class Workflows {
     const w = this.row(run.workflow_id);
     const by = 'workflow:' + w.id;
     try {
+      if (node.kind === 'agent' && node.config.inThread) {
+        // Tried again (#273): the prompt is posted again and the agent woken by driveThreads.
+        const d = dataOf(step) as ThreadData;
+        this.db.prepare("UPDATE workflow_run_steps SET state = 'running', data = ? WHERE id = ?").run(JSON.stringify({ ...d, posted: false, runId: null, agent: null }), step.id);
+        this.clearCouldnt(step.id);
+        this.setRunState(run.id, 'running');
+        return;
+      }
       if (node.kind === 'agent') {
         if (!this.db.prepare('SELECT 1 FROM agents WHERE id = ?').get(node.config.agentId)) throw new CouldntRun(`agent @${node.config.agentId} does not exist`);
         const how = this.steps(run.id).find((s) => s.kind === 'trigger')?.summary ?? 'started';
@@ -987,6 +1128,13 @@ export class Workflows {
         const text = fill(c.text).trim();
         this.notify({ kind: 'workflow.notify', title: cut(c.title ? `${w.name}: ${c.title}` : `Workflow « ${w.name} »`, 200), body: text, cardId: run.subject_card });
         return this.finishStep(run.id, step, 'done', `told you: ${cut(text, 200)}`);
+      }
+      if (c.do === 'command') {
+        // Queued: driveCommands checks the approval, makes the checkout and runs it, outside the transaction.
+        const data: CommandData = { cmd: true, phase: 'queued' };
+        this.db.prepare('UPDATE workflow_run_steps SET data = ? WHERE id = ?').run(JSON.stringify(data), step.id);
+        this.touched.runs.add(run.id);
+        return;
       }
       const card = run.subject_card ? this.cardOrNull(run.subject_card) : null;
       if (!card) return this.failStep(run.id, step, `${name} acts on the run's task, and ${run.subject_card ? `task ${run.subject_card} was deleted` : `this run has none (started ${this.startedHow(run)})`}`);
@@ -1028,7 +1176,8 @@ export class Workflows {
     const rows = this.db
       .prepare(
         `SELECT s.* FROM workflow_run_steps s JOIN workflow_runs r ON r.id = s.run_id
-         WHERE r.${OPEN_RUN} AND s.kind = 'action' AND s.ended_at IS NULL AND s.data IS NOT NULL AND (s.couldnt IS NULL OR s.retry_at <= ?) ORDER BY s.id`,
+         WHERE r.${OPEN_RUN} AND s.kind = 'action' AND s.ended_at IS NULL AND s.data IS NOT NULL AND json_extract(s.data, '$.cmd') IS NULL
+           AND (s.couldnt IS NULL OR s.retry_at <= ?) ORDER BY s.id`,
       )
       .all(iso) as StepRow[];
     for (const step of rows) {
@@ -1091,6 +1240,7 @@ export class Workflows {
     if (step.couldnt) return; // retryDue tries it again
     if (step.kind === 'action') return; // a merge: driveMerges
     if (step.kind === 'wait') return this.checkWait(this.runRow(runId), step);
+    if (step.kind === 'agent' && dataOf(step).thread) return this.checkThread(this.runRow(runId), step);
     const card = step.card_id ? this.cardOrNull(step.card_id) : null;
     if (!card) return this.finishStep(runId, step, step.kind === 'approval' ? 'rejected' : 'failed', 'its task was deleted');
     const by = 'workflow:' + this.runRow(runId).workflow_id;
@@ -1293,9 +1443,369 @@ export class Workflows {
     const open = this.steps(runId).filter((x) => x.state === 'running' || x.state === 'waiting');
     this.endRun(runId, 'stopped', by === 'user' ? 'stopped by you' : `stopped by ${by}`);
     for (const s of open) {
+      const pid = this.children.get(s.id);
+      if (pid) signalGroup(pid, 'SIGKILL'); // its result finds the step ended and only cleans up
+      if (dataOf(s).thread) continue; // the task is the run's own task, not the step's: it stays as it is
       const c = s.card_id ? this.cardOrNull(s.card_id) : null;
       if (c && !['done', 'closed', 'archived'].includes(c.status)) this.kanban.update(c.id, { status: 'closed' }, by);
     }
+  }
+
+  /* ── Command steps (#273, design §10b) ── */
+
+  private commandNodes(workflowId: string): CommandNode[] {
+    return this.nodes(workflowId).map(toNode).filter(isCommand);
+  }
+
+  /** The stored approval of a command step if it matches its current config (command, secrets, limit, project, repo). */
+  private approval(workflowId: string, n: CommandNode): { approved_at: string; approved_by: string } | null {
+    const r = this.db.prepare('SELECT digest, approved_at, approved_by FROM workflow_command_approvals WHERE workflow_id = ? AND node_id = ?').get(workflowId, n.id) as
+      | { digest: string; approved_at: string; approved_by: string }
+      | undefined;
+    return r && r.digest === this.digestOf(workflowId, n) ? r : null;
+  }
+
+  private digestOf(workflowId: string, n: CommandNode): string {
+    const project = this.row(workflowId).project_id;
+    return commandDigest(n.config, project ?? '', project ? projectRow(this.db, project).repo : null);
+  }
+
+  /** Approve every command step as it is now (inside a transaction). Only Master's save and the approve route call it. */
+  private writeApprovals(workflowId: string, by: string): void {
+    const now = this.now().toISOString();
+    const up = this.db.prepare(
+      `INSERT INTO workflow_command_approvals (workflow_id, node_id, digest, approved_at, approved_by) VALUES (?, ?, ?, ?, ?)
+       ON CONFLICT (workflow_id, node_id) DO UPDATE SET digest = excluded.digest, approved_at = excluded.approved_at, approved_by = excluded.approved_by`,
+    );
+    for (const n of this.commandNodes(workflowId)) if (!this.approval(workflowId, n)) up.run(workflowId, n.id, this.digestOf(workflowId, n), now, by);
+  }
+
+  /**
+   * After a create or a save (inside its transaction): removed steps lose their approval; Master's own edit approves
+   * its command steps, an agent's leaves a changed one unapproved and Master gets one Inbox item.
+   */
+  private afterEdit(workflowId: string, by: string): void {
+    const ids = new Set(this.commandNodes(workflowId).map((n) => n.id));
+    for (const r of this.db.prepare('SELECT node_id FROM workflow_command_approvals WHERE workflow_id = ?').all(workflowId) as { node_id: string }[])
+      if (!ids.has(r.node_id)) this.db.prepare('DELETE FROM workflow_command_approvals WHERE workflow_id = ? AND node_id = ?').run(workflowId, r.node_id);
+    const w = this.row(workflowId);
+    if (by === 'user') {
+      this.writeApprovals(workflowId, 'user');
+      return this.closeApprovalNote(w);
+    }
+    if (this.commandNodes(workflowId).some((n) => !this.approval(workflowId, n))) {
+      // Edited again by an agent: the open item says the new state (a fresh one replaces it).
+      this.closeApprovalNote(w);
+      this.askApproval(this.row(workflowId), by);
+    }
+  }
+
+  /** One Inbox item asking Master to approve the workflow's command steps (none while one is open). */
+  private askApproval(w: WfRow, by?: string): void {
+    if (w.approval_note !== null && this.db.prepare('SELECT 1 FROM notifications WHERE id = ? AND archived_at IS NULL').get(w.approval_note)) return;
+    const steps = this.commandNodes(w.id).filter((n) => !this.approval(w.id, n));
+    if (!steps.length) return;
+    const who = by && by !== 'user' ? `@${by.replace(/^workflow:/, '')} changed it. ` : '';
+    const n = insertNotification(this.db, {
+      kind: 'workflow.approval',
+      title: `Workflow « ${w.name} » needs your approval`,
+      body: `${who}${steps.map((s) => `« ${stepTitle(s)} » runs \`${cut(s.config.command, 300)}\`${s.config.secrets.length ? ` with ${s.config.secrets.join(', ')}` : ''}, at most ${s.config.limitMin} min`).join('; ')}. No run starts until you approve it in Workflows.`,
+      cardId: null,
+    });
+    this.notified.push(n);
+    this.db.prepare('UPDATE workflows SET approval_note = ? WHERE id = ?').run(n.id, w.id);
+  }
+
+  private closeApprovalNote(w: WfRow): void {
+    if (w.approval_note === null) return;
+    this.db.prepare('UPDATE notifications SET archived_at = COALESCE(archived_at, ?) WHERE id = ?').run(this.now().toISOString(), w.approval_note);
+    this.db.prepare('UPDATE workflows SET approval_note = NULL WHERE id = ?').run(w.id);
+  }
+
+  /**
+   * At start (#273, design §6): a command step still running in the store ran in an engine that stopped. Its process
+   * group is killed if it is still the same process (pid + start time), its worktree removed, and the step couldn't
+   * run « Atlas stopped while the command ran »: never retried by itself (a deploy run twice is worse than one
+   * waiting), Master told at once.
+   */
+  private recoverCommands(): void {
+    const rows = this.db
+      .prepare(
+        `SELECT s.* FROM workflow_run_steps s JOIN workflow_runs r ON r.id = s.run_id
+         WHERE r.${OPEN_RUN} AND s.ended_at IS NULL AND json_extract(s.data, '$.cmd') = 1 AND json_extract(s.data, '$.phase') = 'running'`,
+      )
+      .all() as StepRow[];
+    for (const step of rows) {
+      if (this.children.has(step.id)) continue; // ours, still going (start called twice)
+      const d = dataOf(step) as CommandData;
+      // No pid: killed between storing « running » and the spawn's pid (the command may have started, unknown).
+      if (d.pid) killIfSame(d.pid, d.started ?? null);
+      this.tx(() => {
+        const run = this.runRow(step.run_id);
+        const w = this.row(run.workflow_id);
+        const node = this.node(w.id, step.node_id);
+        const data: CommandData = { cmd: true, phase: 'queued' };
+        this.db.prepare('UPDATE workflow_run_steps SET data = ?, manual_retry = 1 WHERE id = ?').run(JSON.stringify(data), step.id);
+        this.markCouldnt(run.id, step.id, 'Atlas stopped while the command ran: it may have run in part');
+        this.notify({
+          kind: 'workflow.couldnt_run',
+          title: `Workflow « ${w.name} »: « ${node ? stepTitle(node) : step.node_id} » was cut off`,
+          body: `Run ${run.number}: Atlas stopped while the command ran, so it may have run in part. It is not run again by itself: in the run, Retry now, or Follow « other exit ».`,
+          cardId: run.subject_card,
+        });
+        this.db.prepare('UPDATE workflow_run_steps SET notified_at = ? WHERE id = ?').run(this.now().toISOString(), step.id);
+      });
+    }
+    // No command runs yet in this engine: every step worktree left on disk is a stopped engine's.
+    if (this.opts.command && !this.children.size) removeStaleWorktrees(this.opts.command.dataDir);
+  }
+
+  /** Command steps whose turn it is: queued, or couldn't run and due again (not one cut off by a stop: Master's call). */
+  private driveCommands(): void {
+    if (this.stopping) return;
+    const iso = this.now().toISOString();
+    const rows = this.db
+      .prepare(
+        `SELECT s.* FROM workflow_run_steps s JOIN workflow_runs r ON r.id = s.run_id
+         WHERE r.${OPEN_RUN} AND s.ended_at IS NULL AND json_extract(s.data, '$.cmd') = 1 AND json_extract(s.data, '$.phase') = 'queued'
+           AND (s.couldnt IS NULL OR (s.manual_retry = 0 AND s.retry_at <= ?)) ORDER BY s.id`,
+      )
+      .all(iso) as StepRow[];
+    for (const step of rows) {
+      if (this.running.has(step.id)) continue;
+      const p = this.runCommand(step)
+        .catch((e) => {
+          console.error(`workflow command step ${step.id} failed`, errText(e));
+          this.tx(() => {
+            if (!this.stepRow(step.id).ended_at) this.endRun(step.run_id, 'failed', `the command step failed: ${errText(e)}`);
+          });
+        })
+        .finally(() => this.running.delete(step.id));
+      this.running.set(step.id, p);
+    }
+  }
+
+  /**
+   * One command (#273): the approval checked again, the env (only the step's secrets, the run fields as env vars),
+   * a clean worktree of the default branch, `bash -c`, the output redacted before any cut. No answer (a locked store,
+   * a missing value, gh logged out) is « couldn't run »; the command's code is the exit.
+   */
+  private async runCommand(first: StepRow): Promise<void> {
+    await Promise.resolve(); // never synchronous: driveCommands records the promise first
+    const run = this.runRow(first.run_id);
+    const w = this.row(run.workflow_id);
+    const node = this.node(w.id, first.node_id);
+    const couldnt = (reason: string) =>
+      this.tx(() => {
+        if (!this.stepRow(first.id).ended_at) this.markCouldnt(run.id, first.id, reason);
+      });
+    if (!isCommand(node)) return this.tx(() => this.failStep(run.id, this.stepRow(first.id), `step ${first.node_id} is no longer a command step`));
+    const o = this.opts.command;
+    if (!o) return couldnt('this engine runs no command steps');
+    const c = node.config;
+    const name = `« ${stepTitle(node)} »`;
+    // Checked at the step itself: a run started before an edit runs only what Master approved.
+    if (!this.approval(w.id, node)) {
+      this.tx(() => {
+        if (this.stepRow(first.id).ended_at) return;
+        this.markCouldnt(run.id, first.id, 'not approved since the last edit: approve it in Workflows');
+        this.askApproval(this.row(w.id));
+      });
+      return;
+    }
+    const project = w.project_id ? projectRow(this.db, w.project_id) : null;
+    if (!project?.repo) return this.tx(() => this.failStep(run.id, this.stepRow(first.id), `${name}: the workflow's project has no GitHub repo`));
+    const base = await o.env();
+    let env: NodeJS.ProcessEnv;
+    try {
+      env = o.secrets().envForStep(c.secrets, project.id, base, `workflow:${w.id}/${node.id}`);
+    } catch (e) {
+      return couldnt(e instanceof SecretsUnavailable ? errText(e) : `the step's secrets: ${errText(e)}`);
+    }
+    const fields = this.liveFields(run, this.steps(run.id));
+    const passed = fieldsEnv(fields, new Set([...Object.keys(env).filter((k) => c.secrets.includes(k)), ...Object.keys(base)]));
+    const key = `${run.id}-${node.id}-${first.round}`;
+    let co: { dir: string; branch: string; sha: string };
+    try {
+      co = await prepareCheckout({ dataDir: o.dataDir, clone: o.clone }, project.id, project.repo, key, base);
+    } catch (e) {
+      return couldnt(`can't check out ${project.repo}: ${cut(errText(e), 300)}`);
+    }
+    const clone = join(checkoutRoot(o.dataDir, project.id), 'repo');
+    try {
+      // Stopped, or Master followed « other exit » while the checkout was made: nothing runs.
+      const now = this.stepRow(first.id);
+      if (now.ended_at || this.stopping) return;
+      const limitMs = c.limitMin * (o.minuteMs ?? 60_000);
+      // Stored before the spawn: a kill from here on is « cut off » at the next start, never a second run.
+      this.tx(() => {
+        const data: CommandData = { cmd: true, phase: 'running', dir: co.dir };
+        this.clearCouldnt(first.id);
+        this.db.prepare("UPDATE workflow_run_steps SET state = 'running', data = ? WHERE id = ?").run(JSON.stringify(data), first.id);
+        this.setRunState(run.id, 'running');
+        this.touched.runs.add(run.id);
+      });
+      const result = await spawnCommand(c.command, {
+        cwd: co.dir,
+        env: { ...env, ...passed.env, ATLAS_CHECKOUT_SHA: co.sha, ATLAS_CHECKOUT_BRANCH: co.branch },
+        limitMs,
+        onSpawn: (pid) => {
+          this.children.set(first.id, pid);
+          const data: CommandData = { cmd: true, phase: 'running', pid, started: processStart(pid), dir: co.dir };
+          this.tx(() => {
+            this.db.prepare('UPDATE workflow_run_steps SET data = ? WHERE id = ?').run(JSON.stringify(data), first.id);
+            this.touched.runs.add(run.id);
+          });
+        },
+      });
+      this.children.delete(first.id);
+      if (this.stopping) return; // the engine stops: the next start says it was cut off
+      // Redacted whole, before any cut (#227); a store that can't be read withholds the output.
+      let out: string;
+      try {
+        out = o.secrets().redact(result.output).text;
+      } catch (e) {
+        out = `(output withheld: the secret store can't be read: ${errText(e)})`;
+      }
+      const log = writeLog(o.dataDir, key, out);
+      const how = result.timedOut
+        ? `stopped at its ${c.limitMin} min limit`
+        : result.code === 0
+          ? 'exit 0'
+          : result.code !== null
+            ? `exit ${result.code}`
+            : `killed by ${result.signal ?? 'a signal'}`;
+      const tail = out.length > SUMMARY_TAIL ? '…' + out.slice(-SUMMARY_TAIL) : out;
+      const notes = [...passed.notes, ...(result.truncated ? ['the output passed 64 MB: its end was dropped'] : [])];
+      const summary = `${how} on ${co.branch} ${co.sha.slice(0, 7)}${notes.length ? ` (${notes.join('; ')})` : ''}. Log: ${log}${tail.trim() ? `\n${tail.trimEnd()}` : ''}`;
+      this.tx(() => {
+        const s = this.stepRow(first.id);
+        if (s.ended_at) return; // stopped meanwhile
+        this.db.prepare('UPDATE workflow_run_steps SET data = ? WHERE id = ?').run(JSON.stringify({ cmd: true, phase: 'done' }), s.id);
+        this.finishStep(run.id, s, result.code === 0 && !result.timedOut ? 'exit 0' : 'other exit', summary);
+      });
+    } finally {
+      this.children.delete(first.id);
+      if (!this.stopping) await removeWorktree(clone, co.dir, base);
+    }
+  }
+
+  /* ── Agent steps in the task thread (#273) ── */
+
+  /** The agent of a thread step: the chosen one, or the task's reviewer (the project's review agent, the lead on its own PRs). */
+  private threadAgent(node: AgentNode, card: Card): { id: string } | { couldnt: string } {
+    if (!node.config.reviewAgent) return node.config.agentId ? { id: node.config.agentId } : { couldnt: 'no agent chosen' };
+    if (card.reviewer) return { id: card.reviewer }; // In review: the reviewer the task was handed to
+    // Today's rule (#213): the review agent; on its own task, the project's lead.
+    const review = (this.db.prepare("SELECT value FROM settings WHERE key = 'review_agent'").get() as { value: string } | undefined)?.value || null;
+    if (!review) return { couldnt: 'no review agent is set (Settings → Board & triage)' };
+    const id = review === card.assignee ? leadOf(this.db, card.projectId) : review;
+    return id ? { id } : { couldnt: `@${review} built this task and project ${projectRow(this.db, card.projectId).name} has no lead to review it` };
+  }
+
+  /** Thread steps whose agent is not woken yet: the prompt goes in the thread and the agent starts there, once the thread is free. */
+  private driveThreads(): void {
+    const threads = this.threads;
+    if (!threads || this.stopping || this.waking) return;
+    this.waking = true;
+    try {
+      this.wakeThreads(threads);
+    } finally {
+      this.waking = false;
+    }
+  }
+  private waking = false;
+
+  private wakeThreads(threads: Threads): void {
+    const rows = this.db
+      .prepare(
+        `SELECT s.* FROM workflow_run_steps s JOIN workflow_runs r ON r.id = s.run_id
+         WHERE r.${OPEN_RUN} AND s.ended_at IS NULL AND s.couldnt IS NULL AND json_extract(s.data, '$.thread') = 1 AND json_extract(s.data, '$.runId') IS NULL ORDER BY s.id`,
+      )
+      .all() as StepRow[];
+    for (const step of rows) {
+      try {
+        this.wakeThread(threads, step);
+      } catch (e) {
+        console.error(`workflow thread step ${step.id} failed`, errText(e));
+        this.tx(() => this.endRun(step.run_id, 'failed', errText(e)));
+      }
+    }
+  }
+
+  private wakeThread(threads: Threads, step: StepRow): void {
+    const run = this.runRow(step.run_id);
+    const node = this.node(run.workflow_id, step.node_id);
+    if (!node || node.kind !== 'agent' || !step.card_id) return;
+    const card = this.cardOrNull(step.card_id);
+    if (!card) return this.tx(() => this.reconcile(run.id));
+    const d = dataOf(step) as ThreadData;
+    const runs = () => this.db.prepare('SELECT id, agent_id FROM runs WHERE card_id = ? ORDER BY started_at, rowid').all(card.id) as { id: string; agent_id: string }[];
+    // A kill between the wake and storing its run: the run it started is the one after runsBefore.
+    if (d.posted && d.agent) {
+      const adopted = runs().slice(d.runsBefore).find((r) => r.agent_id === d.agent);
+      if (adopted) return this.tx(() => this.storeThreadRun(step.id, { ...d, runId: adopted.id }));
+    }
+    if (this.db.prepare("SELECT 1 FROM runs WHERE card_id = ? AND status = 'running'").get(card.id)) return; // the thread is busy: after that run
+    const who = this.threadAgent(node, card);
+    if ('couldnt' in who) return this.tx(() => this.markCouldnt(run.id, step.id, who.couldnt));
+    if (!this.db.prepare('SELECT 1 FROM agents WHERE id = ?').get(who.id)) return this.tx(() => this.markCouldnt(run.id, step.id, `agent @${who.id} does not exist`));
+    const events = (this.db.prepare('SELECT COALESCE(MAX(id), 0) AS n FROM card_events WHERE card_id = ?').get(card.id) as { n: number }).n;
+    const seqBefore = this.kanban.messages(card.id).at(-1)?.seq ?? 0;
+    const next: ThreadData = { ...d, posted: true, agent: who.id, runsBefore: runs().length, runId: null, eventsBefore: events, seqBefore };
+    this.tx(() => this.storeThreadRun(step.id, next));
+    const runId = threads.wake(card.id, who.id, d.prompt);
+    if (runId) this.tx(() => this.storeThreadRun(step.id, { ...next, runId }));
+  }
+
+  private storeThreadRun(stepId: number, d: ThreadData): void {
+    this.db.prepare('UPDATE workflow_run_steps SET data = ? WHERE id = ?').run(JSON.stringify(d), stepId);
+    this.touched.runs.add(this.stepRow(stepId).run_id);
+  }
+
+  /**
+   * A thread step once its agent's run ended (inside a transaction). Done: the run ended done; not done: it failed or
+   * was stopped. A review: the pr_validate verdict on this task since the step started (ok → approved, fail →
+   * changes asked with the reason), none → couldn't run, not retried by itself (each try is a model run).
+   */
+  private checkThread(run: RunRow, step: StepRow): void {
+    const d = dataOf(step) as ThreadData;
+    if (!d.runId) return;
+    const r = this.db.prepare('SELECT status, error FROM runs WHERE id = ?').get(d.runId) as { status: string; error: string | null } | undefined;
+    if (!r) return this.finishStep(run.id, step, 'not done', 'its run was deleted');
+    if (r.status === 'running') {
+      this.setStepState(step, 'running');
+      return this.setRunState(run.id, 'running');
+    }
+    if (r.status === 'interrupted') return; // the runner resumes it
+    const node = this.node(run.workflow_id, step.node_id);
+    const said = this.lastAgentText(step.card_id!, d.agent!, d.seqBefore);
+    if (node?.kind === 'agent' && node.config.reviewAgent) {
+      const v = this.db
+        .prepare("SELECT payload FROM card_events WHERE card_id = ? AND kind = 'pr_verdict' AND id > ? ORDER BY id DESC LIMIT 1")
+        .get(step.card_id, d.eventsBefore ?? 0) as { payload: string } | undefined;
+      if (!v) {
+        this.db.prepare('UPDATE workflow_run_steps SET manual_retry = 1 WHERE id = ?').run(step.id);
+        this.markCouldnt(run.id, step.id, `the review by @${d.agent} ended without a verdict (pr_validate)${r.status === 'failed' ? `: ${r.error ?? 'the run failed'}` : ''}`);
+        const w = this.row(run.workflow_id);
+        this.notify({ kind: 'workflow.couldnt_run', title: `Workflow « ${w.name} »: no verdict from @${d.agent}`, body: `Run ${run.number}: the review ended without pr_validate. In the run: Retry now, or Follow « changes asked ».`, cardId: run.subject_card });
+        this.db.prepare('UPDATE workflow_run_steps SET notified_at = ? WHERE id = ?').run(this.now().toISOString(), step.id);
+        return;
+      }
+      const p = JSON.parse(v.payload) as { verdict: 'ok' | 'fail'; reason: string; pr: number; by: string };
+      return this.finishStep(run.id, step, p.verdict === 'ok' ? 'approved' : 'changes asked', `@${p.by} on PR #${p.pr}: ${cut(p.reason, 1000)}`);
+    }
+    if (r.status === 'done') return this.finishStep(run.id, step, 'done', said ?? 'done');
+    this.finishStep(run.id, step, 'not done', `@${d.agent}'s run ${r.status}${r.error ? `: ${r.error}` : ''}${said ? ` (last words: ${cut(said, 300)})` : ''}`);
+  }
+
+  /** What the agent last wrote in the thread during its run. */
+  private lastAgentText(cardId: string, agentId: string, seqBefore: number): string | null {
+    const m = this.kanban
+      .messages(cardId)
+      .filter((x) => x.author === agentId && x.seq > seqBefore && x.content.some((b) => b.type === 'text' && b.text.trim()))
+      .at(-1);
+    return m ? m.content.flatMap((b) => (b.type === 'text' ? [b.text] : [])).join('\n').trim() : null;
   }
 
   /* ── Helpers ── */
@@ -1404,7 +1914,7 @@ export class Workflows {
   private notified: ReturnType<typeof insertNotification>[] = [];
 
   /** Validate a graph; returns its trigger. Every reason is one the user can act on. */
-  private check(g: WorkflowGraph): TriggerConfig {
+  private check(g: WorkflowGraph, projectId: string | null): TriggerConfig {
     const byId = new Map<string, WorkflowNode>();
     for (const n of g.nodes) {
       if (byId.has(n.id)) throw new InvalidError(`two steps have the id ${n.id}`);
@@ -1438,6 +1948,18 @@ export class Workflows {
         }
       if (n.kind === 'action' && n.config.do === 'setAssignee' && n.config.assignee && !this.db.prepare('SELECT 1 FROM agents WHERE id = ?').get(n.config.assignee))
         throw new InvalidError(`« ${stepTitle(n)} »: agent @${n.config.assignee} does not exist`);
+      if (n.kind === 'agent' && n.config.reviewAgent && !n.config.inThread) throw new InvalidError(`« ${stepTitle(n)} »: the review agent works in the task thread`);
+      if (isCommand(n)) {
+        const name = `« ${stepTitle(n)} »`;
+        if (!projectId) throw new InvalidError(`${name}: a command step needs a workflow of a project (a global workflow has no repo to check out)`);
+        if (!projectRow(this.db, projectId).repo) throw new InvalidError(`${name}: project ${projectRow(this.db, projectId).name} has no GitHub repo to check out (Settings → Projects)`);
+        if (/\{\{/.test(n.config.command))
+          throw new InvalidError(`${name}: no {{field}} in a command: every run field is an env var ({{task.ref}} → "$TASK_REF", {{payload.after}} → "$PAYLOAD_AFTER")`);
+        const secrets = this.opts.command?.secrets();
+        if (n.config.secrets.length && !secrets) throw new InvalidError(`${name}: this engine has no secret store`);
+        const why = secrets?.stepSecretProblem(n.config.secrets, projectId);
+        if (why) throw new InvalidError(`${name}: ${why}`);
+      }
     }
     const t = triggers[0]!.config as TriggerConfig;
     if (t.kind === 'task' || t.kind === 'pr')
@@ -1583,6 +2105,11 @@ export class Workflows {
     // The latest run that ran: a skipped firing doesn't hide the run it was skipped for (lists show its step and task).
     const last = this.db.prepare("SELECT * FROM workflow_runs WHERE workflow_id = ? ORDER BY state = 'skipped', number DESC LIMIT 1").get(r.id) as RunRow | undefined;
     const edges = this.db.prepare('SELECT from_node, exit, to_node FROM workflow_edges WHERE workflow_id = ? ORDER BY rowid').all(r.id) as { from_node: string; exit: string; to_node: string }[];
+    const repo = r.project_id ? projectRow(this.db, r.project_id).repo : null;
+    const commandSteps = this.commandNodes(r.id).map((n): WorkflowCommandStep => {
+      const a = this.approval(r.id, n);
+      return { nodeId: n.id, title: stepTitle(n), command: n.config.command, checkout: { repo, ref: 'default branch' }, secrets: n.config.secrets, limitMin: n.config.limitMin, approved: !!a, approvedAt: a?.approved_at ?? null, approvedBy: a?.approved_by ?? null };
+    });
     return {
       id: r.id,
       name: r.name,
@@ -1600,6 +2127,8 @@ export class Workflows {
       projectId: r.project_id,
       nodes: this.nodes(r.id).map(toNode),
       edges: edges.map((e): WorkflowEdge => ({ from: e.from_node, exit: e.exit, to: e.to_node })),
+      commandSteps,
+      needsApproval: commandSteps.some((c) => !c.approved),
     };
   }
 
@@ -1626,7 +2155,12 @@ export class Workflows {
     for (const id of deleted) this.bus.emit({ type: 'workflow.deleted', id });
     for (const id of runs) if (this.db.prepare('SELECT 1 FROM workflow_runs WHERE id = ?').get(id)) this.bus.emit({ type: 'workflow.run', run: this.run(id) });
     for (const id of workflows) if (this.db.prepare('SELECT 1 FROM workflows WHERE id = ?').get(id)) this.bus.emit({ type: 'workflow.updated', workflow: this.get(id) });
-    if (runs.size) this.driveMerges(); // a merge step pinned its PR: GitHub is called once that is stored
+    if (runs.size) {
+      // A merge step pinned its PR, a command step was queued: each starts once that is stored.
+      this.driveMerges();
+      this.driveCommands();
+      this.driveThreads();
+    }
   }
 
   private reset(): void {

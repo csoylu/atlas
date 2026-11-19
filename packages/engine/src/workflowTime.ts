@@ -58,6 +58,7 @@ export function stepTitle(n: WorkflowNode): string {
     if (c.do === 'setStatus') return `Task → ${c.status}`;
     if (c.do === 'setAssignee') return c.assignee ? `Assign to @${c.assignee}` : 'Unassign the task';
     if (c.do === 'mergePr') return 'Validate + merge the PR';
+    if (c.do === 'command') return firstLine(c.command) || 'Run a command';
     return firstLine(c.text) || 'Notify Master';
   }
   if (n.kind === 'wait') {
