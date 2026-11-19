@@ -15,14 +15,16 @@ import { CleanupBody, DigestBody, type MemoryDigestState } from './MemoryDigest.
 import { DIGEST_ID } from './memoryView.ts';
 import { clearDraft, draftKey, readDraft, useDraft } from './drafts.ts';
 import { ProjTag } from './projects.tsx';
+import { EmptyState, Skeleton } from './Kit.tsx';
 import {
   inboxKey,
   itemsOf,
   kindOf,
   lineOf,
+  groupsOf,
   parseTab,
   refOf,
-  shortAgo,
+  rowTime,
   shownItem,
   step,
   timeOf,
@@ -38,8 +40,9 @@ import {
 const WIDE = '(min-width: 901px)';
 
 /**
- * The Inbox (design §16; mockup linear.html?screen=inbox): the list on the left (380px), grouped « Needs you » (live
- * blocked / review cards) and « Updates »; the item on the right, answered in place. J/K move, E archives an update,
+ * The Inbox (design §16; redesign mockup atlas-redesign.html, screen « Inbox », #267): one header row across the screen
+ * (tabs with counts, Archive all read); the list on the left (380px), « Needs you » (live blocked / review cards) first,
+ * then the updates grouped by day; the item on the right, answered in place. J/K move, E archives an update,
  * R replies, 1–4 pick an option. Under 900px one column: the item pushes in over the list.
  */
 export function Inbox(props: {
@@ -137,116 +140,114 @@ export function Inbox(props: {
     return () => window.removeEventListener('keydown', key);
   });
 
-  const needs = items.filter((i) => i.need);
-  const updates = items.filter((i) => i.update);
+  const needCount = inbox?.needsYou.length ?? 0;
+  const allCount = inbox ? itemsOf(inbox, 'all').length : 0;
   const readCount = inbox?.updates.filter((u) => u.readAt).length ?? 0;
   const pushed = !wide && !!item;
+  const groups = groupsOf(items);
+  const archiveRead = () => {
+    if (digest.item?.readAt) digest.archive();
+    api.archiveRead().catch(onError);
+  };
+  const archiveTitle = readCount ? `Archive the ${readCount} update${readCount === 1 ? '' : 's'} you have read` : 'Nothing read to archive yet';
 
   return (
     <div className={'inbox' + (pushed ? ' pushed' : '')}>
-      <section className="ibx" aria-label="Inbox">
-        <header className="screen-head">
-          <div className="crumb">
-            <h1>Inbox</h1>
-          </div>
-          <div className="head-actions">
-            <div className="view-tabs" role="tablist" aria-label="Inbox items">
-              {(['all', 'needs'] as const).map((t) => (
-                <button key={t} type="button" role="tab" aria-selected={tab === t} className={'tabbtn' + (tab === t ? ' on' : '')} onClick={() => setTab(t)}>
-                  {t === 'all' ? 'All' : 'Needs you'}
-                </button>
-              ))}
-            </div>
-            <span className="head-sp" />
-            <button
-              type="button"
-              className="icon-btn"
-              aria-label="Archive all read"
-              title={readCount ? `Archive all read (${readCount})` : 'Archive all read: nothing read yet'}
-              disabled={!readCount}
-              onClick={() => {
-                if (digest.item?.readAt) digest.archive();
-                api.archiveRead().catch(onError);
-              }}
-            >
-              <Icon.dots />
-            </button>
-          </div>
-        </header>
-        <div className="ibx-list" ref={listRef} role="listbox" aria-label="Inbox items">
-          {!inbox ? null : !items.length ? (
-            <p className="state-empty">{tab === 'needs' ? 'Nothing waits on you.' : 'All clear. Questions, reviews and results land here.'}</p>
-          ) : (
-            <>
-              {needs.length > 0 && group('Needs you', needs)}
-              {updates.length > 0 && group('Updates', updates)}
-            </>
-          )}
+      <header className="screen-head ibx-head">
+        <div className="crumb">
+          <h1>Inbox</h1>
         </div>
-      </section>
-      <section className="ibx-pane" aria-label="Item">
-        {item ? (
-          <Detail
-            key={item.key}
-            item={item}
-            refText={refOf(item, numbers)}
-            agents={props.agents}
-            cards={props.cards}
-            replyRef={replyRef}
-            wide={wide}
-            stream={props.stream}
-            onBack={() => onSelect(null)}
-            onOpenCard={props.onOpenCard}
-            onArchive={archive}
-            onAnswer={answer}
-            digest={digest}
-            onError={onError}
-          />
+        <div className="view-tabs" role="tablist" aria-label="Show">
+          {(['all', 'needs'] as const).map((t) => (
+            <button key={t} type="button" role="tab" aria-selected={tab === t} className={'tabbtn' + (tab === t ? ' on' : '')} onClick={() => setTab(t)}>
+              {t === 'all' ? 'All' : 'Needs you'}
+              {inbox && <span className="tab-n">{t === 'all' ? allCount : needCount}</span>}
+            </button>
+          ))}
+        </div>
+        <span className="head-sp" />
+        {wide ? (
+          <button type="button" className="btn ghost" title={archiveTitle} disabled={!readCount} onClick={archiveRead}>
+            <Icon.check />
+            Archive all read
+          </button>
         ) : (
-          wide && <p className="state-empty pane-empty">{inbox ? 'Nothing selected.' : ''}</p>
+          <button type="button" className="icon-btn" aria-label="Archive all read" title={archiveTitle} disabled={!readCount} onClick={archiveRead}>
+            <Icon.check />
+          </button>
         )}
-      </section>
+      </header>
+      <div className="ibx-wrap">
+        <section className="ibx" aria-label="Inbox">
+          <div className="ibx-list" ref={listRef} role="listbox" aria-label="Inbox items">
+            {!inbox ? (
+              <Skeleton rows={4} className="ibx-loading" />
+            ) : !items.length ? (
+              <EmptyState icon={<Icon.inbox />} title={tab === 'needs' ? 'Nothing needs you' : 'All clear'}>
+                {tab === 'needs' ? 'Questions and reviews for you show here.' : 'Updates show here when a task finishes or asks a question.'}
+              </EmptyState>
+            ) : (
+              groups.map((g) => (
+                <div key={g.label} role="group" aria-label={g.label}>
+                  <div className="ibx-group">{g.label}</div>
+                  {g.items.map(row)}
+                </div>
+              ))
+            )}
+          </div>
+        </section>
+        <section className="ibx-pane" aria-label="Item">
+          {item ? (
+            <Detail
+              key={item.key}
+              item={item}
+              refText={refOf(item, numbers)}
+              agents={props.agents}
+              cards={props.cards}
+              replyRef={replyRef}
+              wide={wide}
+              stream={props.stream}
+              onBack={() => onSelect(null)}
+              onOpenCard={props.onOpenCard}
+              onArchive={archive}
+              onAnswer={answer}
+              digest={digest}
+              onError={onError}
+            />
+          ) : (
+            wide && inbox && <EmptyState className="pane-empty">Nothing selected.</EmptyState>
+          )}
+        </section>
+      </div>
     </div>
   );
 
-  function group(label: string, list: InboxItem[]) {
-    return (
-      <>
-        <div className="ibx-group">
-          {label} <span className="n">{list.length}</span>
-        </div>
-        {list.map(row)}
-      </>
-    );
-  }
-
   function row(i: InboxItem) {
     const k = kindOf(i);
-    const agent = i.need ? i.need.card.assignee : i.update.cardId ? (props.cards.find((c) => c.id === i.update!.cardId)?.assignee ?? null) : null;
+    const card = i.need ? i.need.card : i.update.cardId ? props.cards.find((c) => c.id === i.update!.cardId) : undefined;
+    const agent = card?.assignee ?? null;
     const unread = unreadOf(i);
+    const ref = refOf(i, numbers);
     return (
       <button
         key={i.key}
         type="button"
         role="option"
         aria-selected={item?.key === i.key}
+        aria-label={(unread ? 'Unread: ' : '') + titleOf(i)}
         className={'ni' + (item?.key === i.key ? ' on' : '') + (unread ? ' unread' : ' read')}
         onClick={() => onSelect(i.key)}
       >
-        {unread && <span className="ni-dot" aria-label="unread" />}
-        <StatusIcon status={k.icon} />
-        <span className="ni-bd">
-          <span className="ni-l1">
-            {refOf(i, numbers) && <span>{refOf(i, numbers)}</span>}
-            <ProjTag id={i.need ? i.need.card.projectId : i.update.cardId ? props.cards.find((c) => c.id === i.update!.cardId)?.projectId : undefined} />
-            {agent && (
-              <AgentFace id={agent} />
-            )}
-            <span>{k.label}</span>
-            <span className="ni-when">{shortAgo(timeOf(i))}</span>
-          </span>
-          <span className="ni-l2">{titleOf(i)}</span>
-          <span className="ni-l3">{lineOf(i)}</span>
+        <StatusIcon status={k.icon} title={k.label} />
+        <span className="ni-l2">{titleOf(i)}</span>
+        <span className="ni-when" title={new Date(timeOf(i)).toLocaleString('en-GB')}>
+          {rowTime(i)}
+        </span>
+        <span className="ni-l1">
+          {agent && <AgentFace id={agent} />}
+          {ref && <span className="ni-ref">{ref}</span>}
+          <ProjTag id={card?.projectId} />
+          <span className="ni-l3">{lineOf(i) || k.label}</span>
         </span>
       </button>
     );
@@ -272,25 +273,20 @@ function Detail(props: {
   const k = kindOf(item);
   const cardId = item.need ? item.need.card.id : item.update.cardId;
   const card = item.need?.card ?? props.cards.find((c) => c.id === cardId);
+  const who = card?.assignee ?? null;
   return (
     <>
-      <header className="screen-head">
+      <header className="screen-head ibx-dh">
         {!props.wide && (
           <button type="button" className="head-back" aria-label="Back to the inbox" title="Back to the inbox" onClick={props.onBack}>
             <Icon.back />
           </button>
         )}
-        <div className="crumb">
-          {props.refText && (
-            <span className="crumb-part">
-              {props.refText}
-              <span className="crumb-sep" aria-hidden="true">
-                <Icon.chev />
-              </span>
-            </span>
-          )}
-          <h1>{titleOf(item)}</h1>
-        </div>
+        <StatusIcon status={k.icon} title={k.label} />
+        {props.refText && <span className="ibx-ref">{props.refText}</span>}
+        <h1 className="ibx-title" title={titleOf(item)}>
+          {titleOf(item)}
+        </h1>
         <div className="head-actions">
           {cardId && (
             <button type="button" className="btn" onClick={() => props.onOpenCard(cardId)}>
@@ -305,19 +301,14 @@ function Detail(props: {
         </div>
       </header>
       <div className="ibx-det">
-        <h2>
-          <StatusIcon status={k.icon} size={16} />
-          {titleOf(item)}
-        </h2>
         <div className="ibx-meta">
-          {card?.assignee && (
-            <>
-              <AgentFace id={card.assignee} />
-              {card.assignee} ·
-            </>
-          )}{' '}
-          {metaOf(item)} {ago(timeOf(item))}
-          {card && card.parents.length > 0 && <> · child of {card.parents.map((p) => refName(p, props.cards)).join(', ')}</>}
+          {card?.assignee && <AgentFace id={card.assignee} />}
+          {who && <b>{(who + ' ' + verbOf(item)).trim()}</b>}
+          <span>
+            {ago(timeOf(item))} · {metaOf(item)}
+            {card && card.parents.length > 0 && <> · child of {card.parents.map((p) => refName(p, props.cards)).join(', ')}</>}
+          </span>
+          <ProjTag id={card?.projectId} />
         </div>
         {item.need ? (
           <NeedBody need={item.need} {...props} />
@@ -422,20 +413,16 @@ function NeedBody(props: Parameters<typeof Detail>[0] & { need: InboxNeed }) {
 
   return (
     <>
-      <div className="ibx-q">
-        <div className="ibx-k">
-          <StatusIcon status="blocked" /> {BLOCK_LABEL[b.kind] ?? 'Blocked'}
-        </div>
-        <div className="md">
+      <div className="ibx-q ask" role="group" aria-label={BLOCK_LABEL[b.kind] ?? 'Blocked'}>
+        <div className="md ibx-ask">
           <Markdown remarkPlugins={[remarkGfm]}>{b.reason}</Markdown>
         </div>
         {b.options.length > 0 && (
           <div className="ibx-opts">
             {b.options.map((o, i) => (
-              <button key={o} type="button" className={'ibx-opt' + (i === 0 ? ' rec' : '')} disabled={busy} onClick={() => void send(o)}>
-                <b>{o}</b>
-                {i === 0 && <small>recommended</small>}
-                {i < 4 && <span className="kbd">{i + 1}</span>}
+              <button key={o} type="button" className={'btn ibx-opt' + (i === 0 ? ' primary' : '')} title={i === 0 ? 'Recommended' : undefined} disabled={busy} onClick={() => void send(o)}>
+                {i < 4 && <span className="ibx-optn">{i + 1} ·</span>}
+                <span className="ibx-optt">{o}</span>
               </button>
             ))}
           </div>
@@ -483,7 +470,7 @@ function UpdateBody(props: Parameters<typeof Detail>[0] & { update: Notification
       ) : null}
       {update.kind === 'card.stalled' && update.cardId && <StallActions cardId={update.cardId} card={props.cards.find((c) => c.id === update.cardId)} onOpenCard={props.onOpenCard} onError={onError} />}
       {update.cardId && update.kind !== 'run.failed' && <CardDocs cardId={update.cardId} stream={props.stream} onOpenCard={props.onOpenCard} onError={onError} />}
-      <p className="ibx-note">E archives it. « Archive all read » in the list menu clears every update you have read.</p>
+      <p className="ibx-note">E archives it. « Archive all read » at the top clears every update you have read.</p>
     </>
   );
 }
@@ -521,6 +508,18 @@ function StallActions(props: { cardId: string; card: Card | undefined; onOpenCar
 }
 
 const BLOCK_LABEL: Record<string, string> = { needs_input: 'Needs your input', dependency: 'Waiting on other work', capability: 'Needs access or a tool' };
+
+/** What the agent did, after its name on the detail's first line (« munih asks »). */
+function verbOf(item: InboxItem): string {
+  if (item.need) {
+    const { card, failed } = item.need;
+    if (card.status === 'review') return 'asks for your review';
+    if (failed) return 'could not finish';
+    if (card.block?.reason.startsWith('Stopped by you')) return 'was stopped';
+    return ({ needs_input: 'asks', dependency: 'is waiting on other work', capability: 'needs access or a tool' } as Record<string, string>)[card.block?.kind ?? ''] ?? 'is blocked';
+  }
+  return ({ 'card.done': 'finished', 'run.failed': 'failed', 'card.stalled': 'is stuck', 'schedule.ran': 'ran' } as Record<string, string>)[item.update.kind] ?? '';
+}
 
 function metaOf(item: InboxItem): string {
   if (item.need) {

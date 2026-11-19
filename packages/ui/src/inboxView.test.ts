@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import type { Card, Inbox, InboxNeed, Notification } from '@atlas/shared';
-import { inboxKey, taskEntry, taskKey, itemsOf, kindOf, lineOf, parseTab, refOf, shortAgo, shownItem, step, systemTitle, toRead, unreadOf } from './inboxView.ts';
+import { dayLabel, groupsOf, rowTime, inboxKey, taskEntry, taskKey, itemsOf, kindOf, lineOf, parseTab, refOf, shortAgo, shownItem, step, systemTitle, toRead, unreadOf } from './inboxView.ts';
 
 const card = (p: Partial<Card>): Card =>
   ({ id: 'c', number: 1, title: 't', body: '', status: 'blocked', assignee: 'scout', priority: 0, board: 'main', parents: [], block: null, waiting: null, ...p }) as Card;
@@ -81,5 +81,31 @@ describe('inbox view', () => {
     expect(systemTitle({ kind: 'plan.switched', title: 'Claude plan limit reached' })).toBe('Claude plan limit reached');
     expect(parseTab('needs')).toBe('needs');
     expect(parseTab('junk')).toBe('all');
+  });
+
+  it('groups: Needs you first, then the updates by local day; rows show waiting time or clock time', () => {
+    const at = (d: number, h: number, m = 0) => new Date(2026, 10, d, h, m).toISOString(); // local time
+    const now = new Date(2026, 10, 19, 12, 0).getTime();
+    expect(dayLabel(at(19, 0, 5), now)).toBe('Today');
+    expect(dayLabel(at(18, 23, 40), now)).toBe('Yesterday');
+    expect(dayLabel(at(16, 9), now)).toBe('Monday 16 Nov');
+    expect(dayLabel(new Date(2025, 11, 31, 9).toISOString(), now)).toBe('Wednesday 31 Dec 2025');
+    const box: Inbox = {
+      needsYou: [need({ card: ask, since: at(17, 9) })],
+      updates: [upd({ id: 1, at: at(19, 1, 42) }), upd({ id: 2, at: at(19, 1, 30) }), upd({ id: 3, at: at(18, 23, 40) }), upd({ id: 4, at: at(16, 9) })],
+      badge: 0,
+    };
+    const groups = groupsOf(itemsOf(box, 'all'), now);
+    expect(groups.map((g) => [g.label, g.items.map((i) => i.key)])).toEqual([
+      ['Needs you', ['c_ask']],
+      ['Today', ['n1', 'n2']],
+      ['Yesterday', ['n3']],
+      ['Monday 16 Nov', ['n4']],
+    ]);
+    expect(groupsOf(itemsOf(box, 'needs'), now).map((g) => g.label)).toEqual(['Needs you']);
+    expect(rowTime(groups[1]!.items[0]!, now)).toBe('01:42');
+    expect(rowTime({ key: 'x', need: need({ card: ask, since: new Date(now - 4 * 60_000).toISOString() }) }, now)).toBe('4 min');
+    expect(rowTime({ key: 'x', need: need({ card: ask, since: new Date(now - 3 * 3600_000).toISOString() }) }, now)).toBe('3 h');
+    expect(rowTime({ key: 'x', need: need({ card: ask, since: at(17, 9) }) }, now)).toBe('2 d');
   });
 });
