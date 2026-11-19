@@ -220,6 +220,12 @@ select { padding: 4px 8px; }
 .ws-name { font-weight: var(--fw-bold); font-size: var(--fs-base); min-width: 0; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .ws-scope { color: var(--faint); font-size: var(--fs-small); white-space: nowrap; }
 .ws-acts { margin-left: auto; display: flex; gap: 2px; flex: none; }
+/* ⌘K: the palette (search and commands). */
+.ws-k {
+  height: 22px; padding: 0 6px; border: 1px solid var(--line-2); border-radius: 5px; background: none; color: var(--muted);
+  font-size: var(--fs-small); font-weight: var(--fw-regular); line-height: var(--lh-tight); white-space: nowrap;
+}
+.ws-k:hover { background: var(--hover); color: var(--text); }
 .mark { flex: none; display: block; }
 .icon-btn {
   width: 28px; height: 28px; border-radius: 6px; display: grid; place-items: center; padding: 0; flex: none;
@@ -249,6 +255,12 @@ select { padding: 4px 8px; }
 }
 .side-group { display: flex; align-items: center; gap: 4px; padding: 14px 4px 4px 8px; font-size: var(--fs-small); font-weight: var(--fw-medium); color: var(--faint); flex: none; }
 .side-group .icon-btn { margin-left: auto; width: 22px; height: 22px; }
+/* A project's group: folds its agents (#264), the state per project in localStorage. */
+.side-proj { width: 100%; border: 0; background: none; text-align: left; border-radius: 7px; padding-right: 8px; }
+.side-proj:hover { color: var(--text); }
+.side-proj-name { flex: 1; min-width: 0; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.side-proj .icon { flex: none; transition: transform 0.12s; }
+.side-proj[aria-expanded='false'] .icon { transform: rotate(-90deg); }
 .side-agents { display: flex; flex-direction: column; gap: 1px; flex: none; }
 .spin {
   width: 12px; height: 12px; border-radius: 50%; border: 1.5px solid var(--accent); border-right-color: transparent;
@@ -333,9 +345,10 @@ select { padding: 4px 8px; }
   display: inline-flex; align-items: center; gap: 6px; font-size: var(--fs-small); font-weight: var(--fw-medium); white-space: nowrap;
 }
 .head-btn:hover { background: var(--active); }
-.menu-btn { display: none; }
+/* A pushed screen's back button (narrow window, #264; the Inbox's item on a phone). */
+.head-back { display: inline-grid; place-items: center; width: 36px; height: 36px; flex: none; border: 0; border-radius: 7px; background: none; color: var(--muted); padding: 0; }
+.head-back:hover { background: var(--hover); color: var(--text); }
 main { flex: 1; display: flex; min-height: 0; min-width: 0; position: relative; }
-.scrim { display: none; }
 .error {
   display: flex; align-items: center; gap: 12px; margin: 12px 16px 0; padding: 8px 8px 8px 14px; border-radius: 8px;
   background: var(--neg-bg); color: var(--neg-ink); font-size: var(--fs-small);
@@ -854,23 +867,40 @@ button.tool .icon { color: var(--muted); font-family: var(--mono); }
   .board { clip-path: inset(0 12px 0 0); }
   .panel { position: absolute; inset: 0 0 0 auto; width: min(460px, 100%); z-index: 5; box-shadow: var(--float-shadow); }
 }
+/* The narrow shell (#264, breakpoint in shell.ts: App sets .narrow): no sidebar, the tab bar at the bottom, the screen
+   edge to edge. Only the shell keys off .narrow; screens keep their own media queries. */
+.app.narrow { grid-template-columns: minmax(0, 1fr); grid-template-rows: minmax(0, 1fr) auto; }
+.narrow .workspace { padding: 0; }
+.narrow .screen-head { padding: 0 6px 0 14px; gap: 4px; }
+.narrow .screen-head:has(> .head-back) { padding-left: 4px; }
+/* Mac app: no sidebar here, so the header starts at the window's left edge, under the traffic lights (x 14–66). */
+.electron-mac .narrow .screen-head, .electron-mac .narrow .screen-head:has(> .head-back) { padding-left: 72px; }
+.narrow .crumb-sub { display: none; }
+.narrow .sheet { border-radius: 0; border-width: 0; }
+.narrow :is(.nav-item, .chat-hist-item) { height: 40px; }
+.narrow .nav-item.agent-item { height: 44px; }
+.tabbar {
+  display: grid; grid-template-columns: repeat(5, minmax(0, 1fr)); padding: 4px 4px max(8px, env(safe-area-inset-bottom));
+  border-top: 1px solid var(--line); background: var(--panel); -webkit-app-region: no-drag;
+}
+.tabbar-btn {
+  position: relative; display: grid; justify-items: center; gap: 2px; padding: 6px 0; border: 0; background: none; border-radius: 8px;
+  color: var(--muted); font-size: var(--fs-small); line-height: var(--lh-tight); min-width: 0;
+}
+.tabbar-btn:hover { color: var(--text); }
+.tabbar-btn.on { color: var(--accent-hi); font-weight: var(--fw-medium); }
+.tabbar-btn .icon { width: 20px; height: 20px; }
+.tabbar-n {
+  position: absolute; top: 0; left: calc(50% + 6px); min-width: 20px; height: 20px; padding: 0 6px; border-radius: 10px;
+  background: var(--accent); color: var(--on-accent); font-size: var(--fs-small); font-weight: var(--fw-bold); line-height: var(--lh-tight); display: grid; place-items: center; font-variant-numeric: tabular-nums;
+}
+/* Chats and More (narrow tabs): the sidebar's rows on the sheet, one scrolling column. */
+.side-list { flex: 1; min-width: 0; overflow-y: auto; display: flex; flex-direction: column; gap: 1px; padding: 8px 10px 16px; }
+.side-list .ws-row { margin-bottom: 2px; }
+.side-list .side-chats { flex: none; min-height: 0; }
+.side-list .chat-history { overflow: visible; }
+.side-list .sidebar-foot { margin-top: 12px; }
 @media (max-width: 900px) {
-  .app { grid-template-columns: minmax(0, 1fr); }
-  .sidebar {
-    position: fixed; inset: 0 auto 0 0; width: 280px; z-index: 30; background: var(--app);
-    transform: translateX(-100%); transition: transform 0.2s ease; box-shadow: none;
-  }
-  .menu-open .sidebar { transform: none; box-shadow: var(--float-shadow); }
-  .menu-open .scrim { display: block; position: fixed; inset: 0; z-index: 20; background: var(--scrim); }
-  .workspace { padding: 0; }
-  .screen-head { padding: 0 6px 0 0; gap: 4px; }
-  /* Mac app: the sidebar is a drawer here, so the header starts at the window's left edge, under the traffic lights (x 14–66). */
-  .electron-mac .screen-head { padding-left: 72px; }
-  .menu-btn { display: inline-grid; place-items: center; width: 44px; height: 44px; color: var(--muted); }
-  .crumb-sub { display: none; }
-  .sheet { border-radius: 0; border-width: 0; }
-  .nav-item, .chat-hist-item { height: 40px; }
-  .nav-item.agent-item { height: 44px; }
   .msg.assistant .msg-body { padding-left: 0; }
   .msg.asking .msg-body { padding-left: 14px; }
   .board { padding: 12px; scroll-snap-type: x mandatory; scroll-padding-left: 12px; }
@@ -1871,7 +1901,7 @@ button.msg-quote:hover { color: var(--text); }
   .pal-scrim { padding: 12px 8px; }
   .pal { max-height: calc(100vh - 24px); }
   .pal-in input { font-size: 16px; /* type-exception: inputs at 16 px on phone (iOS zooms below) */ }
-  .pal-foot { display: none; }
+  .pal-foot, .pal .kbds, .pal-enter { display: none; }
 }
 
 /* Settings → Voice: how you start talking (card #57) */
@@ -2004,7 +2034,9 @@ button.msg-quote:hover { color: var(--text); }
 .lib-fold .icon { width: 12px; height: 12px; flex: none; }
 .lib-snip { color: var(--muted); margin-left: 8px; font-size: var(--fs-small); }
 .lib-snip mark, .lib-t mark { background: var(--accent-soft); color: var(--accent-hi); border-radius: 3px; padding: 0 1px; }
-.lib-head-search { width: 240px; }
+.lib-head-search { width: auto; flex: 0 1 240px; min-width: 140px; }
+/* One header row down to 901 px (#264): Filter and New folder go icon-only (both have their label as title). */
+@media (max-width: 1100px) { .screen-head:has(.lib-head-search) .btn-text { display: none; } }
 .lib-bar { display: none; }
 /* Recently modified: big tiles with the real content, scaled down (a live render, like the viewer's). */
 .lib-tiles { display: grid; grid-template-columns: repeat(auto-fill, minmax(200px, 1fr)); gap: 14px; padding: 4px 16px 18px; }

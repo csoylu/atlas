@@ -31,15 +31,17 @@ import { GO_HASH, globalKey, nextRow } from './keys.ts';
 import { LAST_AGENT, TOGGLE_PANEL } from './ChatView.tsx';
 import { groupCount } from './workflowView.ts';
 import { effectiveFilter, inFilter, ProjDot, ProjectsCtx, projectsInfo, useProjectFilter } from './projects.tsx';
+import { backOf, groupCollapsed, NARROW, setGroupCollapsed, tabOf, type Tab } from './shell.ts';
+import { useMedia } from './Inbox.tsx';
 
 /**
  * Route in the URL hash, so reloads and the Electron window keep the place: #/inbox/<item>, #/board, #/library/<docId>,
  * #/workflows[/<id>[/runs[/<run id>]]], #/chat/<id> or #/settings/<page>. Old links #/doc/<id> go to the Library viewer, #/schedules to #/workflows, #/canvas/<id> to the Library. Old settings hashes (#/agents, #/models, #/settings/canvas) are rewritten in place.
  * `?card=<id>` on any route opens that task in the side panel on the right of it (#/chat/c_1?card=c_2, #222).
  */
-type View = 'inbox' | 'chat' | 'board' | 'library' | 'workflows' | 'settings';
+type View = 'inbox' | 'chat' | 'board' | 'library' | 'workflows' | 'settings' | 'chats' | 'more';
 /** The screen under the task panel, for its « ‹ Back » button (overlay and phone). */
-const BACK: Record<View, string> = { inbox: 'Inbox', chat: 'Chat', board: 'Board', library: 'Library', workflows: 'Workflows', settings: 'Settings' };
+const BACK: Record<View, string> = { inbox: 'Inbox', chat: 'Chat', board: 'Board', library: 'Library', workflows: 'Workflows', settings: 'Settings', chats: 'Chats', more: 'More' };
 type Route = { view: View; target: string | null; card: string | null; /** What follows #/settings/memory: a scope or m12. */ rest: string };
 function useRoute(): [Route, (hash: string) => void] {
   const parse = (): Route => ({ rest: '', ...parseView(), card: splitHash(location.hash).card });
@@ -68,6 +70,8 @@ function useRoute(): [Route, (hash: string) => void] {
     }
     if (view === 'workflows') return { view: 'workflows', target: id ? decodeURIComponent(id) : null, rest: path.split('/').slice(3).join('/') };
     if (view === 'inbox') return { view: 'inbox', target: id ? decodeURIComponent(id) : null };
+    // The narrow window's Chats and More tabs (#264): lists of the sidebar's rows; App sends a wide window home.
+    if (view === 'chats' || view === 'more') return { view, target: null };
     return { view: 'board', target: null };
   };
   const [route, setRoute] = useState(parse);
@@ -127,7 +131,10 @@ export function App() {
   const [help, setHelp] = useState(false);
   /** « New card » asked from outside the Board (C, the palette): the Board opens its composer. */
   const [createAsk, setCreateAsk] = useState(0);
-  const [menu, setMenu] = useState(false);
+  /** One narrow mode (#264): no sidebar, a tab bar at the bottom, back buttons on pushed screens. */
+  const narrow = useMedia(NARROW);
+  /** Bumped when a sidebar project group folds or unfolds (the state itself is in localStorage, shell.ts). */
+  const [, setFolds] = useState(0);
   const [headSlot, setHeadSlot] = useState<HTMLElement | null>(null);
   const [online, setOnline] = useState(false);
   // App updates (#123): the sidebar badge and its dialog.
@@ -282,6 +289,10 @@ export function App() {
   useEffect(() => {
     if (route.view === 'settings' && route.target) localStorage.setItem('atlas.settings', route.target);
   }, [route.view, route.target]);
+  // Chats and More are the narrow window's tabs: a wide window has them in the sidebar, so it goes home.
+  useEffect(() => {
+    if (!narrow && (route.view === 'chats' || route.view === 'more')) location.replace('#/');
+  }, [narrow, route.view]);
   /** The Inbox item in the URL: replaces the history entry (J/K would fill Back with every row). */
   const selectInbox = useCallback((key: string | null) => {
     location.replace(withCard('#/inbox' + (key ? '/' + encodeURIComponent(key) : ''), splitHash(location.hash).card));
@@ -418,10 +429,6 @@ export function App() {
   ) : null;
   const history = chats.filter((c) => !mainChats.has(c.id));
   const runningTasks = cards.filter((c) => c.status === 'running');
-  const nav0 = (hash: string) => {
-    go(hash);
-    setMenu(false);
-  };
   /** The header's breadcrumb (parts before the title), its title and a faint note after it. */
   const openIsMain = !!openChat && mainChats.has(openChat.id);
   const agentDot = (id: string) => (
@@ -443,6 +450,8 @@ export function App() {
             title: openChat.naming ? 'Generating chat name…' : openChat.title,
           }
         : { parts: [], title: 'Chat' }
+      : route.view === 'chats' || route.view === 'more'
+        ? { parts: [], title: BACK[route.view] }
       : route.view === 'board'
         ? { parts: [], title: 'Tasks' }
         : route.view === 'library'
@@ -473,9 +482,11 @@ export function App() {
           : crumb.title,
     chatId: openChat?.id ?? null,
   };
-  const menuButton = (
-    <button className="menu-btn ghost" aria-label="Menu" aria-expanded={menu} onClick={() => setMenu(!menu)}>
-      <Icon.menu />
+  /** A pushed screen's way back on a narrow window (no sidebar there): Chats for a chat, More for settings… */
+  const back = narrow ? backOf(route.view, route.target) : null;
+  const backButton = back && (
+    <button type="button" className="head-back" aria-label={back.label} title={back.label} onClick={() => go(back.hash)}>
+      <Icon.back />
     </button>
   );
   /** The task panel's « open on the right »: in the chat the card came from (or the chat on screen), else full size. */
@@ -485,44 +496,56 @@ export function App() {
     api.panelOpen(target, doc.id).then(() => go('#/chat/' + target), fail);
   };
 
-  return (
-    <ProjectsCtx.Provider value={pinfo}>
-    <div className={'app' + (menu ? ' menu-open' : '')}>
-      <aside className="sidebar" aria-label="Navigation">
-        <div className="ws-row">
-          <Mark />
-          <span className="ws-name">Atlas</span>
-          <span className="ws-scope">{auth.enabled ? 'Server' : ''}</span>
-          <span className="ws-acts">
-            <button type="button" className="icon-btn" aria-label="Search" title="Search and commands (⌘K)" onClick={() => (setMenu(false), setPalette(true))}>
-              <Icon.search />
-            </button>
-          </span>
-        </div>
-        <nav className="nav">
-          {nav.map((n) => (
+  const wsRow = (
+    <div className="ws-row">
+      <Mark />
+      <span className="ws-name">Atlas</span>
+      <span className="ws-scope">{auth.enabled ? 'Server' : ''}</span>
+      <span className="ws-acts">
+        <button type="button" className="ws-k" aria-label="Search and commands" title="Search and commands (⌘K)" onClick={() => setPalette(true)}>
+          ⌘K
+        </button>
+      </span>
+    </div>
+  );
+  const navRows = (only?: View[]) => (
+    <nav className="nav">
+      {nav
+        .filter((n) => !only || only.includes(n.view))
+        .map((n) => (
+          <button
+            key={n.view}
+            className={'nav-item' + (route.view === n.view ? ' active' : '')}
+            aria-current={route.view === n.view ? 'page' : undefined}
+            title={`${n.label} (${n.keys})`}
+            onClick={() => go(n.hash)}
+          >
+            {n.icon}
+            <span>{n.label}</span>
+            {n.view === 'inbox' && badge > 0 && <span className="nav-count" title="Waiting for you and unread">{badge}</span>}
+          </button>
+        ))}
+    </nav>
+  );
+  const agentsSection = groups
+    ? // A project shows up once one member has a workspace there (cloning or failed: nothing to open yet).
+      groups.filter((p) => p.members.some((m) => m.home || m.cloneState === 'ready')).map((p) => {
+        const folded = groupCollapsed(p.id);
+        return (
+          <section key={p.id} className="side-agents" aria-label={p.name}>
             <button
-              key={n.view}
-              className={'nav-item' + (route.view === n.view ? ' active' : '')}
-              aria-current={route.view === n.view ? 'page' : undefined}
-              title={`${n.label} (${n.keys})`}
-              onClick={() => nav0(n.hash)}
+              type="button"
+              className="side-group side-proj"
+              aria-expanded={!folded}
+              title={(folded ? 'Show' : 'Hide') + ` ${p.name}'s agents`}
+              onClick={() => (setGroupCollapsed(p.id, !folded), setFolds((n) => n + 1))}
             >
-              {n.icon}
-              <span>{n.label}</span>
-              {n.view === 'inbox' && badge > 0 && <span className="nav-count" title="Waiting for you and unread">{badge}</span>}
+              <ProjDot hue={p.colour} />
+              <span className="side-proj-name">{p.name}</span>
+              <Icon.chevDown />
             </button>
-          ))}
-        </nav>
-        {groups ? (
-          // A project shows up once one member has a workspace there (cloning or failed: nothing to open yet).
-          groups.filter((p) => p.members.some((m) => m.home || m.cloneState === 'ready')).map((p) => (
-            <section key={p.id} className="side-agents" aria-label={p.name}>
-              <div className="side-group">
-                <ProjDot hue={p.colour} />
-                {p.name}
-              </div>
-              {agents
+            {!folded &&
+              agents
                 .filter((a) => p.members.some((m) => m.agentId === a.id && (m.home || m.cloneState === 'ready')))
                 .map((a) => {
                   const m = p.members.find((x) => x.agentId === a.id)!;
@@ -533,7 +556,7 @@ export function App() {
                       key={a.id}
                       className={'nav-item agent-item' + (route.view === 'chat' && ((p.isDefault && route.target === a.id) || (!!main && route.target === main)) ? ' active' : '')}
                       title={`Chat with @${a.id} in ${p.name}${working ? ' · working…' : ''}`}
-                      onClick={() => (main ? nav0('#/chat/' + main) : (setMenu(false), openMain(a.id, p)))}
+                      onClick={() => (main ? go('#/chat/' + main) : openMain(a.id, p))}
                     >
                       <AgentFace id={a.id} />
                       <span>{a.id}</span>
@@ -541,76 +564,101 @@ export function App() {
                     </button>
                   );
                 })}
-            </section>
-          ))
-        ) : agents.length > 0 && (
-          <section className="side-agents" aria-label="Agents">
-            <div className="side-group">Agents</div>
-            {agents.map((a) => (
-              <button
-                key={a.id}
-                className={'nav-item agent-item' + (route.view === 'chat' && (route.target === a.id || (!!a.mainChat && route.target === a.mainChat)) ? ' active' : '')}
-                title={`Chat with @${a.id}${busy(a.id) ? ' · working…' : ''}`}
-                onClick={() => nav0('#/chat/' + (a.mainChat ?? a.id))}
-              >
-                <AgentFace id={a.id} />
-                <span>{a.id}</span>
-                {busy(a.id) && <span className="spin" aria-label="working" />}
-              </button>
-            ))}
           </section>
-        )}
-        {runningTasks.length > 0 && (
-          <section className="side-running" aria-label="Running tasks">
-            <div className="side-group">Running</div>
-            {runningTasks.map((c) => (
-              <button key={c.id} type="button" className="nav-item running-item" title={`${cardRef(c)} ${c.title}${c.assignee ? ' · @' + c.assignee : ''}${pinfo.multi && pinfo.byId(c.projectId) ? ' · ' + pinfo.byId(c.projectId)!.name : ''}`} onClick={() => (setMenu(false), setOpenId(c.id))}>
-                <span className="spin" aria-hidden="true" />
-                <span className="running-ref">{cardRef(c)}</span>
-                <span className="running-title">{c.title}</span>
-              </button>
-            ))}
-          </section>
-        )}
-        {history.length > 0 && (
-          <section className="side-chats" aria-label="History">
-            <div className="side-group">History</div>
-            <ChatHistory chats={history} selected={openChat?.id}
-              onSelect={(id) => nav0('#/chat/' + id)}
-              onArchive={archiveChat}
-              onDelete={deleteChat} />
-          </section>
-        )}
-        <SecretsBadge status={secretStatus} onOpen={() => (setMenu(false), go('#/settings/secrets'))} />
-        <UpdateBadge status={update} onOpen={() => (setMenu(false), setUpdateOpen(true))} />
-        <div className="sidebar-foot">
-          <span className="me" aria-hidden="true">{(settings?.userName ?? '?').slice(0, 1).toUpperCase()}</span>
-          <span className="me-name">{settings?.userName ?? ''}</span>
-          <span className={'conn ' + (online ? 'up' : 'down')} role="status" aria-label={online ? 'Engine connected' : 'Engine offline'} title={online ? 'Engine connected' : 'Engine offline'} />
-          {auth.enabled && (
-            <button type="button" className="icon-btn" aria-label="Log out" title="Log out" onClick={() => api.authLogout().then(() => location.reload())}>
-              <Icon.logout />
+        );
+      })
+    : agents.length > 0 && (
+        <section className="side-agents" aria-label="Agents">
+          <div className="side-group">Agents</div>
+          {agents.map((a) => (
+            <button
+              key={a.id}
+              className={'nav-item agent-item' + (route.view === 'chat' && (route.target === a.id || (!!a.mainChat && route.target === a.mainChat)) ? ' active' : '')}
+              title={`Chat with @${a.id}${busy(a.id) ? ' · working…' : ''}`}
+              onClick={() => go('#/chat/' + (a.mainChat ?? a.id))}
+            >
+              <AgentFace id={a.id} />
+              <span>{a.id}</span>
+              {busy(a.id) && <span className="spin" aria-label="working" />}
             </button>
-          )}
-          <button
-            type="button"
-            className={'icon-btn' + (route.view === 'settings' ? ' active' : '')}
-            aria-label="Settings"
-            title="Settings"
-            aria-current={route.view === 'settings' ? 'page' : undefined}
-            onClick={() => {
-              if (route.view !== 'settings') go('#/settings/' + (localStorage.getItem('atlas.settings') ?? 'agents'));
-              setMenu(false);
-            }}
-          >
-            <Icon.gear />
-          </button>
-        </div>
-      </aside>
+          ))}
+        </section>
+      );
+  const runningSection = runningTasks.length > 0 && (
+    <section className="side-running" aria-label="Running tasks">
+      <div className="side-group">Running</div>
+      {runningTasks.map((c) => (
+        <button key={c.id} type="button" className="nav-item running-item" title={`${cardRef(c)} ${c.title}${c.assignee ? ' · @' + c.assignee : ''}${pinfo.multi && pinfo.byId(c.projectId) ? ' · ' + pinfo.byId(c.projectId)!.name : ''}`} onClick={() => setOpenId(c.id)}>
+          <span className="spin" aria-hidden="true" />
+          <span className="running-ref">{cardRef(c)}</span>
+          <span className="running-title">{c.title}</span>
+        </button>
+      ))}
+    </section>
+  );
+  const historySection = history.length > 0 && (
+    <section className="side-chats" aria-label="History">
+      <div className="side-group">History</div>
+      <ChatHistory chats={history} selected={openChat?.id} onSelect={(id) => go('#/chat/' + id)} onArchive={archiveChat} onDelete={deleteChat} />
+    </section>
+  );
+  const badges = (
+    <>
+      <SecretsBadge status={secretStatus} onOpen={() => go('#/settings/secrets')} />
+      <UpdateBadge status={update} onOpen={() => setUpdateOpen(true)} />
+    </>
+  );
+  const foot = (
+    <div className="sidebar-foot">
+      <span className="me" aria-hidden="true">{(settings?.userName ?? '?').slice(0, 1).toUpperCase()}</span>
+      <span className="me-name">{settings?.userName ?? ''}</span>
+      <span className={'conn ' + (online ? 'up' : 'down')} role="status" aria-label={online ? 'Engine connected' : 'Engine offline'} title={online ? 'Engine connected' : 'Engine offline'} />
+      {auth.enabled && (
+        <button type="button" className="icon-btn" aria-label="Log out" title="Log out" onClick={() => api.authLogout().then(() => location.reload())}>
+          <Icon.logout />
+        </button>
+      )}
+      <button
+        type="button"
+        className={'icon-btn' + (route.view === 'settings' ? ' active' : '')}
+        aria-label="Settings"
+        title="Settings"
+        aria-current={route.view === 'settings' ? 'page' : undefined}
+        onClick={() => {
+          if (route.view !== 'settings') go('#/settings/' + (localStorage.getItem('atlas.settings') ?? 'agents'));
+        }}
+      >
+        <Icon.gear />
+      </button>
+    </div>
+  );
+  const tab = tabOf(route.view);
+  const tabs: { id: Tab; label: string; hash: string; icon: ReactNode }[] = [
+    { id: 'inbox', label: 'Inbox', hash: '#/inbox', icon: <Icon.inbox /> },
+    { id: 'tasks', label: 'Tasks', hash: '#/board', icon: <Icon.board /> },
+    { id: 'chats', label: 'Chats', hash: '#/chats', icon: <Icon.ask /> },
+    { id: 'library', label: 'Library', hash: '#/library', icon: <Icon.library /> },
+    { id: 'more', label: 'More', hash: '#/more', icon: <Icon.dots /> },
+  ];
+
+  return (
+    <ProjectsCtx.Provider value={pinfo}>
+    <div className={'app' + (narrow ? ' narrow' : '')}>
+      {!narrow && (
+        <aside className="sidebar" aria-label="Navigation">
+          {wsRow}
+          {navRows()}
+          {agentsSection}
+          {runningSection}
+          {historySection}
+          {badges}
+          {foot}
+        </aside>
+      )}
       <div className="workspace">
         <div className="sheet">
           {route.view !== 'inbox' && <header className="screen-head">
-            {menuButton}
+            {backButton}
             <div className="crumb">
               {crumb.parts.map((p, i) => (
                 <span key={i} className="crumb-part">
@@ -692,7 +740,6 @@ export function App() {
             selected={route.target}
             onSelect={selectInbox}
             onOpenCard={setOpenId}
-            menuButton={menuButton}
             stream={stream}
             onError={fail}
           />
@@ -731,6 +778,21 @@ export function App() {
             onTitle={setLibraryTitle}
             onError={fail}
           />
+        ) : route.view === 'chats' ? (
+          // The narrow window's Chats tab: the sidebar's agents (by project) and History.
+          <div className="side-list" aria-label="Chats">
+            {agentsSection}
+            {historySection}
+          </div>
+        ) : route.view === 'more' ? (
+          // The narrow window's More tab: what the sidebar has that the other four tabs don't.
+          <div className="side-list" aria-label="More">
+            {wsRow}
+            {navRows(['workflows'])}
+            {runningSection}
+            {badges}
+            {foot}
+          </div>
         ) : route.view === 'workflows' ? (
           <WorkflowsView
             workflows={workflows}
@@ -762,7 +824,17 @@ export function App() {
       </HeaderSlot.Provider>
         </div>
       </div>
-      {menu && <div className="scrim" onClick={() => setMenu(false)} />}
+      {narrow && (
+        <nav className="tabbar" aria-label="Tabs">
+          {tabs.map((t) => (
+            <button key={t.id} type="button" className={'tabbar-btn' + (tab === t.id ? ' on' : '')} aria-current={tab === t.id ? 'page' : undefined} onClick={() => go(t.hash)}>
+              {t.icon}
+              <span>{t.label}</span>
+              {t.id === 'inbox' && badge > 0 && <span className="tabbar-n" title="Waiting for you and unread">{badge}</span>}
+            </button>
+          ))}
+        </nav>
+      )}
       {palette && (
         <Palette
           ctx={paletteCtx}
