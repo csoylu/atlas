@@ -12,15 +12,17 @@ export class FakeProvider implements Provider {
   /** Usage of each call, in order. */
   usages: ModelResponse['usage'][] = [];
   private cache = new Set<string>();
-  constructor(private script: (ModelResponse['content'] | ((req: ModelRequest) => ModelResponse['content']))[]) {}
+  /** A step: the reply's content, a function of the request, or a reply with a forced stop reason (`max_tokens`: a turn cut at the output limit, #274). */
+  constructor(private script: (ModelResponse['content'] | ((req: ModelRequest) => ModelResponse['content']) | { content: ModelResponse['content']; stopReason: string; output?: number })[]) {}
 
   async complete(req: ModelRequest, onText: OnDelta, signal: AbortSignal): Promise<ModelResponse> {
     this.calls.push(structuredClone(req));
     const step = this.script.shift();
     if (!step) throw new Error('FakeProvider: script exhausted');
-    const usage = { input: estimateTokens(req.system) + estimateTokens(req.tools) + estimateTokens(req.messages), output: 1, cached: this.cached(req) };
+    const forced = typeof step === 'function' || Array.isArray(step) ? null : step;
+    const usage = { input: estimateTokens(req.system) + estimateTokens(req.tools) + estimateTokens(req.messages), output: forced?.output ?? 1, cached: this.cached(req) };
     this.usages.push(usage);
-    const content = typeof step === 'function' ? step(req) : step;
+    const content = forced ? forced.content : typeof step === 'function' ? step(req) : (step as ModelResponse['content']);
     for (const b of content) {
       if (b.type === 'thinking' && b.thinking) onText(b.thinking, 'thinking');
       if (b.type === 'text') for (const w of b.text.split(/(?<= )/)) onText(w, 'text');
@@ -30,7 +32,7 @@ export class FakeProvider implements Provider {
     // A provider-run tool left without its result: Anthropic pauses the turn (pause_turn) for the caller to continue it.
     const answered = new Set(content.flatMap((b) => (b.type === 'web_search_tool_result' ? [b.tool_use_id] : [])));
     const paused = content.some((b) => b.type === 'server_tool_use' && !answered.has(b.id));
-    const stopReason = content.some((b) => b.type === 'tool_use') ? 'tool_use' : paused ? 'pause_turn' : 'end_turn';
+    const stopReason = forced ? forced.stopReason : content.some((b) => b.type === 'tool_use') ? 'tool_use' : paused ? 'pause_turn' : 'end_turn';
     return { content, stopReason, usage };
   }
 

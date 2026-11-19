@@ -186,6 +186,13 @@ describe('malformed tool input (#55)', () => {
     expect(badInput('grep', err)).toBe('invalid input: context: Too big: expected number to be <=20');
     expect(badInput('grep', 'Your arguments were not valid JSON (Unexpected token). Call the tool again.')).toBe('arguments weren’t valid JSON');
     expect(badInput('grep', 'no matches')).toBeNull();
+    // A call cut at the model's output limit (#274): not a JSON mistake.
+    const cut = 'Your tool call was cut off at the output limit (16000 output tokens, your thinking included): its arguments stop after 31991 chars. The tool did not run.';
+    expect(toolRow('write_file', { _invalid_json: '{"path": "pub.mjs", "content": "x' }, { content: cut, isError: true })).toMatchObject({
+      verb: 'Couldn’t call',
+      object: 'write_file',
+      rest: 'cut off at the output limit, sent back to the model',
+    });
     const row = toolRow('grep', { pattern: 'x', context: 30 }, { content: err, isError: true });
     expect(row).toMatchObject({ icon: 'x', tone: 'bad', verb: 'Couldn’t call', object: 'grep', mono: true, rest: 'invalid input: context: Too big: expected number to be <=20, sent back to the model' });
   });

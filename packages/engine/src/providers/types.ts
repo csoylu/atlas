@@ -57,10 +57,32 @@ export function toolInput(raw: string): Record<string, unknown> {
   return { _invalid_json: raw };
 }
 
-/** Why a tool call's arguments were rejected (toolInput), for the model; null for valid arguments. */
-export function invalidToolInput(input: unknown): string | null {
+/**
+ * The stop reason of a turn the model's output limit cut off. Every provider reports that case as this value
+ * (Anthropic `max_tokens`; OpenAI-compatible `length` and ChatGPT `incomplete: max_output_tokens` are mapped to it), even
+ * when the turn holds tool calls (#274): the runner needs it to tell a cut call from a badly escaped one.
+ */
+export const OUTPUT_LIMIT = 'max_tokens';
+
+/** The start of the error a call cut at the output limit gets (invalidToolInput); the UI matches it (toolRows badInput). */
+export const CUT_OFF = 'Your tool call was cut off at the output limit';
+
+/**
+ * Why a tool call's arguments were rejected (toolInput), for the model; null for valid arguments. `cut`: the turn
+ * stopped at the output limit and this was its last call, so its arguments are cut short, not badly escaped (#274):
+ * the model is told to send less per call instead of « escape your quotes », which would only resend the same
+ * oversized call. `cut.tokens` = the output tokens the turn used (the limit it hit).
+ */
+export function invalidToolInput(input: unknown, cut?: { tokens: number }): string | null {
   if (!input || typeof input !== 'object' || !('_invalid_json' in input)) return null;
   const raw = String((input as { _invalid_json: unknown })._invalid_json);
+  if (cut)
+    return (
+      `${CUT_OFF} (${cut.tokens} output tokens, your thinking included): its arguments stop after ${raw.length} chars. ` +
+      'The tool did not run and nothing was written.\n' +
+      'Do not resend the same call: it would be cut again. Send less per call: write a long file in parts ' +
+      '(write_file with the first part, then edit_file to append each next part after its last lines), or split it into several files.'
+    );
   let why = 'the arguments must be a JSON object';
   try {
     JSON.parse(raw);

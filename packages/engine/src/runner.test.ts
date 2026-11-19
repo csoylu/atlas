@@ -1,6 +1,6 @@
 import { cardRef } from '@atlas/shared';
 import { afterEach, describe, expect, it } from 'vitest';
-import { mkdtempSync, readFileSync } from 'node:fs';
+import { existsSync, mkdtempSync, readFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import type { ServerEvent } from '@atlas/shared';
@@ -183,6 +183,40 @@ describe('runner', () => {
     expect(err.content).toContain('⟨HERE⟩x">hi');
     expect(err.content).toMatch(/Resend the call/);
     expect(readFileSync(join(dataDir, 'workspaces/atlas/a.html'), 'utf8')).toBe('<p class="x">hi</p>');
+  });
+
+  it('tells a call cut at the output limit it was cut, not to escape its quotes (#274)', async () => {
+    const big = '{"path": "big.mjs", "content": "' + 'x'.repeat(200); // stops mid-string, like a turn cut at max_tokens
+    const fake = new FakeProvider([
+      // An earlier call of the same turn, badly escaped: it keeps the escaping hint; only the last call was cut.
+      { stopReason: 'max_tokens', output: 16000, content: [
+        { type: 'tool_use', id: 't0', name: 'write_file', input: toolInput('{"path": "a.html", "content": "<p class="x">hi</p>"}') },
+        { type: 'tool_use', id: 't1', name: 'write_file', input: toolInput(big) },
+      ] },
+      // Same truncated arguments, but the turn ended normally: a malformed call, the escaping hint as before.
+      [{ type: 'tool_use', id: 't2', name: 'write_file', input: toolInput('{"path": "a.html", "content": "<p class="x">hi</p>"}') }],
+      text('ok'),
+    ]);
+    const { engine, dataDir } = await setup(fake);
+    const card = engine.kanban.create({ title: 'x', assignee: 'atlas' }, 'user');
+    engine.kanban.appendMessage(card.id, 'user', 'user', text('go'));
+    engine.runner.wake(card.id);
+    await engine.runner.settled(card.id);
+
+    expect(engine.runner.runs(card.id)[0]).toMatchObject({ status: 'done', error: null });
+    const results = engine.kanban.messages(card.id).filter((m) => m.author === 'tool').flatMap((m) => m.content as { tool_use_id: string; content: string; is_error?: boolean }[]);
+    const [escaped, cut, plain] = results;
+    expect(cut!.tool_use_id).toBe('t1');
+    expect(cut!.is_error).toBe(true);
+    expect(cut!.content).toMatch(/^Your tool call was cut off at the output limit \(16000 output tokens/);
+    expect(cut!.content).toContain(`stop after ${big.length} chars`);
+    expect(cut!.content).toMatch(/edit_file/);
+    expect(cut!.content).not.toMatch(/escape/);
+    for (const r of [escaped!, plain!]) {
+      expect(r.content).toMatch(/^Your arguments were not valid JSON/);
+      expect(r.content).toMatch(/escape every "/);
+    }
+    expect(existsSync(join(dataDir, 'workspaces/atlas/big.mjs'))).toBe(false);
   });
 
   it('fails loudly after 3 turns in a row of invalid JSON arguments', async () => {

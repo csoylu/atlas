@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import { AnthropicProvider, adaptiveThinking, searchesFor, systemBlocks, WEB_SEARCH, withCacheBreakpoints } from './anthropic.ts';
-import type { ModelRequest } from './types.ts';
+import { OUTPUT_LIMIT, type ModelRequest } from './types.ts';
 
 describe('adaptiveThinking', () => {
   it('asks newer Claude models for summarized thinking, leaves older ones alone', () => {
@@ -192,6 +192,22 @@ describe('web search (server tool)', () => {
     expect(streamed).toEqual(['thinking:hmm', 'text:Writing ', 'text:it.']);
     expect(res.stopReason).toBe('tool_use');
     expect(res.usage).toEqual({ input: 15, output: 42, cached: 5 });
+  });
+
+  it('a tool call cut at max_tokens keeps its raw arguments and the stop reason max_tokens (#274)', async () => {
+    const fetch = (async () =>
+      sse([
+        { type: 'message_start', message: { id: 'm1', type: 'message', role: 'assistant', model: 'claude-x', content: [], stop_reason: null, usage: { input_tokens: 10, output_tokens: 0 } } },
+        { type: 'content_block_start', index: 0, content_block: { type: 'tool_use', id: 't1', name: 'write_file', input: {} } },
+        { type: 'content_block_delta', index: 0, delta: { type: 'input_json_delta', partial_json: '{"path":"a.mjs","content":"const a' } },
+        { type: 'content_block_stop', index: 0 },
+        { type: 'message_delta', delta: { stop_reason: 'max_tokens' }, usage: { output_tokens: 16000 } },
+        { type: 'message_stop' },
+      ])) as unknown as typeof globalThis.fetch;
+    const res = await new AnthropicProvider('k', { fetch, maxRetries: 0 }).complete(req(), () => {}, new AbortController().signal);
+    expect(res.stopReason).toBe(OUTPUT_LIMIT);
+    expect(res.content).toEqual([{ type: 'tool_use', id: 't1', name: 'write_file', input: { _invalid_json: '{"path":"a.mjs","content":"const a' } }]);
+    expect(res.usage.output).toBe(16000);
   });
 
   it('a stream cut before message_stop is a transient error, not an answer', async () => {
