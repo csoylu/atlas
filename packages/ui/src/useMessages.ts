@@ -18,6 +18,8 @@ export type LiveEvent =
   | { type: 'usage' }
   | { type: 'claude'; status: ClaudePlanStatus }
   | { type: 'doc'; doc: Doc }
+  /** An artifact was deleted for good (#242; keys 'docs' and 'doc:<id>'). */
+  | { type: 'docDeleted'; id: string }
   | { type: 'panel'; tabs: PanelTab[] }
   | { type: 'voice'; status: VoiceStatus }
   /** A memory was added or changed (key 'memories'). */

@@ -1,4 +1,5 @@
 import { useEffect, useMemo, useRef, useState, type ReactNode } from 'react';
+import { createPortal } from 'react-dom';
 import Markdown from 'react-markdown';
 import remarkGfm from 'remark-gfm';
 import { changedSections, findSection, linkOf, splitSections, USER, type Doc, type DocContent, type DocSection, type DocVersion } from '@atlas/shared';
@@ -62,8 +63,10 @@ export function ArtifactViewer(props: {
   end?: ReactNode;
   /** The ⋯ menu's first line: « Opened by @x » (chat); default « By @author ». */
   by?: string;
-  /** The ⋯ menu's last items. */
+  /** The ⋯ menu's last items (before « Delete… », which every viewer has). */
   menu?(close: () => void): ReactNode;
+  /** After « Delete… » went through (#242): leave the viewer (the Library goes back to its list). */
+  onDeleted?(): void;
   /** A version to show (a chat card opens its own); a new key shows it again. */
   want?: { version: number; key: string } | null;
   /** Markdown section (or html element id) to scroll to; a new scrollKey scrolls again. */
@@ -79,6 +82,7 @@ export function ArtifactViewer(props: {
   const { doc, onError } = props;
   const [version, setVersion] = useState<number | null>(null);
   const [src, setSrc] = useState(false);
+  const [deleting, setDeleting] = useState(false);
   const folders = useFolders(props.stream, onError);
   useEffect(() => {
     setVersion(null);
@@ -196,11 +200,23 @@ export function ArtifactViewer(props: {
                 </PopItem>
               )}
               {props.menu?.(close)}
+              <div className="pop-sep" />
+              <PopItem
+                danger
+                icon={<Icon.trash />}
+                onClick={() => {
+                  close();
+                  setDeleting(true);
+                }}
+              >
+                Delete…
+              </PopItem>
             </>
           )}
         </PopButton>
         {props.end}
       </div>
+      {deleting && <DeleteArtifactDialog doc={doc} onCancel={() => setDeleting(false)} onDeleted={() => props.onDeleted?.()} onError={onError} />}
       {src ? (
         <Source key={doc.id} doc={doc} version={version} onError={onError} />
       ) : (
@@ -217,6 +233,68 @@ export function ArtifactViewer(props: {
         />
       )}
     </div>
+  );
+}
+
+/**
+ * « Delete «title»? » (#242): the artifact, every version and its file go for good. The number of versions is read
+ * first (the last 50 are kept, so it can be fewer than the version number). Esc or a click outside cancels.
+ */
+export function DeleteArtifactDialog(props: { doc: Doc; onCancel(): void; onDeleted(): void; onError(e: unknown): void }) {
+  const { doc, onCancel, onError } = props;
+  const [n, setN] = useState<number | null>(null);
+  const [busy, setBusy] = useState(false);
+  useEffect(() => {
+    let live = true;
+    api.docVersions(doc.id).then((v) => live && setN(v.length), onError);
+    return () => {
+      live = false;
+    };
+  }, [doc.id, onError]);
+  useEffect(() => {
+    const key = (e: KeyboardEvent) => {
+      if (e.key !== 'Escape') return;
+      e.preventDefault();
+      e.stopImmediatePropagation();
+      onCancel();
+    };
+    window.addEventListener('keydown', key, true);
+    return () => window.removeEventListener('keydown', key, true);
+  }, [onCancel]);
+  const del = () => {
+    setBusy(true);
+    api.deleteDoc(doc.id).then(
+      () => {
+        onCancel();
+        props.onDeleted();
+      },
+      (e) => {
+        setBusy(false);
+        onError(e);
+      },
+    );
+  };
+  return createPortal(
+    <div className="modal-scrim del-scrim" role="presentation" onMouseDown={(e) => e.target === e.currentTarget && onCancel()}>
+      <div className="modal" role="alertdialog" aria-modal="true" aria-labelledby="del-art-title" aria-describedby="del-art-text">
+        <h2 id="del-art-title">Delete «{doc.title}»?</h2>
+        <p id="del-art-text">
+          {n === null ? 'All its versions are removed.' : n === 1 ? 'Its only version is removed.' : `All ${n} versions are removed.`} This can't be undone.
+        </p>
+        <p className="del-fine">
+          Its file <code>{doc.path}</code> in {who(doc.agentId)}'s workspace is deleted too. Its cards in chats will read “Deleted artifact”.
+        </p>
+        <div className="modal-actions">
+          <button type="button" className="ghost" onClick={onCancel}>
+            Cancel
+          </button>
+          <button type="button" className="primary danger" autoFocus disabled={busy} onClick={del}>
+            {busy ? 'Deleting…' : 'Delete'}
+          </button>
+        </div>
+      </div>
+    </div>,
+    document.body,
   );
 }
 

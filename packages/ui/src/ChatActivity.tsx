@@ -1,6 +1,6 @@
 import { createContext, useContext, useEffect, useMemo, useState, type ReactNode } from 'react';
 import { KIND_WORD, type Message, type ToolCallTiming, type parseDocRef } from '@atlas/shared';
-import { useCanvasPages, useLatestVersion } from './artifacts.ts';
+import { useArtifactState, useCanvasPages } from './artifacts.ts';
 import { ChatRow, PathObject, RowIconSvg, RowMeta } from './ChatRow.tsx';
 import { isDangerous, todoList, type Artifact } from './cardModal.ts';
 import { endedOnFailure, groupSummary, groupTurn, stepArtifact, type CanvasPage, type Segment, type Step } from './chatTurn.ts';
@@ -218,7 +218,20 @@ function useNow(on: boolean): number {
  * version in the panel.
  */
 export function ArtifactChip({ art, stream, onOpen }: { art: Artifact; stream: MessageStream; onOpen?(ref: DocRef): void }) {
-  const latest = useLatestVersion(art.docId, stream);
+  const { latest, deleted } = useArtifactState(art.docId, stream);
+  // Deleted for good (#242): the card stays in the thread, says so, and opens nothing.
+  if (deleted)
+    return (
+      <div className="artifact deleted" title={`${art.title} was deleted`}>
+        <span className={'art-icon ' + art.kind} aria-hidden="true">
+          <KindIcon kind={art.kind} />
+        </span>
+        <span className="art-text">
+          <span className="art-title">{art.title}</span>
+          <span className="art-meta">Deleted artifact · {KIND_WORD[art.kind]} · v{art.version}</span>
+        </span>
+      </div>
+    );
   const body = (
     <>
       <span className={'art-icon ' + art.kind} aria-hidden="true">

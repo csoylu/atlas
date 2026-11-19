@@ -8,7 +8,7 @@ import { Menu, PopButton, PopItem, PopRow } from './HeadMenu.tsx';
 import { Avatar } from './Board.tsx';
 import { StatusIcon } from './StatusIcon.tsx';
 import { shortAgo } from './inboxView.ts';
-import { ArtifactPreview, ArtifactViewer, KindIcon } from './Viewer.tsx';
+import { ArtifactPreview, ArtifactViewer, DeleteArtifactDialog, KindIcon } from './Viewer.tsx';
 import { folderName, useFolders } from './artifacts.ts';
 import { clearFilter, filterCount, folderCounts, groupDocs, inFolder, LIB_TABS, libraryHref, matches, parseLibView, recentDocs, relAgo, TYPE_LABEL, type LibFolder, type LibView } from './library.ts';
 
@@ -17,7 +17,8 @@ import { clearFilter, filterCount, folderCounts, groupDocs, inFolder, LIB_TABS, 
  * (chips on phones) with All artifacts, Unfiled and each folder (⋯: Rename, Delete: its artifacts go to Unfiled);
  * « Recently modified » as 4 large tiles showing the real content; Pinned (on top of each folder), then This week /
  * Earlier. Rows have a folder badge and ⋯ (Open, Pin, Move to). Search in the header covers titles and content in
- * every folder. #/library/<docId> shows one in the shared viewer (⋯: Pin, Move to).
+ * every folder. #/library/<docId> shows one in the shared viewer (⋯: Pin, Move to, Delete…). Rows' ⋯ has Delete… too
+ * (#242: the artifact, its versions and its file go for good, after a confirm).
  */
 export function Library(props: {
   docId: string | null;
@@ -37,6 +38,8 @@ export function Library(props: {
   const [hits, setHits] = useState<DocHit[] | null>(null);
   /** The folder being renamed, or 'new' while one is created. */
   const [editing, setEditing] = useState<string | null>(null);
+  /** The artifact whose « Delete… » was picked in a row's ⋯ (#242). */
+  const [deleting, setDeleting] = useState<Doc | null>(null);
   const folders = useFolders(stream, onError);
   const save = (next: LibView) => {
     setView(next);
@@ -52,6 +55,7 @@ export function Library(props: {
   useEffect(() => {
     void reload();
     const offDoc = stream.listen('docs', (e) => {
+      if (e.type === 'docDeleted') return setDocs((ds) => ds && ds.filter((d) => d.id !== e.id));
       if (e.type !== 'doc') return;
       setDocs((ds) => (ds ? (ds.some((d) => d.id === e.doc.id) ? ds.map((d) => (d.id === e.doc.id ? e.doc : d)) : [e.doc, ...ds]) : ds));
     });
@@ -163,6 +167,9 @@ export function Library(props: {
               <Icon.pin />
             </button>
           }
+          onDeleted={() => {
+            location.hash = '#/library';
+          }}
           menu={(close) => (
             <>
               {c && (
@@ -299,7 +306,7 @@ export function Library(props: {
           <span className="lib-when" title={new Date(d.updatedAt).toLocaleString()}>
             {shortAgo(d.updatedAt)}
           </span>
-          <PopButton className="lib-more" title="Open, pin, move" ariaLabel={`Actions for ${d.title}`} label={<Icon.dots />} width={240}>
+          <PopButton className="lib-more" title="Open, pin, move, delete" ariaLabel={`Actions for ${d.title}`} label={<Icon.dots />} width={240}>
             {(close) => (
               <>
                 <a className="pop-row" role="menuitem" href={libraryHref(d.id)} onClick={close}>
@@ -307,6 +314,17 @@ export function Library(props: {
                   <span className="pop-t">Open</span>
                 </a>
                 {fileItems(d, close)}
+                <div className="pop-sep" />
+                <PopItem
+                  danger
+                  icon={<Icon.trash />}
+                  onClick={() => {
+                    close();
+                    setDeleting(d);
+                  }}
+                >
+                  Delete…
+                </PopItem>
               </>
             )}
           </PopButton>
@@ -505,6 +523,7 @@ export function Library(props: {
           <div className="lib-list">{body}</div>
         </div>
       </div>
+      {deleting && <DeleteArtifactDialog doc={deleting} onCancel={() => setDeleting(null)} onDeleted={() => undefined} onError={onError} />}
     </div>
   );
 }

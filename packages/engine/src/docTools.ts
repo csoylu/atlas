@@ -143,6 +143,21 @@ export const DOC_TOOLS = {
       return `${doc.title} (${doc.id}, ${doc.kind}, v${c.version} of ${doc.version}, ${folderOf(doc, ctx)}, @${doc.agentId}:${doc.path})\n\n${text}`;
     },
   }),
+  artifact_delete: tool({
+    description:
+      'Delete one of your own artifacts for good (file and every version). Cannot be undone: only when the user asks.',
+    input: z.object(Target),
+    run: (i, ctx) => {
+      const ref = i.artifact ?? i.path;
+      if (!ref) throw new Error('give the artifact (id or path)');
+      const doc = /^doc_[\w-]+$/.test(ref) ? ctx.documents.get(ref) : ctx.documents.byPath(ctx.agentId, ref, ctx.cardId);
+      if (!doc) throw new Error(`no artifact ${ref} in your workspace`);
+      reachDoc(doc, ctx);
+      if (doc.agentId !== ctx.agentId) throw new Error(`${doc.title} (${doc.id}) is @${doc.agentId}'s artifact: you can delete only your own`);
+      const r = ctx.documents.remove(doc.id);
+      return `deleted ${doc.title} (${doc.id}, ${doc.path}): ${r.versions} version${r.versions === 1 ? '' : 's'}${r.file ? ' and the file' : ''} removed`;
+    },
+  }),
   panel_open: tool({
     description:
       'Show an existing artifact again in the side panel beside the chat (artifact_create / artifact_update already ' +

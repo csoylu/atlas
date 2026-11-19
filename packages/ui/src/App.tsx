@@ -205,6 +205,9 @@ export function App() {
         else if (e.type === 'document.updated') {
           stream.push('doc:' + e.doc.id, { type: 'doc', doc: e.doc });
           stream.push('docs', { type: 'doc', doc: e.doc });
+        } else if (e.type === 'document.deleted') {
+          stream.push('doc:' + e.id, { type: 'docDeleted', id: e.id });
+          stream.push('docs', { type: 'docDeleted', id: e.id });
         } else if (e.type === 'memory.updated') stream.push('memories', { type: 'memory', memory: e.memory });
         else if (e.type === 'memory.proposal') stream.push('memories', { type: 'proposal', proposal: e.proposal });
         else if (e.type === 'panel.updated') stream.push('panel:' + e.chatId, { type: 'panel', tabs: e.tabs });

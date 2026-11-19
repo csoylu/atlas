@@ -2569,3 +2569,13 @@ button.wfl-ghead:hover { color: var(--text); background: var(--hover); }
   .proj-btn .btn-text { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; min-width: 0; }
 }
 .pj-form input:disabled { color: var(--muted); }
+
+/* ── Delete an artifact (#242): the confirm dialog and a chat card of a deleted artifact ── */
+.del-scrim { z-index: 70; }
+.modal p.del-fine { font-size: var(--fs-small); color: var(--muted); overflow-wrap: anywhere; }
+.modal p.del-fine code { font-family: var(--mono); font-size: var(--fs-small); }
+.modal-actions { display: flex; justify-content: flex-end; gap: 8px; margin-top: 4px; }
+.modal .modal-actions .primary { margin-top: 0; }
+.artifact.deleted { border-style: dashed; background: transparent; }
+.artifact.deleted .art-icon { background: var(--hover); color: var(--muted); }
+.artifact.deleted .art-title { color: var(--muted); }
