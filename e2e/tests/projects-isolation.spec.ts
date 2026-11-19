@@ -1,5 +1,5 @@
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
-import { join, sep } from 'node:path';
+import { join } from 'node:path';
 import { test, expect } from '@playwright/test';
 import type { Card, ContentBlock, Project } from '@atlas/shared';
 import { TestAtlas } from '../harness/engine.ts';
@@ -288,11 +288,9 @@ for (const [from, to] of [['A', 'B'], ['B', 'A']] as const) {
     expect(p.results.artifact_list!.at(-1)).toMatch(/lead|member|not allowed|only/i);
   });
 
-  // Known bug (#245): in project A an agent's workdir is its home folder, and B's clone is a sub-folder of it.
+  // Was bug #245 (fixed): B's clone was a sub-folder of A's home workdir. Clones now live in data/projects/<project>/<agent>.
   test(`${to} → ${from}: file tools in ${from} can neither read nor write ${to}'s workspace`, async () => {
     const [here, other] = from === 'A' ? [w.A, w.B] : [w.B, w.A];
-    // Expected to fail only while the clone is nested in the home workdir (#245 moves it out: then this runs as a plain test).
-    test.fail(here.side === 'A' && other.workspace.startsWith(here.workspace + sep), "bug #245: B's clone is inside A's workdir, so A's file tools read and write it");
     const p = await probe(w, here, other, 'files');
     try {
       expect(await sightings(w, p, other.c), `canaries of ${other.side} seen in ${here.side}`).toEqual([]);

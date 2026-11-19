@@ -1,6 +1,6 @@
 # Projects: end-to-end tests and isolation audit (#218, 19 Nov 2026)
 
-Build tested: `main` at 38588ee (#213–#217, #236–#239 in). Tests: `e2e/tests/projects-flow.spec.ts`, `projects-isolation.spec.ts`
+Build tested: `main` at 81370e3 (#213–#217, #236–#248 in); the regression and ui-check runs of §3 were made on 38588ee. Tests: `e2e/tests/projects-flow.spec.ts`, `projects-isolation.spec.ts`
 (harness `e2e/harness/projects.ts`), `packages/engine/test/projects-crash.test.ts`, `packages/engine/src/projectRemovalRestart.test.ts`,
 tools `e2e/tools/single-project-regression.ts` and `compare-shots.mjs`. Run: `npm run build`, then in `e2e/`:
 `E2E_CHANNEL=chrome npx playwright test projects-`.
@@ -20,10 +20,10 @@ Each direction has a positive control (the probe sees every canary of its own pr
 
 | # | Finding | Status |
 |---|---|---|
-| 1 | In the home project an agent's workdir `workspaces/<agent>` contains its clone `workspaces/<agent>/<project>`: file tools read and write the other project's clone | bug, **#245**; pinned with `test.fail` |
+| 1 | In the home project an agent's workdir `workspaces/<agent>` contains its clone `workspaces/<agent>/<project>`: file tools read and write the other project's clone | bug, **#245**, fixed (clones moved to `data/projects/<project>/<agent>`); the test is a plain test now |
 | 2 | The shell reads and writes the other project's workspace by absolute path (both directions) | **accepted limit** (Master, 19 Nov, no sandbox for now), documented by #248; pinned as current behaviour: flips if a sandbox is built |
-| 3 | Member removed, then a kill before its run ended: the next start resumes that run (« continue » kick on the lead's card, run fails « not a member ») | bug, **#246**; pinned with `it.fails` |
-| 4 | `shellEnv.test.ts` « a git commit … configured email » fails on main on this machine (global git config) | **#247**, not projects |
+| 3 | Member removed, then a kill before its run ended: the next start resumes that run (« continue » kick on the lead's card, run fails « not a member ») | bug, **#246**, fixed (recover stops the run); the test is a plain test now |
+| 4 | `shellEnv.test.ts` « a git commit … configured email » fails on main on this machine (global git config) | **#247**, fixed (test isolation), not projects |
 
 ## 3. Single-project regression
 `npx tsx e2e/tools/single-project-regression.ts <copy of atlas.db>` on (a) a backup of the live database at 0055 and (b) the 0.43.1 backup at

@@ -73,14 +73,14 @@ describe('projects survive a kill (#218)', () => {
     try {
       await eventually(() => expect(engine.projects.get('datinel').members.map((m) => m.cloneState)).toEqual(['ready', 'ready']), { timeout: 20_000, what: 'both clones ready after the kills' });
       for (const agent of ['munih', 'zurich']) {
-        const ws = join(dataDir, 'workspaces', agent, 'datinel');
+        const ws = join(dataDir, 'projects', 'datinel', agent); // #245: clones live outside every agent workdir
         expect(readFileSync(join(ws, 'README.md'), 'utf8')).toBe('datinel readme\n');
         expect(existsSync(join(ws, 'partial.txt'))).toBe(false); // the partial folder of a killed clone is never the workspace
         expect(git(ws, 'status', '--porcelain').toString()).toBe('');
         expect(existsSync(`${ws}.cloning`)).toBe(false);
         expect(engine.projects.get('datinel').members.find((m) => m.agentId === agent)).toMatchObject({ cloneState: 'ready', cloneError: null, workspace: ws });
       }
-      expect(readdirSync(join(dataDir, 'workspaces', 'zurich')).filter((f) => f.endsWith('.cloning'))).toEqual([]);
+      expect(readdirSync(join(dataDir, 'projects', 'datinel')).filter((f) => f.endsWith('.cloning'))).toEqual([]);
       // Two engines never both cloned the same member: no member cloned twice in the last engine.
       expect(new Set(cloned).size).toBe(cloned.length);
     } finally {
@@ -125,8 +125,8 @@ describe('projects survive a kill (#218)', () => {
         for (const c of works) expect(c, c.title).toMatchObject({ assignee: null });
         expect(works.filter((c) => c.status !== 'done').every((c) => c.status === 'triage')).toBe(true);
         expect(chat.every((c) => c.status === 'archived')).toBe(true);
-        expect(kept).toEqual([{ path: join(dataDir, 'workspaces', 'zurich', 'datinel') }]);
-        expect(existsSync(join(dataDir, 'workspaces', 'zurich', 'datinel', 'README.md'))).toBe(true);
+        expect(kept).toEqual([{ path: join(dataDir, 'projects', 'datinel', 'zurich') }]);
+        expect(existsSync(join(dataDir, 'projects', 'datinel', 'zurich', 'README.md'))).toBe(true);
         // A resumed run of the removed member must not be left running, nor fail the card in the lead's triage.
         await eventually(() => expect(engine.db.prepare("SELECT COUNT(*) n FROM runs r JOIN cards c ON c.id = r.card_id WHERE c.project_id = 'datinel' AND r.agent_id = 'zurich' AND r.status = 'running'").get()).toEqual({ n: 0 }), { timeout: 30_000, what: 'no run of the removed member keeps going' });
         expect(engine.kanban.list({ project: 'datinel' }).filter((c) => c.title.startsWith('datinel work')).every((c) => c.assignee === null)).toBe(true);
