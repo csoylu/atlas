@@ -6,9 +6,15 @@ import { HeaderActions } from './ScreenHeader.tsx';
 import type { MessageStream } from './useMessages.ts';
 import { useMedia } from './Inbox.tsx';
 import { KindIcon, StepPanel } from './WorkflowStepPanel.tsx';
+import { ApprovalBanner } from './WorkflowApproval.tsx';
 import { RunOnPicker, RunStart, RunKnows, LoopGuardBanner, PLAY } from './WorkflowRunParts.tsx';
 import {
+  ADD_STEPS,
+  addStep,
+  clampBox,
+  type AddKind,
   KIND_LABEL,
+  kindLine,
   NODE_W,
   RUN_LABEL,
   STATE_LABEL,
@@ -19,9 +25,7 @@ import {
   edgePath,
   exitTarget,
   exitsOf,
-  freeSpot,
   loopGuardHit,
-  newNodeId,
   nodeClass,
   nodeMeta,
   nodeRunState,
@@ -51,20 +55,10 @@ type Save = { state: 'saved'; at: number } | { state: 'saving' } | { state: 'err
 /** A node's ports, relative to its top-left corner (px at 100 %), measured from the DOM. */
 type Ports = { h: number; input: Pt; exits: Record<string, Pt> };
 
-const ADD: { kind: 'agent' | 'approval' | 'condition'; label: string; help: string }[] = [
-  { kind: 'agent', label: 'Agent step', help: 'An agent runs a prompt as a task. Exits: done, failed.' },
-  { kind: 'approval', label: 'Approval', help: 'A task blocked on you, in the Inbox. Exits: approved, rejected.' },
-  { kind: 'condition', label: 'Condition', help: 'An exact test picks yes or no.' },
-];
+/** Height of the ghost node while the add menu is open (px at 100 %). */
+const GHOST_H = 96;
 const ZOOMS = [0.5, 0.67, 0.8, 0.9, 1, 1.1, 1.25, 1.5];
 const ordinal = (n: number) => (n === 1 ? '1st' : n === 2 ? '2nd' : n === 3 ? '3rd' : `${n}th`);
-
-function blank(kind: 'agent' | 'approval' | 'condition', id: string, at: { x: number; y: number }, g: Graph): WorkflowNode {
-  if (kind === 'agent') return { id, kind, ...at, config: { title: '', agentId: null, prompt: '', newTaskEachRun: true } };
-  if (kind === 'approval') return { id, kind, ...at, config: { title: '', question: '' } };
-  const counted = g.nodes.find((n) => n.kind === 'agent')?.id ?? 'trigger';
-  return { id, kind, ...at, config: { test: 'ranFewer', title: '', node: counted, times: 3 } };
-}
 
 export function WorkflowCanvas(props: {
   workflow: Workflow;
@@ -260,6 +254,7 @@ export function WorkflowCanvas(props: {
     </HeaderActions>
   );
 
+  const unapproved = w.commandSteps.filter((c) => !c.approved).map((c) => c.nodeId);
   const off = loopGuardHit(w) ? (
     <LoopGuardBanner
       w={w}
@@ -271,7 +266,7 @@ export function WorkflowCanvas(props: {
       }}
       onError={onError}
     />
-  ) : !w.enabled ? (
+  ) : !w.enabled && !w.commandSteps.some((c) => !c.approved) ? (
     <div className="wf-off">Off: the trigger doesn't fire. Run now still works; runs already started finish.</div>
   ) : null;
 
@@ -280,6 +275,7 @@ export function WorkflowCanvas(props: {
       <div className="wf-body phone">
         {header}
         <div className="wf-phone">
+          <ApprovalBanner w={w} onError={onError} />
           {off}
           {mode === 'runs' && (
             <>
@@ -289,7 +285,7 @@ export function WorkflowCanvas(props: {
           )}
           <div className="wf-phone-steps">
             {stepOrder(g).map((n, i) => (
-              <NodeCard key={n.id} n={n} g={g} run={mode === 'runs' ? shown : null} cards={props.cards} phone index={i} onOpenCard={props.onOpenCard} />
+              <NodeCard key={n.id} n={n} g={g} run={mode === 'runs' ? shown : null} cards={props.cards} phone index={i} needsOk={unapproved.includes(n.id)} onOpenCard={props.onOpenCard} />
             ))}
           </div>
           {mode === 'edit' && <p className="wf-sum">Edit the steps on a wider screen.</p>}
@@ -315,8 +311,14 @@ export function WorkflowCanvas(props: {
         }}
         onOpenCard={props.onOpenCard}
         onUndo={doUndo}
+        unapproved={unapproved}
+        onAdded={(id) => {
+          setSel(id);
+          setSideOpen(true);
+        }}
         top={
           <>
+            <ApprovalBanner w={w} onError={onError} />
             {off}
             {save.state === 'error' && (
               <div className="state-err bar wf-refused" role="alert">
@@ -341,27 +343,16 @@ export function WorkflowCanvas(props: {
                 Undo
               </button>
               {menu && (
-                <div className="wf-add-menu" role="menu" onKeyDown={(e) => e.key === 'Escape' && setMenu(false)}>
-                  {ADD.map((a) => (
-                    <button
-                      key={a.kind}
-                      role="menuitem"
-                      onClick={() => {
-                        const id = newNodeId(g.nodes);
-                        change({ nodes: [...g.nodes, blank(a.kind, id, freeSpot(g.nodes, selected ?? undefined), g)], edges: g.edges });
-                        setSel(id);
-                        setSideOpen(true);
-                        setMenu(false);
-                      }}
-                    >
-                      <KindIcon kind={a.kind} />
-                      <span>
-                        <b>{a.label}</b>
-                        <span className="help">{a.help}</span>
-                      </span>
-                    </button>
-                  ))}
-                </div>
+                <AddMenu
+                  onPick={(kind) => {
+                    const r = addStep(g, kind, selected ? { from: selected } : null);
+                    change(r.graph);
+                    setSel(r.id);
+                    setSideOpen(true);
+                    setMenu(false);
+                  }}
+                  onClose={() => setMenu(false)}
+                />
               )}
             </div>
           )
@@ -407,6 +398,10 @@ function Plane(props: {
   onSelect(id: string | null): void;
   onOpenCard(id: string): void;
   onUndo(): void;
+  /** Command steps waiting for Master's OK. */
+  unapproved: string[];
+  /** A step was added by dropping an exit on empty canvas: select it. */
+  onAdded(id: string): void;
   top: ReactNode;
   tools: ReactNode;
 }) {
@@ -419,6 +414,9 @@ function Plane(props: {
   const [drag, setDrag] = useState<{ id: string; x: number; y: number } | null>(null);
   /** Wiring: from an exit to the pointer, maybe over a step. */
   const [wiring, setWiring] = useState<{ from: string; exit: string; to: Pt; over: string | null } | null>(null);
+  /** An exit dropped on empty canvas (#262): the add menu at the drop point, a ghost node already wired. */
+  const [adding, setAdding] = useState<{ from: string; exit: string; at: Pt; menu: Pt } | null>(null);
+  const stageRef = useRef<HTMLDivElement>(null);
   const nodes = drag ? g.nodes.map((n) => (n.id === drag.id ? { ...n, x: drag.x, y: drag.y } : n)) : g.nodes;
 
   // Measure each node's ports (relative to the node) after every render; new state only when they changed.
@@ -487,7 +485,9 @@ function Plane(props: {
       const id = el?.dataset.id ?? null;
       return id && id !== from && g.nodes.find((n) => n.id === id)?.kind !== 'trigger' ? id : null;
     };
-    setWiring({ from, exit, to: toPlane(e), over: null });
+    const start = toPlane(e);
+    setAdding(null);
+    setWiring({ from, exit, to: start, over: null });
     const move = (ev: PointerEvent) => setWiring({ from, exit, to: toPlane(ev), over: target(ev) });
     const up = (ev: PointerEvent) => {
       window.removeEventListener('pointermove', move);
@@ -495,8 +495,17 @@ function Plane(props: {
       setWiring(null);
       const to = target(ev);
       const had = g.edges.find((x) => x.from === from && x.exit === exit)?.to ?? null;
-      // Dropped on a step: wire it there. Dropped off any step: unwire (the run ends at this exit).
-      if (to !== had) props.change(wire(g, from, exit, to));
+      // Dropped on a step: wire it there.
+      if (to) {
+        if (to !== had) props.change(wire(g, from, exit, to));
+        return;
+      }
+      // Dropped on empty canvas, away from the exit: the add menu opens there, with a ghost node wired to the exit.
+      const [x, y] = toPlane(ev);
+      const onCanvas = document.elementFromPoint(ev.clientX, ev.clientY)?.closest('.wf-canvas') && !document.elementFromPoint(ev.clientX, ev.clientY)?.closest('.wf-node');
+      if (!onCanvas || Math.hypot(x - start[0], y - start[1]) < 24) return;
+      const st = stageRef.current!.getBoundingClientRect();
+      setAdding({ from, exit, at: [Math.max(0, Math.round(x)), Math.max(0, Math.round(y - GHOST_H / 2))], menu: [ev.clientX - st.left, ev.clientY - st.top] });
     };
     window.addEventListener('pointermove', move);
     window.addEventListener('pointerup', up);
@@ -534,6 +543,7 @@ function Plane(props: {
   const paths: ReactNode[] = [];
   /** Exit names on the edges that go back to an earlier column (#259): where they cross, a line needs its name. */
   const labels: ReactNode[] = [];
+  const placed: [number, number, number][] = [];
   // A selected step lights the edges coming into it and dims the others (colour tokens, no transparency).
   const lit = edit && props.sel && !wiring ? props.sel : null;
   for (const e of g.edges) {
@@ -552,6 +562,14 @@ function Plane(props: {
     const cls = [fail ? 'fail' : '', state].filter(Boolean).join(' ');
     paths.push(<path key={k} className={cls || undefined} d={d} data-edge={k} />);
     const at = edgeLabelAt(a, b, srcBottom, t.y, bottom);
+    // Two back edges in the same lane between the same columns: their names side by side, not on top of each other.
+    if (at) {
+      const lo = Math.min(a[0], b[0]) + 8;
+      const hi = Math.max(a[0], b[0]);
+      const pos = labelSpot(at, e.exit, placed, lo, hi);
+      at[0] = pos;
+      placed.push([at[0], at[1], labelW(e.exit)]);
+    }
     if (at)
       labels.push(
         <span key={k + ':label'} className={'wf-elabel' + (cls ? ' ' + cls : '')} style={{ left: at[0], top: at[1] }} data-edge-label={k}>
@@ -572,52 +590,77 @@ function Plane(props: {
     const end: Pt = over && ports[over.id] ? abs(over, ports[over.id]!.input) : wiring.to;
     if (s && sp) paths.push(<path key="draft" className="draft" d={draftPath(abs(s, sp), end)} />);
   }
+  if (adding) {
+    const s = nodes.find((n) => n.id === adding.from);
+    const sp = s && ports[s.id]?.exits[adding.exit];
+    if (s && sp) paths.push(<path key="ghost" className="draft" d={draftPath(abs(s, sp), [adding.at[0], adding.at[1] + GHOST_H / 2])} />);
+  }
   const deselect = (e: ReactPointerEvent) => e.target === e.currentTarget && props.onSelect(null);
+  const pick = (kind: AddKind) => {
+    const from = adding && g.nodes.find((n) => n.id === adding.from);
+    setAdding(null);
+    if (!from || !adding) return;
+    const r = addStep(g, kind, { from, exit: adding.exit, at: { x: adding.at[0], y: adding.at[1] } });
+    props.change(r.graph);
+    props.onAdded(r.id);
+  };
 
   return (
     <div className="wf-canvas-wrap">
       {props.top}
-      <div className="wf-stage">
-      <div className={'wf-canvas' + (edit ? ' edit' : ' runs') + (wiring ? ' wiring' : '') + (lit ? ' litmode' : '')} ref={canvasRef} onPointerDown={deselect}>
-        <div className="wf-scale" style={{ width: width * zoom, height: height * zoom }} onPointerDown={deselect}>
-          <div className="wf-plane" ref={planeRef} style={{ width, height, transform: zoom === 1 ? undefined : `scale(${zoom})` }} onPointerDown={deselect}>
-            <svg className="wf-edges" width={width} height={height} aria-hidden="true">
-              {paths}
-            </svg>
-            {labels}
-            {nodes.map((n) => (
-              <NodeCard
-                key={n.id}
-                n={n}
-                g={g}
-                run={run}
-                cards={props.cards}
-                selected={props.sel === n.id}
-                target={wiring?.over === n.id}
-                wiringExit={wiring && wiring.from === n.id ? wiring.exit : null}
-                litExits={lit ? g.edges.filter((e) => e.from === n.id && e.to === lit).map((e) => e.exit) : undefined}
-                onPointerDown={(e) => startNodeDrag(e, n)}
-                onSelect={edit ? () => props.onSelect(n.id) : undefined}
-                onExitDown={edit ? (e, exit) => startWire(e, n.id, exit) : undefined}
-                onOpenCard={props.onOpenCard}
-              />
-            ))}
+      <div className="wf-stage" ref={stageRef}>
+        <div className={'wf-canvas' + (edit ? ' edit' : ' runs') + (wiring ? ' wiring' : '') + (lit ? ' litmode' : '')} ref={canvasRef} onPointerDown={deselect}>
+          <div className="wf-scale" style={{ width: width * zoom, height: height * zoom }} onPointerDown={deselect}>
+            <div className="wf-plane" ref={planeRef} style={{ width, height, transform: zoom === 1 ? undefined : `scale(${zoom})` }} onPointerDown={deselect}>
+              <svg className="wf-edges" width={width} height={height} aria-hidden="true">
+                {paths}
+              </svg>
+              {labels}
+              {adding && (
+                <div className="wf-ghost" style={{ left: adding.at[0], top: adding.at[1], width: NODE_W, height: GHOST_H }} aria-hidden="true">
+                  <span className="wf-port in" />
+                  <span>
+                    <b>The new step lands here</b>
+                    <br />
+                    wired to « {adding.exit} »
+                  </span>
+                </div>
+              )}
+              {nodes.map((n) => (
+                <NodeCard
+                  key={n.id}
+                  n={n}
+                  g={g}
+                  run={run}
+                  cards={props.cards}
+                  selected={props.sel === n.id}
+                  target={wiring?.over === n.id}
+                  wiringExit={wiring && wiring.from === n.id ? wiring.exit : null}
+                  needsOk={props.unapproved.includes(n.id)}
+                  litExits={lit ? g.edges.filter((e) => e.from === n.id && e.to === lit).map((e) => e.exit) : undefined}
+                  onPointerDown={(e) => startNodeDrag(e, n)}
+                  onSelect={edit ? () => props.onSelect(n.id) : undefined}
+                  onExitDown={edit ? (e, exit) => startWire(e, n.id, exit) : undefined}
+                  onOpenCard={props.onOpenCard}
+                />
+              ))}
+            </div>
           </div>
         </div>
-      </div>
-      {props.tools}
-      <div className="wf-zoom" role="group" aria-label="Zoom">
-        <button aria-label="Zoom out" onClick={() => zoomStep(-1)} disabled={zoom <= ZOOMS[0]!}>
-          −
-        </button>
-        <button title="Back to 100%" onClick={() => props.setZoom(1)}>
-          {Math.round(zoom * 100)}%
-        </button>
-        <button aria-label="Zoom in" onClick={() => zoomStep(1)} disabled={zoom >= ZOOMS.at(-1)!}>
-          +
-        </button>
-        <button onClick={fit}>Fit</button>
-      </div>
+        {props.tools}
+        {adding && <AddMenu at={adding.menu} beside={NODE_W * zoom} onPick={pick} onClose={() => setAdding(null)} />}
+        <div className="wf-zoom" role="group" aria-label="Zoom">
+          <button aria-label="Zoom out" onClick={() => zoomStep(-1)} disabled={zoom <= ZOOMS[0]!}>
+            −
+          </button>
+          <button title="Back to 100%" onClick={() => props.setZoom(1)}>
+            {Math.round(zoom * 100)}%
+          </button>
+          <button aria-label="Zoom in" onClick={() => zoomStep(1)} disabled={zoom >= ZOOMS.at(-1)!}>
+            +
+          </button>
+          <button onClick={fit}>Fit</button>
+        </div>
       </div>
     </div>
   );
@@ -636,6 +679,8 @@ function NodeCard(props: {
   wiringExit?: string | null;
   /** Its exits that lead into the selected step (lit). */
   litExits?: string[];
+  /** A « Run a command » step Master has not approved yet. */
+  needsOk?: boolean;
   onPointerDown?(e: ReactPointerEvent): void;
   /** Enter or Space on a focused node selects it. */
   onSelect?(): void;
@@ -645,7 +690,7 @@ function NodeCard(props: {
   const { n, g, run, phone } = props;
   const st = run ? nodeRunState(run, n.id) : null;
   const last = st?.steps.at(-1);
-  const cls = ['wf-node', n.kind, st ? nodeClass(st.state) : '', props.selected ? 'sel' : '', props.target ? 'target' : ''].filter(Boolean).join(' ');
+  const cls = ['wf-node', 'k-' + n.kind, st ? nodeClass(st.state) : '', props.selected ? 'sel' : '', props.target ? 'target' : ''].filter(Boolean).join(' ');
   return (
     <div
       className={cls}
@@ -665,8 +710,9 @@ function NodeCard(props: {
       <div className="wf-kind">
         {phone && props.index !== undefined && <span className="wf-num">{props.index + 1}</span>}
         <KindIcon kind={n.kind} />
-        {KIND_LABEL[n.kind]}
+        <span className="wf-kl">{kindLine(n)}</span>
       </div>
+      {props.needsOk && <span className="wf-ok-chip wf-node-ok">needs your OK</span>}
       <div className="wf-title">{nodeTitle(n, g.nodes)}</div>
       <div className="wf-meta">
         {n.kind === 'agent' && n.config.agentId && <AgentFace id={n.config.agentId} />}
@@ -679,7 +725,7 @@ function NodeCard(props: {
             className={'wf-out' + (x.failing ? ' fail' : '') + (x.to ? ' on' : ' end') + (props.wiringExit === x.exit ? ' drag' : '') + (props.litExits?.includes(x.exit) ? ' lit' : '') + (run && !phone && takenExit(run, n.id, x.exit) ? ' taken' : '')}
             data-exit={x.exit}
             onPointerDown={props.onExitDown ? (e) => props.onExitDown!(e, x.exit) : undefined}
-            title={props.onExitDown ? `${x.exit} → ${exitTarget(x, g.nodes)}. Drag onto a step to wire it` : undefined}
+            title={props.onExitDown ? `${x.exit} → ${exitTarget(x, g.nodes)}. Drag onto a step to wire it, or onto empty canvas to add a step there` : undefined}
           >
             <span className="en">
               {!x.to && !phone && <span className="ends">ends · </span>}
@@ -699,7 +745,11 @@ function NodeCard(props: {
         <div className="wf-run">
           <div className="wf-run-now">
             {st.state === 'working' && <span className="spin" aria-hidden="true" />}
-            <span className={'st-chip ' + chipClass(st.state)}>{STATE_LABEL[st.state]}</span>
+            {st.state === 'couldnt' && last?.couldntRun ? (
+              <span className="wf-couldnt">Couldn't run · {last.couldntRun.autoRetry ? 'retrying' : 'waiting for you'}</span>
+            ) : (
+              <span className={'st-chip ' + chipClass(st.state)}>{STATE_LABEL[st.state]}</span>
+            )}
             {last && st.state === 'working' && <span className="muted">{duration(last.startedAt, new Date().toISOString())}</span>}
             {last?.cardId && (
               <button className="linklike" onClick={() => props.onOpenCard(last.cardId!)}>
@@ -726,6 +776,9 @@ function NodeCard(props: {
   );
 }
 
+/** « GitHub can't be read » from « GitHub can't be read: gh is logged out »: the node says the first part, the run all of it. */
+const hhmm = (iso: string) => new Date(iso).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
+
 const takenExit = (run: WorkflowRun, node: string, exit: string) => (run.steps ?? []).some((s) => s.nodeId === node && s.exit === exit);
 
 /* ── Runs: the list and the chosen run's steps ── */
@@ -734,7 +787,13 @@ function RunsPanel(props: { w: Workflow; g: Graph; runs: WorkflowRun[] | null; r
   const { runs, run, g } = props;
   const [failedOnly, setFailedOnly] = useState(false);
   if (!runs) return <p className="wf-sum">Loading runs…</p>;
-  if (!runs.length) return <p className="wf-sum">No runs yet. Run now starts one{props.w.enabled && props.w.nextRunAt ? `; the trigger fires ${when(props.w.nextRunAt)}` : ''}.</p>;
+  if (!runs.length)
+    return (
+      <p className="wf-sum">
+        No runs yet. Run now starts one
+        {props.w.enabled && props.w.nextRunAt ? `; the trigger fires ${when(props.w.nextRunAt)}` : ''}.
+      </p>
+    );
   const open = !!run && (run.state === 'running' || run.state === 'waiting');
   const listed = failedOnly ? runs.filter((r) => r.state === 'failed' || r.state === 'skipped') : runs;
   return (
@@ -768,6 +827,7 @@ function RunsPanel(props: { w: Workflow; g: Graph; runs: WorkflowRun[] | null; r
               <StepLine key={s.id} s={s} g={g} cards={props.cards} onOpenCard={props.onOpenCard} />
             ))}
           </ol>
+          {open && <CouldntRun run={run} g={g} cards={props.cards} onOpenCard={props.onOpenCard} onError={props.onError} />}
           {!open && run.reason && (
             <p className={'wf-sum' + (run.state === 'failed' ? ' bad' : '')}>
               <b>{RUN_LABEL[run.state]}</b>: {run.reason}
@@ -791,12 +851,19 @@ function RunsPanel(props: { w: Workflow; g: Graph; runs: WorkflowRun[] | null; r
 function StepLine({ s, g, cards, onOpenCard }: { s: WorkflowRunStep; g: Graph; cards: Card[]; onOpenCard(id: string): void }) {
   const n = g.nodes.find((x) => x.id === s.nodeId);
   const st = stepState(s);
-  const dot = st === 'working' ? 'wk' : st === 'waiting' ? 'bk' : st === 'failed' || st === 'rejected' ? 'bad' : st === 'stopped' ? 'off' : 'ok';
+  const dot = st === 'couldnt' ? 'bad' : st === 'working' ? 'wk' : st === 'waiting' ? 'bk' : st === 'failed' || st === 'rejected' ? 'bad' : st === 'stopped' ? 'off' : 'ok';
   const who = n?.kind === 'agent' && n.config.agentId ? ` · @${n.config.agentId}` : '';
   const exit = s.exit && s.kind !== 'trigger' ? ` · ${s.exit}` : '';
   const round = s.round > 1 ? ` · ${ordinal(s.round)} round` : '';
   const title = s.kind === 'trigger' ? 'Trigger' : n ? nodeTitle(n, g.nodes) : `${s.nodeId} (deleted)`;
-  const say = s.state === 'running' ? `Working for ${duration(s.startedAt, new Date().toISOString())}` : s.state === 'waiting' ? 'Waiting for you' : s.summary;
+  const say =
+    s.couldntRun && !s.endedAt
+      ? `Couldn't run since ${hhmm(s.couldntRun.since)}: ${s.couldntRun.reason}`
+      : s.state === 'running'
+        ? `Working for ${duration(s.startedAt, new Date().toISOString())}`
+        : s.state === 'waiting'
+          ? 'Waiting for you'
+          : s.summary;
   return (
     <li>
       <span className={'d ' + dot} aria-label={STATE_LABEL[st]} />
@@ -815,5 +882,133 @@ function StepLine({ s, g, cards, onOpenCard }: { s: WorkflowRunStep; g: Graph; c
       )}
       {say && <span className="s">{say}</span>}
     </li>
+  );
+}
+
+/** An exit name's width on an edge, roughly (px at 100 %): enough to keep two names apart. */
+const labelW = (exit: string) => exit.length * 7.5 + 18;
+/**
+ * Where an exit's name goes on a back edge's lane (#262): its middle, else the nearest free spot on either side within
+ * the lane, so two edges sharing a lane show both names side by side, never on top of each other or off the canvas.
+ */
+function labelSpot(at: Pt, exit: string, placed: [number, number, number][], lo: number, hi: number): number {
+  const w = labelW(exit);
+  const free = (x: number) => !placed.some(([px, py, pw]) => Math.abs(py - at[1]) < 14 && Math.abs(px - x) < (pw + w) / 2 + 6);
+  for (let d = 0; d < 600; d += 12) for (const x of [at[0] + d, at[0] - d]) if (x - w / 2 >= lo && x + w / 2 <= hi + 40 && free(x)) return x;
+  return at[0];
+}
+
+/**
+ * A step that couldn't run (#262, mockup « Couldn't run »): no outcome yet, the run waits on it. Retry now, or Follow its
+ * negative exit; these live in the run only (the task points here).
+ */
+function CouldntRun({ run, g, cards, onOpenCard, onError }: { run: WorkflowRun; g: Graph; cards: Card[]; onOpenCard(id: string): void; onError(e: unknown): void }) {
+  const steps = run.steps ?? [];
+  const i = steps.findIndex((s) => s.couldntRun && !s.endedAt);
+  const [busy, setBusy] = useState<'retry' | 'follow' | null>(null);
+  const s = steps[i];
+  if (!s?.couldntRun) return null;
+  const c = s.couldntRun;
+  const n = g.nodes.find((x) => x.id === s.nodeId);
+  const task = run.subject?.cardId;
+  const act = (k: 'retry' | 'follow') => {
+    setBusy(k);
+    (k === 'retry' ? api.retryWorkflowRun(run.id) : api.followWorkflowRun(run.id)).catch(onError).finally(() => setBusy(null));
+  };
+  const follow = () => {
+    if (!c.negativeExit) return;
+    if (confirm(`Follow « ${c.negativeExit} »? The run goes on as if « ${n ? nodeTitle(n, g.nodes) : s.nodeId} » had answered « ${c.negativeExit} ».`)) act('follow');
+  };
+  const notifyAt = new Date(Date.parse(c.since) + 15 * 60_000).toISOString();
+  return (
+    <div className="wf-couldnt-box" role="alert">
+      <p>
+        <b>Step {i + 1} couldn't run: no outcome yet.</b>{' '}
+        {c.autoRetry ? (
+          <>
+            Atlas retries it by itself every minute
+            {task && (
+              <>
+                ;{' '}
+                <button className="linklike" onClick={() => onOpenCard(task)}>
+                  {refOf(task, cards)}
+                </button>{' '}
+                stays as it is
+              </>
+            )}
+            . {c.notified ? 'You got an Inbox item about it.' : `After 15 min of failures you get one Inbox item (at ${hhmm(notifyAt)}).`} Fix the cause and it goes on by itself.
+          </>
+        ) : (
+          <>
+            Atlas doesn't retry it by itself: Retry now
+            {c.negativeExit ? `, or follow « ${c.negativeExit} »` : ''}.
+          </>
+        )}
+      </p>
+      <span className="why">{c.reason}</span>
+      <div className="acts">
+        <button className="primary small" disabled={!!busy} onClick={() => act('retry')}>
+          {busy === 'retry' ? 'Retrying…' : 'Retry now'}
+        </button>
+        {c.negativeExit && (
+          <button className="head-btn" disabled={!!busy} onClick={follow}>
+            Follow « {c.negativeExit} »…
+          </button>
+        )}
+      </div>
+    </div>
+  );
+}
+
+/**
+ * The « Add step » menu (#262, mockup « Add step »): each kind says its exits. Under the header button, or at an exit's
+ * drop point (`at`, stage px) beside the ghost node. It never leaves the canvas area: placed inside it, and scrolls
+ * when the canvas is shorter than the menu (the approval banner takes room).
+ */
+function AddMenu(props: { at?: Pt; beside?: number; onPick(kind: AddKind): void; onClose(): void }) {
+  const ref = useRef<HTMLDivElement>(null);
+  const [box, setBox] = useState<{ left?: number; top?: number; maxHeight: number } | null>(null);
+  useLayoutEffect(() => {
+    const el = ref.current;
+    const stage = el?.closest('.wf-stage');
+    if (!el || !stage) return;
+    const area = stage.getBoundingClientRect();
+    const w = el.offsetWidth;
+    const h = el.scrollHeight;
+    if (props.at) {
+      const maxHeight = Math.max(160, area.height - 16);
+      const right = props.at[0] + (props.beside ?? 0) + 16;
+      const x = right + w + 8 <= area.width ? right : props.at[0] - w - 16;
+      const p = clampBox({ x, y: props.at[1] - 24 }, w, Math.min(h, maxHeight), { w: area.width, h: area.height });
+      setBox({ left: p.x, top: p.y, maxHeight });
+    } else {
+      const top = el.getBoundingClientRect().top - area.top;
+      setBox({ maxHeight: Math.max(160, area.height - top - 8) });
+    }
+  }, [props.at?.[0], props.at?.[1]]);
+  useEffect(() => {
+    ref.current?.querySelector<HTMLButtonElement>('button')?.focus({ preventScroll: true });
+    const key = (e: KeyboardEvent) => e.key === 'Escape' && props.onClose();
+    const down = (e: PointerEvent) => !(e.target as HTMLElement).closest('.wf-add-menu, [aria-haspopup="menu"]') && props.onClose();
+    window.addEventListener('keydown', key);
+    window.addEventListener('pointerdown', down);
+    return () => {
+      window.removeEventListener('keydown', key);
+      window.removeEventListener('pointerdown', down);
+    };
+  }, []);
+  return (
+    <div ref={ref} className={'wf-add-menu' + (props.at ? ' at' : '')} role="menu" aria-label="Add a step" style={{ ...(box ?? {}), visibility: box ? undefined : 'hidden' }}>
+      {ADD_STEPS.map((a) => (
+        <button key={a.kind} role="menuitem" onClick={() => props.onPick(a.kind)}>
+          <KindIcon kind={a.kind} />
+          <span>
+            <b>{a.label}</b>
+            {a.isNew && <span className="wf-new">new</span>}
+            <span className="help">{a.help}</span>
+          </span>
+        </button>
+      ))}
+    </div>
   );
 }

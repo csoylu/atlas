@@ -2351,6 +2351,66 @@ button.wfl-ghead:hover { color: var(--text); background: var(--hover); }
 .wf-add-menu button:hover, .wf-add-menu button:focus-visible { background: var(--hover); }
 .wf-add-menu b { font-weight: var(--fw-medium); }
 .wf-add-menu .help { display: block; margin-top: 2px; font-size: var(--fs-small); color: var(--muted); line-height: var(--lh-normal); }
+.wf-add-menu { overflow-y: auto; width: 320px; max-width: calc(100vw - 32px); }
+.wf-add-menu.at { top: auto; }
+.wf-add-menu .wf-new { margin-left: 6px; }
+/* #262: an exit dropped on empty canvas: the step-to-be, already wired (accent tokens, no opacity). */
+.wf-ghost { position: absolute; display: grid; place-items: center; text-align: center; padding: 8px; border: 1.5px dashed var(--accent); border-radius: var(--radius-card); background: var(--accent-soft); color: var(--text); font-size: var(--fs-small); line-height: var(--lh-normal); pointer-events: none; }
+.wf-ghost b { font-weight: var(--fw-medium); }
+.wf-ghost .wf-port.in { border-color: var(--accent); background: var(--accent); }
+/* #262: a step that couldn't run, on its node and in the run panel. */
+.wf-couldnt { color: var(--neg-ink); font-size: var(--fs-small); line-height: var(--lh-normal); }
+.wf-couldnt-box { display: flex; flex-direction: column; gap: 6px; margin: 4px 0; padding: 10px 12px; border: 1px solid var(--negative); border-radius: 8px; background: var(--neg-bg); color: var(--text); font-size: var(--fs-small); line-height: var(--lh-normal); }
+.wf-couldnt-box p { margin: 0; }
+.wf-couldnt-box b { font-weight: var(--fw-bold); }
+.wf-couldnt-box .linklike { display: inline; }
+.wf-couldnt-box .why { color: var(--muted); }
+.wf-couldnt-box .acts { display: flex; flex-wrap: wrap; gap: 8px; }
+/* #262: « Waiting for your approval » above the canvas (above the steps on a phone). */
+.wf-appr { flex: none; display: flex; flex-direction: column; gap: 8px; margin: 12px 12px 0; padding: 12px 14px; border: 1px solid var(--bk-dot); border-radius: 10px; background: var(--bk-bg); color: var(--text); font-size: var(--fs-base); line-height: var(--lh-normal); max-height: 55vh; overflow-y: auto; }
+.wf-appr p { margin: 0; }
+.wf-appr-h { display: flex; align-items: center; gap: 8px; }
+.wf-appr-h b { font-weight: var(--fw-medium); }
+.wf-appr-h .ico { display: inline-grid; place-items: center; width: 16px; height: 16px; border-radius: 50%; background: var(--bk-dot); color: var(--app); font-size: var(--fs-small); font-weight: var(--fw-bold); line-height: var(--lh-tight); }
+.wf-appr-kv { display: grid; grid-template-columns: max-content minmax(0, 1fr); gap: 6px 16px; margin: 0; padding: 10px 12px; border: 1px solid var(--line-2); border-radius: 8px; background: var(--panel); font-size: var(--fs-small); }
+.wf-appr-kv dt { color: var(--muted); }
+.wf-appr-kv dd { margin: 0; min-width: 0; overflow-wrap: anywhere; }
+.wf-appr-kv pre { margin: 0; padding: 8px 10px; border-radius: 6px; background: var(--app); white-space: pre-wrap; overflow-wrap: anywhere; font-size: var(--fs-small); }
+.wf-appr-kv .mono, .wf-appr-kv pre { font-family: var(--mono); }
+.wf-appr-acts { display: flex; flex-wrap: wrap; gap: 8px; }
+@media (max-width: 640px) {
+  .wf-appr { margin: 0 0 12px; max-height: none; }
+  .wf-appr-kv { grid-template-columns: minmax(0, 1fr); gap: 2px; }
+  .wf-appr-kv dd { margin-bottom: 6px; }
+  .wf-appr-acts button { flex: 1; min-height: 40px; }
+  .wf-couldnt-box .acts button { flex: 1; min-height: 40px; }
+}
+/* #262: step panels: « needs your OK », « Comes from », the condition try, the wait's fixed subject. */
+.wf-ok-chip { padding: 0 6px; border-radius: 9px; background: var(--bk-bg); color: var(--bk-ink); font-size: var(--fs-small); font-weight: var(--fw-medium); line-height: var(--lh-normal); }
+.wf-sum.warn { color: var(--bk-ink); }
+.wf-node-ok { display: inline-block; margin: 4px 0 2px; }
+.wf-appr-acts button { justify-content: center; }
+.wf-from { display: grid; grid-template-columns: max-content 12px minmax(0, 1fr); gap: 4px 8px; align-items: center; font-size: var(--fs-small); line-height: var(--lh-normal); }
+.wf-from .row { display: contents; }
+.wf-from .xn { font-family: var(--mono); color: var(--text); }
+.wf-from .row.fail .xn { color: var(--neg-ink); }
+.wf-from .arr { color: var(--muted); }
+.wf-from .fr { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.wf-kv.wrap dd { white-space: normal; }
+.wf-fixed { color: var(--text); font-size: var(--fs-small); line-height: var(--lh-normal); padding: 6px 10px; border: 1px solid var(--line-2); border-radius: 8px; background: var(--app); }
+.wf-limit { display: grid; grid-template-columns: 88px minmax(0, 1fr); gap: 8px; }
+.wf-match { align-self: flex-start; }
+.wf-flt.wf-test { grid-template-columns: minmax(0, 1fr) minmax(0, 1fr) 40px; row-gap: 6px; padding-bottom: 6px; border-bottom: 1px solid var(--line-2); }
+.wf-flt.wf-test > :nth-child(1) { grid-column: 1 / 3; grid-row: 1; }
+.wf-flt.wf-test > :nth-child(2) { grid-column: 1; grid-row: 2; }
+.wf-flt.wf-test > :nth-child(3) { grid-column: 2; grid-row: 2; }
+.wf-flt.wf-test > :nth-child(4) { grid-column: 3; grid-row: 1; }
+.wf-tryhead { display: inline-flex; align-items: center; gap: 8px; }
+.wf-tryhead select { width: auto; }
+.wf-try { padding: 8px 10px; border-radius: 8px; border: 1px solid var(--line-2); background: var(--app); font-size: var(--fs-small); line-height: var(--lh-normal); }
+.wf-try .pass { color: var(--text); }
+.wf-try .miss { color: var(--neg-ink); }
+.wf-try b { font-weight: var(--fw-bold); }
 .wf-ico { flex: none; width: 22px; height: 22px; border-radius: 6px; display: grid; place-items: center; background: var(--active); color: var(--muted); margin-top: 1px; }
 .wf-ico.trigger { background: var(--accent-soft); color: var(--accent); }
 .wf-ico.approval { background: var(--bk-bg); color: var(--bk-ink); }
@@ -2367,6 +2427,7 @@ button.wfl-ghead:hover { color: var(--text); background: var(--hover); }
 .wf-node.target { border-color: var(--accent); }
 .wf-kind { display: flex; align-items: center; gap: 6px; font-size: var(--fs-small); color: var(--muted); line-height: var(--lh-tight); }
 .wf-kind .wf-ico { width: 18px; height: 18px; border-radius: 5px; margin: 0; }
+.wf-kind .wf-kl { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .wf-title { margin-top: 6px; font-size: var(--fs-base); font-weight: var(--fw-medium); line-height: var(--lh-tight); color: var(--text); overflow-wrap: anywhere; }
 .wf-meta { margin-top: 4px; display: flex; align-items: center; gap: 6px; font-size: var(--fs-small); color: var(--muted); line-height: var(--lh-tight); white-space: nowrap; min-width: 0; }
 .wf-meta > span { overflow: hidden; text-overflow: ellipsis; }

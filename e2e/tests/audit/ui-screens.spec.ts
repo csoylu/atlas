@@ -186,7 +186,7 @@ test.describe('U · screens (Playwright, real UI, scripted model)', () => {
     await page.getByRole('button', { name: 'Create and open' }).click();
     await expect.poll(() => page.evaluate(() => location.hash)).toMatch(/#\/workflows\/wf_/);
     const side = page.getByRole('complementary', { name: 'Step' });
-    await side.getByLabel('Agent').selectOption('atlas');
+    await side.getByLabel('Chosen agent').selectOption('atlas');
     await side.getByLabel('Prompt').fill('Ping the team');
     const wf = (await call(atlas, 'GET', '/workflows')).body.find((x: any) => x.name === 'Ping the team');
     await expect.poll(async () => (await call(atlas, 'GET', `/workflows/${wf.id}`)).body.nodes.find((n: any) => n.id === 'step1').config.prompt).toBe('Ping the team');

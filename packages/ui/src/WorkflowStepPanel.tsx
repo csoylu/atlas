@@ -1,5 +1,25 @@
 import { useEffect, useRef, useState } from 'react';
-import { CARD_STATUSES, type Agent, type TriggerConfig, type Workflow, type WorkflowField, type WorkflowEdge, type WorkflowNode, type WorkflowNodeKind } from '@atlas/shared';
+import {
+  ACTION_STATUSES,
+  CARD_STATUSES,
+  FIELD_TEST_OPS,
+  WAIT_FOR,
+  workflowExits,
+  type ActionConfig,
+  type ConditionTryResult,
+  type FieldTest,
+  type FieldTestOp,
+  type Settings,
+  type WaitFor,
+  type WorkflowRun,
+  type Agent,
+  type TriggerConfig,
+  type Workflow,
+  type WorkflowField,
+  type WorkflowEdge,
+  type WorkflowNode,
+  type WorkflowNodeKind,
+} from '@atlas/shared';
 import { useProjects } from './projects.tsx';
 import { STATUS_LABEL } from './StatusIcon.tsx';
 import { api } from './api.ts';
@@ -21,6 +41,11 @@ import {
   type FilterKey,
   type FilterRow,
   type TriggerKind,
+  envOf,
+  hasRunTask,
+  incomingOf,
+  limitParts,
+  UNIT_MIN,
 } from './workflowView.ts';
 import { BROWSER_TZ, DAYS, KIND_LABEL, cronOf, exitTarget, exitsOf, freeSpot, newNodeId, nodeMeta, nodeTitle, timeDraftOf, triggerOf, when, wire, withoutNode, type Repeat, type TimeDraft } from './workflowView.ts';
 
@@ -66,8 +91,13 @@ export function KindIcon({ kind }: { kind: WorkflowNodeKind }) {
 export function StepPanel(props: { n: WorkflowNode; g: Graph; w: Workflow; agents: Agent[]; change: Change; onClose(): void; onDeleted(): void; go(hash: string): void; onError(e: unknown): void }) {
   const { n, g } = props;
   const fields = { workflowId: props.w.id, nodeId: n.id };
-  const set: SetConfig = (config, key = null) =>
-    props.change({ nodes: g.nodes.map((m) => (m.id === n.id ? ({ ...m, config } as WorkflowNode) : m)), edges: g.edges }, key && `${n.id}:${key}`);
+  // A change of what a step does can change its exits (an action that merges: merged / refused): links from an exit
+  // that no longer exists go, else the save is refused.
+  const set: SetConfig = (config, key = null) => {
+    const next = { ...n, config } as WorkflowNode;
+    const exits = workflowExits(next);
+    props.change({ nodes: g.nodes.map((m) => (m.id === n.id ? next : m)), edges: g.edges.filter((e) => e.from !== n.id || exits.includes(e.exit)) }, key && `${n.id}:${key}`);
+  };
   return (
     <aside className="wf-side" aria-label="Step">
       <div className="sd-head">
@@ -80,10 +110,11 @@ export function StepPanel(props: { n: WorkflowNode; g: Graph; w: Workflow; agent
       </div>
       <div className="wf-side-body">
         {n.kind === 'trigger' && <TriggerFields n={n} w={props.w} agents={props.agents} set={set} />}
-        {n.kind === 'agent' && <AgentFields n={n} agents={props.agents} fields={fields} set={set} />}
+        {n.kind === 'agent' && <AgentFields n={n} g={g} w={props.w} agents={props.agents} fields={fields} set={set} />}
         {n.kind === 'approval' && <ApprovalFields n={n} fields={fields} set={set} />}
-        {n.kind === 'condition' && <ConditionFields n={n} g={g} set={set} />}
-        {(n.kind === 'action' || n.kind === 'wait') && <p className="wf-sum">{nodeMeta(n, g.nodes)}</p>}
+        {n.kind === 'condition' && <ConditionFields n={n} g={g} w={props.w} set={set} onError={props.onError} />}
+        {n.kind === 'action' && <ActionFields n={n} g={g} w={props.w} agents={props.agents} fields={fields} set={set} />}
+        {n.kind === 'wait' && <WaitFields n={n} g={g} set={set} />}
         <Exits n={n} g={g} change={props.change} />
       </div>
       <div className="wf-side-foot">
@@ -223,25 +254,40 @@ function FieldPicker({ of, q, setQ, onPick, onClose }: { of: FieldsOf; q: string
   );
 }
 
-function AgentFields({ n, agents, fields, set }: { n: Extract<WorkflowNode, { kind: 'agent' }>; agents: Agent[]; fields: FieldsOf; set: SetConfig }) {
+/** Settings → Board & triage: the review agent, for « the project's review agent » (#262). */
+function useSettings(): Settings | null {
+  const [st, setSt] = useState<Settings | null>(null);
+  useEffect(() => {
+    let live = true;
+    api.settings().then(
+      (x) => live && setSt(x),
+      () => live && setSt(null), // only a description is lost: the choice still works
+    );
+    return () => {
+      live = false;
+    };
+  }, []);
+  return st;
+}
+
+/**
+ * An agent step (#262, mockup « Agent + fields »): a chosen agent or the project's review agent; in the task thread
+ * (the run's task: its history and PR stay) or as a task of its own.
+ */
+function AgentFields({ n, g, w, agents, fields, set }: { n: Extract<WorkflowNode, { kind: 'agent' }>; g: Graph; w: Workflow; agents: Agent[]; fields: FieldsOf; set: SetConfig }) {
   const c = n.config;
+  const settings = useSettings();
+  const { byId } = useProjects();
+  const project = w.projectId ? byId(w.projectId) : undefined;
+  const review = settings?.reviewAgent ?? null;
+  const lead = project?.lead ?? null;
+  const thread = !!c.inThread;
+  const canThread = hasRunTask(g);
   return (
     <>
       <label className="field">
         Title
-        <input value={c.title} placeholder={c.prompt.trim().split('\n')[0]?.slice(0, 80) || 'Validate the PR'} onChange={(e) => set({ ...c, title: e.target.value }, 'title')} />
-      </label>
-      <label className="field">
-        Agent
-        <select value={c.agentId ?? ''} onChange={(e) => set({ ...c, agentId: e.target.value || null })}>
-          {!c.agentId && <option value="">Pick an agent</option>}
-          {agents.map((a) => (
-            <option key={a.id} value={a.id}>
-              @{a.id}
-            </option>
-          ))}
-          {c.agentId && !agents.some((a) => a.id === c.agentId) && <option value={c.agentId}>@{c.agentId} (missing)</option>}
-        </select>
+        <input value={c.title} placeholder={c.prompt.trim().split('\n')[0]?.slice(0, 80) || 'Review the PR'} onChange={(e) => set({ ...c, title: e.target.value }, 'title')} />
       </label>
       <PromptField
         fields={fields}
@@ -251,16 +297,102 @@ function AgentFields({ n, agents, fields, set }: { n: Extract<WorkflowNode, { ki
         onChange={(v) => set({ ...c, prompt: v }, 'prompt')}
       />
       <div className="field">
-        Task
-        <div className="segmented">
-          <button type="button" className={c.newTaskEachRun ? 'on' : ''} aria-pressed={c.newTaskEachRun} onClick={() => set({ ...c, newTaskEachRun: true })}>
-            New each run
+        Agent
+        <div className="wf-tks compact" role="radiogroup" aria-label="Agent">
+          <button
+            type="button"
+            role="radio"
+            aria-checked={!!c.reviewAgent}
+            className={'wf-tk' + (c.reviewAgent ? ' on' : '')}
+            disabled={!canThread && !c.reviewAgent}
+            title={!canThread ? "The review agent works in the thread of the run's task: start the workflow on a task or PR event" : undefined}
+            onClick={() => !c.reviewAgent && set({ ...c, reviewAgent: true, inThread: true })}
+          >
+            <span className="tkx">
+              <b>The project's review agent</b>
+              <span className="help">
+                {review ? `@${review}${project ? ` in ${project.name}` : ''}; on @${review}'s own PRs, the lead${lead ? ` @${lead}` : ''}` : 'Settings → Board & triage → Review agent; the lead on its own PRs'}
+              </span>
+            </span>
           </button>
-          <button type="button" className={!c.newTaskEachRun ? 'on' : ''} aria-pressed={!c.newTaskEachRun} onClick={() => set({ ...c, newTaskEachRun: false })}>
-            One, keeps history
+          <button type="button" role="radio" aria-checked={!c.reviewAgent} className={'wf-tk' + (!c.reviewAgent ? ' on' : '')} onClick={() => c.reviewAgent && set({ ...c, reviewAgent: undefined })}>
+            <span className="tkx">
+              <b>A chosen agent</b>
+              <span className="help">always the same one</span>
+            </span>
           </button>
         </div>
+        {!c.reviewAgent && (
+          <select aria-label="Chosen agent" value={c.agentId ?? ''} onChange={(e) => set({ ...c, agentId: e.target.value || null })}>
+            {!c.agentId && <option value="">Pick an agent</option>}
+            {agents.map((a) => (
+              <option key={a.id} value={a.id}>
+                @{a.id}
+              </option>
+            ))}
+            {c.agentId && !agents.some((a) => a.id === c.agentId) && <option value={c.agentId}>@{c.agentId} (missing)</option>}
+          </select>
+        )}
       </div>
+      <div className="field">
+        Works
+        <div className="segmented">
+          <button
+            type="button"
+            className={thread ? 'on' : ''}
+            aria-pressed={thread}
+            disabled={!canThread && !thread}
+            title={!canThread ? 'Needs a run about a task: start the workflow on a task or PR event' : undefined}
+            onClick={() => !thread && set({ ...c, inThread: true })}
+          >
+            In the task thread
+          </button>
+          <button
+            type="button"
+            className={!thread ? 'on' : ''}
+            aria-pressed={!thread}
+            disabled={!!c.reviewAgent}
+            title={c.reviewAgent ? 'The review agent works in the task thread' : undefined}
+            onClick={() => thread && set({ ...c, inThread: undefined })}
+          >
+            As a new task
+          </button>
+        </div>
+        <span className="help">
+          {thread
+            ? `In the thread of the task that started the run: its history and PR stay, its assignee stays${c.reviewAgent ? ', the review agent shows as its reviewer' : ''}.`
+            : 'A task of its own, assigned to the agent.'}
+        </span>
+      </div>
+      {!thread && (
+        <div className="field">
+          Task
+          <div className="segmented">
+            <button type="button" className={c.newTaskEachRun ? 'on' : ''} aria-pressed={c.newTaskEachRun} onClick={() => set({ ...c, newTaskEachRun: true })}>
+              New each run
+            </button>
+            <button type="button" className={!c.newTaskEachRun ? 'on' : ''} aria-pressed={!c.newTaskEachRun} onClick={() => set({ ...c, newTaskEachRun: false })}>
+              One, keeps history
+            </button>
+          </div>
+        </div>
+      )}
+      {c.reviewAgent && (
+        <div className="field">
+          Exit from the verdict
+          <dl className="wf-kv wrap">
+            <div>
+              <dt className="mono">ok</dt>
+              <dd>→ exit « approved »</dd>
+            </div>
+            <div>
+              <dt className="mono">fail</dt>
+              <dd>→ exit « changes asked », its reason becomes the note</dd>
+            </div>
+          </dl>
+          <span className="help">The reviewer ends with pr_validate; its verdict picks the exit. No verdict when the agent stops: the step couldn't run.</span>
+        </div>
+      )}
     </>
   );
 }
@@ -279,11 +411,15 @@ function ApprovalFields({ n, fields, set }: { n: Extract<WorkflowNode, { kind: '
   );
 }
 
-function ConditionFields({ n, g, set }: { n: Extract<WorkflowNode, { kind: 'condition' }>; g: Graph; set: SetConfig }) {
+const OP_LABEL: Record<FieldTestOp, string> = { is: 'is', isNot: 'is not', contains: 'contains', notContains: 'does not contain', isEmpty: 'is empty', isNotEmpty: 'is not empty', gt: 'more than', lt: 'less than' };
+const noValue = (op: FieldTestOp) => op === 'isEmpty' || op === 'isNotEmpty';
+
+/** A condition (#262, mockup « Condition »): tests on the run's fields (or a summary, or rounds), tried on a past run. */
+function ConditionFields({ n, g, w, set, onError }: { n: Extract<WorkflowNode, { kind: 'condition' }>; g: Graph; w: Workflow; set: SetConfig; onError(e: unknown): void }) {
   const c = n.config;
   const steps = g.nodes.filter((x) => x.kind !== 'trigger' && x.id !== n.id);
-  // Tests on fields (#261): edited in the stage 2 editor (5/6); shown read-only here.
-  if (c.test === 'fields') return <p className="wf-sum">{nodeTitle({ ...n, config: { ...c, title: '' } }, g.nodes)}</p>;
+  const fields = useFields(w.id, n.id);
+  const firstField = fields.list?.[0]?.field ?? 'task.status';
   return (
     <>
       <label className="field">
@@ -295,18 +431,78 @@ function ConditionFields({ n, g, set }: { n: Extract<WorkflowNode, { kind: 'cond
         <div className="segmented">
           <button
             type="button"
+            className={c.test === 'fields' ? 'on' : ''}
+            aria-pressed={c.test === 'fields'}
+            onClick={() => c.test !== 'fields' && set({ test: 'fields', title: c.title, match: 'all', tests: [{ field: firstField, op: 'is', value: '' }] })}
+          >
+            Fields
+          </button>
+          <button type="button" className={c.test === 'summaryContains' ? 'on' : ''} aria-pressed={c.test === 'summaryContains'} onClick={() => c.test !== 'summaryContains' && set({ test: 'summaryContains', title: c.title, text: 'OK' })}>
+            Summary has
+          </button>
+          <button
+            type="button"
             className={c.test === 'ranFewer' ? 'on' : ''}
             aria-pressed={c.test === 'ranFewer'}
             onClick={() => c.test !== 'ranFewer' && set({ test: 'ranFewer', title: c.title, node: steps[0]?.id ?? 'trigger', times: 3 })}
           >
             Rounds
           </button>
-          <button type="button" className={c.test === 'summaryContains' ? 'on' : ''} aria-pressed={c.test === 'summaryContains'} onClick={() => c.test !== 'summaryContains' && set({ test: 'summaryContains', title: c.title, text: 'OK' })}>
-            Summary has
-          </button>
         </div>
       </div>
-      {c.test === 'ranFewer' ? (
+      {c.test === 'fields' && (
+        <div className="field">
+          Yes when
+          <div className="segmented wf-match">
+            <button type="button" className={c.match === 'all' ? 'on' : ''} aria-pressed={c.match === 'all'} onClick={() => set({ ...c, match: 'all' })}>
+              all
+            </button>
+            <button type="button" className={c.match === 'any' ? 'on' : ''} aria-pressed={c.match === 'any'} onClick={() => set({ ...c, match: 'any' })}>
+              any
+            </button>
+          </div>
+          <div className="wf-filters">
+            {c.tests.map((t, i) => {
+              const put = (x: FieldTest, key: string | null = null) => set({ ...c, tests: c.tests.map((y, j) => (j === i ? x : y)) }, key);
+              const known = fields.list?.some((f) => f.field === t.field);
+              return (
+                <div key={i} className="wf-flt wf-test">
+                  <select aria-label="Field" value={t.field} onChange={(e) => put({ ...t, field: e.target.value })}>
+                    {fields.list?.map((f) => (
+                      <option key={f.field} value={f.field}>
+                        {f.label}
+                      </option>
+                    ))}
+                    {!known && <option value={t.field}>{t.field}</option>}
+                  </select>
+                  <select aria-label="Test" value={t.op} onChange={(e) => put({ ...t, op: e.target.value as FieldTestOp, value: noValue(e.target.value as FieldTestOp) ? '' : t.value })}>
+                    {FIELD_TEST_OPS.map((o) => (
+                      <option key={o} value={o}>
+                        {OP_LABEL[o]}
+                      </option>
+                    ))}
+                  </select>
+                  {noValue(t.op) ? (
+                    <span />
+                  ) : (
+                    <input aria-label="Value" value={t.value} inputMode={t.op === 'gt' || t.op === 'lt' ? 'decimal' : undefined} onChange={(e) => put({ ...t, value: e.target.value }, `test${i}`)} />
+                  )}
+                  <button type="button" className="sd-btn" aria-label="Remove test" disabled={c.tests.length === 1} onClick={() => set({ ...c, tests: c.tests.filter((_, j) => j !== i) })}>
+                    ✕
+                  </button>
+                </div>
+              );
+            })}
+            {c.tests.length < 20 && (
+              <button type="button" className="ghost small wf-addflt" onClick={() => set({ ...c, tests: [...c.tests, { field: firstField, op: 'is', value: '' }] })}>
+                + Add a test
+              </button>
+            )}
+          </div>
+          <span className="help">Exact tests, no model: is, is not, contains, is empty, more / less than.</span>
+        </div>
+      )}
+      {c.test === 'ranFewer' && (
         <div className="form-grid">
           <label className="field grow">
             Yes when this step
@@ -324,13 +520,251 @@ function ConditionFields({ n, g, set }: { n: Extract<WorkflowNode, { kind: 'cond
             <input type="number" min={1} max={100} value={c.times} onChange={(e) => set({ ...c, times: Math.min(100, Math.max(1, Math.round(+e.target.value) || 1)) }, 'times')} />
           </label>
         </div>
-      ) : (
+      )}
+      {c.test === 'summaryContains' && (
         <label className="field">
           Yes when the previous step's summary contains
           <input value={c.text} onChange={(e) => e.target.value && set({ ...c, text: e.target.value }, 'text')} />
         </label>
       )}
-      <p className="wf-sum">Nothing is judged by a model: the test is exact.</p>
+      {c.test === 'fields' ? <TryOnRun w={w} config={c} labels={fields.list} onError={onError} /> : <p className="wf-sum">Nothing is judged by a model: the test is exact.</p>}
+    </>
+  );
+}
+
+/** « With run N »: the condition's tests on a past run's fields (POST /try-condition), before saving (#262). */
+function TryOnRun({ w, config, labels, onError }: { w: Workflow; config: Extract<WorkflowNode, { kind: 'condition' }>['config']; labels: WorkflowField[] | null; onError(e: unknown): void }) {
+  const [runs, setRuns] = useState<WorkflowRun[] | null>(null);
+  const [run, setRun] = useState<string | null>(null);
+  const [res, setRes] = useState<{ ok: ConditionTryResult } | { error: string } | null>(null);
+  const err = useRef(onError);
+  err.current = onError;
+  useEffect(() => {
+    api.workflowRuns(w.id).then(
+      (rs) => {
+        const ran = rs.filter((r) => r.state !== 'skipped').slice(0, 20);
+        setRuns(ran);
+        setRun((x) => x ?? ran[0]?.id ?? null);
+      },
+      (e) => err.current(e),
+    );
+  }, [w.id]);
+  const key = JSON.stringify(config);
+  useEffect(() => {
+    if (!run) return;
+    // Typing a value: try once it rests.
+    const t = setTimeout(() => {
+      api.tryCondition(w.id, { run, config }).then(
+        (ok) => setRes({ ok }),
+        (e: Error) => setRes({ error: e.message }),
+      );
+    }, 300);
+    return () => clearTimeout(t);
+  }, [run, key]);
+  if (!runs) return null;
+  if (!runs.length) return <p className="wf-sum">No run yet to try it on: Run now, then come back.</p>;
+  const label = (f: string) => labels?.find((x) => x.field === f)?.label ?? f;
+  return (
+    <div className="field">
+      <span className="wf-tryhead">
+        Try on run
+        <select aria-label="Try on run" value={run ?? ''} onChange={(e) => setRun(e.target.value)}>
+          {runs.map((r) => (
+            <option key={r.id} value={r.id}>
+              Run {r.number}
+            </option>
+          ))}
+        </select>
+      </span>
+      {res && 'error' in res && <p className="wf-sum bad">{res.error}</p>}
+      {res && 'ok' in res && (
+        <div className={'wf-try ' + res.ok.exit}>
+          {res.ok.tests.map((t, i) => (
+            <span key={i} className={t.pass ? 'pass' : 'miss'}>
+              {label(t.field)} = {t.actual ?? 'nothing'} <span aria-label={t.pass ? 'passes' : 'fails'}>{t.pass ? '✓' : '✗'}</span>
+              {i < res.ok.tests.length - 1 ? ' · ' : ''}
+            </span>
+          ))}
+          <span>
+            {' '}
+            → <b>{res.ok.exit}</b>
+          </span>
+        </div>
+      )}
+    </div>
+  );
+}
+
+const WAIT_LABEL: Record<WaitFor, string> = { ciFinished: 'CI finished', ciGreen: 'CI green', conflict: 'A conflict', merged: 'The PR merged', unblocked: 'The task unblocked', status: 'The task changes status to…' };
+const PR_WAITS: WaitFor[] = ['ciFinished', 'ciGreen', 'conflict', 'merged'];
+
+/** A wait (#262, mockup « Wait »): an event on the run's task or PR, with a time limit. */
+function WaitFields({ n, g, set }: { n: Extract<WorkflowNode, { kind: 'wait' }>; g: Graph; set: SetConfig }) {
+  const c = n.config;
+  const lim = limitParts(c.limitMin);
+  const setLimit = (num: number, unit: keyof typeof UNIT_MIN) => set({ ...c, limitMin: Math.min(43_200, Math.max(1, Math.round(num) * UNIT_MIN[unit])) }, 'limit');
+  return (
+    <>
+      <label className="field">
+        Title
+        <input value={c.title} placeholder={nodeTitle({ ...n, config: { ...c, title: '' } }, g.nodes)} onChange={(e) => set({ ...c, title: e.target.value }, 'title')} />
+      </label>
+      <div className="field">
+        Wait for
+        <div className="wf-events" role="radiogroup" aria-label="Wait for">
+          {WAIT_FOR.map((x) => (
+            <button key={x} type="button" role="radio" aria-checked={c.for === x} className={c.for === x ? 'on' : ''} onClick={() => set({ ...c, for: x, status: x === 'status' ? (c.status ?? 'done') : null })}>
+              {WAIT_LABEL[x]}
+            </button>
+          ))}
+        </div>
+        {c.for === 'status' && (
+          <select aria-label="Status" value={c.status ?? ''} onChange={(e) => set({ ...c, status: e.target.value as typeof c.status })}>
+            {CARD_STATUSES.filter((x) => x !== 'archived').map((x) => (
+              <option key={x} value={x}>
+                {STATUS_LABEL[x]}
+              </option>
+            ))}
+          </select>
+        )}
+      </div>
+      <div className="field">
+        On
+        <span className="wf-fixed">{PR_WAITS.includes(c.for) ? "Pull request › this run's PR" : "Task › this run's task"}</span>
+      </div>
+      <div className="field">
+        At most
+        <div className="wf-limit">
+          <input type="number" aria-label="Time limit" min={1} value={lim.n} onChange={(e) => setLimit(+e.target.value || 1, lim.unit)} />
+          <select aria-label="Unit" value={lim.unit} onChange={(e) => setLimit(lim.n, e.target.value as keyof typeof UNIT_MIN)}>
+            <option value="minutes">minutes</option>
+            <option value="hours">hours</option>
+            <option value="days">days</option>
+          </select>
+        </div>
+        <span className="help">Already true when the step starts? It goes on at once. A wait costs nothing (no model, no process) and survives a restart.</span>
+      </div>
+    </>
+  );
+}
+
+const DO_LABEL: Record<ActionConfig['do'], string> = { setStatus: 'Set the task status', setAssignee: 'Set the assignee', mergePr: 'Validate + merge the PR', notify: 'Notify Master', command: 'Run a command' };
+const DOS = ['setStatus', 'setAssignee', 'mergePr', 'notify', 'command'] as const;
+
+/** An action (#262, mockup « Action »): Atlas does it, no model. « Run a command » needs Master's OK. */
+function ActionFields({ n, g, w, agents, fields, set }: { n: Extract<WorkflowNode, { kind: 'action' }>; g: Graph; w: Workflow; agents: Agent[]; fields: FieldsOf; set: SetConfig }) {
+  const c = n.config;
+  const { byId } = useProjects();
+  const pick = (d: ActionConfig['do']) => {
+    if (d === c.do) return;
+    const title = c.title;
+    if (d === 'setStatus') set({ do: d, title, status: 'ready', note: '' });
+    else if (d === 'setAssignee') set({ do: d, title, assignee: null, note: '' });
+    else if (d === 'mergePr') set({ do: d, title });
+    else if (d === 'notify') set({ do: d, title, text: 'Run {{run.number}} of {{workflow.name}}' });
+    else set({ do: d, title, command: 'echo "$TASK_REF"', secrets: [], limitMin: 10 });
+  };
+  const incoming = incomingOf(n, g);
+  const approval = w.commandSteps.find((x) => x.nodeId === n.id);
+  const repo = w.projectId ? byId(w.projectId)?.repo : null;
+  return (
+    <>
+      <label className="field">
+        Title
+        <input value={c.title} placeholder={nodeTitle({ ...n, config: { ...c, title: '' } }, g.nodes)} onChange={(e) => set({ ...c, title: e.target.value }, 'title')} />
+      </label>
+      <div className="field">
+        Do
+        <div className="wf-tks compact" role="radiogroup" aria-label="Do">
+          {DOS.map((d) => (
+            <button key={d} type="button" role="radio" aria-checked={c.do === d} className={'wf-tk' + (c.do === d ? ' on' : '')} onClick={() => pick(d)}>
+              <span className="tkx">
+                <span className="tkt">
+                  <b>{DO_LABEL[d]}</b>
+                  {d === 'command' && <span className="wf-ok-chip">needs your OK</span>}
+                </span>
+              </span>
+            </button>
+          ))}
+        </div>
+      </div>
+      {c.do === 'setStatus' && (
+        <>
+          <label className="field">
+            Status
+            <select value={c.status} onChange={(e) => set({ ...c, status: e.target.value as typeof c.status })}>
+              {ACTION_STATUSES.map((x) => (
+                <option key={x} value={x}>
+                  {STATUS_LABEL[x]}
+                </option>
+              ))}
+            </select>
+          </label>
+          <PromptField fields={fields} label="Note" value={c.note} placeholder="Optional: a note in the task's thread, e.g. {{previous.summary}}" onChange={(v) => set({ ...c, note: v }, 'note')} />
+        </>
+      )}
+      {c.do === 'setAssignee' && (
+        <>
+          <label className="field">
+            Assignee
+            <select value={c.assignee ?? ''} onChange={(e) => set({ ...c, assignee: e.target.value || null })}>
+              <option value="">Nobody</option>
+              {agents.map((a) => (
+                <option key={a.id} value={a.id}>
+                  @{a.id}
+                </option>
+              ))}
+              {c.assignee && !agents.some((a) => a.id === c.assignee) && <option value={c.assignee}>@{c.assignee} (missing)</option>}
+            </select>
+          </label>
+          <PromptField fields={fields} label="Note" value={c.note} placeholder="Optional: a note in the task's thread" onChange={(v) => set({ ...c, note: v }, 'note')} />
+        </>
+      )}
+      {c.do === 'mergePr' && <p className="wf-sum">Validates and merges the run's pull request with the project's gate, the same as pr_validate. GitHub saying no (a conflict, red CI) is the « refused » exit.</p>}
+      {c.do === 'notify' && <PromptField fields={fields} label="Text" value={c.text} placeholder="What you read in the Inbox" onChange={(v) => v.trim() && set({ ...c, text: v }, 'text')} />}
+      {c.do === 'command' && (
+        <>
+          <label className="field">
+            Command
+            <textarea className="mono" rows={4} value={c.command} spellCheck={false} onChange={(e) => e.target.value.trim() && set({ ...c, command: e.target.value }, 'command')} />
+            <span className="help">
+              Runs with bash in a clean checkout of {repo ?? "the project's repo"} (default branch). Every run field is an environment variable, never pasted into the text: {'{{task.ref}}'} →{' '}
+              <code>${envOf('task.ref')}</code>, {'{{payload.after}}'} → <code>${envOf('payload.after')}</code>.
+            </span>
+          </label>
+          <label className="field">
+            Secrets
+            <input className="mono" value={c.secrets.join(', ')} placeholder="VERCEL_TOKEN" onChange={(e) => set({ ...c, secrets: e.target.value.split(/[\s,]+/).filter(Boolean) }, 'secrets')} />
+            <span className="help">Names from Settings → Secrets, given to this step only.</span>
+          </label>
+          <label className="field">
+            Time limit (minutes)
+            <input type="number" min={1} max={120} value={c.limitMin} onChange={(e) => set({ ...c, limitMin: Math.min(120, Math.max(1, Math.round(+e.target.value) || 1)) }, 'limit')} />
+          </label>
+          <p className={'wf-sum' + (approval?.approved ? '' : ' warn')}>
+            {approval?.approved
+              ? `Approved by ${approval.approvedBy === 'user' ? 'you' : `@${approval.approvedBy}`}${approval.approvedAt ? ` · ${when(approval.approvedAt)}` : ''}. An agent's later edit asks again; your own edits don't.`
+              : 'Needs your OK: no run starts until you approve this command, its secrets and limit (the banner above the canvas).'}
+          </p>
+        </>
+      )}
+      {incoming.length > 0 && (
+        <div className="field">
+          Comes from · {incoming.length} {incoming.length === 1 ? 'exit' : 'exits'}
+          <div className="wf-from">
+            {incoming.map((x) => (
+              <div key={x.from.id + ':' + x.exit} className={'row' + (x.failing ? ' fail' : '')}>
+                <span className="xn">{x.exit}</span>
+                <span className="arr" aria-hidden="true">
+                  ←
+                </span>
+                <span className="fr">{nodeTitle(x.from, g.nodes)}</span>
+              </div>
+            ))}
+          </div>
+          <span className="help">The selected step lights up the exits that lead to it; the others dim.</span>
+        </div>
+      )}
     </>
   );
 }

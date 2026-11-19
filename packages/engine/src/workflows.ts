@@ -485,7 +485,7 @@ export class Workflows {
         runId: r.id,
         runNumber: r.number,
         state: r.state,
-        step: cur ? { nodeId: cur.node_id, title: n ? stepTitle(n) : cur.node_id, state: cur.state, cardId: cur.card_id } : null,
+        step: cur ? { nodeId: cur.node_id, title: n ? stepTitle(n) : cur.node_id, state: cur.state, cardId: cur.card_id, couldntRun: cur.couldnt } : null,
       };
     });
   }

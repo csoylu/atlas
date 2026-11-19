@@ -191,8 +191,13 @@ export function TaskWorkflows({ cardId, cards, stream, onOpenCard, onError }: { 
             <b>{x.workflowName}</b>
             <span className="muted"> · run {x.runNumber}</span>
             <div className="step">
-              <span className={'st-chip ' + chipClass(x.state)}>{x.step?.state === 'waiting' ? STATE_LABEL.waiting : RUN_LABEL[x.state]}</span>
+              {x.step?.couldntRun ? (
+                <span className="st-chip failed">Couldn't run</span>
+              ) : (
+                <span className={'st-chip ' + chipClass(x.state)}>{x.step?.state === 'waiting' ? STATE_LABEL.waiting : RUN_LABEL[x.state]}</span>
+              )}
               {x.step && <span>{x.step.title}</span>}
+              {x.step?.couldntRun && <span className="wf-couldnt-why">{x.step.couldntRun} · Retry now or follow its negative exit in the run</span>}
               {x.step?.cardId && x.step.cardId !== cardId && (
                 <button className="linklike" onClick={() => onOpenCard(x.step!.cardId!)}>
                   {refOf(x.step.cardId, cards)}
