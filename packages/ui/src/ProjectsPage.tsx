@@ -547,6 +547,22 @@ function ProjectDetail({ project: p, agents, cards, workflows, focusRepo, onErro
               ))}
             </select>
           </label>
+          {p.repo && (
+            <label className="field">
+              Review agent
+              <select value={p.reviewAgent ?? ''} disabled={archived || saving} onChange={(e) => void save({ reviewAgent: e.target.value || null })}>
+                {!p.reviewAgent && <option value="">Nobody (nothing is reviewed)</option>}
+                {p.members.map((m) => (
+                  <option key={m.agentId} value={m.agentId}>
+                    {(() => {
+                      const a = agents.find((x) => x.id === m.agentId);
+                      return a ? agentLabel(a) : '@' + m.agentId;
+                    })()}
+                  </option>
+                ))}
+              </select>
+            </label>
+          )}
         </div>
         {repoChanged ? (
           <RepoCheckLine repo={repo} check={check} />
@@ -591,6 +607,7 @@ function ProjectDetail({ project: p, agents, cards, workflows, focusRepo, onErro
                 <div className="model-title">
                   <b>{m.agentId}</b>
                   {isLead && <span className="badge">lead</span>}
+                  {m.agentId === p.reviewAgent && <span className="badge">reviewer</span>}
                   {m.cloneState === 'failed' && <span className="badge bad">Clone failed</span>}
                 </div>
                 <div className="model-detail">

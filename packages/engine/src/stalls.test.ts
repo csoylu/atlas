@@ -38,6 +38,7 @@ const card = (over: Partial<Card> = {}): Card => ({
   projectId: 'atlas',
   statusSince: ago(0),
   stall: null,
+  reviewOff: null,
   ...over,
 });
 const pr = (over: Partial<CardPr> = {}): CardPr => ({
@@ -67,7 +68,7 @@ const facts = (c: Partial<Card>, f: Partial<StallFacts> = {}): StallFacts => ({
   lastRunEnd: null,
   startProblem: null,
   parents: [],
-  reviewStall: null,
+  reviewRun: false,
   ...f,
 });
 
@@ -75,7 +76,7 @@ describe('stuck tasks: the rules (#237)', () => {
   it('In review: 45 min with CI green, no review run and no verdict', () => {
     const review = { status: 'review' as const, prs: [pr()] };
     expect(detectStall(facts({ ...review, statusSince: ago(44) }))).toBe(null);
-    expect(detectStall(facts({ ...review, statusSince: ago(46) }))).toEqual({ rule: 'review', reason: 'CI is green, no review is running', since: ago(46), action: 'retry_review' });
+    expect(detectStall(facts({ ...review, statusSince: ago(46) }))).toEqual({ rule: 'review', reason: 'CI is green, no Review run is going on it', since: ago(46), action: 'retry_review' });
     // A review run going on, CI not finished or red, a verdict, GitHub unreadable: not stuck.
     expect(detectStall(facts({ ...review, statusSince: ago(90) }, { running: true }))).toBe(null);
     expect(detectStall(facts({ status: 'review', prs: [pr({ ci: 'pending' })], statusSince: ago(90) }))).toBe(null);
@@ -86,15 +87,11 @@ describe('stuck tasks: the rules (#237)', () => {
     expect(detectStall(facts({ ...review, statusSince: ago(90) }, { lastRunEnd: ago(20) }))).toBe(null);
     // Why the reviewer doesn't start is said when it says something.
     expect(detectStall(facts({ ...review, statusSince: ago(90), waiting: 'review agent @zurich is not a member of project Datinel: add it in Settings → Projects' }))?.reason).toBe(
-      'CI is green, no review is running (review agent @zurich is not a member of project Datinel: add it in Settings → Projects)',
+      'CI is green, no Review run is going on it (review agent @zurich is not a member of project Datinel: add it in Settings → Projects)',
     );
-    // The #221 stall: at once, whatever the time.
-    expect(detectStall(facts({ ...review, statusSince: ago(5) }, { reviewStall: 'the review by @zurich ended without a verdict on aaaaaaa (2 runs)', lastRunEnd: ago(1) }))).toEqual({
-      rule: 'review',
-      reason: 'the review by @zurich ended without a verdict on aaaaaaa (2 runs)',
-      since: ago(1),
-      action: 'retry_review',
-    });
+    // A Review run open on it (#263): the run owns its stuck steps; « No Review workflow is on » has its own item.
+    expect(detectStall(facts({ ...review, statusSince: ago(90) }, { reviewRun: true }))).toBe(null);
+    expect(detectStall(facts({ ...review, statusSince: ago(90), reviewOff: { projectId: 'p', projectName: 'Atlas', workflowId: null } }))).toBe(null);
   });
 
   it('Working: no run for 10 min', () => {
@@ -135,8 +132,8 @@ describe('stuck tasks: the rules (#237)', () => {
     expect(sinceLabel(ago(35), NOW)).toBe('35 min');
     expect(sinceLabel(ago(130), NOW)).toBe('2 h');
     expect(sinceLabel(ago(60 * 30), NOW)).toBe('1 d');
-    expect(stallText({ rule: 'review', reason: 'CI is green, no review is running', since: ago(120), action: 'retry_review' }, ago(125), NOW)).toBe(
-      'In review for 2 h: CI is green, no review is running',
+    expect(stallText({ rule: 'review', reason: 'CI is green, no Review run is going on it', since: ago(120), action: 'retry_review' }, ago(125), NOW)).toBe(
+      'In review for 2 h: CI is green, no Review run is going on it',
     );
     expect(STALL_LIMITS).toEqual({ review: 2_700_000, running: 600_000, ready: 1_800_000, todo: 600_000 });
   });

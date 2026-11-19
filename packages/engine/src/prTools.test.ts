@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import { mkdirSync } from 'node:fs';
-import { launch, until } from '../test/kit/index.ts';
+import { launch, setReviewAgent, until } from '../test/kit/index.ts';
 import { prToolSpecs, runPrTool } from './prTools.ts';
 
 const SHA = 'a'.repeat(40);
@@ -26,8 +26,9 @@ async function setup() {
   const t = await launch({ script: [], dispatch: false, prs: { read: async () => Promise.reject(new Error('no poll here')), intervalMs: false } });
   const e = t.engine;
   for (const id of ['zurich', 'munih']) if (!e.agents.list().some((a) => a.id === id)) e.agents.create({ id, modelId: e.agents.get('atlas').modelId });
-  e.settings.update({ reviewAgent: 'zurich', triageAgent: 'atlas' });
-  e.projects.create({ name: 'Datinel', repo: 'datinel/datinel', lead: 'munih', members: ['zurich'] });
+  e.settings.update({ triageAgent: 'atlas' });
+  e.projects.create({ name: 'Datinel', repo: 'datinel/datinel', lead: 'munih', members: ['zurich'], reviewAgent: 'zurich' });
+  setReviewAgent(e, 'atlas', 'zurich');
   const inReview = (projectId: string, url: string, assignee = 'munih') => {
     const c = e.kanban.create({ title: 'x', status: 'running', assignee, projectId }, 'user');
     e.kanban.requestReview(c.id, [url], assignee, 'built');
@@ -53,7 +54,7 @@ describe('pr_validate (#216)', () => {
     expect(f.merges()[0]).toContain(`sha=${SHA}`);
   });
 
-  it('no CI job: one red or running check refuses, naming it; no check at all refuses', async () => {
+  it('no CI job: one red or running check refuses, naming it; no check at all passes (#263: a repo with no CI)', async () => {
     const { inReview, run } = await setup();
     const c = inReview('datinel', 'https://github.com/datinel/datinel/pull/3');
     const ok = { pr: 3, verdict: 'ok', sha: SHA, reason: 'r' };
@@ -61,12 +62,14 @@ describe('pr_validate (#216)', () => {
     for (const [checks, why] of [
       [[green, { id: 2, name: 'e2e', status: 'completed', conclusion: 'failure', html_url: 'https://github.com/datinel/datinel/runs/2' }], /CI check "e2e" is failure on aaaaaaa \(https:\/\/github\.com\/datinel\/datinel\/runs\/2\)/],
       [[green, { id: 2, name: 'e2e', status: 'in_progress', conclusion: null }], /CI check "e2e" is still running/],
-      [[], /CI has not run on aaaaaaa yet/],
     ] as const) {
       const f = fakeGh('datinel/datinel', 3, { checks: [...checks] });
       expect(await run(c.id, ok, f.gh)).toMatchObject({ isError: true, output: expect.stringMatching(why) });
       expect(f.statuses()).toHaveLength(0);
     }
+    const none = fakeGh('datinel/datinel', 3, { checks: [] });
+    expect(await run(c.id, { ...ok, merge: false }, none.gh)).toMatchObject({ isError: false });
+    expect(none.statuses()).toHaveLength(1);
   });
 
   it('the project’s CI job when set: only that check counts', async () => {
@@ -157,8 +160,8 @@ describe('pr_validate in a reviewer run (#216)', () => {
     const t = await launch({ script: [[call], [{ type: 'text', text: 'validated' }]], dispatch: false, prs: { read: async () => Promise.reject(new Error('no poll')), intervalMs: false, validate: { gh: f.gh } }, projects: { clone: async (_r, dir) => void mkdirSync(dir, { recursive: true }) } });
     const e = t.engine;
     for (const id of ['zurich', 'munih']) if (!e.agents.list().some((a) => a.id === id)) e.agents.create({ id, modelId: e.agents.get('atlas').modelId });
-    e.settings.update({ reviewAgent: 'zurich', triageAgent: 'atlas' });
-    e.projects.create({ name: 'Datinel', repo: 'datinel/datinel', lead: 'munih', members: ['zurich'] });
+    e.settings.update({ triageAgent: 'atlas' });
+    e.projects.create({ name: 'Datinel', repo: 'datinel/datinel', lead: 'munih', members: ['zurich'], reviewAgent: 'zurich' });
     await until(() => e.projects.get('datinel').members.every((m) => m.cloneState === 'ready'), 'Datinel workspaces ready');
     const c = e.kanban.create({ title: 'x', status: 'running', assignee: 'munih', projectId: 'datinel' }, 'user');
     e.kanban.requestReview(c.id, ['https://github.com/datinel/datinel/pull/3'], 'munih', 'built');

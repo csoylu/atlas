@@ -154,20 +154,28 @@ read or write another project's workspace. A lead crosses projects through the t
   job `test`, so a new commit needs a new validation. **Flow (#189): the task carries its PR.** Push the branch, open
   the PR, then end your run with `task_request_review({summary, prs: ["https://github.com/csoylu/atlas/pull/N"]})`
   (not `task_complete`, which is refused while a linked PR is open). The task goes **In review** (waiting for QA, not
-  for Master: no Inbox item) and Atlas reads the PR from GitHub every minute (`gh api`, Master's gh login). When CI
-  `test` is green, the reviewer's run starts **in the same task thread**: zurich (Settings → Board & triage → Review
-  agent), or atlas for zurich's own PRs. No separate "Validate PR #N" task any more. The reviewer reads the diff and
+  for Master: no Inbox item) and Atlas reads the PR from GitHub every minute (`gh api`, Master's gh login). **The review
+  is a workflow (#263):** every project with a repo has a default « Review » workflow (Workflows, marked « default »;
+  « Reset to default » restores its steps and layout): a task asks for review → CI finished on the PR (at most 2 h; a
+  project with no CI job whose PR has no check goes on at once) → CI green, no conflict? → Review the PR, **in the same
+  task thread**, by the project's review agent (Settings → Projects → the project → Review agent: zurich), or the
+  project's lead on that agent's own PRs → Validate + merge → Task → Done. Timed out, no, changes asked and refused all
+  go to « Back to the builder ». No separate "Validate PR #N" task. The reviewer reads the diff and
   checks it (code: tests, the feature in a build, screenshots for UI; docs only: read it), then gives its verdict with
-  the engine's **`pr_validate` tool** (#216: `{pr, verdict: "ok", sha: <head>, reason: "what was checked"}`, merges
-  by default; or `{pr, verdict: "fail", reason: "why, for the builder"}`), offered only to the task's reviewer while
-  it is In review. Master's terminal: `node scripts/pr/validate.mjs <pr> --ok --sha <head> --as master "…" --merge`
-  (same gate, same code). **ui-check in a review (#240):** none for an engine-only or docs-only PR; for a UI PR,
+  the engine's **`pr_validate` tool** (#216: `{pr, verdict: "ok", sha: <head>, merge: false, reason: "what was
+  checked"}`, the workflow's next step merges; or `{pr, verdict: "fail", reason: "why, for the builder"}`), offered
+  only to the task's reviewer while it is In review. A review that ends without a verdict runs once more, then the step
+  « couldn't run » (Retry on the task). Master's terminal, always open whatever the workflow does:
+  `node scripts/pr/validate.mjs <pr> --ok --sha <head> --as master "…" --merge` (same gate, same code); a merge outside
+  the workflow stops its run and the task goes Done. A project whose Review workflow is off or deleted: each task In
+  review says « No Review workflow is on in <project> » with Turn it on and Validate by hand, and Master gets one Inbox
+  item. **ui-check in a review (#240):** none for an engine-only or docs-only PR; for a UI PR,
   `--only` on the screens the diff can affect at all four widths (the builder names them in the `task_request_review`
   summary, otherwise the reviewer derives them from the diff); a full run only for a change to something shared by every
   screen (list in the ui-check section), with the reason said in the verdict. Never two runs at once (`pgrep -fl
   check.mjs`). The verdict says which screens were checked and which were not: a narrowed run is never reported as a full
-  one. Builders: name the affected screens in the summary. Atlas moves the task by itself: **merged → Done**; **CI red, a conflict
-  or a failed validation → Ready** for the builder, with the reason as a note in the thread; the builder fixes, pushes and calls
+  one. Builders: name the affected screens in the summary. **Merged → Done**; **CI red, a conflict, a timeout, changes
+  asked or a refused merge → Ready** for the builder, with the reason as a note in the thread; the builder fixes, pushes and calls
   `task_request_review` again. Blocked only ever means "needs Master". When GitHub can't be read (gh logged out,
   offline) nothing moves; the card says why. The gate (`pr_validate` and the script, same code) refuses a base other
   than the repo's default branch, a head that moved, a conflict (the builder rebases) and a required CI check that is
@@ -178,18 +186,20 @@ read or write another project's workspace. A lead crosses projects through the t
   (`--as master`). The gate guards against accidents, not misuse: `--as` is a name anyone can type.
 - **Other projects (#216).** The same flow works for any project with a GitHub repo (Datinel: datinel/datinel). The gate
   comes from the task's project: `repo` and `ciJob` (the check that must be green; empty = every check run on the head
-  green: success, neutral or skipped). Atlas: csoylu/atlas, `test`. A new project: no CI job. Set it with
+  green: success, neutral or skipped; no check at all passes). Atlas: csoylu/atlas, `test`. A new project: no CI job. Set it with
   `PATCH /api/projects/:id {"ciJob": "…"}`. Nothing in the gate is Atlas-specific: a project's rules live in its CI.
-  `task_request_review` refuses a PR of another repo than the task's project's (and a project without a repo). The
-  reviewer must be a member of the project (its review runs in its workspace for that project); otherwise nothing
-  starts and the card says « review agent @X is not a member of project Y ». Every task In review gets its reviewer run
-  as soon as its CI is green, independently of the others (#249 removed #236's merge queue). Atlas's CI also refuses
+  `task_request_review` refuses a PR of another repo than the task's project's (and a project without a repo). Each
+  project gets its own Review workflow when it gets a repo. The review agent must be a member of the project (it
+  reviews in its workspace for that project); unset, disabled or not a member, the review step « couldn't run » and
+  says where to fix it (Settings → Projects), never another agent. Every task In review gets its own Review run,
+  independently of the others (#249 removed #236's merge queue). Atlas's CI also refuses
   a PR whose new migration is not numbered above every one on main (`node scripts/pr/migrations.mjs check HEAD^1 HEAD`):
   main moved, renumber yours above and rebase. On the GitHub side Master
   sets, per repo, branch protection on main: required status `qa/validated`, plus the required CI check if there is one
   (agents never change a repo's settings).
 - **Done means on main** (#126, #189): a task with a PR ends with `task_request_review` and becomes Done when the PR
-  merges, by itself. A task with several branches links every PR. A task with no code (mockup, audit, report)
+  merges, by itself. One PR per task where the project has a Review workflow (#263: one run, one verdict, one merge):
+  work that needs two PRs is two tasks. A task with no code (mockup, audit, report)
   finishes with `task_complete` as usual.
 - **Agents never install the app.** No `install:mac`: Master's Atlas shows "Update available" and installs on
   Master's click (it restarts; running tasks resume). `install:mac` stays for a manual build from source.

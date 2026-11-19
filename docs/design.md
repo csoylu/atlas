@@ -259,48 +259,35 @@ Statuses: `triage → todo → ready → running → (blocked | review) → done
 - No automatic decomposition: only an agent or the user creates cards.
 - Notifications: only `needs_input`, `capability` blocks and cards the user subscribed to. Not every status change.
 
-### 7.1 Tasks linked to their pull requests (#189, built 18 Nov 2026, `engine/src/prs.ts`)
+### 7.1 Tasks linked to their pull requests (#189, built 18 Nov 2026, `engine/src/prs.ts`; the review: §9.1, #263)
 - **Link.** The builder ends its run with `task_request_review({summary, prs: [url…]})`: rows in `card_prs` (repo,
   number, url, branch, head, state open / merged / closed, CI `test`, `qa/validated` + its description, when read, the
-  last read error), the card goes `review` and gets `cards.reviewer`: the review agent (Settings → Board & triage),
-  or the triage agent when the builder is the review agent (zurich's own PRs → atlas). Work with no PR ends with
+  last read error), the card goes `review` and gets `cards.reviewer`: the project's review agent (`projects.review_agent`,
+  Settings → Projects), or the project's lead when the builder is the review agent (zurich's own PRs → atlas). The
+  request is the `review_requested` task event that starts the project's Review workflow (§9.1). Work with no PR ends with
   `task_complete`; `task_complete` is refused while a linked PR is open.
 - **Read.** `Prs` polls every 60 s (and right after a link or a reviewer run ends) with `gh api`, the user's own gh
   login with the login shell's PATH: no token anywhere in Atlas. Only tasks `review` and `blocked` with linked PRs are
   read; one poll at a time.
-- **Move** (no agent run, by `github`):
-  - every PR merged → `done` (« PR #N merged into main (sha) » is the summary: Inbox update, report to the origin chat);
-    from `blocked` too (#231: a PR merged outside the flow while the task asked the user leaves no decision, so it
-    leaves « Needs you »), unless a run is going in the thread; a blocked task moves on nothing else (open, red CI or
-    closed unmerged stay the user's call);
-  - CI red, a conflict with the base, `qa/validated` = failure (its description is the reason), or every PR closed
-    unmerged → `ready` for the builder, the reason as a system note in the thread (once per head: `failed_sha`);
-  - CI green, not validated, not yet reviewed on this head → the reviewer's run starts **in the task's own thread**
-    (kind `work`, agent = reviewer, kick « You review this task's pull request… », prompt: review, don't fix). One run
-    per head (`reviewed_sha`); a new `task_request_review` clears it. The reviewer validates and merges with
-    the `pr_validate` tool (#216: `scripts/pr/validate.mjs` run in-process with the gate of the task's project: repo
-    and required CI check); the merge then moves the card. The gate holds only what is true for any repo: base = the
-    repo's default branch, the reviewed head has not moved, no conflict, the required check green, a verdict with a
-    reason. A repo's own rules (Atlas's one changelog entry per PR) are checks its CI runs on the PR (#238), so an
-    installed engine never lags behind a rule changed on main; a red check is named and linked in the refusal and in
-    the builder's note (`card_prs.ci_failed_name`, `ci_failed_url`). The reviewer must be a member of the task's project. Retry on an In review card starts the reviewer again.
-    The kick is always appended (`kickAlways`, #221), even when the builder's last tool result leaves a turn owed:
-    without it the reviewer got the builder's thread ending on « in review: PR #N waits for @zurich » and carried on
-    as the builder.
-  - **A review run that ends without a verdict** (#221: done or failed, the PR still open on the same head, no
-    `qa/validated` success or failure) is not a review: `reviewed_sha` is cleared and the reviewer starts once more,
-    told why (`review_retry` event; `REVIEW_TRIES` = 2 runs per head, counted from `review_started` events, which
-    carry the run id). After the second, the card's why-line says « review by @zurich ended without a verdict on
-    abc1234 (2 runs): Retry starts it again »; the task stays In review and is marked stuck at once (§7.2: the stall
-    mark and its one Inbox item, `card.stalled`, replaced `review.stalled` in #237). Retry runs it again; a new head
-    is a new review.
+- **What stays here** (generic, outside any workflow): reading PR state from GitHub (it feeds the Review's Wait and
+  Condition steps and the PR events of §9), and **every PR merged → `done`** (« PR #N merged into main (sha) »: Inbox
+  update, report to the origin chat) when no Review run is open on the task: a merge by Master's terminal, by
+  « Validate by hand » or on GitHub. An open Review run on a task whose PR merged outside it stops (« merged on GitHub
+  outside the workflow ») and the task goes Done. From `blocked` too (#231), unless a run is going in the thread.
+- **Everything else is the Review workflow (#263, §9.1)**: waiting for CI, the conflict check, the reviewer's run in the
+  task thread, the merge and the send-backs. Before #263 `prs.ts` did it by hand (`reviewed_sha` one run per head,
+  `review_retry`, `failed_sha` once per head); those columns stay, unused by the flow. The gate is unchanged:
+  `pr_validate` and `scripts/pr/validate.mjs` (same code) hold what is true for any repo: base = the repo's default
+  branch, the reviewed head has not moved, no conflict, the required check green (no CI job: every check green, none
+  at all passes), a verdict with a reason. A repo's own rules are checks its CI runs (#238); a red check is named and
+  linked (`card_prs.ci_failed_name`, `ci_failed_url`).
 - **GitHub unreadable** (gh missing, logged out, offline): nothing moves on old data; the card's why-line and the task
   view's banner say « can't read PR #N from GitHub since 10:42: gh: not logged in »; after 15 min one Inbox item
   (`github.unreadable`), archived by itself when a read works again.
-- **Restart:** everything is in `card_prs` and `cards`; the first poll after a start resumes (a PR merged while Atlas
-  was down → done; a head already reviewed is not reviewed twice).
-- **No merge queue** (#249): every task In review gets its reviewer run when its CI is green, without waiting for the
-  others. #236 had added one in Atlas (one PR at a time per project, automatic rebase, migrations renumbered); Master
+- **Restart:** `card_prs`, `cards` and the Review run's steps are in SQLite; the first poll after a start resumes (a PR
+  merged while Atlas was down → done; the run's Wait or review step goes on where it was, its reviewer run is adopted,
+  never started twice).
+- **No merge queue** (#249): every task In review gets its own Review run, without waiting for the others. #236 had added one in Atlas (one PR at a time per project, automatic rebase, migrations renumbered); Master
   removed it: migration 0057 drops its columns (`cards.review_queued_at`, `review_head_at`, `card_prs.synced_sha`,
   `sync_error`). What stays is a repo rule run by CI on the PR: `scripts/pr/migrations.mjs check HEAD^1 HEAD` fails a
   new migration not numbered above every one on main in its folder, so two migrations with one number never merge.
@@ -313,9 +300,11 @@ Statuses: `triage → todo → ready → running → (blocked | review) → done
   2 h » on the board tile, « 2 h » at the end of a list row and after the task view's status pill. Not for Triage,
   Done, Closed, Archived.
 - **Stuck** = in a state longer than its limit with nothing moving it (`STALL_LIMITS`, constants, no setting):
-  - In review, 45 min: CI green on every open PR, no run on the task, no verdict (counted from the request or the end
-    of the last run). A review that ended twice without a verdict (§7.1, #221) is stuck at once. GitHub unreadable,
-    CI pending or red, or validated: not stuck (other paths move it).
+  - In review, 45 min: CI green on every open PR, no Review run open on it, no run on the task, no verdict (counted
+    from the request or the end of the last run). A task with an open Review run is never marked here (#263): the run
+    owns its stuck steps (« couldn't run », one Inbox item after 15 min; a review that ended twice without a verdict,
+    #221, at once). A task in the « No Review workflow is on » state has its own item. GitHub unreadable, CI pending or
+    red, or validated: not stuck (other paths move it).
   - Working, 10 min: no run running or queued on it (a run died without the task moving).
   - Ready with an assignee, 30 min: no run started while the agent has a free slot (the dispatcher's `startProblem`
     is null).
@@ -591,6 +580,37 @@ A workflow is a small graph: one **trigger** wired to **steps**. Mockup: paris's
   and `POST /api/workflows/:id/try-condition`, since #273 `POST /api/workflows/:id/approve` (`{revision}`) and
   `POST /api/workflows/:id/reject` (Master only: no agent tool calls them). A workflow carries `needsApproval` and
   `commandSteps` (per command node: checkout, secrets, limit, approved, by, at).
+
+### 9.1 The default Review workflow (#263, 19 Nov 2026, `engine/src/reviewFlow.ts`, migration 0063)
+Review is a workflow like any other: what was hardcoded in `prs.ts` (§7.1, #189) became seven steps Master can see,
+edit, turn off and reset. One per project with a GitHub repo, `workflows.origin = 'review'`, shown « default ».
+- **Steps** (approved layout, design v47: three columns, « Back to the builder » alone on the bottom row):
+  1. *A task asks for review*: task event `review_requested` of the project, loop guard 10 runs per task per hour.
+  2. *CI finished on the PR*: Wait `ciFinished`, at most 2 h. It also ends on a conflict (GitHub runs no CI on it) and,
+     in a project with no CI job, on a PR with no check at all (Datinel: no 2 h wait for nothing).
+  3. *CI green, no conflict?*: Condition `pr.ci` is not failure and `pr.conflict` is not yes.
+  4. *Review the PR*: Agent step in the task thread (`inThread`, `reviewAgent`): the project's review agent
+     (`projects.review_agent`, Settings → Projects; it replaced Settings → Board & triage → Review agent), or the
+     project's lead on that agent's own PRs (`reviewerFor`). Unset, disabled or not a member: the step « couldn't
+     run » and says where to fix it, never another agent. Exits from the `pr_validate` verdict: approved / changes
+     asked. A run that ends without a verdict is woken once more (`REVIEW_TRIES` = 2, #221), then « couldn't run ».
+     A reviewer run from before the update (`review_started` on the current request) is adopted, not started again.
+  5. *Validate + merge the PR*: action `mergePr` with the gate of §7.1 at the head the review saw. merged / refused.
+  6. *Task → Done*. 7. *Back to the builder*: Ready, the note « <step>: <exit> (<why>). Back to Ready for @builder… ».
+- **Seeded** at the engine start (`ReviewFlow.seed`) for every active project with a repo and `review_seeded = 0`, and
+  when a project gets a repo; in the same transaction, each task of that project already In review gets a run whose
+  trigger step says « started at the update ». Once per project: one Master deletes is not made again by itself.
+- **Migration 0063**: `projects.review_agent` (the old global setting copied into each project the agent is a member
+  of; the setting is deleted) and `projects.review_seeded`.
+- **Reset to default** (`POST /api/workflows/:id/reset`): steps, links and layout back, as a new revision; on/off and
+  runs stay.
+- **Off or deleted**: a task In review with no Review run open and its project's Review not on shows « No Review
+  workflow is on in <project> » (`Card.reviewOff`) with **Turn it on** (`POST /api/projects/:id/review-workflow`: on
+  again, or made again from the default) and **Validate by hand** (`POST /api/cards/:id/validate {sha}`: the gate of
+  `validate.mjs --as master --merge` at the head shown; Master only, no agent tool calls it). One `review.off` Inbox item
+  per task, archived when it leaves the state; turning Review on starts a run on each waiting task. The loop guard
+  turning the default Review off says so in its Inbox item (the whole project's review is off).
+- **Retry** on a task In review (#221, #237): the Review run's « couldn't run » step tries now; with no run, a new one.
 
 ## 10. Tools (v1)
 | Tool | Notes |

@@ -214,6 +214,19 @@ export function WorkflowCanvas(props: {
   const runOn = trigger?.kind === 'trigger' && (trigger.config.kind === 'task' || trigger.config.kind === 'pr') ? trigger.config.kind : null;
   const pastOnce = trigger?.kind === 'trigger' && trigger.config.kind === 'time' && trigger.config.repeat === 'at' && !!trigger.config.at && new Date(trigger.config.at) < new Date();
   const runCount = runs?.[0]?.number ?? w.lastRun?.number ?? 0;
+  // « Reset to default » (#263): in the header; on a phone, under the steps (the header has no room for it).
+  const resetButton = (
+    <button
+      className="btn ghost"
+      title="Bring back the default Review workflow's seven steps, their links and layout"
+      onClick={() => {
+        if (!window.confirm(`Reset « ${w.name} » to the default? Its seven steps, their links and layout come back; your changes to them are lost. On/off and its runs stay.`)) return;
+        api.resetWorkflow(w.id).catch(onError);
+      }}
+    >
+      Reset to default
+    </button>
+  );
   const header = (
     <HeaderActions>
       {!phone && mode === 'edit' && (
@@ -221,6 +234,7 @@ export function WorkflowCanvas(props: {
           {save.state === 'saving' ? 'saving…' : save.state === 'error' ? 'not saved' : `saved · edited ${relative(new Date(save.at).toISOString())}`}
         </span>
       )}
+      {!phone && mode === 'edit' && w.origin === 'review' && resetButton}
       {(
         <div className="segmented wf-seg">
           <button className={mode === 'edit' ? 'on' : ''} aria-pressed={mode === 'edit'} onClick={() => props.go(base)}>
@@ -267,7 +281,11 @@ export function WorkflowCanvas(props: {
       onError={onError}
     />
   ) : !w.enabled && !w.commandSteps.some((c) => !c.approved) ? (
-    <div className="wf-off">Off: the trigger doesn't fire. Run now still works; runs already started finish.</div>
+    <div className="wf-off">
+      {w.origin === 'review'
+        ? "Off: no pull request of this project is reviewed or merged. Its tasks In review say so, with Turn it on and Validate by hand."
+        : "Off: the trigger doesn't fire. Run now still works; runs already started finish."}
+    </div>
   ) : null;
 
   if (phone)
@@ -289,6 +307,7 @@ export function WorkflowCanvas(props: {
             ))}
           </div>
           {mode === 'edit' && <p className="wf-sum">Edit the steps on a wider screen.</p>}
+          {mode === 'edit' && w.origin === 'review' && <div className="wf-phone-reset">{resetButton}</div>}
         </div>
       </div>
     );

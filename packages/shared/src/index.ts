@@ -171,6 +171,11 @@ export const Card = z.object({
   statusSince: z.string().nullable().default(null),
   /** Stuck in its state with nothing moving it (#237): why, since when, and what the Inbox offers. Null = moving. */
   stall: CardStall.nullable().default(null),
+  /**
+   * In review in a project whose Review workflow is off or deleted (#263): nothing reviews it. The task offers « Turn
+   * it on » and « Validate by hand ». null otherwise.
+   */
+  reviewOff: z.object({ projectId: z.string(), projectName: z.string(), workflowId: z.string().nullable() }).nullable().default(null),
 });
 export type Card = z.infer<typeof Card>;
 
@@ -448,11 +453,6 @@ export type CreateAgent = z.input<typeof CreateAgent>;
 export interface Settings {
   /** Agent that shapes cards dropped in triage; null = nobody triages. */
   triageAgent: string | null;
-  /**
-   * Agent that checks pull requests of tasks In review (#189); its own PRs go to the triage agent. null = nobody: the
-   * task waits In review and says so.
-   */
-  reviewAgent: string | null;
   /** The human's name, as agents address them (asked on first launch; null until then). */
   userName: string | null;
   /** The human in their own words (age, job, background): agents adapt to it. Asked on first launch. */
@@ -522,7 +522,6 @@ export interface UpdateStatus {
 export const UpdateSettings = z
   .object({
     triageAgent: z.string().nullable(),
-    reviewAgent: z.string().nullable(),
     userName: z.string().trim().min(1, 'Enter your name').max(40),
     userAbout: z.string().trim().min(1, 'Say a few words about yourself').max(USER_ABOUT_MAX),
     memoryReviewModel: z.string().min(1).nullable(),
@@ -1042,8 +1041,8 @@ export interface Workflow extends WorkflowGraph {
   name: string;
   /** Off: the trigger doesn't fire; Run now still works. */
   enabled: boolean;
-  /** 'schedules': migrated from a schedule (#170). */
-  origin: 'schedules' | null;
+  /** 'schedules': migrated from a schedule (#170); 'review': its project's default Review workflow (#263). */
+  origin: 'schedules' | 'review' | null;
   /** Bumped by every graph save: a save from an older revision is refused. */
   revision: number;
   nextRunAt: string | null;
@@ -1317,7 +1316,7 @@ export type UpdatePlanAccount = z.infer<typeof UpdatePlanAccount>;
  * Kinds of notification the engine writes. card.blocked / card.review rows are for the system notification and history;
  * the Inbox shows those cards from their live state (InboxNeed). plan.* rows are « system ».
  */
-export const NOTIFICATION_KINDS = ['card.blocked', 'card.review', 'card.done', 'run.failed', 'schedule.ran', 'memory.cleanup', 'plan.switched', 'plan.exhausted', 'github.unreadable', 'review.stalled', 'card.stalled', 'workflow.stopped', 'workflow.couldnt_run', 'workflow.notify', 'workflow.approval'] as const;
+export const NOTIFICATION_KINDS = ['card.blocked', 'card.review', 'card.done', 'run.failed', 'schedule.ran', 'memory.cleanup', 'plan.switched', 'plan.exhausted', 'github.unreadable', 'review.stalled', 'card.stalled', 'workflow.stopped', 'workflow.couldnt_run', 'workflow.notify', 'workflow.approval', 'review.off'] as const;
 export type NotificationKind = (typeof NOTIFICATION_KINDS)[number];
 
 /** Something the user is told about (also shown as a system notification by the app). */

@@ -134,7 +134,8 @@ const GREEN = new Set(['success', 'neutral', 'skipped']);
 
 /**
  * null when CI passed on `sha`, else why not (a sentence). With a CI job: its latest run passed. Without one (another
- * project, #216): the latest run of every check on the head finished green (success, neutral or skipped).
+ * project, #216): the latest run of every check on the head finished green (success, neutral or skipped); no check at
+ * all passes there (#263: a repo with no CI, as the Review workflow's « CI finished » step goes on at once).
  */
 export async function ciState(gh, sha, o) {
   const { repo, ciJob } = gateOf(o);
@@ -142,7 +143,7 @@ export async function ciState(gh, sha, o) {
   const latest = new Map();
   for (const r of [...runs].sort((a, b) => (a.id ?? 0) - (b.id ?? 0))) latest.set(r.name, r);
   const checks = ciJob ? [latest.get(ciJob)].filter(Boolean) : [...latest.values()];
-  if (!checks.length) return `${ciName(o)} has not run on ${sha.slice(0, 7)} yet: wait for it`;
+  if (!checks.length) return ciJob ? `${ciName(o)} has not run on ${sha.slice(0, 7)} yet: wait for it` : null;
   const what = (r) => (ciJob ? ciName(o) : `CI check "${r.name}"`);
   const running = checks.find((r) => r.status !== 'completed');
   const red = checks.find((r) => r.status === 'completed' && !(ciJob ? r.conclusion === 'success' : GREEN.has(r.conclusion)));

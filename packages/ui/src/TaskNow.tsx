@@ -27,6 +27,26 @@ export const TaskNow = forwardRef<HTMLElement, { card: Card; run: Run | null; on
   const act = card.stall && !card.block ? stallAction(card.stall) : null;
   const retry = !card.block && !card.stall && !!card.waiting?.includes('Retry');
   const running = card.status === 'running' || run?.status === 'running';
+  // « No Review workflow is on in <project> » (#263): nothing reviews it; Master turns it on or validates by hand.
+  const off = card.status === 'review' && card.reviewOff ? card.reviewOff : null;
+  const openPr = card.prs.find((p) => p.state === 'open');
+  const turnOn = () => {
+    setBusy(true);
+    api.turnOnReview(off!.projectId).then(
+      () => setBusy(false),
+      (e: unknown) => (setBusy(false), onError(e)),
+    );
+  };
+  const byHand = () => {
+    if (!openPr?.headSha) return;
+    const head = openPr.headSha.slice(0, 7);
+    if (!window.confirm(`Validate and merge PR #${openPr.number} at ${head}? Same gate as scripts/pr/validate.mjs --as master --merge: CI green on ${head}, no conflict, base ${openPr.base ?? 'main'}.`)) return;
+    setBusy(true);
+    api.validateByHand(card.id, openPr.headSha).then(
+      () => setBusy(false),
+      (e: unknown) => (setBusy(false), onError(e)),
+    );
+  };
   const b = card.block;
   const send = (text: string) => {
     setBusy(true);
@@ -57,7 +77,7 @@ export const TaskNow = forwardRef<HTMLElement, { card: Card; run: Run | null; on
           </button>
         )}
       </div>
-      {(v.line || v.branch || v.prNote || act || retry) && (
+      {(v.line || v.branch || v.prNote || act || retry || off) && (
         <div className={'now-l2' + (v.tone !== 'muted' ? ' ' + v.tone : '')}>
           {v.line && <span>{/[.!?:]$/.test(v.line) ? v.line : v.line + '.'} </span>}
           {v.prNote &&
@@ -86,10 +106,20 @@ export const TaskNow = forwardRef<HTMLElement, { card: Card; run: Run | null; on
               {act.label}
             </button>
           )}
-          {retry && (
+          {retry && !off && (
             <button type="button" className="btn small now-act" onClick={() => api.retry(card.id).catch(onError)}>
               Retry
             </button>
+          )}
+          {off && (
+            <span className="now-acts">
+              <button type="button" className="btn small primary" disabled={busy} onClick={turnOn}>
+                Turn it on
+              </button>
+              <button type="button" className="btn small" disabled={busy || !openPr?.headSha} title={openPr?.headSha ? undefined : 'Atlas has not read the PR head from GitHub yet'} onClick={byHand}>
+                Validate by hand
+              </button>
+            </span>
           )}
         </div>
       )}

@@ -20,6 +20,7 @@ import type { Secrets } from './secrets.ts';
 import { SecretsPasswordError } from './secretFile.ts';
 import type { Documents } from './documents.ts';
 import type { Projects } from './projects.ts';
+import type { ReviewFlow } from './reviewFlow.ts';
 import { findSection, formatDocRef, splitSections } from '@atlas/shared';
 import { inside } from './tools.ts';
 import { statSync } from 'node:fs';
@@ -80,8 +81,10 @@ export function createApi(deps: {
   /** Login and cross-site checks (auth.ts). */
   auth: Auth;
   projects: Projects;
+  /** The default Review workflow of each project (#263). */
+  reviewFlow: ReviewFlow;
 }): Server {
-  const { kanban, agents, models, runner, rewinds, slash, dispatcher, settings, documents, memories, cleanup, workflows, local, accounts, chatgpt, claude, plans, notifications, usage, bus, auth, projects } = deps;
+  const { kanban, agents, models, runner, rewinds, slash, dispatcher, settings, documents, memories, cleanup, workflows, local, accounts, chatgpt, claude, plans, notifications, usage, bus, auth, projects, reviewFlow } = deps;
   const app = express();
   const uploads = new Uploads(deps.dataDir);
   const taskImages = new TaskImages(deps.dataDir, uploads);
@@ -313,6 +316,17 @@ export function createApi(deps: {
     const id = req.params.id;
     const timeline: Timeline = { runs: runner.endedRuns(id), rewinds: rewinds.events(id), summary: runner.summaryOf(id), clears: slash.events(id) };
     res.json(timeline);
+  });
+  /**
+   * « Validate by hand » (#263): Master validates and merges the task's PR at the head shown (`sha`), with the gate of
+   * `scripts/pr/validate.mjs --as master --merge`. Only Master: no agent tool calls this route (pinned by a test).
+   */
+  app.post('/api/cards/:id/validate', async (req, res) => {
+    const sha = typeof req.body?.sha === 'string' ? req.body.sha : '';
+    if (!/^[0-9a-f]{7,40}$/i.test(sha)) throw new InvalidError('sha: the head commit of the PR you checked');
+    const id = kanban.resolve(req.params.id);
+    projects.assertActive(kanban.get(id).projectId, 'its tasks');
+    res.json({ result: await reviewFlow.validateByHand(id, sha), card: kanban.get(id) });
   });
   app.post('/api/cards/:id/retry', async (req, res) => {
     projects.assertActive(kanban.get(req.params.id).projectId, 'its tasks');
@@ -896,6 +910,14 @@ export function createApi(deps: {
   });
   app.post('/api/workflows/:id/reject', (req, res) => {
     res.json(workflows.reject(req.params.id));
+  });
+  /** « Reset to default » of a project's Review workflow (#263): its seven steps, links and layout come back. */
+  app.post('/api/workflows/:id/reset', (req, res) => {
+    res.json(workflows.resetReview(req.params.id));
+  });
+  /** « Turn it on » (#263): the project's Review workflow on again, or made again from the default if deleted. */
+  app.post('/api/projects/:id/review-workflow', (req, res) => {
+    res.json(reviewFlow.turnOn(projects.get(req.params.id).id));
   });
   app.patch('/api/workflows/:id', (req, res) => {
     res.json(workflows.update(req.params.id, req.body));

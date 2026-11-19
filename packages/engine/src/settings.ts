@@ -33,7 +33,6 @@ export class Settings {
     return {
       // The default project's lead (#213): Settings → Board's triage agent until the Projects page replaces it.
       triageAgent: this.defaultLead(),
-      reviewAgent: map.get('review_agent') || null,
       userName: map.get('user_name') || null,
       userAbout: map.get('user_about') || null,
       memoryReviewModel: map.get('memory_review_model') || null,
@@ -63,10 +62,6 @@ export class Settings {
             )
             .run(project, p.triageAgent, new Date().toISOString(), p.triageAgent);
       })();
-    }
-    if (p.reviewAgent !== undefined) {
-      if (p.reviewAgent && !this.db.prepare('SELECT 1 FROM agents WHERE id = ?').get(p.reviewAgent)) throw new ConflictError(`agent ${p.reviewAgent} does not exist`);
-      this.set('review_agent', p.reviewAgent ?? '');
     }
     if (p.userName !== undefined) this.set('user_name', p.userName);
     if (p.userAbout !== undefined) this.set('user_about', p.userAbout);

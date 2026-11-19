@@ -35,8 +35,11 @@ export interface StallFacts {
   startProblem: string | null;
   /** Todo: its parents. */
   parents: Card[];
-  /** In review: the #221 stall (the review ended twice without a verdict), in words, or null. */
-  reviewStall: string | null;
+  /**
+   * In review: a Review run is open on it (#263). The run owns its stuck steps (« couldn't run », its own Inbox item
+   * after 15 min, a review without a verdict at once), so the task is not marked stuck twice.
+   */
+  reviewRun: boolean;
 }
 
 const later = (...isos: (string | null | undefined)[]): string => isos.filter((x): x is string => !!x).sort().at(-1)!;
@@ -49,14 +52,15 @@ export function detectStall(f: StallFacts): CardStall | null {
   const inState = c.statusSince ?? c.updatedAt;
   switch (c.status) {
     case 'review': {
-      if (f.reviewStall) return { rule: 'review', reason: f.reviewStall, since: later(inState, f.lastRunEnd), action: 'retry_review' };
+      // Its Review run says where it is stuck; « No Review workflow is on » has its own Inbox item (#263).
+      if (f.reviewRun || c.reviewOff) return null;
       const open = c.prs.filter((p) => p.state === 'open');
       // GitHub unreadable has its own item; CI still running or red, or a verdict given: something else moves it.
       if (!open.length || open.some((p) => p.error || p.ci !== 'success' || p.qa === 'failure') || open.every((p) => p.qa === 'success')) return null;
       const since = later(inState, f.lastRunEnd);
       if (!over(since, 'review', now)) return null;
       const why = c.waiting && !/^waiting for @\S+$/.test(c.waiting) ? ` (${c.waiting})` : '';
-      return { rule: 'review', reason: `CI is green, no review is running${why}`, since, action: 'retry_review' };
+      return { rule: 'review', reason: `CI is green, no Review run is going on it${why}`, since, action: 'retry_review' };
     }
     case 'running': {
       const since = later(inState, f.lastRunEnd);
@@ -95,7 +99,7 @@ export function stallOf(db: Db, cardId: string): CardStall | null {
 }
 
 const ACTION_HINT: Record<CardStall['action'], string> = {
-  retry_review: 'Retry the review starts the reviewer again.',
+  retry_review: 'Retry the review starts a Review run on it.',
   restart: 'Restart the run starts a new run of the task.',
   ready: 'Move to Ready lets it start.',
   open: 'Open the task to decide.',
@@ -104,8 +108,8 @@ const ACTION_HINT: Record<CardStall['action'], string> = {
 export class Stalls {
   /** Set by the dispatcher: why a ready task's assignee can't start it now (null = a free slot). */
   startProblem: (c: Card) => string | null = () => null;
-  /** Set by the PR watcher: the #221 review stall in words. */
-  reviewStall: (c: Card) => string | null = () => null;
+  /** Set by the engine: a Review run is open on the task (#263). */
+  reviewRun: (c: Card) => boolean = () => false;
   /** Set by the dispatcher: wake the agent of a chat a note was posted in. */
   deliver: (cardId: string) => void = () => {};
   private last = 0;
@@ -141,7 +145,7 @@ export class Stalls {
         lastRunEnd: last?.endedAt ?? null,
         startProblem: c.status === 'ready' ? this.startProblem(c) : null,
         parents: c.status === 'todo' ? c.parents.flatMap((p) => byId.get(p) ?? this.cardOrNone(p)) : [],
-        reviewStall: c.status === 'review' ? this.reviewStall(c) : null,
+        reviewRun: c.status === 'review' && this.reviewRun(c),
       });
       this.apply(c, stall);
     }

@@ -117,6 +117,6 @@ describe('auth (design §12)', () => {
     engine = await start(null);
     const res = await raw(engine.url + '/api/settings', { method: 'PATCH', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ serverPasswordHash: 'x' }) });
     expect(res.status).toBe(400);
-    expect(Object.keys(JSON.parse((await raw(engine.url + '/api/settings')).body))).toEqual(['triageAgent', 'reviewAgent', 'userName', 'userAbout', 'memoryReviewModel']);
+    expect(Object.keys(JSON.parse((await raw(engine.url + '/api/settings')).body))).toEqual(['triageAgent', 'userName', 'userAbout', 'memoryReviewModel']);
   });
 });

@@ -174,7 +174,7 @@ const OP_TEXT = { is: 'is', isNot: 'is not', contains: 'contains', notContains: 
 function actionText(c: Extract<WorkflowNode, { kind: 'action' }>['config']): string {
   if (c.do === 'setStatus') return `Task → ${c.status}`;
   if (c.do === 'setAssignee') return c.assignee ? `Assign to @${c.assignee}` : 'Unassign the task';
-  if (c.do === 'mergePr') return 'Validate + merge the PR';
+  if (c.do === 'mergePr') return 'qa/validated on the head, then merge';
   if (c.do === 'command') return firstLine(c.command).slice(0, 80) || 'Run a command';
   return firstLine(c.text).slice(0, 80) || 'Notify Master';
 }
@@ -605,7 +605,7 @@ export function filterKeys(t: EventTrigger): FilterKey[] {
 /** An event trigger's line on the canvas: its kind and its filters in short (« Pull request event · base main »). */
 export function eventMeta(t: EventTrigger): string {
   const rows = filterRows(t).map((r) => `${FILTER_LABEL[r.key].split(' › ')[1]!.toLowerCase()} ${r.key === 'assignee' ? '@' + r.value : r.value}`);
-  return [t.kind === 'task' ? 'Task event' : 'Pull request event', ...(rows.length ? rows : [t.kind === 'task' ? 'any task' : 'any PR'])].join(' · ');
+  return [t.kind === 'task' ? 'Task event' : 'Pull request event', ...(rows.length ? rows : [t.kind === 'task' ? (t.event === 'review_requested' ? 'the task has a PR' : 'any task') : 'any PR'])].join(' · ');
 }
 
 export function filterRows(t: EventTrigger): FilterRow[] {

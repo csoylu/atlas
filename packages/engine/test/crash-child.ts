@@ -1,7 +1,8 @@
 // Child engine for crash.test.ts: started and SIGKILLed repeatedly.
 import { execFileSync } from 'node:child_process';
+import { mkdirSync } from 'node:fs';
 import { startEngine } from '../src/index.ts';
-import { LEASE_MS, SlowProvider } from './crash-fixture.ts';
+import { LEASE_MS, SlowProvider, redPr } from './crash-fixture.ts';
 
 const [dbFile, dataDir, marker, origin] = process.argv.slice(2) as [string, string, string, string];
 const engine = await startEngine({
@@ -14,12 +15,17 @@ const engine = await startEngine({
   env: {},
   // A command step (#273) clones a local bare repo standing in for GitHub.
   workflowCommand: { clone: async (_repo, dir) => void execFileSync('git', ['clone', '-q', origin, dir]) },
+  // The default Review workflow (#263): GitHub says the task's PR is red, read every 20 ms.
+  prs: { read: redPr, intervalMs: 20 },
+  memoryReview: false,
+  projects: { clone: async (_repo, dir) => void mkdirSync(dir, { recursive: true }) },
 });
 if (engine.kanban.list().length === 0) {
   // An event-started workflow (#258): each task created fires one run, whose step makes one task per run.
   engine.workflows.create(
     {
       name: 'On created',
+      projectId: 'atlas',
       nodes: [
         { id: 'trigger', kind: 'trigger', x: 0, y: 0, config: { kind: 'task', event: 'created' } },
         { id: 'look', kind: 'agent', x: 0, y: 0, config: { agentId: 'atlas', prompt: 'Look at {{task.ref}} « {{task.title}} »', newTaskEachRun: true } },
@@ -65,7 +71,14 @@ if (engine.kanban.list().length === 0) {
     'user',
   );
   engine.workflows.runNow(c.id);
+  // A task In review in a project with a repo (#263): its Review run, killed at any step, sends it back once.
+  const r = engine.kanban.create({ title: 'review crash', status: 'running', assignee: 'atlas', projectId: p.id }, 'user');
+  engine.kanban.requestReview(r.id, ['https://github.com/crash/crash/pull/7'], 'atlas', 'review me');
 }
 // Events consumed and step tasks made at a random instant too: the kill may come before, during or after.
-setTimeout(() => engine.workflows.start(5), Math.random() * 300);
+setTimeout(() => {
+  engine.workflows.start(5);
+  engine.reviewFlow.start(5);
+  engine.prs.start();
+}, Math.random() * 300);
 process.stdout.write('ready\n');

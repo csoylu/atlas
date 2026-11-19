@@ -9,7 +9,6 @@ import {
   type ConditionTryResult,
   type FieldTest,
   type FieldTestOp,
-  type Settings,
   type WaitFor,
   type WorkflowRun,
   type Agent,
@@ -254,32 +253,15 @@ function FieldPicker({ of, q, setQ, onPick, onClose }: { of: FieldsOf; q: string
   );
 }
 
-/** Settings → Board & triage: the review agent, for « the project's review agent » (#262). */
-function useSettings(): Settings | null {
-  const [st, setSt] = useState<Settings | null>(null);
-  useEffect(() => {
-    let live = true;
-    api.settings().then(
-      (x) => live && setSt(x),
-      () => live && setSt(null), // only a description is lost: the choice still works
-    );
-    return () => {
-      live = false;
-    };
-  }, []);
-  return st;
-}
-
 /**
  * An agent step (#262, mockup « Agent + fields »): a chosen agent or the project's review agent; in the task thread
  * (the run's task: its history and PR stay) or as a task of its own.
  */
 function AgentFields({ n, g, w, agents, fields, set }: { n: Extract<WorkflowNode, { kind: 'agent' }>; g: Graph; w: Workflow; agents: Agent[]; fields: FieldsOf; set: SetConfig }) {
   const c = n.config;
-  const settings = useSettings();
   const { byId } = useProjects();
   const project = w.projectId ? byId(w.projectId) : undefined;
-  const review = settings?.reviewAgent ?? null;
+  const review = project?.reviewAgent ?? null;
   const lead = project?.lead ?? null;
   const thread = !!c.inThread;
   const canThread = hasRunTask(g);
@@ -311,7 +293,7 @@ function AgentFields({ n, g, w, agents, fields, set }: { n: Extract<WorkflowNode
             <span className="tkx">
               <b>The project's review agent</b>
               <span className="help">
-                {review ? `@${review}${project ? ` in ${project.name}` : ''}; on @${review}'s own PRs, the lead${lead ? ` @${lead}` : ''}` : 'Settings → Board & triage → Review agent; the lead on its own PRs'}
+                {review ? `@${review}${project ? ` in ${project.name}` : ''}; on @${review}'s own PRs, the lead${lead ? ` @${lead}` : ''}` : `none set: Settings → Projects${project ? ` → ${project.name}` : ''} → Review agent`}
               </span>
             </span>
           </button>

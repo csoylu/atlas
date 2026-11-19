@@ -22,8 +22,9 @@ import { isCleanupCard } from './cleanup.ts';
 import { stripData } from './images.ts';
 import { cardPrs, parsePrUrl } from './prs.ts';
 import { stallOf } from './stalls.ts';
+import { reviewOffOf } from './reviewFlow.ts';
 import { recordPrEvent, recordTaskEvent } from './workflowEvents.ts';
-import { assertActive, defaultProjectId, defaultProjectOrNull, isMember, leadOf, projectForNewCard, projectRow, resolveProject, scopeFor } from './projects.ts';
+import { assertActive, defaultProjectId, defaultProjectOrNull, isMember, leadOf, projectForNewCard, projectRow, resolveProject, reviewerFor, scopeFor } from './projects.ts';
 
 interface CardRow {
   id: string;
@@ -211,6 +212,7 @@ export class Kanban {
       projectId: r.project_id,
       statusSince: r.status_since,
       stall: r.board === 'main' ? stallOf(this.db, r.id) : null,
+      reviewOff: reviewOffOf(this.db, { id: r.id, status: r.status, board: r.board, projectId: r.project_id }),
     };
     card.waiting = this.waitingReason(card);
     return card;
@@ -563,10 +565,13 @@ export class Kanban {
         `${stray.map((p) => p.url).join(', ')} ${stray.length > 1 ? 'are' : 'is'} not in ${project.repo}, the repo of project ${project.name} (${cardRef(before)}'s project): ` +
           'open the PR in that repo, or do the work in a task of the project it belongs to',
       );
-    const setting = (k: string) => (this.db.prepare('SELECT value FROM settings WHERE key = ?').get(k) as { value: string } | undefined)?.value || null;
-    const review = setting('review_agent');
-    // The review agent's own PR goes to the project's lead (it was the triage agent before projects, #213).
-    const reviewer = review && review === before.assignee ? leadOf(this.db, before.projectId) : review;
+    // One PR per task where the project's Review workflow reviews it (#263): one run, one verdict, one merge.
+    const all = new Set([...before.prs.map((p) => `${p.repo.toLowerCase()}#${p.number}`), ...prs.map((p) => `${p.repo.toLowerCase()}#${p.number}`)]);
+    if (all.size > 1 && this.db.prepare("SELECT 1 FROM workflows WHERE project_id = ? AND origin = 'review'").get(before.projectId))
+      throw new InvalidError(`one pull request per task in project ${project.name} (its Review workflow reviews one): ${cardRef(before)} would link ${all.size}. Split the task, one PR each`);
+    // The project's review agent; on its own PR, the project's lead (#213, #263). Unset: the Review step says so.
+    const who = reviewerFor(this.db, before.projectId, before.assignee);
+    const reviewer = 'id' in who ? who.id : null;
     const now = new Date().toISOString();
     this.tx(() => {
       assertActive(this.db, before.projectId, cardRef(before));
@@ -580,7 +585,10 @@ export class Kanban {
           )
           .run(id, pr.repo, pr.number, pr.url, now);
       }
-      this.db.prepare('UPDATE card_prs SET reviewed_sha = NULL, failed_sha = NULL WHERE card_id = ?').run(id);
+      // A new request reads the PR afresh (#263): the Review's wait never acts on the previous head's CI or conflict.
+      this.db
+        .prepare('UPDATE card_prs SET reviewed_sha = NULL, failed_sha = NULL, ci = NULL, ci_failed_name = NULL, ci_failed_url = NULL, mergeable = NULL, qa = NULL, qa_description = NULL, checked_at = NULL WHERE card_id = ?')
+        .run(id);
       this.db.prepare("UPDATE cards SET status = 'review', reviewer = ?, updated_at = ? WHERE id = ?").run(reviewer, now, id);
       this.clearBlock(id);
       this.event(id, 'status', { from: before.status, to: 'review', by });

@@ -4,7 +4,7 @@ import { effectiveFilter, inFilter, projectForNew, projectsInfo } from './projec
 
 const p = (id: string, extra: Partial<Project> = {}): Project => ({
   id, name: id[0]!.toUpperCase() + id.slice(1), repo: null, ciJob: null, lead: null, colour: 212, status: 'active',
-  createdAt: '2026-11-18T00:00:00Z', archivedAt: null, members: [], kept: [], isDefault: false, ...extra,
+  createdAt: '2026-11-18T00:00:00Z', archivedAt: null, members: [], kept: [], isDefault: false, reviewAgent: null, ...extra,
 });
 const one = projectsInfo([p('atlas', { isDefault: true })]);
 const two = projectsInfo([p('atlas', { isDefault: true }), p('datinel'), p('old', { status: 'archived' })]);
