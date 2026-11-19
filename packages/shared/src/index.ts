@@ -78,6 +78,8 @@ export const CardPr = z.object({
   mergeable: z.boolean().nullable(),
   /** The head's check runs together: null = none (yet). */
   ci: z.enum(['pending', 'success', 'failure']).nullable(),
+  /** When ci is failure: the red check, named and linked (#238; a repo's own rules are its CI checks). */
+  ciFailed: z.object({ name: z.string(), url: z.string().nullable() }).nullable(),
   /** The `qa/validated` status on the head (scripts/pr/validate.mjs). */
   qa: z.enum(['pending', 'success', 'failure']).nullable(),
   qaDescription: z.string().nullable(),

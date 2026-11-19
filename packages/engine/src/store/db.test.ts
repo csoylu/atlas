@@ -208,7 +208,7 @@ describe('store', () => {
     db.close();
   });
 
-  it('0050 project gate: Atlas keeps CI job « test » and the changelog rule, another project gets any check, no changelog', () => {
+  it('0050 project gate: Atlas keeps CI job « test », another project gets any check; 0053 drops the changelog option (#238)', () => {
     const dir = join(dirname(fileURLToPath(import.meta.url)), 'migrations');
     const db = new Database(':memory:');
     db.exec('CREATE TABLE schema_migrations (name TEXT PRIMARY KEY, applied_at TEXT NOT NULL)');
@@ -220,10 +220,11 @@ describe('store', () => {
     db.pragma('foreign_keys = ON');
     db.prepare("INSERT INTO projects (id, name, repo, colour, created_at) VALUES ('datinel', 'Datinel', 'datinel/datinel', 200, 'x')").run();
     migrate(db);
-    expect(db.prepare('SELECT id, ci_job, changelog FROM projects ORDER BY id').all()).toEqual([
-      { id: 'atlas', ci_job: 'test', changelog: 1 },
-      { id: 'datinel', ci_job: null, changelog: 0 },
+    expect(db.prepare('SELECT id, ci_job FROM projects ORDER BY id').all()).toEqual([
+      { id: 'atlas', ci_job: 'test' },
+      { id: 'datinel', ci_job: null },
     ]);
+    expect((db.prepare('PRAGMA table_info(projects)').all() as { name: string }[]).map((c) => c.name)).not.toContain('changelog');
     db.close();
   });
 
@@ -243,7 +244,7 @@ describe('store', () => {
     const shared = Number(add.run('rule', 'shared', 'Master wants short answers').lastInsertRowid);
     const own = Number(add.run('fact', 'agent:atlas', 'Clone lives in publish-atlas').lastInsertRowid);
     db.prepare("INSERT INTO memory_changes (memory_id, at, by, action, before_text, before_kind, before_scope, before_status, before_pinned) VALUES (?, 'x', 'user', 'update', 'old', 'rule', 'shared', 'active', 0)").run(shared);
-    expect(migrate(db)).toEqual(['0052_project_memory.sql']);
+    expect(migrate(db)[0]).toBe('0052_project_memory.sql');
     expect(db.prepare('SELECT id, scope, project_id FROM memories ORDER BY id').all()).toEqual([
       { id: shared, scope: 'shared', project_id: 'atlas' },
       { id: own, scope: 'agent:atlas', project_id: 'atlas' },

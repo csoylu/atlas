@@ -61,7 +61,14 @@ describe('CI job graph (docs/updater.md step 3)', () => {
     expect(j.release!.text).toContain('--prerelease');
   });
 
-  it('the one-entry check runs on pushes only, before anything is built, with the push\'s « before » commit and full history', () => {
+  it('on a pull request the job `test` checks the one-entry rule (#238), first, against the base of GitHub\'s merge commit', () => {
+    const t = j.test!.text;
+    expect(t).toContain('fetch-depth: 0');
+    expect(t).toMatch(/if: github\.event_name == 'pull_request'\n {8}run: node scripts\/release\/changelog\.mjs check HEAD\^1 --pr\n/);
+    expect(t.indexOf('changelog.mjs check')).toBeLessThan(t.indexOf('npm ci'));
+  });
+
+  it('the one-entry check of a push runs before anything is built, with the push\'s « before » commit and full history', () => {
     expect(j.changelog!.text).toContain('fetch-depth: 0');
     expect(j.changelog!.text).toMatch(/if: github\.event_name == 'push'[\s\S]*check-push\.sh "\$BEFORE"/);
     expect(j.changelog!.text).toContain('github.event.before');
@@ -214,6 +221,29 @@ describe('releases from real git history (docs/updater.md steps 1-3, #223)', { t
       // a then b: 0.5.0 (Added) → 0.5.1 (Fixed). b then a: 0.4.1 (Fixed) → 0.5.0 (Added). Same files, merge order decides.
       expect(versions).toEqual(order[0] === 'a' ? ['0.5.0', '0.5.1'] : ['0.4.1', '0.5.0']);
     }
+  });
+
+  it('a pull request (#238): GitHub\'s merge commit checked against HEAD^1 passes with one entry, fails without one', () => {
+    const r = repo();
+    r.push(r.entry('Fixed', 'on main', 2));
+    const pr = (branch: string, files: Record<string, string>) => {
+      r.git('checkout', '-q', '-b', branch, 'main');
+      r.write(files);
+      r.git('commit', '-qm', branch);
+      r.git('checkout', '-q', 'main');
+      r.push(r.entry('Fixed', `main moved on after ${branch} left it`));
+      r.git('checkout', '-q', '--detach', 'main');
+      r.git('merge', '-q', '--no-ff', '-m', `Merge ${branch} into main`, branch); // what actions/checkout gives on a PR
+      const out = r.cli('check', 'HEAD^1', '--pr');
+      r.git('checkout', '-q', 'main');
+      return out;
+    };
+    const good = pr('good', { 'changelog/30-good.md': '## Changed · #30 · good\n', 'x.txt': 'x' });
+    expect(good.stderr).toBe('');
+    expect(good.stdout).toMatch(/CHANGELOG check ok: one new entry/);
+    const none = pr('none', { 'y.txt': 'y' });
+    expect(none.status).toBe(1);
+    expect(none.stderr).toMatch(/this pull request: no new changelog entry/);
   });
 
   it('a branch that merged main in, then merges back: main\'s entries stay where they reached main, the branch\'s is newest', () => {

@@ -4,7 +4,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import type { ContentBlock } from '@atlas/shared';
 import { launch, eventually, type LaunchOptions } from '../test/kit/index.ts';
-import { combineChecks, parsePrUrl, UNREADABLE_NOTIFY_MS, type GhPr, type GhRead } from './prs.ts';
+import { combineChecks, failedCheck, parsePrUrl, UNREADABLE_NOTIFY_MS, type GhPr, type GhRead } from './prs.ts';
 
 const URL = 'https://github.com/csoylu/atlas/pull/41';
 const use = (name: string, input: unknown): ContentBlock[] => [{ type: 'tool_use', id: 't_' + Math.random().toString(36).slice(2, 8), name, input }];
@@ -46,6 +46,9 @@ describe('pull requests linked to tasks (#189)', () => {
     expect(combineChecks([{ status: 'completed', conclusion: 'success' }, { status: 'completed', conclusion: 'skipped' }])).toBe('success');
     expect(combineChecks([{ status: 'in_progress', conclusion: null }, { status: 'completed', conclusion: 'success' }])).toBe('pending');
     expect(combineChecks([{ status: 'in_progress', conclusion: null }, { status: 'completed', conclusion: 'failure' }])).toBe('failure');
+    // #238: the red check, named and linked, for the builder's note.
+    expect(failedCheck([{ name: 'lint', status: 'completed', conclusion: 'success' }, { name: 'test', status: 'completed', conclusion: 'failure', html_url: 'https://github.com/o/r/runs/2' }])).toEqual({ name: 'test', url: 'https://github.com/o/r/runs/2' });
+    expect(failedCheck([{ name: 'test', status: 'completed', conclusion: 'success' }])).toBe(null);
   });
 
   it('task_request_review links the PR: In review, not in the Inbox; task_complete is refused while it is open', async () => {
@@ -145,6 +148,13 @@ describe('pull requests linked to tasks (#189)', () => {
     await e.prs.poll();
     expect(e.kanban.get(c.id).status).toBe('ready');
     expect(note()).toMatchObject({ text: expect.stringContaining('PR #41: CI failed on bbbbbbb') });
+
+    // A repo rule (here Atlas's changelog entry) fails in CI (#238): the note names the check and links it.
+    await again();
+    gh.pr = { ...gh.pr, headSha: 'ddddddd4444', ci: 'failure', ciFailed: { name: 'test', url: 'https://github.com/csoylu/atlas/actions/runs/9/job/1' } };
+    await e.prs.poll();
+    expect(note()).toMatchObject({ text: expect.stringContaining('PR #41: CI check "test" failed on ddddddd (https://github.com/csoylu/atlas/actions/runs/9/job/1): its log says what to fix') });
+    expect(e.kanban.get(c.id).prs[0]!.ciFailed).toEqual({ name: 'test', url: 'https://github.com/csoylu/atlas/actions/runs/9/job/1' });
 
     await again();
     gh.pr = { ...gh.pr, headSha: 'ccccccc3333', ci: 'success', mergeable: false };

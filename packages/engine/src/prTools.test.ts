@@ -4,22 +4,18 @@ import { launch, until } from '../test/kit/index.ts';
 import { prToolSpecs, runPrTool } from './prTools.ts';
 
 const SHA = 'a'.repeat(40);
-const ENTRY = 'changelog/3-new.md';
-type File = { filename: string; status: string };
 
-/** A fake `gh` for one repo: the PR, its check runs, its changed files, the entry file, statuses and the merge; every call recorded. */
-function fakeGh(repo: string, number: number, over: { pr?: Record<string, unknown>; checks?: unknown[]; files?: File[] } = {}) {
+/** A fake `gh` for one repo: the PR, its check runs, statuses and the merge; every call recorded. Anything else throws. */
+function fakeGh(repo: string, number: number, over: { pr?: Record<string, unknown>; checks?: unknown[] } = {}) {
   const calls: string[][] = [];
   const gh = async (args: string[]) => {
     calls.push(args);
     const path = args[1]!;
     if (!path.startsWith(`repos/${repo}/`)) throw new Error(`asked another repo: ${path}`);
     if (path.endsWith(`/pulls/${number}`))
-      return JSON.stringify({ state: 'open', draft: false, merged: false, mergeable: true, base: { ref: 'main' }, head: { sha: SHA, ref: 'feat/3-x', repo: { full_name: repo } }, number, ...over.pr });
+      return JSON.stringify({ state: 'open', draft: false, merged: false, mergeable: true, base: { ref: 'main', repo: { full_name: repo, default_branch: 'main' } }, head: { sha: SHA, ref: 'feat/3-x', repo: { full_name: repo } }, number, ...over.pr });
     if (path.endsWith(`/pulls/${number}/merge`)) return JSON.stringify({ sha: 'b'.repeat(40), merged: true });
     if (path.includes('/check-runs')) return JSON.stringify({ check_runs: over.checks ?? [{ id: 1, name: 'test', status: 'completed', conclusion: 'success' }] });
-    if (path.includes('/compare/')) return JSON.stringify({ merge_base_commit: { sha: 'c'.repeat(40) }, files: over.files ?? [{ filename: 'src/a.ts', status: 'modified' }, { filename: ENTRY, status: 'added' }] });
-    if (path.includes(`contents/${ENTRY}?ref=${SHA}`)) return '## Added · #3 · new\n';
     if (path.includes('/statuses/')) return '{}';
     throw new Error(`unexpected gh call: ${args.join(' ')}`);
   };
@@ -43,11 +39,11 @@ async function setup() {
 }
 
 describe('pr_validate (#216)', () => {
-  it('a project without a changelog and no CI job: any check green is enough, success set on the head and merged', async () => {
+  it('a project with no CI job: any check green is enough, success set on the head and merged', async () => {
     const { e, inReview, run } = await setup();
     const c = inReview('datinel', 'https://github.com/datinel/datinel/pull/3');
-    expect(e.db.prepare("SELECT ci_job, changelog FROM projects WHERE id = 'datinel'").get()).toEqual({ ci_job: null, changelog: 0 });
-    const f = fakeGh('datinel/datinel', 3, { checks: [{ id: 1, name: 'build', status: 'completed', conclusion: 'success' }, { id: 2, name: 'lint', status: 'completed', conclusion: 'skipped' }], files: [{ filename: 'src/a.ts', status: 'modified' }] });
+    expect(e.db.prepare("SELECT ci_job FROM projects WHERE id = 'datinel'").get()).toEqual({ ci_job: null });
+    const f = fakeGh('datinel/datinel', 3, { checks: [{ id: 1, name: 'build', status: 'completed', conclusion: 'success' }, { id: 2, name: 'lint', status: 'completed', conclusion: 'skipped' }] });
     const r = await run(c.id, { pr: 3, verdict: 'ok', sha: SHA, reason: 'tests green, read the diff' }, f.gh);
     expect(r).toMatchObject({ isError: false, output: expect.stringContaining('merged PR #3') });
     expect(f.statuses()).toHaveLength(1);
@@ -63,7 +59,7 @@ describe('pr_validate (#216)', () => {
     const ok = { pr: 3, verdict: 'ok', sha: SHA, reason: 'r' };
     const green = { id: 1, name: 'build', status: 'completed', conclusion: 'success' };
     for (const [checks, why] of [
-      [[green, { id: 2, name: 'e2e', status: 'completed', conclusion: 'failure' }], /CI check "e2e" is failure on aaaaaaa/],
+      [[green, { id: 2, name: 'e2e', status: 'completed', conclusion: 'failure', html_url: 'https://github.com/datinel/datinel/runs/2' }], /CI check "e2e" is failure on aaaaaaa \(https:\/\/github\.com\/datinel\/datinel\/runs\/2\)/],
       [[green, { id: 2, name: 'e2e', status: 'in_progress', conclusion: null }], /CI check "e2e" is still running/],
       [[], /CI has not run on aaaaaaa yet/],
     ] as const) {
@@ -82,7 +78,7 @@ describe('pr_validate (#216)', () => {
     expect(f.merges()).toHaveLength(0);
   });
 
-  it('a conflicting PR is refused, changelog or not', async () => {
+  it('a conflicting PR is refused', async () => {
     const { inReview, run } = await setup();
     const c = inReview('datinel', 'https://github.com/datinel/datinel/pull/3');
     const f = fakeGh('datinel/datinel', 3, { pr: { mergeable: false } });
@@ -90,20 +86,40 @@ describe('pr_validate (#216)', () => {
     expect(f.statuses()).toHaveLength(0);
   });
 
-  it('Atlas keeps its gate: CI job « test » and exactly one changelog entry', async () => {
+  it('Atlas: only its CI job « test » decides; the repo’s own rules (changelog entry) are never read by the engine (#238)', async () => {
     const { e, inReview, run } = await setup();
     const c = inReview('atlas', 'https://github.com/csoylu/atlas/pull/3');
-    expect(e.projects.get('atlas')).toMatchObject({ repo: 'csoylu/atlas', ciJob: 'test', changelog: true });
-    const none = fakeGh('csoylu/atlas', 3, { files: [{ filename: 'src/a.ts', status: 'modified' }] });
-    expect(await run(c.id, { pr: 3, verdict: 'ok', sha: SHA, reason: 'r' }, none.gh)).toMatchObject({ isError: true, output: expect.stringMatching(/no new changelog entry/) });
-    const edited = fakeGh('csoylu/atlas', 3, { files: [{ filename: ENTRY, status: 'added' }, { filename: 'changelog/1-old.md', status: 'modified' }] });
-    expect(await run(c.id, { pr: 3, verdict: 'ok', sha: SHA, reason: 'r' }, edited.gh)).toMatchObject({ isError: true, output: expect.stringMatching(/changelog\/1-old\.md is changed/) });
+    expect(e.projects.get('atlas')).toMatchObject({ repo: 'csoylu/atlas', ciJob: 'test' });
+    expect(e.projects.get('atlas')).not.toHaveProperty('changelog');
+    const ok = { pr: 3, verdict: 'ok', sha: SHA, reason: 'r' };
+    // The goal test: main changed a repo rule after this engine was built. CI checks it on the PR; the gate reads CI only.
+    const red = fakeGh('csoylu/atlas', 3, { checks: [{ id: 1, name: 'test', status: 'completed', conclusion: 'failure', html_url: 'https://github.com/csoylu/atlas/actions/runs/9/job/1' }] });
+    expect(await run(c.id, ok, red.gh)).toMatchObject({ isError: true, output: 'refused: CI job "test" is failure on aaaaaaa (https://github.com/csoylu/atlas/actions/runs/9/job/1): its log says what to fix in the repo' });
+    expect(red.statuses()).toHaveLength(0);
     const conflict = fakeGh('csoylu/atlas', 3, { pr: { mergeable: false } });
-    expect(await run(c.id, { pr: 3, verdict: 'ok', sha: SHA, reason: 'r' }, conflict.gh)).toMatchObject({ isError: true, output: expect.stringMatching(/conflicts with main: rebase it/) });
+    expect(await run(c.id, ok, conflict.gh)).toMatchObject({ isError: true, output: expect.stringMatching(/conflicts with main: rebase it/) });
     const other = fakeGh('csoylu/atlas', 3, { checks: [{ id: 1, name: 'build', status: 'completed', conclusion: 'success' }] });
-    expect(await run(c.id, { pr: 3, verdict: 'ok', sha: SHA, reason: 'r' }, other.gh)).toMatchObject({ isError: true, output: expect.stringMatching(/CI job "test" has not run/) });
+    expect(await run(c.id, ok, other.gh)).toMatchObject({ isError: true, output: expect.stringMatching(/CI job "test" has not run/) });
     const good = fakeGh('csoylu/atlas', 3);
-    expect(await run(c.id, { pr: 3, verdict: 'ok', sha: SHA, reason: 'r' }, good.gh)).toMatchObject({ isError: false, output: expect.stringContaining('merged PR #3') });
+    expect(await run(c.id, ok, good.gh)).toMatchObject({ isError: false, output: expect.stringContaining('merged PR #3') });
+    // What the gate asks GitHub, whatever the repo's rules: the PR, its checks, then the status and the merge.
+    expect(good.calls.map((a) => a[1]!.replace(/[0-9a-f]{40}/, 'SHA'))).toEqual([
+      'repos/csoylu/atlas/pulls/3',
+      'repos/csoylu/atlas/commits/SHA/check-runs?per_page=100',
+      'repos/csoylu/atlas/statuses/SHA',
+      'repos/csoylu/atlas/pulls/3/merge',
+    ]);
+  });
+
+  it('the base is the repo’s default branch, whatever its name', async () => {
+    const { inReview, run } = await setup();
+    const c = inReview('datinel', 'https://github.com/datinel/datinel/pull/3');
+    const trunk = { base: { ref: 'trunk', repo: { full_name: 'datinel/datinel', default_branch: 'trunk' } } };
+    expect(await run(c.id, { pr: 3, verdict: 'ok', sha: SHA, reason: 'r' }, fakeGh('datinel/datinel', 3, { pr: trunk }).gh)).toMatchObject({ isError: false });
+    const stacked = { base: { ref: 'feat/2-x', repo: { full_name: 'datinel/datinel', default_branch: 'main' } } };
+    const f = fakeGh('datinel/datinel', 3, { pr: stacked });
+    expect(await run(c.id, { pr: 3, verdict: 'ok', sha: SHA, reason: 'r' }, f.gh)).toMatchObject({ isError: true, output: expect.stringMatching(/based on "feat\/2-x", not main/) });
+    expect(f.statuses()).toHaveLength(0);
   });
 
   it('fail sets failure with the reason, without CI or sha', async () => {

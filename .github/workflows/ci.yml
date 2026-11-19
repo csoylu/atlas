@@ -1,7 +1,8 @@
 name: CI
 
 # One push to main = one changelog entry = one release (docs/updater.md, card #123; one file per PR in changelog/, #223).
-#  - pull requests: typecheck + tests only (the QA gate, scripts/pr/validate.mjs, checks the PR's changelog entry).
+#  - pull requests: the job `test` checks the PR's changelog entry (one new file in changelog/, no other changed: the
+#    repo's rule, run by the repo, #238; the review gate in the app only reads this job), then typecheck + tests.
 #  - push to main: the push must add exactly one entry file to changelog/ and change no other; tests; build the Mac
 #    app (arm64 + x64: dmg + zip + SHA256SUMS.txt); tag v<version> and publish a GitHub release whose notes are that
 #    entry, with the whole changelog (generated, never committed) as CHANGELOG.md. No release when a step fails.
@@ -54,10 +55,16 @@ jobs:
     runs-on: macos-latest
     steps:
       - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0 # the changelog order (and so the check below) reads the whole history
       - uses: actions/setup-node@v4
         with:
           node-version: 24
           cache: npm
+      # The repo's own release rule on a PR (#238). HEAD is GitHub's merge of the PR into its base: HEAD^1 = the base.
+      - name: One new changelog entry in this pull request
+        if: github.event_name == 'pull_request'
+        run: node scripts/release/changelog.mjs check HEAD^1 --pr
       - run: npm ci
       - run: npm run typecheck
       - run: npm test

@@ -268,8 +268,12 @@ Statuses: `triage → todo → ready → running → (blocked | review) → done
   - CI green, not validated, not yet reviewed on this head → the reviewer's run starts **in the task's own thread**
     (kind `work`, agent = reviewer, kick « You review this task's pull request… », prompt: review, don't fix). One run
     per head (`reviewed_sha`); a new `task_request_review` clears it. The reviewer validates and merges with
-    the `pr_validate` tool (#216: `scripts/pr/validate.mjs` run in-process with the gate of the task's project: repo,
-    CI job, changelog rule); the merge then moves the card. The reviewer must be a member of the task's project. Retry on an In review card starts the reviewer again.
+    the `pr_validate` tool (#216: `scripts/pr/validate.mjs` run in-process with the gate of the task's project: repo
+    and required CI check); the merge then moves the card. The gate holds only what is true for any repo: base = the
+    repo's default branch, the reviewed head has not moved, no conflict, the required check green, a verdict with a
+    reason. A repo's own rules (Atlas's one changelog entry per PR) are checks its CI runs on the PR (#238), so an
+    installed engine never lags behind a rule changed on main; a red check is named and linked in the refusal and in
+    the builder's note (`card_prs.ci_failed_name`, `ci_failed_url`). The reviewer must be a member of the task's project. Retry on an In review card starts the reviewer again.
     The kick is always appended (`kickAlways`, #221), even when the builder's last tool result leaves a turn owed:
     without it the reviewer got the builder's thread ending on « in review: PR #N waits for @zurich » and carried on
     as the builder.

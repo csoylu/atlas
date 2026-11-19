@@ -118,7 +118,8 @@ with `process.env` directly: take `ctx.env()`.
   from 0.3.0 through history.md then the files in that order (`node scripts/release/changelog.mjs version`; Fixed →
   patch, Added/Changed → minor, Breaking → major; needs the full history, not a shallow clone): never type a number.
   `changelog.mjs full` prints the whole changelog with each version, generated, never committed. CI
-  (`.github/workflows/ci.yml`) refuses a push to main that does not add exactly one entry file or changes another,
+  (`.github/workflows/ci.yml`) checks the rule on every pull request (first step of the job `test`: `changelog.mjs
+  check HEAD^1 --pr` on GitHub's merge commit, #238), refuses a push to main that does not add exactly one entry file or changes another,
   runs the tests, builds the Mac app (arm64 + x64 zip and dmg, SHA256SUMS.txt), tags `v<version>` and publishes the
   GitHub release with that entry as its notes and the full changelog as `CHANGELOG.md`. No release when tests fail.
 - **Every change reaches main through a pull request** (Master, 18 Nov 2026): no direct push to main, for anyone, docs
@@ -140,14 +141,17 @@ with `process.env` directly: take `ctx.env()`.
   (same gate, same code). Atlas moves the task by itself: **merged → Done**; **CI red, a conflict
   or a failed validation → Ready** for the builder, with the reason as a note in the thread; the builder fixes, pushes and calls
   `task_request_review` again. Blocked only ever means "needs Master". When GitHub can't be read (gh logged out,
-  offline) nothing moves; the card says why. The script refuses a base other than main, a head that moved, a conflict
-  with main (the builder rebases), red CI and a PR that does not add exactly one entry file to `changelog/` or changes
-  another changelog file. `--list` shows the PRs still waiting. Master can validate from a terminal too
+  offline) nothing moves; the card says why. The gate (`pr_validate` and the script, same code) refuses a base other
+  than the repo's default branch, a head that moved, a conflict (the builder rebases) and a required CI check that is
+  not green, naming the red check and linking it. **A repo's own rules are checks of that repo, run by its CI on the
+  PR, never code in the gate** (#238): an installed engine reads only CI, so a rule changed on main (the changelog
+  entry format, say) applies at once, without updating the app. A new repo rule = a step in the repo's CI (Atlas: in
+  the job `test`). When CI is red, the builder's note names the failing check and links its log. `--list` shows the PRs still waiting. Master can validate from a terminal too
   (`--as master`). The gate guards against accidents, not misuse: `--as` is a name anyone can type.
 - **Other projects (#216).** The same flow works for any project with a GitHub repo (Datinel: datinel/datinel). The gate
-  comes from the task's project: `repo`, `ciJob` (the check that must be green; empty = every check run on the head
-  green: success, neutral or skipped) and `changelog` (exactly one new entry file in `changelog/`, the rule above).
-  Atlas: csoylu/atlas, `test`, on. A new project: no CI job, changelog off. Set them with `PATCH /api/projects/:id {"ciJob": "…", "changelog": true}`.
+  comes from the task's project: `repo` and `ciJob` (the check that must be green; empty = every check run on the head
+  green: success, neutral or skipped). Atlas: csoylu/atlas, `test`. A new project: no CI job. Set it with
+  `PATCH /api/projects/:id {"ciJob": "…"}`. Nothing in the gate is Atlas-specific: a project's rules live in its CI.
   `task_request_review` refuses a PR of another repo than the task's project's (and a project without a repo). The
   reviewer must be a member of the project (its review runs in its workspace for that project); otherwise nothing
   starts and the card says « review agent @X is not a member of project Y ». The auto-rebase uses the reviewer's clone of

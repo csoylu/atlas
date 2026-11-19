@@ -52,11 +52,9 @@ export interface Project {
   repo: string | null;
   /**
    * PR validation gate (#216): the CI check that must be green on a PR's head before QA validates it; null = every
-   * check run on the head green. Atlas: « test ».
+   * check run on the head green. Atlas: « test ». A repo's own rules (Atlas's changelog entry) run in its CI (#238).
    */
   ciJob: string | null;
-  /** Each PR must add exactly one entry file to changelog/ and change no other changelog file (#223). Atlas: on. */
-  changelog: boolean;
   /** Gets the project's new tasks (triage); always a member. null = nobody triages. */
   lead: string | null;
   /** Hue 0-359 of its mark. */
@@ -83,7 +81,6 @@ export const CreateProject = z.object({
   name: z.string().trim().min(1).max(60),
   repo: RepoName.nullable().default(null),
   ciJob: CiJob.default(null),
-  changelog: z.boolean().default(false),
   lead: z.string().min(1).nullable().default(null),
   /** Agents; the lead is added if missing. */
   members: z.array(z.string().min(1)).default([]),
@@ -98,7 +95,6 @@ export const UpdateProject = z
     name: z.string().trim().min(1).max(60),
     repo: RepoName.nullable(),
     ciJob: CiJob,
-    changelog: z.boolean(),
     lead: z.string().min(1).nullable(),
     /** The whole member list (the lead is added if missing). */
     members: z.array(z.string().min(1)),
