@@ -1,4 +1,5 @@
 import { randomUUID } from 'node:crypto';
+import type { GhPr } from '../src/prs.ts';
 import type { ModelRequest, ModelResponse, OnDelta, Provider } from '../src/providers/types.ts';
 
 export const STEPS = 4;
@@ -22,3 +23,17 @@ export class SlowProvider implements Provider {
     };
   }
 }
+
+/** A pull request whose CI is red (#263): the Review run sends its task back to the builder. */
+export const redPr = async (): Promise<GhPr> => ({
+  state: 'open',
+  mergeSha: null,
+  headSha: 'c7c7c7c7c7c',
+  branch: 'feat/7',
+  base: 'main',
+  mergeable: true,
+  ci: 'failure',
+  qa: null,
+  qaDescription: null,
+  ciFailed: { name: 'test', url: 'https://github.com/crash/crash/actions/runs/7' },
+});

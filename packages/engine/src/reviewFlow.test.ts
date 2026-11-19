@@ -30,13 +30,13 @@ describe('the default Review workflow (#263)', () => {
     expect(w).toMatchObject({ name: 'Review', enabled: true, origin: 'review', projectId: 'atlas' });
     // Seven steps in three columns, « Back to the builder » alone on the bottom row.
     expect(layout(e, w.id)).toEqual([
-      ['trigger', 'trigger', 40, 24],
-      ['ci', 'wait', 272, 24],
-      ['checks', 'condition', 504, 24],
-      ['review', 'agent', 40, 232],
-      ['merge', 'action', 272, 232],
-      ['done', 'action', 504, 232],
-      ['back', 'action', 40, 440],
+      ['trigger', 'trigger', 40, 80],
+      ['ci', 'wait', 272, 80],
+      ['checks', 'condition', 504, 80],
+      ['review', 'agent', 40, 288],
+      ['merge', 'action', 272, 288],
+      ['done', 'action', 504, 288],
+      ['back', 'action', 40, 496],
     ]);
     expect(w.edges).toEqual(reviewGraph().edges);
     expect(w.nodes.find((n) => n.id === 'trigger')!.config).toMatchObject({ kind: 'task', event: 'review_requested', maxRunsPerHour: REVIEW_LOOP_GUARD });

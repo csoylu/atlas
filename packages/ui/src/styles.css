@@ -2660,6 +2660,7 @@ button.wfl-ghead:hover { color: var(--text); background: var(--hover); }
 .wf-phone .wf-off { margin: 0; }
 .wf-phone .wf-h { margin-top: 8px; }
 .wf-phone-steps { display: flex; flex-direction: column; gap: 8px; }
+.wf-phone-reset { display: flex; justify-content: flex-start; margin-top: 4px; }
 .wf-phone .wf-node { position: relative; width: auto; cursor: default; user-select: text; touch-action: auto; }
 .wf-phone .wf-outs { flex-direction: column; align-items: flex-start; gap: 2px; }
 .wf-phone .wf-out { padding: 0; display: flex; gap: 6px; }

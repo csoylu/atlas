@@ -35,7 +35,8 @@ export const BACK_NOTE = '{{last.title}}: {{last.exit}} ({{last.summary}}). Back
 
 /** Positions (Master's approved layout, design v47): three columns, « Back to the builder » alone on the bottom row. */
 const COLX = [40, 272, 504];
-const ROWS = [24, 232, 440];
+// The first row at y 80, like a new workflow's: the canvas's « Add step » bar sits over the top 70 px.
+const ROWS = [80, 288, 496];
 const at = (c: number, r: number) => ({ x: COLX[c]!, y: ROWS[r]! });
 
 /** The seven steps and their links, as a fresh project gets them and « Reset to default » restores them. */
