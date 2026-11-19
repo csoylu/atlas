@@ -10,6 +10,7 @@ import { VoiceLoop, VoiceModels, defaultModelsDir, missingModels, type LoopMetri
 import { startEngine, type Engine } from './index.ts';
 import { FakeProvider } from './providers/fake.ts';
 import type { ModelRequest } from './providers/types.ts';
+import { eventually } from '../test/kit/index.ts';
 
 const FIXTURES = join(import.meta.dirname, '../../voice/test/fixtures');
 const wav = (name: string) => sherpa.readWave(join(FIXTURES, `${name}.wav`), false).samples;
@@ -314,19 +315,24 @@ describe.skipIf(!haveModels)('voice loop end to end (WAV fixtures, fake provider
 
   it('#52: a card report during a spoken turn is queued, then said after the reply, once', async () => {
     const long = 'Here is the full report. The first card is about the login page. The second card is about billing.';
-    const { engine, orb, loop } = await setup([text(long), text('Card twelve is closed.')], ':memory:', 1, { quietSeconds: 0.3 });
+    const { engine, orb, loop, announced } = await setup([text(long)], ':memory:', 1, { quietSeconds: 0.3 });
     const chatId = engine.voiceChat!.id();
     const card = engine.kanban.create({ title: 'Report me', status: 'todo' }, 'atlas', chatId);
+    const said = `Task ${card.number} is closed: Report me.`;
     await say(loop, 'wake-daniel-one-breath', 30);
     // the voice turn's run is over (its text all streamed), Atlas is still speaking it
-    await until('the reply streamed', () => loop.state === 'speaking' && !engine.kanban.get(chatId).working && engine.runner.runs(chatId)[0]?.status === 'done');
+    await eventually(() => loop.state === 'speaking' && !engine.kanban.get(chatId).working && engine.runner.runs(chatId)[0]?.status === 'done', { timeout: 20_000, what: 'the reply streamed, still speaking' });
+    const spokenBefore = orb.spoken.length;
     engine.kanban.update(card.id, { status: 'closed' }, 'atlas');
-    await until('the report answered', () => engine.runner.runs(chatId).length === 2 && engine.runner.runs(chatId)[0]!.status === 'done');
-    expect(loop.state).toBe('speaking'); // not cut: queued
-    await until('the report spoken', () => orb.spoken.includes('Card twelve is closed.') && loop.state === 'listening', 30_000);
+    // the task note is in the chat (#143: it wakes no agent, so the voice says the note itself)
+    expect(announced).toEqual([said]);
+    expect(loop.state).toBe('speaking'); // not cut: queued behind the reply
+    expect(orb.spoken.length).toBe(spokenBefore);
+    await eventually(() => orb.spoken.includes(said) && loop.state === 'listening', { timeout: 30_000, what: 'the report spoken after the reply' });
     const turn = ['Here is the full report.', 'The first card is about the login page.', 'The second card is about billing.'];
-    expect(orb.spoken).toEqual([...turn, 'Card twelve is closed.']);
+    expect(orb.spoken).toEqual([...turn, said]); // after the reply, once
     expect(orb.cut).toEqual([]);
+    expect(engine.runner.runs(chatId)).toHaveLength(1); // no agent turn for the note
   }, 90_000);
 
   it('#52: Esc stops an announcement and drops the queue; barge-in too', async () => {
