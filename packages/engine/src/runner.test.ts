@@ -377,7 +377,8 @@ describe('context management (design §8)', () => {
     });
     const fake = new FakeProvider(script);
     const { engine } = await setup(fake);
-    engine.models.update(engine.agents.get('atlas').modelId, { contextWindow: 24_000 });
+    // The tool schemas count in the window: small enough to prune, large enough that pruning (not a summary) reaches the pair.
+    engine.models.update(engine.agents.get('atlas').modelId, { contextWindow: 33_000 });
     const card = engine.kanban.create({ title: 'Search and work', assignee: 'atlas' }, 'user');
     engine.kanban.appendMessage(card.id, 'user', 'user', text('look it up, then run the steps'));
     engine.runner.wake(card.id);
