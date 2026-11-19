@@ -9,6 +9,7 @@ import RetryReporter from './scripts/test/retryReporter.ts';
 const include = ['packages/*/src/**/*.test.ts', 'packages/*/test/**/*.test.ts', 'apps/*/src/**/*.test.ts', 'scripts/**/*.test.ts'];
 const slow = [
   'packages/engine/test/crash.test.ts',
+  'packages/engine/test/projects-crash.test.ts',
   'packages/engine/test/screenshot.chrome.test.ts',
   'packages/voice/**/*.test.ts',
   'apps/desktop/src/voice.test.ts',
