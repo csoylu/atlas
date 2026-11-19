@@ -74,6 +74,20 @@ jobs:
       - run: npm ci
       - run: npm run typecheck
       - run: npm test
+      # The durability test (design §6, rule 2, #254): engines SIGKILLed at random instants, then every run must resume
+      # and finish consistently. 30 kills instead of 50 keeps it around a minute. The other slow suites stay local: the
+      # voice tests need models CI does not have (anyone touching voice runs `npm run test:full` before review).
+      - name: Crash test (30 SIGKILLs)
+        env:
+          CRASH_KILLS: '30'
+        run: npx vitest run --project slow packages/engine/test/crash.test.ts
+      # The screenshot tool against the runner's Google Chrome and the built UI (#133). The test skips itself without
+      # Chrome or a UI build, so both are checked first: a skip here would hide a regression.
+      - name: Screenshot test (real Chrome)
+        run: |
+          test -x "/Applications/Google Chrome.app/Contents/MacOS/Google Chrome" || { echo "::error::Google Chrome is missing on the runner"; exit 1; }
+          npm -w @atlas/ui run build
+          npx vitest run --project slow packages/engine/test/screenshot.chrome.test.ts
 
   # Each Mac chip on its own runner: native modules (better-sqlite3, sharp, sherpa-onnx) install for the runner's chip.
   mac:

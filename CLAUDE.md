@@ -39,7 +39,11 @@ apps/desktop      Electron main process: opens the UI window. Dev: loads Vite (:
    model key; every tool output passes the redactor (`Secrets.redact`, values → `[secret NAME]`) before it is stored or
    sent to a model. Never spawn an agent command or store a tool output around those two (design §10b).
 6. **Tests:** `vitest`. Every engine module has tests; the restart test (rule 2) and the agent-loop test with a fake
-   provider must stay green. `npm run typecheck && npm test` before every commit (`npm test` = fast project, ~10 s; `npm run test:full` also runs the slow project: real voice models + the 50-SIGKILL crash test, `CRASH_KILLS=n` shortens it. Run it when you touch voice, the store, runs or leases).
+   provider must stay green. `npm run typecheck && npm test` before every commit (`npm test` = fast project, ~10 s; `npm run test:full` also runs the slow project: real voice models + the 50-SIGKILL crash test + the real-Chrome screenshot test, `CRASH_KILLS=n` shortens the crash test. Run it when you touch voice, the store, runs or leases).
+   **What runs where** (#254): CI's `test` job runs the fast project, the crash test (`CRASH_KILLS=30`) and the
+   real-Chrome screenshot test on every PR and push to main. The voice suites run **only locally** (CI has no voice
+   models; they skip without them): anyone touching voice runs `npm run test:full` before asking for review and states
+   the result in the `task_request_review` summary.
 7. Shared types go in `packages/shared`; the UI never imports engine code directly, only the API.
 
 ## UI type rules
