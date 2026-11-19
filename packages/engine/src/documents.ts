@@ -373,18 +373,15 @@ export class Documents {
 
   /**
    * Canvases are gone (#120): each canvas still in the archive table becomes an html page in its author's workspace
-   * (pages/canvases/…, folder « Canvases »), once. Its date stays the canvas's, so the Library's recent list is not
-   * flooded. Returns how many were converted.
+   * (pages/canvases/…, folder « Canvases »), once: canvases.converted_at marks it (#253), so a page deleted afterwards
+   * is not made again. Its date stays the canvas's, so the Library's recent list is not flooded. Returns how many.
    */
   convertCanvases(): number {
-    let todo: { id: string; name: string; nodes: string; updated_by: string; updated_at: string }[];
-    try {
-      todo = this.db
-        .prepare('SELECT c.id, c.name, c.nodes, c.updated_by, c.updated_at FROM canvases c WHERE NOT EXISTS (SELECT 1 FROM documents d WHERE d.from_canvas = c.id) ORDER BY c.updated_at')
-        .all() as typeof todo;
-    } catch {
-      return 0; // no archive table (a fresh database)
-    }
+    // converted_at, not the page's existence, says a canvas is done (#253): a converted page deleted from the Library
+    // stays deleted.
+    const todo = this.db
+      .prepare('SELECT id, name, nodes, updated_by, updated_at FROM canvases WHERE converted_at IS NULL ORDER BY updated_at')
+      .all() as { id: string; name: string; nodes: string; updated_by: string; updated_at: string }[];
     if (!todo.length) return 0;
     const agents = (this.db.prepare('SELECT id FROM agents ORDER BY rowid').all() as { id: string }[]).map((a) => a.id);
     if (!agents.length) return 0;
@@ -406,9 +403,16 @@ export class Documents {
       const full = inside(root, rel);
       mkdirSync(dirname(full), { recursive: true });
       writeFileSync(full, html);
-      const doc = this.record(agentId, project, rel, html, stampOf(full).stamp, c.updated_by, null, c.name).doc;
-      this.db.prepare('UPDATE documents SET folder_id = ?, from_canvas = ?, updated_at = ? WHERE id = ?').run(folder.id, c.id, c.updated_at, doc.id);
-      this.db.prepare('UPDATE document_versions SET updated_at = ? WHERE doc_id = ?').run(c.updated_at, doc.id);
+      // The page's row and the marker commit together: a crash before leaves neither, and the next start converts it.
+      const doc = this.db
+        .transaction(() => {
+          const d = this.record(agentId, project, rel, html, stampOf(full).stamp, c.updated_by, null, c.name).doc;
+          this.db.prepare('UPDATE documents SET folder_id = ?, from_canvas = ?, updated_at = ? WHERE id = ?').run(folder.id, c.id, c.updated_at, d.id);
+          this.db.prepare('UPDATE document_versions SET updated_at = ? WHERE doc_id = ?').run(c.updated_at, d.id);
+          this.db.prepare('UPDATE canvases SET converted_at = ? WHERE id = ?').run(new Date().toISOString(), c.id);
+          return d;
+        })
+        .immediate();
       this.emitDoc(doc.id);
       n++;
     }

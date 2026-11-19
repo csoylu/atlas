@@ -282,7 +282,7 @@ describe('store', () => {
     const row = (t: string) => db.prepare(`SELECT * FROM ${t}`).get() as Record<string, unknown>;
     const keep = (r: Record<string, unknown>) => Object.fromEntries(Object.entries(r).filter(([k]) => !gone.includes(k)));
     const rows = { cards: keep(row('cards')), card_prs: keep(row('card_prs')) };
-    expect(migrate(db)).toEqual(['0057_drop_merge_queue.sql']);
+    expect(migrate(db)).toContain('0057_drop_merge_queue.sql');
     expect(cols('cards')).toEqual(before.cards.filter((c) => !gone.includes(c)));
     expect(cols('card_prs')).toEqual(before.card_prs.filter((c) => !gone.includes(c)));
     expect({ cards: row('cards'), card_prs: row('card_prs') }).toEqual(rows);
@@ -321,5 +321,43 @@ describe('store', () => {
     db.prepare("UPDATE cards SET status = 'running' WHERE id = 'c_3'").run();
     expect((db.prepare("SELECT status_since FROM cards WHERE id = 'c_3'").get() as { status_since: string }).status_since > '2026-01-02T08:00:00Z').toBe(true);
     db.close();
+  });
+
+  it('0058 canvas marker: where the conversion already ran every canvas is marked (a deleted page stays deleted); before #120 none is', () => {
+    const upTo0058 = () => {
+      const db = new Database(':memory:');
+      db.exec('CREATE TABLE schema_migrations (name TEXT PRIMARY KEY, applied_at TEXT NOT NULL)');
+      const dir = join(dirname(fileURLToPath(import.meta.url)), 'migrations');
+      db.pragma('foreign_keys = OFF');
+      for (const f of readdirSync(dir).filter((f) => /^\d{4}_.+\.sql$/.test(f) && f < '0058').sort()) {
+        db.exec(readFileSync(join(dir, f), 'utf8'));
+        db.prepare('INSERT INTO schema_migrations (name, applied_at) VALUES (?, ?)').run(f, 'x');
+      }
+      db.pragma('foreign_keys = ON');
+      const cv = db.prepare("INSERT INTO canvases (id, name, nodes, version, updated_by, updated_at) VALUES (?, ?, '[]', 1, 'paris', '2026-11-17T22:00:00Z')");
+      cv.run('cv_kept', 'Kept');
+      cv.run('cv_deleted', 'Deleted');
+      return db;
+    };
+    const marked = (db: Database.Database) => db.prepare('SELECT id FROM canvases WHERE converted_at IS NOT NULL ORDER BY id').all();
+    // Converted at a start before #253: cv_kept has its page, cv_deleted's page was deleted from the Library.
+    const ran = upTo0058();
+    ran
+      .prepare("INSERT INTO documents (id, agent_id, path, kind, title, version, updated_by, updated_at, from_canvas, project_id) VALUES ('doc_1', 'paris', 'pages/canvases/kept.html', 'html', 'Kept', 1, 'paris', 'x', 'cv_kept', 'atlas')")
+      .run();
+    expect(migrate(ran)).toContain('0058_canvas_converted.sql');
+    expect(marked(ran)).toEqual([{ id: 'cv_deleted' }, { id: 'cv_kept' }]);
+    ran.close();
+    // Every converted page deleted, the « Canvases » folder left: the conversion ran too.
+    const folderOnly = upTo0058();
+    folderOnly.prepare("INSERT INTO folders (id, name, created_at, project_id) VALUES ('fld_1', 'Canvases', 'x', 'atlas')").run();
+    migrate(folderOnly);
+    expect(marked(folderOnly)).toHaveLength(2);
+    folderOnly.close();
+    // Straight from before #120: nothing converted yet, so nothing is marked and the next start converts both.
+    const never = upTo0058();
+    migrate(never);
+    expect(marked(never)).toEqual([]);
+    never.close();
   });
 });
