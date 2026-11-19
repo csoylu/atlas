@@ -460,6 +460,33 @@ const WORKFLOW_OFF = { ...WORKFLOW, id: 'wf_uicheckoff', name: 'Weekly funding-r
   nodes: [{ id: 'trigger', kind: 'trigger', x: 40, y: 120, config: { kind: 'time', repeat: 'cron', cron: '0 9 * * 1', at: null, timezone: 'Europe/Paris' } }, { id: 'step1', kind: 'agent', x: 300, y: 120, config: { title: 'Weekly funding-rate digest', agentId: 'atlas', prompt: 'Digest', newTaskEachRun: true } }],
   edges: [{ from: 'trigger', exit: 'start', to: 'step1' }] };
 
+// Workflows v2 stage 1 (#259): a PR-event workflow whose run is on the modal's task, what the run knows, the fields a
+// step can insert, and a workflow the loop guard turned off (the list's « stopped » line, the canvas banner).
+const WF_EV_RUN = {
+  id: 'wr_uicheckev', workflowId: 'wf_uicheckev', number: 7, state: 'running', trigger: 'pr', event: 'ci_finished', reason: null,
+  subject: { cardId: modalCard.id, prUrl: 'https://github.com/csoylu/atlas/pull/245' }, startedAt: wfAgo(3), endedAt: null,
+  steps: [WF_STEP(1, 'trigger', 'trigger', 1, 'done', 'start', null, 'CI turned red on PR #245', 3), WF_STEP(2, 'fix', 'agent', 1, 'running', null, modalCard.id, null, 2)],
+};
+const WORKFLOW_EV = {
+  ...WORKFLOW, id: 'wf_uicheckev', name: 'Send red CI back to the builder', projectId: 'atlas', lastRun: WF_EV_RUN, recentRuns: ['done', 'failed', 'running'],
+  nodes: [
+    { id: 'trigger', kind: 'trigger', x: 40, y: 120, config: { kind: 'pr', event: 'ci_finished', repo: '', base: 'main', result: 'failure', status: [], assignee: [], maxRunsPerHour: 5 } },
+    { id: 'fix', kind: 'agent', x: 300, y: 120, config: { title: 'Fix the build', agentId: 'munih', prompt: 'CI is red on {{pr.url}} for {{task.ref}} « {{task.title}} »: fix it.', newTaskEachRun: false } },
+  ],
+  edges: [{ from: 'trigger', exit: 'start', to: 'fix' }],
+};
+const WORKFLOW_LOOP = {
+  ...WORKFLOW_EV, id: 'wf_uicheckloop', name: 'Re-triage reopened tasks', enabled: false, lastRun: null, recentRuns: ['done', 'done', 'done', 'done', 'done', 'done'],
+  lastError: 'loop guard: 6 runs on #245 in the last hour (at most 5)',
+  nodes: [{ ...WORKFLOW_EV.nodes[0], config: { kind: 'task', event: 'status_changed', from: [], to: ['ready'], status: [], assignee: [], maxRunsPerHour: 5 } }, WORKFLOW_EV.nodes[1]],
+};
+const WF_CONTEXT = { runId: WF_EV_RUN.id, fields: {
+  'project.name': 'Atlas', 'task.ref': '#245', 'task.title': modalCard.title, 'task.status': modalCard.status, 'pr.url': 'https://github.com/csoylu/atlas/pull/245',
+  'pr.number': '245', 'pr.branch': 'feat/259-' + 'a_very_long_unbroken_branch_name_'.repeat(2), 'pr.sha': '8a7bae6', 'event.name': 'ci_finished', 'event.by': 'github',
+} };
+const WF_FIELDS = Object.entries(WF_CONTEXT.fields).map(([field, example]) => ({ field, label: field.replace('.', ' '), optional: field.startsWith('pr.'), example }));
+const TASK_WORKFLOWS = [{ workflowId: WORKFLOW_EV.id, workflowName: WORKFLOW_EV.name, runId: WF_EV_RUN.id, runNumber: 7, state: 'running', step: { nodeId: 'fix', title: 'Fix the build', state: 'running', cardId: modalCard.id } }];
+
 const MEMORY_CHANGES = [
   change(9403, 9301, 'pin', 20, { text: MEMORIES[0].text, kind: 'rule', status: 'active', pinned: false }),
   change(9402, 9303, 'update', 90, { text: 'npm is not on PATH', kind: 'fact', status: 'active', pinned: false }),
@@ -523,6 +550,7 @@ const SCREENS = [
   { name: 'chat-tools-live', hash: `#/chat/${chat.id}`, ready: '.chat-row.steps.running', tools: true, keys: ['.chat-row.steps.running > .chat-row-line .chat-row-verb', '.chat-row.plan .chat-row-obj', '.chat-row.plan .todo-list li'] },
   // A task opened anywhere shows in the side panel on the right (#222): from the board (kanban, then list), the inbox,
   // and over the chat (the pinned fixture tasks stay in view).
+  { name: 'thread-workflows', hash: `#/board?card=${modalCard.id}`, ready: '.thread-panel .cm-wfnow', taskWorkflows: true, then: { js: `document.querySelector('.thread-panel .cm-wfnow')?.scrollIntoView({ block: 'center' });`, ready: '.thread-panel .cm-wfnow' }, keys: ['.thread-panel .cm-title', '.cm-wfnow .wf-openrun'] },
   { name: 'task-board', hash: `#/board?card=${modalCard.id}`, ready: '.thread-panel', keys: ['.thread-panel .cm-title', '.thread-panel .cm-pill', '.thread-panel .cm-h', '.thread-panel .cm-foot button', '.card.open .card-title'] },
   { name: 'task-list', hash: `#/board?card=${modalCard.id}`, ready: '.thread-panel', then: { js: `const was = localStorage.getItem('atlas.board.view'); document.querySelector('button[title="Board or list"]').click(); for (let i = 0; i < 20 && ![...document.querySelectorAll('.pop-row')].some((r) => r.textContent.trim() === 'List'); i++) await new Promise((r) => setTimeout(r, 50)); [...document.querySelectorAll('.pop-row')].find((r) => r.textContent.trim() === 'List').click(); if (was === null) localStorage.removeItem('atlas.board.view'); else localStorage.setItem('atlas.board.view', was); document.querySelector('.list-row.open')?.scrollIntoView({ block: 'center' });`, ready: '.board-list .list-row.open' }, keys: ['.thread-panel .cm-title', '.thread-panel .cm-h', '.thread-panel .cm-foot button', '.list-row.open'] },
   { name: 'task-inbox', hash: `#/inbox?card=${modalCard.id}`, ready: '.thread-panel', inbox: true, keys: ['.thread-panel .cm-title', '.thread-panel .cm-h', '.thread-panel .cm-foot button'] },
@@ -581,6 +609,11 @@ const SCREENS = [
   { name: 'workflow-edit', hash: '#/workflows/wf_uicheck', ready: '.wf-node, .wf-phone', workflows: true, then: { js: `document.querySelector('.wf-plane .wf-node[data-id="validate"]')?.dispatchEvent(new PointerEvent('pointerdown', { bubbles: true, button: 0, isPrimary: true })); document.querySelector('.wf-plane .wf-node[data-id="validate"]')?.dispatchEvent(new PointerEvent('pointerup', { bubbles: true, button: 0, isPrimary: true })); await new Promise((r) => setTimeout(r, 200)); document.body.dataset.wfSel = '1';`, ready: 'body[data-wf-sel]' }, keys: ['.wf-title', '.wf-kind', '.wf-out', '.wf-side .sd-head b', '.wf-side .field > span'] },
   { name: 'workflow-runs', hash: '#/workflows/wf_uicheck/runs/wr_uicheck2', ready: '.wf-run, .wf-phone', workflows: true, keys: ['.wf-title', '.wf-run .st-chip', '.wf-steps-log .t', '.wf-runs button'] },
   { name: 'workflow-off', hash: '#/workflows/wf_uicheckoff', ready: '.wf-off', workflows: true, keys: ['.wf-off', '.wf-title'] },
+  { name: 'workflow-trigger', hash: '#/workflows/wf_uicheckev', ready: '.wf-node, .wf-phone', workflows: true, then: { js: `document.querySelector('.wf-plane .wf-node[data-id="trigger"]')?.dispatchEvent(new PointerEvent('pointerdown', { bubbles: true, button: 0, isPrimary: true })); document.querySelector('.wf-plane .wf-node[data-id="trigger"]')?.dispatchEvent(new PointerEvent('pointerup', { bubbles: true, button: 0, isPrimary: true })); await new Promise((r) => setTimeout(r, 200)); document.body.dataset.wfSel = '1';`, ready: 'body[data-wf-sel]' }, keys: ['.wf-title', '.wf-out', '.wf-side .sd-head b'] },
+  { name: 'workflow-fields', hash: '#/workflows/wf_uicheckev', ready: '.wf-node, .wf-phone', workflows: true, then: { js: `const n = document.querySelector('.wf-plane .wf-node[data-id="fix"]'); if (n) { n.dispatchEvent(new PointerEvent('pointerdown', { bubbles: true, button: 0, isPrimary: true })); n.dispatchEvent(new PointerEvent('pointerup', { bubbles: true, button: 0, isPrimary: true })); for (let i = 0; i < 40 && !document.querySelector('.wf-ins > button'); i++) await new Promise((r) => setTimeout(r, 50)); document.querySelector('.wf-ins > button')?.click(); for (let i = 0; i < 40 && !document.querySelector('.wf-picker'); i++) await new Promise((r) => setTimeout(r, 50)); } document.body.dataset.wfSel = '1';`, ready: 'body[data-wf-sel]' }, keys: ['.wf-title', '.wf-side .sd-head b'] },
+  { name: 'workflow-run-pr', hash: '#/workflows/wf_uicheckev/runs/wr_uicheckev', ready: '.wf-run, .wf-phone', workflows: true, keys: ['.wf-title', '.wf-runs button'] },
+  { name: 'workflow-loop', hash: '#/workflows/wf_uicheckloop', ready: '.wf-node, .wf-phone', workflows: true, keys: ['.wf-title'] },
+  { name: 'workflow-new', hash: '#/workflows', ready: '.wf-row', workflows: true, then: { js: `[...document.querySelectorAll('button')].find((b) => b.textContent.trim() === 'New workflow')?.click(); for (let i = 0; i < 40 && !document.querySelector('.wf-newdlg'); i++) await new Promise((r) => setTimeout(r, 50)); [...document.querySelectorAll('.wf-newdlg [role=radio]')].find((b) => /Task event/.test(b.textContent))?.click();`, ready: '.wf-newdlg' }, keys: ['.wf-newdlg h2'] },
   { name: 'settings-secrets', hash: '#/settings/secrets', ready: '.sec-row', secrets: SECRET_STATUS, keys: ['.settings-group-title', '.sec-grant.all', '.sec-desc', '.sec-row .badge', '.sec-row .model-actions button', '.section-head h2'] },
   { name: 'settings-secrets-add', hash: '#/settings/secrets', ready: '.sec-row', secrets: SECRET_STATUS, then: { js: `[...document.querySelectorAll('.model-row.add')].find((b) => b.textContent.includes('Add a secret')).click(); await new Promise((r) => setTimeout(r, 100)); document.querySelector('.segmented [role=radio]:nth-child(2)').click(); await new Promise((r) => setTimeout(r, 100)); document.querySelector('.sec-form').scrollIntoView({ block: 'start' });`, ready: '.sec-pick label' }, keys: ['.sec-form .field', '.segmented button', '.sec-pick label', '.sec-form .actions button'] },
   { name: 'settings-secrets-locked', hash: '#/settings/secrets', ready: '.sec-lock', secrets: SECRET_LOCKED, keys: ['.sec-lock h3', '.sec-lock .sec-paused', '.update-badge-label', '.update-badge-v'] },
@@ -667,7 +700,7 @@ handlers.set('Fetch.requestPaused', async ({ requestId, request }) => {
       if (!card) return await send('Fetch.continueRequest', { requestId });
       switch (fx[2]) {
         case undefined: return await json(screen?.taskImages ? withTaskImages(card) : card);
-        case 'messages': case 'runs': case 'tool-calls': return await json([]);
+        case 'messages': case 'runs': case 'tool-calls': case 'workflows': return await json([]);
         case 'timeline': return await json({ runs: [], rewinds: [], summary: null });
         case 'usage': return await json({ calls: 0, input: 0, output: 0, cached: 0, lastInput: null, lastModelId: null, contextWindow: null, plan: null });
         default: return await send('Fetch.continueRequest', { requestId });
@@ -689,14 +722,18 @@ handlers.set('Fetch.requestPaused', async ({ requestId, request }) => {
     if (request.method === 'GET' && /^\/api\/agents\/[^/]+\/memory-budget$/.test(url.pathname) && screen?.memory) return await json({ used: 1509, limit: 3000 });
     if (screen?.secrets && request.method === 'GET' && url.pathname === '/api/secrets') return await json(secretList(screen.secrets));
     if (screen?.secrets && request.method === 'GET' && url.pathname === '/api/secrets/status') return await json(screen.secrets);
+    if (request.method === 'GET' && url.pathname === `/api/cards/${encodeURIComponent(modalCard.id)}/workflows` && screen?.taskWorkflows) return await json(TASK_WORKFLOWS);
     if (screen?.workflows && request.method === 'GET') {
-      const W = [WORKFLOW, WORKFLOW_OFF];
+      const W = [WORKFLOW, WORKFLOW_OFF, WORKFLOW_EV, WORKFLOW_LOOP];
       if (url.pathname === '/api/workflows') return await json([...W, ...(await get('/workflows'))]);
       const one = W.find((w) => url.pathname === `/api/workflows/${w.id}`);
       if (one) return await json(one);
       if (url.pathname === '/api/workflows/wf_uicheck/runs') return await json([WF_RUN, WF_RUN1].map(({ steps, ...r }) => r));
       if (url.pathname === '/api/workflows/wf_uicheckoff/runs') return await json([]);
-      const run = [WF_RUN, WF_RUN1].find((r) => url.pathname === `/api/workflow-runs/${r.id}`);
+      if (url.pathname === '/api/workflows/wf_uicheckev/runs' || url.pathname === '/api/workflows/wf_uicheckloop/runs') return await json([WF_EV_RUN].map(({ steps, ...r }) => r));
+      if (/^\/api\/workflows\/[^/]+\/fields$/.test(url.pathname)) return await json(WF_FIELDS);
+      if (/^\/api\/workflow-runs\/[^/]+\/context$/.test(url.pathname)) return await json({ ...WF_CONTEXT, runId: url.pathname.split('/')[3] });
+      const run = [WF_RUN, WF_RUN1, WF_EV_RUN].find((r) => url.pathname === `/api/workflow-runs/${r.id}`);
       if (run) return await json(run);
     }
     if (request.method === 'GET' && url.pathname === '/api/inbox' && screen?.inbox) return await json(INBOX);

@@ -446,14 +446,24 @@ function NewWorkflow(props: { project: string | null; agents: Agent[]; onCancel(
       .finally(() => setSaving(false));
   };
   return (
+    <div className="modal-scrim" role="presentation" onMouseDown={(e) => e.target === e.currentTarget && props.onCancel()} onKeyDown={(e) => e.key === 'Escape' && props.onCancel()}>
     <form
-      className="model-row schedule-form wf-new"
-      aria-label="New workflow"
+      className="modal wf-newdlg"
+      role="dialog"
+      aria-modal="true"
+      aria-labelledby="wf-new-title"
       onSubmit={(e) => {
         e.preventDefault();
         if (name.trim()) create();
       }}
     >
+      <div className="wf-new-head">
+        <h2 id="wf-new-title">New workflow</h2>
+        <button type="button" className="sd-btn" aria-label="Close" onClick={props.onCancel}>
+          ×
+        </button>
+      </div>
+      <div className="wf-new-body">
       <div className="form-grid">
         <label className="field grow">
           Name
@@ -475,6 +485,7 @@ function NewWorkflow(props: { project: string | null; agents: Agent[]; onCancel(
       <TriggerPick kind={trigger.kind} global={false} onPick={(k) => setTrigger(blankTrigger(k, trigger))} />
       {(trigger.kind === 'task' || trigger.kind === 'pr') && <EventFields t={trigger} projectId={projectId} agents={props.agents} set={(c) => setTrigger(c as TriggerConfig)} />}
       <RunGets t={trigger} hasProject={!!projectId} />
+      </div>
       <div className="wf-form-foot">
         {trigger.kind !== 'manual' && <span className="wf-sum">It starts off: add its steps, then turn it on.</span>}
         <span className="sp" />
@@ -486,5 +497,6 @@ function NewWorkflow(props: { project: string | null; agents: Agent[]; onCancel(
         </button>
       </div>
     </form>
+    </div>
   );
 }

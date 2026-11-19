@@ -165,7 +165,7 @@ function PromptField(props: { label: string; value: string; placeholder: string;
         />
       </div>
       <div className="wf-ins">
-        <button type="button" className={'ghost small' + (open ? ' on' : '')} aria-expanded={open} onClick={() => setOpen(!open)}>
+        <button type="button" className={'tool' + (open ? ' on' : '')} aria-expanded={open} onClick={() => setOpen(!open)}>
           {'{ }'} Insert a field
         </button>
         <span className="muted">or type {'{{'}</span>

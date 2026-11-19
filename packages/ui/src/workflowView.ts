@@ -191,7 +191,7 @@ export function nodeMeta(n: WorkflowNode, nodes: WorkflowNode[] = []): string {
       return n.config.kind === 'time'
         ? `At set times · ${n.config.timezone}`
         : n.config.kind === 'task' || n.config.kind === 'pr'
-          ? eventText(n.config)
+          ? eventMeta(n.config)
           : 'Run now, from here or a chat';
     case 'agent':
       return n.config.agentId ? `@${n.config.agentId} · ${n.config.newTaskEachRun ? 'new task' : 'one task'}` : 'Pick an agent and a prompt';
@@ -580,6 +580,12 @@ export const FILTER_LABEL: Record<FilterKey, string> = {
 export function filterKeys(t: EventTrigger): FilterKey[] {
   if (t.kind === 'task') return t.event === 'status_changed' ? ['status', 'from', 'assignee'] : ['status', 'assignee'];
   return t.event === 'validated' ? ['repo', 'base', 'result', 'status', 'assignee'] : ['repo', 'base', 'status', 'assignee'];
+}
+
+/** An event trigger's line on the canvas: its kind and its filters in short (« Pull request event · base main »). */
+export function eventMeta(t: EventTrigger): string {
+  const rows = filterRows(t).map((r) => `${FILTER_LABEL[r.key].split(' › ')[1]!.toLowerCase()} ${r.key === 'assignee' ? '@' + r.value : r.value}`);
+  return [t.kind === 'task' ? 'Task event' : 'Pull request event', ...(rows.length ? rows : [t.kind === 'task' ? 'any task' : 'any PR'])].join(' · ');
 }
 
 export function filterRows(t: EventTrigger): FilterRow[] {

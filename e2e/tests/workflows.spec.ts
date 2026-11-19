@@ -20,7 +20,7 @@ test('create a workflow, add and wire a step, Run now: the run finishes with its
     await page.getByRole('button', { name: 'New workflow' }).click();
     await page.getByLabel('Name').fill('Ship it');
     await page.getByRole('radio', { name: /Only by hand/ }).click();
-    await page.getByRole('button', { name: 'Create and open the canvas' }).click();
+    await page.getByRole('button', { name: 'Create and open' }).click();
 
     // The canvas opens with its empty agent step selected.
     await expect.poll(() => page.evaluate(() => location.hash)).toMatch(/^#\/workflows\/wf_/);
@@ -124,6 +124,66 @@ test('a schedule migrated from before workflows shows on the list and runs', asy
     await page.setViewportSize({ width: 390, height: 844 });
     await expect(page.locator('.wf-phone .wf-node')).toHaveCount(2);
     await expect(page.locator('.wf-phone .wf-node').nth(1)).toContainText(/done\s*→\s*ends the run/);
+  } finally {
+    await atlas.stop();
+  }
+});
+
+/** Workflows v2 stage 1 (#259): a task-event workflow made from New workflow; a matching task starts its run, seen on the canvas and in the task. */
+test('a task-event workflow: a new task starts its run, the run shows what started it and the task shows the workflow', async ({ page }) => {
+  const atlas = await TestAtlas.start();
+  try {
+    const errors: string[] = [];
+    page.on('pageerror', (e) => errors.push(e.message));
+    await page.setViewportSize({ width: 1440, height: 900 });
+    await page.goto(atlas.url + '/#/workflows');
+    await page.getByRole('button', { name: 'New workflow' }).click();
+    const dlg = page.getByRole('dialog', { name: 'New workflow' });
+    await dlg.getByLabel('Name').fill('Triage new tasks');
+    await dlg.getByRole('radio', { name: /Task event/ }).click();
+    await dlg.getByRole('radiogroup', { name: 'Event' }).getByRole('radio', { name: 'is created' }).click();
+    await expect(dlg).toContainText('Only if');
+    await expect(dlg).toContainText('The run gets');
+    await dlg.getByRole('button', { name: 'Create and open' }).click();
+    await expect.poll(() => page.evaluate(() => location.hash)).toMatch(/^#\/workflows\/wf_/);
+    const id = (await page.evaluate(() => location.hash)).split('/')[2]!;
+    expect((await get(atlas, `/workflows/${id}`)).nodes[0].config).toMatchObject({ kind: 'task', event: 'created' });
+
+    // Fill the step, with a field from « Insert a field ».
+    const side = page.getByRole('complementary', { name: 'Step' });
+    await side.getByLabel('Title').fill('Triage');
+    await side.getByLabel('Agent').selectOption('atlas');
+    await side.getByLabel('Prompt').fill('Triage ');
+    await side.getByRole('button', { name: /Insert a field/ }).click();
+    await page.getByRole('dialog', { name: 'Insert a field' }).getByRole('option', { name: /^Task title/ }).click();
+    await expect(side.getByLabel('Prompt')).toHaveValue(/Triage \{\{task\.title\}\}/);
+    await expect(side.locator('.wf-mirror mark')).toHaveCount(1);
+    await expect.poll(async () => (await get(atlas, `/workflows/${id}`)).nodes.find((n: any) => n.id === 'step1').config.prompt).toContain('{{task.title}}');
+    await page.locator('.wf-onoff').click();
+    await expect.poll(async () => (await get(atlas, `/workflows/${id}`)).enabled).toBe(true);
+
+    // A new task in its project starts a run. No scripted reply: the step's agent answers without finishing, the run stays open.
+    const card = await (await fetch(atlas.url + '/api/cards', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ title: 'Flaky login', status: 'todo' }) })).json();
+    await expect.poll(async () => (await get(atlas, `/workflows/${id}`)).lastRun?.steps?.length ?? 0, { timeout: 20_000 }).toBe(2);
+    const run = (await get(atlas, `/workflows/${id}`)).lastRun;
+    expect(run).toMatchObject({ trigger: 'task', subject: { cardId: card.id } });
+    expect(['running', 'waiting']).toContain(run.state);
+
+    // Runs: what started it, what it knows, the path on the canvas.
+    await page.goto(atlas.url + `/#/workflows/${id}/runs/${run.id}`);
+    const runs = page.getByRole('complementary', { name: 'Runs' });
+    await expect(runs.locator('.wf-start')).toContainText('is created');
+    await expect(runs.locator('.wf-knows')).toContainText('Flaky login');
+    await expect(page.locator('.wf-edges path[data-edge="trigger:start"]')).toHaveClass(/taken/);
+
+    // The task it runs on lists the workflow, its current step and a link to the run.
+    await page.goto(atlas.url + `/#/board?card=${card.id}`);
+    const now = page.getByRole('region', { name: 'Workflows on this task' });
+    await expect(now).toContainText('Triage new tasks');
+    await expect(now).toContainText('Triage');
+    await now.getByRole('link', { name: /run/i }).first().click();
+    await expect.poll(() => page.evaluate(() => location.hash)).toContain(`#/workflows/${id}/runs/${run.id}`);
+    expect(errors).toEqual([]);
   } finally {
     await atlas.stop();
   }
