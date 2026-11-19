@@ -29,10 +29,10 @@ test('board flow: In review with its PR, failed → Ready with the reason, merge
     await page.setViewportSize({ width: 1440, height: 900 });
     await page.goto(`${atlas.url}/#/board`);
     const tile = page.locator('article.card', { hasText: 'Workflows engine' });
-    await expect(tile.locator('.prc-link')).toHaveText('PR #41');
-    await expect(tile.locator('.prc-link')).toHaveAttribute('href', URL);
+    // #266: one pill per PR with its worst state; the reviewer's name is in the note and the task view.
+    await expect(tile.locator('.pr-pill')).toHaveText('PR #41 · CI running');
+    await expect(tile.locator('.pr-pill')).toHaveAttribute('href', URL);
     await expect(tile).toContainText('QA starts when CI is green');
-    await expect(tile.locator('.rv-face')).toHaveAttribute('title', 'reviewer @zurich');
     await expect(page.getByText(/^Needs you/).first()).toHaveText('Needs you'); // no count: in review is not for you
     await page.screenshot({ path: join(SHOTS, 'review-1440.png') });
 
@@ -46,7 +46,7 @@ test('board flow: In review with its PR, failed → Ready with the reason, merge
     await atlas.engine.prs.poll();
     // Back to Ready for atlas (the dispatcher then starts it again: the scripted builder just answers).
     await expect.poll(() => atlas.engine.db.prepare("SELECT payload FROM card_events WHERE card_id = ? AND kind = 'status' ORDER BY id DESC").all(task.id).map((r) => JSON.parse((r as { payload: string }).payload).to)).toContain('ready');
-    await expect(page.locator('article.card', { hasText: 'Workflows engine' }).locator('.rv-face')).toHaveCount(0);
+    await expect(page.locator('article.card', { hasText: 'Workflows engine' }).locator('.pr-pill')).toHaveText('PR #41 · QA failed'); // back in Ready: the pill says why
     await page.goto(`${atlas.url}/#/board?card=${task.id}`);
     await expect(page.getByText('PR #41: Validation failed (@zurich): zurich: restart test red', { exact: false }).first()).toBeVisible();
     await page.screenshot({ path: join(SHOTS, 'failed-1440.png') });

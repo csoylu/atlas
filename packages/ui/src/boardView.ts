@@ -35,19 +35,22 @@ export function filterCount(f: BoardFilter): number {
 }
 
 /**
- * The card's one line under the title: why it is blocked, else why it is stuck (#237: « In review for 2 h: CI is green,
- * no review is running », `stuck`), else why it isn't running. Null when it is moving.
+ * The card's one note under its marks (redesign « Tasks », #266), or null when it is moving: a stuck task says why
+ * (#237, `stuck`), a blocked one what it needs from you (« Needs your answer », the question as tooltip), a task
+ * waiting on its parents « waits for #61, #62 », anything else the engine's « why isn't it moving » as it is.
  */
-export function whyLine(c: Pick<Card, 'status' | 'block' | 'waiting'> & Partial<Pick<Card, 'stall' | 'statusSince'>>, now = Date.now()): { text: string; blocked: boolean; stuck?: true } | null {
-  if (c.stall && c.status !== 'blocked') return { text: stallText(c.stall, c.statusSince ?? null, now), blocked: false, stuck: true };
+export type CardNote = { text: string; tone: 'needs' | 'stuck' | 'muted'; title?: string };
+const BLOCK_KIND: Record<string, string> = { needs_input: 'Needs your answer', capability: 'Missing access', dependency: 'Waiting on other work', transient: 'Retrying later' };
+export function cardNote(c: Pick<Card, 'status' | 'block' | 'waiting'> & Partial<Pick<Card, 'stall' | 'statusSince'>>, now = Date.now()): CardNote | null {
+  if (c.stall && c.status !== 'blocked') return { text: stallText(c.stall, c.statusSince ?? null, now), tone: 'stuck' };
   if (c.status === 'blocked' && c.block) {
-    const first = c.block.reason.split('\n').find((l) => l.trim()) ?? '';
-    const kind = c.block.kind === 'needs_input' ? 'Needs your answer' : c.block.kind === 'capability' ? 'Missing access' : c.block.kind === 'dependency' ? 'Waiting on other work' : 'Retrying later';
-    const text = first.replace(/^[#>*\s-]+/, '').trim();
-    return { text: text ? `${kind} · ${text}` : kind, blocked: true };
+    const first = (c.block.reason.split('\n').find((l) => l.trim()) ?? '').replace(/^[#>*\s-]+/, '').trim();
+    return { text: BLOCK_KIND[c.block.kind] ?? 'Blocked', tone: 'needs', ...(first ? { title: first } : {}) };
   }
-  if (c.waiting) return { text: c.waiting, blocked: false };
-  return null;
+  if (!c.waiting) return null;
+  const parents = /^waiting on (.+)$/.exec(c.waiting);
+  if (c.status === 'todo' && parents) return { text: 'waits for ' + parents[1]!.replace(/ \([a-z]+\)/g, ''), tone: 'muted', title: c.waiting };
+  return { text: c.waiting, tone: 'muted', title: c.waiting };
 }
 
 /** Statuses whose time in state is shown (#237): not Triage, Done, Closed or Archived. */
@@ -57,23 +60,10 @@ export function timeInState(c: Pick<Card, 'status' | 'statusSince'>, now = Date.
   return c.statusSince && TIMED.includes(c.status) ? sinceLabel(c.statusSince, now) : null;
 }
 
-/**
- * Whether the « after #N » label is worth showing: not when the why-line already names every parent
- * (« waiting on #61 (running) », « parent #61 was closed… »), so the dependency isn't said twice.
- * `refs` = the parents as shown (« #61 »).
- */
-export function showAfterLabel(c: Pick<Card, 'status' | 'block' | 'waiting'>, refs: string[]): boolean {
-  if (refs.length === 0) return false;
-  const why = whyLine(c);
-  if (!why || why.blocked) return true;
-  const esc = (s: string) => s.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
-  return !refs.every((r) => new RegExp(esc(r) + '(?![0-9A-Za-z])').test(why.text));
-}
-
 /** Saved view state (tab, filter, layout), kept across reloads; anything unreadable falls back to the default. */
-export type BoardView = { tab: BoardTab; filter: BoardFilter; layout: BoardLayout; showEmpty: boolean };
+export type BoardView = { tab: BoardTab; filter: BoardFilter; layout: BoardLayout };
 export function parseView(raw: string | null): BoardView {
-  const def: BoardView = { tab: 'all', filter: { agent: null, priority: null }, layout: 'board', showEmpty: false };
+  const def: BoardView = { tab: 'all', filter: { agent: null, priority: null }, layout: 'board' };
   if (!raw) return def;
   let v: unknown;
   try {
@@ -87,7 +77,6 @@ export function parseView(raw: string | null): BoardView {
     tab: o.tab === 'needs' || o.tab === 'running' ? o.tab : 'all',
     filter: { agent: typeof f.agent === 'string' ? f.agent : null, priority: typeof f.priority === 'number' ? f.priority : null },
     layout: o.layout === 'list' ? 'list' : 'board',
-    showEmpty: o.showEmpty === true,
   };
 }
 
@@ -99,4 +88,13 @@ export function phoneColumn(columns: readonly CardStatus[], saved: string | null
   const keep = columns.find((s) => s === saved);
   if (keep) return keep;
   return columns.find((s) => count(s) > 0) ?? columns[0]!;
+}
+
+/**
+ * The phone's status strip (#266): what needs looking at first (Running, In review, Blocked), then the queue, then
+ * history. A work status with no task is left out; Done and Closed always stay, so history is one tap away.
+ */
+const STRIP_ORDER: readonly CardStatus[] = ['running', 'review', 'blocked', 'todo', 'ready', 'triage', 'done', 'closed'];
+export function stripColumns(columns: readonly CardStatus[], count: (s: CardStatus) => number): CardStatus[] {
+  return STRIP_ORDER.filter((s) => columns.includes(s) && (count(s) > 0 || s === 'done' || s === 'closed'));
 }

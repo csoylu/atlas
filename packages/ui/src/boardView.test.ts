@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import type { Card } from '@atlas/shared';
-import { columnsFor, filterCount, matches, parseView, phoneColumn, showAfterLabel, timeInState, whyLine } from './boardView.ts';
+import { cardNote, columnsFor, filterCount, matches, parseView, phoneColumn, stripColumns, timeInState } from './boardView.ts';
 
 const card = (p: Partial<Card>): Card =>
   ({ id: 'c', number: 1, title: 't', body: '', status: 'ready', assignee: 'atlas', priority: 0, board: 'main', parents: [], block: null, waiting: null, ...p }) as Card;
@@ -23,11 +23,12 @@ describe('board view', () => {
     expect(filterCount({ agent: '', priority: 0 })).toBe(2);
     expect(filterCount(any)).toBe(0);
   });
-  it('why line: the block reason first line for blocked cards, else « why not running »', () => {
-    expect(whyLine(card({ status: 'blocked', block: { kind: 'needs_input', reason: '## Which source?\nmore', options: [], until: null } }))).toEqual({ text: 'Needs your answer · Which source?', blocked: true });
-    expect(whyLine(card({ status: 'blocked', block: { kind: 'capability', reason: '', options: [], until: null } }))).toEqual({ text: 'Missing access', blocked: true });
-    expect(whyLine(card({ waiting: 'Waits for #12' }))).toEqual({ text: 'Waits for #12', blocked: false });
-    expect(whyLine(card({}))).toBeNull();
+  it('card note (#266): what a blocked task needs (its question as tooltip), « waits for #N » for parents, else the engine\'s why', () => {
+    expect(cardNote(card({ status: 'blocked', block: { kind: 'needs_input', reason: '## Which source?\nmore', options: [], until: null } }))).toEqual({ text: 'Needs your answer', tone: 'needs', title: 'Which source?' });
+    expect(cardNote(card({ status: 'blocked', block: { kind: 'capability', reason: '', options: [], until: null } }))).toEqual({ text: 'Missing access', tone: 'needs' });
+    expect(cardNote(card({ status: 'todo', waiting: 'waiting on #61 (running), #62 (ready)' }))).toEqual({ text: 'waits for #61, #62', tone: 'muted', title: 'waiting on #61 (running), #62 (ready)' });
+    expect(cardNote(card({ status: 'ready', waiting: '@munih is busy with #12' }))?.text).toBe('@munih is busy with #12');
+    expect(cardNote(card({}))).toBeNull();
   });
   it('time in state (#237): shown for todo, ready, working, blocked and in review; a stuck task says why, in its own style', () => {
     const now = Date.parse('2026-11-19T12:00:00Z');
@@ -37,26 +38,15 @@ describe('board view', () => {
     for (const status of ['done', 'closed', 'triage', 'archived'] as const) expect(timeInState(card({ status, statusSince: '2026-11-19T10:00:00Z' }), now)).toBeNull();
     expect(timeInState(card({ status: 'ready', statusSince: null }), now)).toBeNull();
     const stall = { rule: 'review' as const, reason: 'CI is green, no review is running', since: '2026-11-19T10:00:00Z', action: 'retry_review' as const };
-    expect(whyLine(card({ status: 'review', statusSince: '2026-11-19T10:00:00Z', waiting: 'waiting for @zurich', stall }), now)).toEqual({
+    expect(cardNote(card({ status: 'review', statusSince: '2026-11-19T10:00:00Z', waiting: 'waiting for @zurich', stall }), now)).toEqual({
       text: 'In review for 2 h: CI is green, no review is running',
-      blocked: false,
-      stuck: true,
+      tone: 'stuck',
     });
   });
-  it('« after #N » label: hidden while the why-line already names every parent, shown otherwise', () => {
-    expect(showAfterLabel(card({ status: 'todo', waiting: 'waiting on #61 (running)' }), ['#61'])).toBe(false);
-    expect(showAfterLabel(card({ status: 'todo', waiting: 'waiting on #61 (running), #62 (ready)' }), ['#61', '#62'])).toBe(false);
-    expect(showAfterLabel(card({ status: 'todo', waiting: 'waiting on #61 (running)' }), ['#61', '#60'])).toBe(true);
-    expect(showAfterLabel(card({ status: 'todo', waiting: 'waiting on #610 (running)' }), ['#61'])).toBe(true);
-    expect(showAfterLabel(card({ status: 'ready' }), ['#61'])).toBe(true); // parent done, no why-line
-    expect(showAfterLabel(card({ status: 'running', waiting: null }), ['#61'])).toBe(true);
-    expect(showAfterLabel(card({ status: 'blocked', waiting: 'waiting on #61', block: { kind: 'dependency', reason: 'x', options: [], until: null } }), ['#61'])).toBe(true);
-    expect(showAfterLabel(card({ status: 'todo', waiting: 'parked' }), [])).toBe(false);
-  });
   it('saved view: unreadable or unknown values fall back to the default', () => {
-    expect(parseView(null)).toEqual({ tab: 'all', filter: any, layout: 'board', showEmpty: false });
-    expect(parseView('{oops')).toEqual({ tab: 'all', filter: any, layout: 'board', showEmpty: false });
-    expect(parseView(JSON.stringify({ tab: 'needs', layout: 'list', showEmpty: true, filter: { agent: 'atlas', priority: 3 } }))).toEqual({ tab: 'needs', filter: { agent: 'atlas', priority: 3 }, layout: 'list', showEmpty: true });
+    expect(parseView(null)).toEqual({ tab: 'all', filter: any, layout: 'board' });
+    expect(parseView('{oops')).toEqual({ tab: 'all', filter: any, layout: 'board' });
+    expect(parseView(JSON.stringify({ tab: 'needs', layout: 'list', showEmpty: true, filter: { agent: 'atlas', priority: 3 } }))).toEqual({ tab: 'needs', filter: { agent: 'atlas', priority: 3 }, layout: 'list' });
     expect(parseView(JSON.stringify({ tab: 'weird', layout: 7 })).tab).toBe('all');
   });
   it('phone (#229): one column, the saved one if the tab shows it, else the first with tasks, else the first', () => {
@@ -66,5 +56,10 @@ describe('board view', () => {
     expect(phoneColumn(all, null, n({ running: 3, done: 9 }))).toBe('running');
     expect(phoneColumn(all, 'nonsense', n({}))).toBe(all[0]);
     expect(phoneColumn(columnsFor('needs'), 'ready', n({}))).toBe('blocked');
+  });
+  it('phone strip (#266): running, in review, blocked first; empty work statuses left out; Done and Closed always there', () => {
+    const n = (m: Partial<Record<string, number>>) => (s: string) => m[s] ?? 0;
+    expect(stripColumns(columnsFor('all'), n({ todo: 1, running: 3, blocked: 1, review: 1 }))).toEqual(['running', 'review', 'blocked', 'todo', 'done', 'closed']);
+    expect(stripColumns(columnsFor('all'), n({ triage: 2, done: 9 }))).toEqual(['triage', 'done', 'closed']);
   });
 });

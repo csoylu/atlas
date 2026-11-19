@@ -103,10 +103,10 @@ export const SPEC_AUDIT = (W, scale, exceptions, minContrast) => `((W, SCALE, EX
   want('.screen-head', 'h', 48, 'screen header height');
   want('.crumb .dot-avatar', 'w', 24, 'chat header avatar');
   want('.msg .who .dot-avatar', 'w', 20, 'message avatar');
-  want('.card-top .dot-avatar', 'w', 20, 'card avatar');
+  want('.card-m .dot-avatar', 'w', 20, 'card avatar');
   want('.chat-row.steps > .chat-row-line, .chat-row.nested > .chat-row-line', 'h', matchMedia('(pointer: coarse)').matches ? 44 : 36, 'step row height', 1.5);
   want('.chat-pin', 'h', matchMedia('(pointer: coarse)').matches ? 44 : 40, 'pinned task height');
-  if (!phone) want('.column:not(.folded)', 'w', 300, 'board lane width'); // empty lanes fold to a 40 px rail
+  if (!phone) want('.column:not(.folded)', 'w', 228, 'board lane width'); // empty lanes are a 40 px rail (#266)
   if (!phone) for (const e of document.querySelectorAll('.chat-pane .composer')) { if (shown(e) && e.getBoundingClientRect().width > 781) { issues.push('composer wider than the 780 px column: ' + Math.round(e.getBoundingClientRect().width)); break; } }
 
   // ── 5: status words are chips

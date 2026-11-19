@@ -127,7 +127,7 @@ export function ProjectFilterButton(props: {
   return (
     <Menu
       className="proj-menu"
-      btnClass="proj-btn"
+      btnClass="proj-btn ghost"
       open={open}
       onOpen={setOpen}
       title="Project"
@@ -144,7 +144,10 @@ export function ProjectFilterButton(props: {
             ) : v === 'archived' ? (
               'Archived'
             ) : (
-              'All projects'
+              <span className="proj-crumb">
+                <Icon.grid />
+                All projects
+              </span>
             )}
           </span>
           <Icon.chevDown />
