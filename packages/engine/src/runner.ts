@@ -46,6 +46,7 @@ import { REDACT_OVERLAP, type Secrets } from './secrets.ts';
 import { isSecretTool, redactSecretCalls, runSecretTool, secretToolSpecs } from './secretTools.ts';
 import { isPrTool, prToolSpecs, runPrTool, type PrToolContext } from './prTools.ts';
 import { filesRoot, projectRow, workspaceOf } from './projects.ts';
+import { afterTools, ceilingReason, freshGuard, MAX_TURNS, stopNote, type GuardCall, type GuardState } from './loopGuard.ts';
 
 interface RunRow {
   id: string;
@@ -56,6 +57,11 @@ interface RunRow {
   error: string | null;
   started_at: string;
   ended_at: string | null;
+  turns: number;
+  fail_streak: number;
+  repeat_streak: number;
+  repeat_key: string | null;
+  limit_reason: string | null;
 }
 const toRun = (r: RunRow): Run => ({
   id: r.id,
@@ -66,6 +72,7 @@ const toRun = (r: RunRow): Run => ({
   error: r.error,
   startedAt: r.started_at,
   endedAt: r.ended_at,
+  ...(r.limit_reason ? { limit: r.limit_reason } : {}),
 });
 
 /** Tools after which the agent's documents are re-indexed. */
@@ -129,10 +136,7 @@ export interface RunEnd {
 const isoIn = (ms: number) => new Date(Date.now() + ms).toISOString();
 /** The seq of the last message of a transcript (0 if empty). */
 const upto = (transcript: { seq: number }[]) => transcript.at(-1)?.seq ?? 0;
-/** The note a run leaves when it reaches the turn limit. */
-export const pausedNote = (n: number) => `Paused after ${n} turns: reply to continue.`;
-/** Turns per run before it pauses (design §4). */
-export const MAX_TURNS = 150;
+export { MAX_TURNS };
 
 /** Runs an agent on a card's conversation until the agent owes no reply (design §4). One run per card at a time. */
 export class Runner {
@@ -355,11 +359,16 @@ export class Runner {
     const claimed = this.db
       .transaction(() => {
         if (this.db.prepare("SELECT 1 FROM runs WHERE card_id = ? AND status = 'running'").get(card.id)) return false;
+        // A run resumed after a restart goes on with the loop guard's counters of the one it resumes (#239): a kill never
+        // lets a loop start again from zero.
+        const prev = this.db.prepare('SELECT * FROM runs WHERE card_id = ? ORDER BY started_at DESC, rowid DESC LIMIT 1').get(card.id) as RunRow | undefined;
+        const g = prev && prev.status === 'interrupted' && prev.agent_id === agentId ? prev : null;
         this.db
           .prepare(
-            "INSERT INTO runs (id, card_id, agent_id, kind, status, started_at, owner, lease_until) VALUES (?, ?, ?, ?, 'running', ?, ?, ?)",
+            `INSERT INTO runs (id, card_id, agent_id, kind, status, started_at, owner, lease_until, turns, fail_streak, repeat_streak, repeat_key)
+             VALUES (?, ?, ?, ?, 'running', ?, ?, ?, ?, ?, ?, ?)`,
           )
-          .run(runId, card.id, agentId, kind, new Date().toISOString(), this.instance, isoIn(this.leaseMs));
+          .run(runId, card.id, agentId, kind, new Date().toISOString(), this.instance, isoIn(this.leaseMs), g?.turns ?? 0, g?.fail_streak ?? 0, g?.repeat_streak ?? 0, g?.repeat_key ?? null);
         return true;
       })
       .immediate();
@@ -395,6 +404,18 @@ export class Runner {
       .prepare("SELECT * FROM runs WHERE status = 'running' AND (lease_until IS NULL OR lease_until < ?)")
       .all(now) as RunRow[];
     for (const r of stale) {
+      if (r.limit_reason) {
+        // The guard had stopped it (its note is written): it ended, only the bookkeeping was lost. Not resumed (no
+        // second stop); the dispatcher routes the stop now (#239).
+        this.db.prepare("UPDATE runs SET status = 'done', ended_at = ? WHERE id = ? AND status = 'running'").run(now, r.id);
+        const run = this.emitRun(r.id);
+        try {
+          this.onRunEnd({ run, terminal: null, transient: false });
+        } catch (e) {
+          console.error(`after run ${r.id}`, e);
+        }
+        continue;
+      }
       const orphans = this.db
         .prepare("SELECT id, pid FROM tool_calls WHERE run_id = ? AND status = 'running'")
         .all(r.id) as { id: number; pid: number | null }[];
@@ -508,6 +529,17 @@ export class Runner {
       // Anthropic paused a long server-tool turn (web search): the same answer continues with one more call.
       let paused = false;
       let badJsonTurns = 0;
+      // The loop guard (#239), from the run's row: a resumed run starts from the counters of the one it resumes.
+      const row = this.db.prepare('SELECT turns, fail_streak, repeat_streak, repeat_key FROM runs WHERE id = ?').get(runId) as
+        | Pick<RunRow, 'turns' | 'fail_streak' | 'repeat_streak' | 'repeat_key'>
+        | undefined;
+      let guard: GuardState = row ? { turns: row.turns, failStreak: row.fail_streak, repeatStreak: row.repeat_streak, repeatKey: row.repeat_key } : freshGuard();
+      // A stop ends as a note in the conversation, never as an error (design §4); the dispatcher says who is asked.
+      const stopRun = (reason: string, after: number) =>
+        this.db.transaction(() => {
+          this.kanban.appendMessage(cardId, 'assistant', 'system', [{ type: 'text', text: stopNote(reason) }], after);
+          this.db.prepare('UPDATE runs SET limit_reason = ? WHERE id = ?').run(reason, runId);
+        })();
       for (let turn = 0; !terminal; turn++) {
         const card = this.kanban.get(cardId);
         this.closeDanglingToolUses(card);
@@ -515,9 +547,8 @@ export class Runner {
         // A task note that came in during the run is read on the next turn, not answered now (#143).
         if (!paused && !owesTurn(transcript, this.kanban.taskNotes(card.conversationId))) break;
         paused = false;
-        if (turn >= this.maxTurns) {
-          // A limit ends as waiting, never as an error (design §4): the note closes the turn, a reply resumes the work.
-          this.kanban.appendMessage(cardId, 'assistant', 'system', [{ type: 'text', text: pausedNote(this.maxTurns) }], upto(transcript));
+        if (guard.turns >= this.maxTurns) {
+          stopRun(ceilingReason(this.maxTurns), upto(transcript));
           break;
         }
         if (!paused) {
@@ -560,7 +591,11 @@ export class Runner {
         if (res.content.length === 0) throw new ModelError(`model ${model.id} returned an empty answer (stop: ${res.stopReason})`);
         if (turn === 0 && model.lastError) this.models.record(model.id, null);
         // A secret_set value is stored as [secret NAME] (#207); the calls below run with the real input.
-        const reply = this.kanban.appendMessage(cardId, 'assistant', agent.id, redactSecretCalls(res.content), seen);
+        guard = { ...guard, turns: guard.turns + 1 };
+        const reply = this.db.transaction(() => {
+          this.db.prepare('UPDATE runs SET turns = ? WHERE id = ?').run(guard.turns, runId);
+          return this.kanban.appendMessage(cardId, 'assistant', agent.id, redactSecretCalls(res.content), seen);
+        })();
         if (res.stopReason === 'pause_turn') {
           paused = true;
           continue;
@@ -571,8 +606,9 @@ export class Runner {
         // Arguments that weren't valid JSON: the call gets an error result and the model resends it; a model that keeps
         // failing ends the run (rule 3).
         badJsonTurns = uses.some((u) => invalidToolInput(u.input)) ? badJsonTurns + 1 : 0;
+        const calls: GuardCall[] = [];
         const results = await Promise.all(
-          uses.map(async (u) => {
+          uses.map(async (u, i) => {
             const { lastInsertRowid } = this.db
               .prepare("INSERT INTO tool_calls (run_id, tool_use_id, name, input, status, started_at) VALUES (?, ?, ?, ?, 'running', ?)")
               .run(runId, u.id, u.name, JSON.stringify((redactSecretCalls([u])[0] as typeof u).input), new Date().toISOString());
@@ -675,11 +711,22 @@ export class Runner {
               .prepare('UPDATE tool_calls SET status = ?, output = ?, ended_at = ?, detail = ?, secrets_hidden = ? WHERE id = ?')
               .run(r.isError ? 'error' : 'done', r.output, new Date().toISOString(), detail ? JSON.stringify(detail) : null, hidden, lastInsertRowid);
             this.emitCalls([Number(lastInsertRowid)]);
+            calls[i] = { name: u.name, input: u.input, output: r.output, isError: r.isError };
             return { type: 'tool_result' as const, tool_use_id: u.id, content: r.output, ...(r.isError ? { is_error: true } : {}), ...(r.images?.length ? { images: r.images } : {}) };
           }),
         );
         signal.throwIfAborted();
-        this.kanban.appendMessage(cardId, 'user', 'tool', results);
+        // The guard counts the calls in the order the model made them (they finish in any order).
+        const step = afterTools(guard, calls);
+        guard = step.state;
+        const resultsMsg = this.db.transaction(() => {
+          this.db.prepare('UPDATE runs SET fail_streak = ?, repeat_streak = ?, repeat_key = ? WHERE id = ?').run(guard.failStreak, guard.repeatStreak, guard.repeatKey, runId);
+          return this.kanban.appendMessage(cardId, 'user', 'tool', results);
+        })();
+        if (step.stop && !terminal) {
+          stopRun(step.stop, resultsMsg.seq);
+          break;
+        }
         if (badJsonTurns >= MAX_BAD_JSON_TURNS)
           throw new ModelError(`model ${model.id} sent tool calls with invalid JSON arguments ${badJsonTurns} turns in a row: ${invalidToolInput(uses.find((u) => invalidToolInput(u.input))!.input)!.split('\n')[0]}`);
       }
@@ -1082,7 +1129,16 @@ export class Runner {
             '  leave the task in triage; the answer comes in this chat.',
             'Do not do the work itself.',
           ]
-        : kind === 'work' && card.reviewer === agent.id && card.assignee !== agent.id
+        : kind === 'work' && card.status === 'running' && project.lead === agent.id && card.assignee && card.assignee !== agent.id
+          ? [
+              `Your job: @${card.assignee}'s run on the task below was stopped by the loop guard (the reason is the last note in this`,
+              'thread); you are the project lead. Read the thread, then do exactly one of:',
+              `- continue: end your turn with a short message to @${card.assignee} (what to do differently): it resumes with it;`,
+              '- re-scope: task_update (body, assignee, or status ready to start it again; closed if it is not worth doing);',
+              `- ask ${name}: task_block needs_input with a real question, only when ${name} must decide.`,
+              "Don't do the task's work yourself here.",
+            ]
+          : kind === 'work' && card.reviewer === agent.id && card.assignee !== agent.id
           ? [
               `Your job: review the pull request(s) of the task below, built by @${card.assignee ?? 'nobody'} (you are its reviewer;`,
               'the builder\'s messages are earlier in this thread). Check the diff, the tests and the feature, then validate and',

@@ -10,7 +10,7 @@ import { toolInput, type ModelRequest } from './providers/types.ts';
 import { realProviders } from './models.ts';
 import { estimateTokens, INTERRUPTED, serverToolProblem, SUMMARY_LEAD, TODO_LEAD } from './context.ts';
 import { runCardTool } from './cardTools.ts';
-import { pausedNote } from './runner.ts';
+import { stopNote } from './loopGuard.ts';
 
 let engines: Engine[] = [];
 afterEach(async () => {
@@ -464,7 +464,7 @@ describe('context management (design §8)', () => {
     expect(fake.usages[1]!.cached).toBeGreaterThanOrEqual(estimateTokens(JSON.stringify(req.tools) + stable));
   });
 
-  it('pauses at the turn limit with a note instead of failing, and a reply resumes', async () => {
+  it('stops at the safety ceiling with a note instead of failing, and a reply resumes', async () => {
     const shell = (i: number) => [{ type: 'tool_use' as const, id: 's' + i, name: 'shell', input: { command: 'echo ' + i } }];
     const fake = new FakeProvider([shell(1), shell(2), text('All three steps done.')]);
     const { engine } = await setup(fake, ':memory:', undefined, { maxTurns: 2 });
@@ -473,9 +473,9 @@ describe('context management (design §8)', () => {
     engine.runner.wake(card.id);
     await engine.runner.settled(card.id);
 
-    expect(engine.runner.runs(card.id)[0]).toMatchObject({ status: 'done', error: null });
+    expect(engine.runner.runs(card.id)[0]).toMatchObject({ status: 'done', error: null, limit: 'reached the safety ceiling of 2 turns in one run' });
     const last = engine.kanban.messages(card.id).at(-1)!;
-    expect(last).toMatchObject({ role: 'assistant', author: 'system', content: text(pausedNote(2)) });
+    expect(last).toMatchObject({ role: 'assistant', author: 'system', content: text(stopNote('reached the safety ceiling of 2 turns in one run')) });
     expect(engine.runner.owesReply(card.id)).toBe(false);
 
     engine.kanban.appendMessage(card.id, 'user', 'user', text('continue'));

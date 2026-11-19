@@ -51,7 +51,7 @@ export interface EngineOptions {
   env?: NodeJS.ProcessEnv;
   /** Run lease length (tests shorten it). */
   leaseMs?: number;
-  /** Turns per run before it pauses (tests lower it; default MAX_TURNS). */
+  /** Safety ceiling: turns per run before it stops (tests lower it; default MAX_TURNS, loopGuard.ts). */
   maxTurns?: number;
   /** Background memory review after runs (v3); default on. Tests with a scripted provider turn it off. */
   memoryReview?: boolean;

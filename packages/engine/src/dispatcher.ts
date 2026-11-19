@@ -1,4 +1,4 @@
-import { cardRef, type Card } from '@atlas/shared';
+import { cardRef, type Card, type Run } from '@atlas/shared';
 import type { Bus } from './events.ts';
 import type { Kanban } from './kanban.ts';
 import type { Agents } from './agents.ts';
@@ -7,10 +7,16 @@ import type { Settings } from './settings.ts';
 import type { RunEnd, Runner } from './runner.ts';
 import { ModelError } from './providers/types.ts';
 import { REWOUND } from './rewind.ts';
+import { stopNote } from './loopGuard.ts';
 
 import { TRIAGE_KICK, WORK_KICK } from '@atlas/shared';
 export { TRIAGE_KICK, WORK_KICK };
 const TRANSIENT_RETRY_MS = 60_000;
+
+/** The note that wakes a project's lead in a task whose assignee the loop guard or the ceiling stopped (#239). */
+export const leadKick = (c: Card, run: Run, before: number) =>
+  `${stopNote(`@${run.agentId}'s run on this task: ${run.limit}`)} You are the project lead: decide what happens next` +
+  (before ? ` (the guard has stopped work on this task ${before} time${before > 1 ? 's' : ''} before).` : '.');
 
 /** 16:40 today, « Mon 09:00 » further out (a plan's weekly reset). */
 const hhmm = (iso: string) => {
@@ -198,6 +204,7 @@ export class Dispatcher {
     const c = this.kanban.get(run.cardId);
     if (run.status === 'interrupted') return; // resumes by itself (design §6)
     if (run.status === 'stopped' && run.error === REWOUND) return; // the rewind sets the card's status itself
+    if (c.status === 'running' && run.kind === 'work' && !terminal && run.status === 'done' && this.routeStop(c, run)) return this.soon();
     if (c.status === 'running' && run.kind !== 'triage' && !terminal) {
       if (run.status === 'failed' && transient)
         // Every plan subscription paused: wait for the earliest reset, else retry in a minute.
@@ -205,12 +212,41 @@ export class Dispatcher {
       else if (run.status === 'failed') this.kanban.block(c.id, { kind: 'capability', reason: run.error ?? 'the run failed' }, 'dispatcher');
       else if (run.status === 'stopped')
         this.kanban.block(c.id, { kind: 'needs_input', reason: 'Stopped by you. Write what to do next.', stopped: true }, 'user');
+      else if (run.limit) this.kanban.block(c.id, { kind: 'needs_input', reason: `${stopNote(run.limit)} Write what to do next: a reply resumes the task.` }, 'dispatcher');
       else this.kanban.block(c.id, { kind: 'needs_input', reason: this.lastText(c.id) ?? 'The agent stopped without finishing. What next?' }, 'dispatcher');
     }
     // A failed triage leaves the card in triage (no block): the Inbox still says so, with Retry.
     if (run.kind === 'triage' && run.status === 'failed' && !transient && c.board === 'main')
       this.kanban.notifyNow({ kind: 'run.failed', title: c.title, body: `Triage failed: ${run.error ?? 'the run failed'}`, cardId: c.id });
     this.soon();
+  }
+
+  /**
+   * A work run on a running task ended without a terminal tool (#239). The loop guard or the ceiling stopped the
+   * assignee: its project's lead is woken in the thread (it continues, re-scopes or blocks for Master). The lead's run
+   * there ended without blocking or moving the task: the assignee goes on with what the lead wrote. True if handled;
+   * false = the usual path (a stopped lead, or no lead, reaches Master as a block).
+   */
+  private routeStop(c: Card, run: Run): boolean {
+    const lead = this.kanban.leadOf(c.projectId);
+    if (run.limit) {
+      if (!lead || lead === run.agentId || run.agentId !== c.assignee) return false;
+      const before = this.kanban.eventCount(c.id, 'run_limited');
+      this.kanban.event(c.id, 'run_limited', { by: run.agentId, runId: run.id, reason: run.limit, to: lead });
+      this.after(c.id, () => this.runner.wake(c.id, { agentId: lead, kind: 'work', kickAlways: true, kick: leadKick(c, run, before) }));
+      return true;
+    }
+    if (run.agentId === c.assignee || run.agentId !== lead || !c.assignee) return false;
+    this.after(c.id, () => this.runner.wake(c.id, { kind: 'work', kickAlways: true, kick: `@${lead} (project lead) answered above: continue the task with that.` }));
+    return true;
+  }
+
+  /** Once the run that is ending has let go of the card (afterRun is called from inside it). */
+  private after(cardId: string, fn: () => void): void {
+    void this.runner.settled(cardId).then(() => {
+      // The task moved meanwhile (Master closed or blocked it): nothing to start.
+      if (this.kanban.get(cardId).status === 'running') fn();
+    }).catch((e: unknown) => console.error(`after the run on ${cardId}`, e));
   }
 
   /** The last run failed and the user hasn't written or pressed Retry since: retrying would fail the same way. */

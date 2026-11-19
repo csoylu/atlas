@@ -920,6 +920,11 @@ export class Kanban {
     return r.at ?? '';
   }
 
+  /** How many events of a kind a card has. */
+  eventCount(cardId: string, kind: string): number {
+    return (this.db.prepare('SELECT COUNT(*) AS n FROM card_events WHERE card_id = ? AND kind = ?').get(cardId, kind) as { n: number }).n;
+  }
+
   event(cardId: string, kind: string, payload: unknown): void {
     this.db
       .prepare('INSERT INTO card_events (card_id, at, kind, payload) VALUES (?, ?, ?, ?)')
