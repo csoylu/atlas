@@ -492,6 +492,9 @@ export function landedLines(text: string, spans: Span[], replacement: string): n
 /** A foreground command: its own process group (Unix), killed whole on stop, timeout or restart. */
 function runForeground(command: string, timeout_s: number, env: NodeJS.ProcessEnv, { workdir, signal, onSpawn, onOutput }: ToolContext): Promise<{ code: number | null; sig: NodeJS.Signals | null; out: string }> {
   return new Promise((resolvePromise, reject) => {
+    // Aborted before the spawn: start nothing (a child returned without its 'error' handler crashes the engine on a
+    // spawn error, e.g. a workspace removed with the member, #246).
+    if (signal.aborted) return reject(signal.reason instanceof Error ? signal.reason : new Error('aborted'));
     const child = spawn(command, { cwd: workdir, shell: true, env, detached: process.platform !== 'win32' });
     if (child.pid) onSpawn?.(child.pid);
     const killTree = () => {
@@ -507,7 +510,6 @@ function runForeground(command: string, timeout_s: number, env: NodeJS.ProcessEn
       killTree();
       reject(signal.reason instanceof Error ? signal.reason : new Error('aborted'));
     };
-    if (signal.aborted) return onAbort();
     signal.addEventListener('abort', onAbort, { once: true });
     let out = '';
     const take = (d: Buffer) => {
