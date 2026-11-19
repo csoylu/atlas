@@ -97,18 +97,6 @@ describe('stuck tasks: the rules (#237)', () => {
     });
   });
 
-  it('In review behind others in the merge queue (#236): not stuck; the head counts from when it reached the head', () => {
-    const review = { status: 'review' as const, prs: [pr()], statusSince: ago(180) };
-    expect(detectStall(facts(review, { queue: { position: 2, headAt: null } }))).toBe(null);
-    expect(detectStall(facts(review, { queue: { position: 0, headAt: ago(30) } }))).toBe(null);
-    expect(detectStall(facts({ ...review, waiting: '1st in the queue for 50 min · waiting for @zurich' }, { queue: { position: 0, headAt: ago(50) } }))).toEqual({
-      rule: 'review',
-      reason: 'CI is green, no review is running',
-      since: ago(50),
-      action: 'retry_review',
-    });
-  });
-
   it('Working: no run for 10 min', () => {
     expect(detectStall(facts({ status: 'running', statusSince: ago(9) }))).toBe(null);
     expect(detectStall(facts({ status: 'running', statusSince: ago(11) }))).toMatchObject({ rule: 'running', reason: 'no run started', action: 'restart' });

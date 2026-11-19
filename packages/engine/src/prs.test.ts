@@ -72,7 +72,7 @@ describe('pull requests linked to tasks (#189)', () => {
     // CI still running: nobody runs, the card says why.
     await e.prs.poll();
     expect(gh.reads).toBe(1);
-    expect(e.kanban.get(c.id)).toMatchObject({ status: 'review', waiting: '1st in the queue for 0 min · QA starts when CI is green', prs: [{ ci: 'pending', headSha: 'aaaaaaa1111', branch: 'feat/170-x' }] });
+    expect(e.kanban.get(c.id)).toMatchObject({ status: 'review', waiting: 'QA starts when CI is green', prs: [{ ci: 'pending', headSha: 'aaaaaaa1111', branch: 'feat/170-x' }] });
     expect(e.runner.current(c.id)).toBe(null);
   });
 
@@ -93,7 +93,7 @@ describe('pull requests linked to tasks (#189)', () => {
     // The same head again: no second run.
     await e.prs.poll();
     expect(e.runner.runs(c.id)).toHaveLength(1);
-    expect(e.kanban.get(c.id).waiting).toBe('1st in the queue for 0 min · validated: waiting for the merge');
+    expect(e.kanban.get(c.id).waiting).toBe('validated: waiting for the merge');
 
     gh.pr = { ...gh.pr, state: 'merged', mergeSha: 'e96a8e2ffff' };
     await e.prs.poll();
@@ -103,6 +103,28 @@ describe('pull requests linked to tasks (#189)', () => {
       payload: JSON.stringify({ by: 'github', summary: 'PR #41 merged into main (e96a8e2)' }),
     });
     expect(e.notifications.inbox().updates).toMatchObject([{ kind: 'card.done', body: 'PR #41 merged into main (e96a8e2)' }]);
+  });
+
+  it('three tasks In review with green CI each get their reviewer run at once: no queue, none waits for another (#249)', async () => {
+    const gh = fakeGitHub();
+    gh.pr.ci = 'success';
+    const { e, idle } = await setup({ gh, script: [text('checking'), text('checking'), text('checking')] });
+    e.agents.update('zurich', { maxRuns: 3 });
+    const cards = [41, 42, 43].map((n) => {
+      const c = card(e);
+      e.kanban.requestReview(c.id, [`https://github.com/csoylu/atlas/pull/${n}`], 'atlas', `PR ${n}`);
+      return c;
+    });
+    await e.prs.poll();
+    for (const c of cards) {
+      expect(e.runner.runs(c.id)).toMatchObject([{ agentId: 'zurich', kind: 'work' }]);
+      expect(e.kanban.get(c.id).waiting ?? '').not.toMatch(/queue/);
+    }
+    for (const c of cards) await idle(c.id);
+    // Nothing left of #236 in the store.
+    const cols = (t: string) => (e.db.prepare(`SELECT name FROM pragma_table_info('${t}')`).all() as { name: string }[]).map((c) => c.name);
+    expect(cols('cards')).not.toContain('review_queued_at');
+    expect(cols('card_prs')).not.toContain('synced_sha');
   });
 
   it('a task blocked on the user whose PR merges goes to Done by itself and leaves « Needs you » (#231)', async () => {
@@ -255,7 +277,7 @@ describe('pull requests linked to tasks (#189)', () => {
     await e.prs.poll();
     await e.prs.poll();
     expect(e.runner.runs(c.id)).toHaveLength(2);
-    expect(e.kanban.get(c.id)).toMatchObject({ status: 'review', waiting: '1st in the queue for 0 min · review by @zurich ended without a verdict on aaaaaaa (2 runs): Retry starts it again' });
+    expect(e.kanban.get(c.id)).toMatchObject({ status: 'review', waiting: 'review by @zurich ended without a verdict on aaaaaaa (2 runs): Retry starts it again' });
     // The stall mark (#237, one mechanism for every stuck task): on the card and one Inbox item, at once.
     e.stalls.check();
     e.stalls.check();
@@ -281,7 +303,7 @@ describe('pull requests linked to tasks (#189)', () => {
     await eventually(() => e.runner.runs(c.id).length === 4, { what: 'the review of the new head' });
     await idle(c.id);
     await e.prs.poll();
-    expect(e.kanban.get(c.id).waiting).toBe('1st in the queue for 0 min · validated: waiting for the merge');
+    expect(e.kanban.get(c.id).waiting).toBe('validated: waiting for the merge');
     e.stalls.check();
     expect(e.kanban.get(c.id).stall).toBe(null);
     expect(stalled()).toMatchObject([{ archived_at: expect.any(String) }]);
@@ -400,6 +422,6 @@ describe('pull requests of another project (#216)', () => {
     gh.pr.ci = 'success';
     await e.prs.poll();
     expect(e.runner.runs(d.id)).toEqual([]);
-    expect(e.kanban.get(d.id)).toMatchObject({ status: 'review', waiting: '1st in the queue for 0 min · review agent @zurich is not a member of project Datinel: add it in Settings → Projects' });
+    expect(e.kanban.get(d.id)).toMatchObject({ status: 'review', waiting: 'review agent @zurich is not a member of project Datinel: add it in Settings → Projects' });
   });
 });

@@ -261,32 +261,32 @@ describe('store', () => {
     db.close();
   });
 
-  it('0054 merge queue: tasks already In review keep the order in which they asked', () => {
+  it('0057 drops the merge queue of #236: its four columns go, every other column and row stays', () => {
     const db = new Database(':memory:');
-    db.pragma('foreign_keys = ON');
     db.exec('CREATE TABLE schema_migrations (name TEXT PRIMARY KEY, applied_at TEXT NOT NULL)');
     const dir = join(dirname(fileURLToPath(import.meta.url)), 'migrations');
-    for (const f of readdirSync(dir).filter((f) => /^\d{4}_.+\.sql$/.test(f) && f < '0054').sort()) {
-      const sql = readFileSync(join(dir, f), 'utf8');
-      if (sql.startsWith('-- atlas: foreign_keys off')) db.pragma('foreign_keys = OFF');
-      db.exec(sql);
-      db.pragma('foreign_keys = ON');
+    db.pragma('foreign_keys = OFF');
+    for (const f of readdirSync(dir).filter((f) => /^\d{4}_.+\.sql$/.test(f) && f < '0057').sort()) {
+      db.exec(readFileSync(join(dir, f), 'utf8'));
       db.prepare('INSERT INTO schema_migrations (name, applied_at) VALUES (?, ?)').run(f, 'x');
     }
-    const card = (id: string, status: string, updated: string) => {
-      db.prepare("INSERT INTO conversations (id, kind) VALUES (?, 'card')").run('k' + id);
-      db.prepare("INSERT INTO cards (id, title, status, conversation_id, created_by, created_at, updated_at, project_id) VALUES (?, 'x', ?, ?, 'user', 't0', ?, 'atlas')").run(id, status, 'k' + id, updated);
-    };
-    card('c_a', 'review', 't9');
-    card('c_b', 'review', 't8');
-    card('c_c', 'ready', 't1');
-    db.prepare("INSERT INTO card_events (card_id, at, kind, payload) VALUES ('c_a', 't2', 'review_requested', '{}'), ('c_a', 't5', 'review_requested', '{}')").run();
-    expect(migrate(db)).toContain('0054_merge_queue.sql');
-    expect(db.prepare('SELECT id, review_queued_at, review_head_at FROM cards ORDER BY id').all()).toEqual([
-      { id: 'c_a', review_queued_at: 't5', review_head_at: null },
-      { id: 'c_b', review_queued_at: 't8', review_head_at: null },
-      { id: 'c_c', review_queued_at: null, review_head_at: null },
-    ]);
+    db.pragma('foreign_keys = ON');
+    db.prepare("INSERT INTO conversations (id, kind) VALUES ('k1', 'card')").run();
+    db.prepare(
+      "INSERT INTO cards (id, title, status, conversation_id, created_by, created_at, updated_at, project_id, review_queued_at, review_head_at) VALUES ('c_1', 't', 'review', 'k1', 'user', 't0', 't1', 'atlas', 't2', 't3')",
+    ).run();
+    db.prepare("INSERT INTO card_prs (card_id, repo, number, url, linked_at, synced_sha, sync_error) VALUES ('c_1', 'o/r', 7, 'u', 't0', 'abc', 'boom')").run();
+    const cols = (t: string) => (db.prepare(`SELECT name FROM pragma_table_info('${t}')`).all() as { name: string }[]).map((c) => c.name);
+    const gone = ['review_queued_at', 'review_head_at', 'synced_sha', 'sync_error'];
+    const before = { cards: cols('cards'), card_prs: cols('card_prs') };
+    const row = (t: string) => db.prepare(`SELECT * FROM ${t}`).get() as Record<string, unknown>;
+    const keep = (r: Record<string, unknown>) => Object.fromEntries(Object.entries(r).filter(([k]) => !gone.includes(k)));
+    const rows = { cards: keep(row('cards')), card_prs: keep(row('card_prs')) };
+    expect(migrate(db)).toEqual(['0057_drop_merge_queue.sql']);
+    expect(cols('cards')).toEqual(before.cards.filter((c) => !gone.includes(c)));
+    expect(cols('card_prs')).toEqual(before.card_prs.filter((c) => !gone.includes(c)));
+    expect({ cards: row('cards'), card_prs: row('card_prs') }).toEqual(rows);
+    expect(db.pragma('foreign_key_check')).toEqual([]);
     db.close();
   });
 
