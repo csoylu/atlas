@@ -5,7 +5,6 @@ import { api } from './api.ts';
 import { withCard } from './cardModal.ts';
 import { agentSecrets, agoText, cleanName, deleteText, grantees, modelKeyRow, storeLine, whenText } from './secretsView.ts';
 import type { MessageStream } from './useMessages.ts';
-import { HeaderActions } from './ScreenHeader.tsx';
 import { effectiveFilter, inFilter, ProjectFilterButton, ProjTag, projectForNew, useProjectFilter, useProjects } from './projects.tsx';
 import { Skeleton } from './Kit.tsx';
 
@@ -62,14 +61,12 @@ export function SecretsPage(props: { agents: Agent[]; cards: Card[]; models: Mod
 
   return (
     <>
-      {pinfo.multi && (
-        <HeaderActions>
-          <ProjectFilterButton value={pf} onChange={setPf} globalOnly count={(f) => allMine.filter((s) => inFilter(f, s.project, pinfo, true)).length} />
-        </HeaderActions>
-      )}
       <section>
         <header className="section-head">
-          <h2>Agent secrets</h2>
+          <div className="set-head">
+            <h2>Agent secrets</h2>
+            {pinfo.multi && <ProjectFilterButton value={pf} onChange={setPf} globalOnly count={(f) => allMine.filter((s) => inFilter(f, s.project, pinfo, true)).length} />}
+          </div>
           <p>
             API keys, tokens and RPC URLs your agents use in shell commands as <code>$NAME</code>. An agent sees only the names it's granted, never a value. Values can be
             replaced or deleted, never shown again.

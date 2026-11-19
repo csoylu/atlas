@@ -2,7 +2,7 @@ import { useEffect, useRef, useState, type FormEvent, type ReactNode } from 'rea
 import type { Agent, Card, Project, ProjectMember, RepoCheck, Workflow } from '@atlas/shared';
 import { api, ApiError } from './api.ts';
 import { AgentFace } from './AgentFace.tsx';
-import { HeaderActions, Icon } from './ScreenHeader.tsx';
+import { Icon } from './ScreenHeader.tsx';
 import { ProjDot, useProjectFilter, useProjects } from './projects.tsx';
 
 /**
@@ -23,17 +23,17 @@ export function ProjectsPage(props: { rest: string; agents: Agent[]; cards: Card
   const archived = all.filter((p) => p.status === 'archived');
   return (
     <section>
-      {!creating && (
-        <HeaderActions>
-          <span className="head-sp" />
-          <button type="button" className="btn primary" onClick={() => setCreating(true)}>
-            <Icon.plus />
-            <span className="btn-text">New project</span>
-          </button>
-        </HeaderActions>
-      )}
       <header className="section-head">
-        <h2>Projects</h2>
+        <div className="set-head">
+          <h2>Projects</h2>
+          <span className="head-sp" />
+          {!creating && (
+            <button type="button" className="btn primary" onClick={() => setCreating(true)}>
+              <Icon.plus />
+              <span className="btn-text">New project</span>
+            </button>
+          )}
+        </div>
         <p>
           A project is a repo your agents work on, with its own tasks, chats, artifacts, memory, secrets and workflows. Each member works in its own clone of
           the repo; the lead gets the project's new tasks.

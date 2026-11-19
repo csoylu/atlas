@@ -524,7 +524,7 @@ const panelTabs = () =>
 
 // Memory has its own screens below (fixtures, edit, deep links).
 const PJ2 = 'uicheck-datinel'; // the fixture project's id (#217)
-const SETTINGS = ['projects', 'agents', 'board', 'subscriptions', 'api-keys', 'local', 'model-list', 'usage', 'profile', 'appearance', 'voice', 'about'];
+const SETTINGS = ['projects', 'agents', 'agents/atlas', 'board', 'models', 'models/api-keys', 'models/local', 'models/model-list', 'usage', 'profile', 'appearance', 'voice', 'about'];
 // Settings → Secrets (#209): every row kind (granted to some, to all, to none, made by an agent, waiting for a value,
 // model keys) on the desktop keychain, then the same list on a locked server (the sidebar badge, the unlock panel).
 const secretRow = (name, o) => ({ name, description: '', kind: 'agent', grant: 'none', agents: [], project: null, hasValue: true, createdBy: 'user', createdCard: null, createdAt: secAgo(86400 * 6), updatedAt: secAgo(86400 * 6), updatedBy: 'user', lastUsedAt: null, lastUsedBy: null, waitingCard: null, ...o });
@@ -603,10 +603,10 @@ const SCREENS = [
   // Search across folders: a content match shows its snippet; then the empty state.
   { name: 'library-search', hash: '#/library', ready: '.lib-row', then: { js: `const sb = document.querySelector('.lib-search-btn'); if (sb && sb.offsetParent) { sb.click(); await new Promise((r) => setTimeout(r, 100)); } const i = [...document.querySelectorAll('.mem-search input')].find((x) => x.offsetParent); Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, 'value').set.call(i, 'the'); i.dispatchEvent(new Event('input', { bubbles: true }));`, ready: '.list-group[aria-label=Results] .lib-row' }, keys: ['.lib-t', '.lib-snip', '.lib-fold'] },
   { name: 'library-search-empty', hash: '#/library', ready: '.lib-row', then: { js: `const sb = document.querySelector('.lib-search-btn'); if (sb && sb.offsetParent) { sb.click(); await new Promise((r) => setTimeout(r, 100)); } const i = [...document.querySelectorAll('.mem-search input')].find((x) => x.offsetParent); Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, 'value').set.call(i, 'zzqxnothing'); i.dispatchEvent(new Event('input', { bubbles: true }));`, ready: '.state-empty' }, keys: ['.state-empty p', '.state-empty .btn'] },
-  { name: 'settings-memory', hash: '#/settings/memory', ready: '.mem-row', memory: true, keys: ['.mem-chip', '.mem-t', '.mem-k', '.mem-intro h2', '.settings-group-title'] },
-  { name: 'settings-memory-edit', hash: '#/settings/memory/agent:atlas', ready: '.mem-row', memory: true, then: { js: `document.querySelector('.mem-t').click();`, ready: '.mem-edit textarea' }, keys: ['.mem-edit-bar button', '.mem-note', '.mem-chip'] },
+  { name: 'settings-memory', hash: '#/settings/memory', ready: '.mem-row', memory: true, keys: ['.mem-chip', '.mem-t', '.mem-k', '.memory-page h2', '.settings-group-title'] },
+  { name: 'settings-memory-edit', hash: '#/settings/memory/agent:atlas', ready: '.mem-row', memory: true, then: { js: `document.querySelector('.mem-t').click(); await new Promise((r) => setTimeout(r, 100)); [...document.querySelectorAll('.mem-acts button')].find((b) => b.textContent.includes('Edit')).click();`, ready: '.mem-edit textarea' }, keys: ['.mem-edit-bar button', '.mem-note', '.mem-chip'] },
   // An old Library link (posted digests) lands on Settings → Memory, on that memory.
-  { name: 'settings-memory-old-link', hash: '#/library/memory/m9302', ready: '.mem-row.focus', memory: true, keys: ['.mem-note', '.mem-t', '.mem-intro h2'] },
+  { name: 'settings-memory-old-link', hash: '#/library/memory/m9302', ready: '.mem-row.focus', memory: true, keys: ['.mem-note', '.mem-t', '.memory-page h2'] },
   { name: 'inbox-cleanup', hash: '#/inbox/n9007', ready: '.mem-digest', inbox: true, keys: ['.ibx-dh .ibx-title', '.md-act', '.md-text', '.mem-digest .btn'] },
   { name: 'inbox-digest', hash: '#/inbox/n-1', ready: '.mem-digest', inbox: true, memory: true, keys: ['.ibx-dh .ibx-title', '.md-act', '.md-text a', '.mem-digest .btn'] },
   ...(doc ? [{ name: 'library-doc', hash: `#/library/${doc.id}`, ready: '.viewer .doc-md', keys: ['.sd-ver-btn', '.crumb h1', '.viewer h2'] }] : []),
@@ -618,7 +618,7 @@ const SCREENS = [
   // Workflows (#171): the list (fixtures on top of the real ones), the canvas in Edit with a step selected, the canvas in
   // Runs with the waiting run; on a phone the canvas screens show the steps as a list.
   // Projects (#217): with a single project nothing changes elsewhere; these screens add a second one (fixture).
-  { name: 'projects-2', hash: '#/settings/projects', ready: '.pj-row', projects2: true, keys: ['.pj-row .model-title b', '.pj-cl', '.pj-err', '.settings-nav button'] },
+  { name: 'projects-2', hash: '#/settings/projects', ready: '.pj-row', projects2: true, keys: ['.pj-row .model-title b', '.pj-cl', '.pj-err', '.settings-nav a'] },
   { name: 'project-page', hash: `#/settings/projects/${PJ2}`, ready: '.pj-mem', projects2: true, keys: ['.pj-mem b', '.pj-sub', '.pj-form .field', '.crumb-link'] },
   { name: 'project-new', hash: '#/settings/projects/new', ready: '.pj-form', projects2: true, keys: ['.pj-form .field', '.pj-check', '.pj-form .actions button'] },
   { name: 'board-2', hash: '#/board', ready: '.board', projects2: true, then: { js: `document.querySelector('.proj-btn').click();`, ready: '.proj-menu .pop-row' }, keys: ['.proj-btn', '.proj-menu .pop-row', '.proj-tag', '.side-group'] },
@@ -640,7 +640,9 @@ const SCREENS = [
   { name: 'settings-secrets', hash: '#/settings/secrets', ready: '.sec-row', secrets: SECRET_STATUS, keys: ['.settings-group-title', '.sec-grant.all', '.sec-desc', '.sec-row .badge', '.sec-row .model-actions button', '.section-head h2'] },
   { name: 'settings-secrets-add', hash: '#/settings/secrets', ready: '.sec-row', secrets: SECRET_STATUS, then: { js: `[...document.querySelectorAll('.model-row.add')].find((b) => b.textContent.includes('Add a secret')).click(); await new Promise((r) => setTimeout(r, 100)); document.querySelector('.segmented [role=radio]:nth-child(2)').click(); await new Promise((r) => setTimeout(r, 100)); document.querySelector('.sec-form').scrollIntoView({ block: 'start' });`, ready: '.sec-pick label' }, keys: ['.sec-form .field', '.segmented button', '.sec-pick label', '.sec-form .actions button'] },
   { name: 'settings-secrets-locked', hash: '#/settings/secrets', ready: '.sec-lock', secrets: SECRET_LOCKED, keys: ['.sec-lock h3', '.sec-lock .sec-paused', '.update-badge-label', '.update-badge-v'] },
-  ...SETTINGS.map((p) => ({ name: 'settings-' + p, hash: '#/settings/' + p, ready: '.settings', keys: ['.settings-group-title', '.settings-nav button', 'h2'] })),
+  ...SETTINGS.map((p) => ({ name: 'settings-' + p.replace('/', '-'), hash: '#/settings/' + p, ready: '.settings', keys: ['.settings-group-title', '.settings-nav a', 'h2'] })),
+  // The narrow window's list of settings pages (#272): #/settings alone.
+  { name: 'settings-index', hash: '#/settings', ready: '.settings', keys: ['.settings-group-title', '.settings-nav a', '.settings-index a', 'h1'] },
 ].filter((s) => !ONLY?.length || ONLY.some((o) => s.name.startsWith(o)));
 if (!doc) console.warn('No document in the workspace: the panel screen is skipped.');
 
