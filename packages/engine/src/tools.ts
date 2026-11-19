@@ -22,6 +22,22 @@ const OUTPUT_CAP = 30_000;
 const cap = (s: string) =>
   s.length <= OUTPUT_CAP ? s : `[${s.length - OUTPUT_CAP} chars omitted]\n` + s.slice(s.length - OUTPUT_CAP);
 
+/**
+ * The environment a shell command gets: enough to run ordinary commands, none of the engine's secrets. A model can
+ * print its environment, and that output is stored in the transcript and sent to the provider on every later turn
+ * (CLAUDE.md rule 5). Names are matched exactly, so a new secret is excluded until it is added here on purpose.
+ */
+const SHELL_ENV = ['PATH', 'HOME', 'USER', 'LOGNAME', 'SHELL', 'TMPDIR', 'LANG', 'LC_ALL', 'TERM', '__CF_USER_TEXT_ENCODING'] as const;
+
+export function shellEnv(source: NodeJS.ProcessEnv = process.env): NodeJS.ProcessEnv {
+  const env: NodeJS.ProcessEnv = {};
+  for (const name of SHELL_ENV) {
+    const value = source[name];
+    if (value !== undefined) env[name] = value;
+  }
+  return env;
+}
+
 /** Resolve a path inside the workdir; anything outside is refused (design §10). */
 export function inside(workdir: string, p: string): string {
   const full = resolve(workdir, p);
@@ -79,12 +95,14 @@ export const TOOLS = {
     },
   }),
   shell: tool({
-    description: 'Run a shell command in your working directory. Returns exit code, stdout and stderr (tail-capped).',
+    description:
+      'Run a shell command in your working directory. Returns exit code, stdout and stderr (tail-capped). ' +
+      'The command gets a clean environment (PATH, HOME and similar); the engine\'s secrets are not available.',
     input: z.object({ command: z.string().min(1), timeout_s: z.number().int().positive().max(1800).default(120) }),
     run: ({ command, timeout_s }, { workdir, signal, onSpawn }) =>
       new Promise((resolvePromise, reject) => {
         // Own process group (Unix), so the whole command tree can be killed on stop, timeout or restart.
-        const child = spawn(command, { cwd: workdir, shell: true, env: process.env, detached: process.platform !== 'win32' });
+        const child = spawn(command, { cwd: workdir, shell: true, env: shellEnv(), detached: process.platform !== 'win32' });
         if (child.pid) onSpawn?.(child.pid);
         const killTree = () => {
           if (!child.pid) return;

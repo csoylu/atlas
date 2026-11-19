@@ -2,7 +2,7 @@ import { describe, expect, it } from 'vitest';
 import { mkdtempSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { inside, runTool, toolSpecs } from './tools.ts';
+import { inside, runTool, shellEnv, toolSpecs } from './tools.ts';
 
 const ctx = () => ({ workdir: mkdtempSync(join(tmpdir(), 'atlas-tools-')), signal: new AbortController().signal });
 
@@ -35,6 +35,24 @@ describe('tools', () => {
     const r = await runTool('shell', { command: 'pwd && exit 3' }, c);
     expect(r.output).toMatch(/^exit 3\n/);
     expect(r.output).toContain(c.workdir.split('/').pop());
+  });
+
+  it('keeps the engine environment out of shell commands (rule 5)', async () => {
+    expect(shellEnv({ PATH: '/bin', HOME: '/h', ATLAS_PASSWORD: 'x', ANTHROPIC_API_KEY: 'y' })).toEqual({ PATH: '/bin', HOME: '/h' });
+    const saved = { ATLAS_TEST_SECRET: process.env.ATLAS_TEST_SECRET, ANTHROPIC_API_KEY: process.env.ANTHROPIC_API_KEY };
+    process.env.ATLAS_TEST_SECRET = 'sk-never-in-the-transcript';
+    process.env.ANTHROPIC_API_KEY = 'sk-ant-never-in-the-transcript';
+    try {
+      const r = await runTool('shell', { command: 'printenv' }, ctx());
+      expect(r.isError).toBe(false);
+      expect(r.output).toContain('PATH=');
+      expect(r.output).not.toContain('never-in-the-transcript');
+    } finally {
+      for (const [name, value] of Object.entries(saved)) {
+        if (value === undefined) delete process.env[name];
+        else process.env[name] = value;
+      }
+    }
   });
 
   it('describes every tool with a JSON schema', () => {
