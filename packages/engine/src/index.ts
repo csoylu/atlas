@@ -33,9 +33,8 @@ import { Voice, type VoiceHost } from './voice.ts';
 import { VoiceChat } from './voiceChat.ts';
 import { Updater, type UpdateHost } from './updater.ts';
 import { ShellEnv, type ShellPathOptions } from './shellEnv.ts';
-import { Prs, ghReader, type GhRead, type PrSync } from './prs.ts';
-import { findClone, syncBranch } from './prSync.ts';
-import { Projects, ghClone, ghRunner, workspaceOf, type CloneRun, type GhRun } from './projects.ts';
+import { Prs, ghReader, type GhRead } from './prs.ts';
+import { Projects, ghClone, ghRunner, type CloneRun, type GhRun } from './projects.ts';
 import { Stalls } from './stalls.ts';
 
 export interface EngineOptions {
@@ -87,7 +86,7 @@ export interface EngineOptions {
    */
   shellPath?: 'login' | 'engine' | ShellPathOptions;
   /** Pull requests of tasks In review (#189): how they are read (default: gh api) and how often (false: never by itself). */
-  prs?: { read?: GhRead; sync?: PrSync; intervalMs?: number | false; validate?: RunnerOptions['prTool'] };
+  prs?: { read?: GhRead; intervalMs?: number | false; validate?: RunnerOptions['prTool'] };
   /**
    * Projects (#213): how the repo check runs gh (default: gh with the engine's login-shell env); how a member's
    * workspace is cloned (#214, default: gh repo clone, same env).
@@ -202,15 +201,6 @@ export async function startEngine(opts: EngineOptions): Promise<Engine> {
   const slash = new Slash(db, bus, kanban, runner);
   const prs = new Prs(db, bus, kanban, agents, runner, {
     read: opts.prs?.read ?? ghReader(() => shellEnv.engineEnv()),
-    // The merge queue's rebase (#236): in the reviewer's clone of the repo in its workspace for the project, with the
-    // engine's environment (login PATH; the commits keep their authors, the committer is the user's git identity).
-    sync:
-      opts.prs?.sync ??
-      (async (a) => {
-        const env = await shellEnv.engineEnv();
-        const clone = await findClone(workspaceOf(db, opts.dataDir, a.reviewer, a.projectId), a.repo, env);
-        return syncBranch({ clone, branch: a.branch, sha: a.sha, base: a.base, env });
-      }),
     intervalMs: opts.prs?.intervalMs,
   });
   dispatcher.reviewReason = (c) => prs.reason(c);
@@ -219,7 +209,6 @@ export async function startEngine(opts: EngineOptions): Promise<Engine> {
   const stalls = new Stalls(db, bus, kanban, runner, opts.stallsNow);
   stalls.startProblem = (c) => dispatcher.startProblem(c);
   stalls.reviewStall = (c) => prs.reviewStall(c);
-  stalls.reviewQueue = (c) => prs.queueSpot(c);
   stalls.deliver = (id) => dispatcher.onAgentMessage(id);
   dispatcher.stalls = stalls;
   const updater = new Updater(db, bus, {

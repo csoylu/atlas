@@ -37,8 +37,6 @@ export interface StallFacts {
   parents: Card[];
   /** In review: the #221 stall (the review ended twice without a verdict), in words, or null. */
   reviewStall: string | null;
-  /** In review: its place in the project's merge queue (#236, 0 = the head) and when it became the head; null = no queue. */
-  queue?: { position: number; headAt: string | null } | null;
 }
 
 const later = (...isos: (string | null | undefined)[]): string => isos.filter((x): x is string => !!x).sort().at(-1)!;
@@ -52,15 +50,12 @@ export function detectStall(f: StallFacts): CardStall | null {
   switch (c.status) {
     case 'review': {
       if (f.reviewStall) return { rule: 'review', reason: f.reviewStall, since: later(inState, f.lastRunEnd), action: 'retry_review' };
-      // Behind others in the merge queue (#236): waiting its turn is not stuck; the head counts from when it got there.
-      if (f.queue && (f.queue.position > 0 || !f.queue.headAt)) return null;
       const open = c.prs.filter((p) => p.state === 'open');
       // GitHub unreadable has its own item; CI still running or red, or a verdict given: something else moves it.
       if (!open.length || open.some((p) => p.error || p.ci !== 'success' || p.qa === 'failure') || open.every((p) => p.qa === 'success')) return null;
-      const since = later(inState, f.queue?.headAt ?? null, f.lastRunEnd);
+      const since = later(inState, f.lastRunEnd);
       if (!over(since, 'review', now)) return null;
-      const waiting = c.waiting?.replace(/^\d+\w* in the queue for [^·]*· /, '') ?? null;
-      const why = waiting && !/^waiting for @\S+$/.test(waiting) ? ` (${waiting})` : '';
+      const why = c.waiting && !/^waiting for @\S+$/.test(c.waiting) ? ` (${c.waiting})` : '';
       return { rule: 'review', reason: `CI is green, no review is running${why}`, since, action: 'retry_review' };
     }
     case 'running': {
@@ -111,8 +106,6 @@ export class Stalls {
   startProblem: (c: Card) => string | null = () => null;
   /** Set by the PR watcher: the #221 review stall in words. */
   reviewStall: (c: Card) => string | null = () => null;
-  /** Set by the PR watcher: the task's place in its project's merge queue (#236), null when it has none. */
-  reviewQueue: (c: Card) => { position: number; headAt: string | null } | null = () => null;
   /** Set by the dispatcher: wake the agent of a chat a note was posted in. */
   deliver: (cardId: string) => void = () => {};
   private last = 0;
@@ -149,7 +142,6 @@ export class Stalls {
         startProblem: c.status === 'ready' ? this.startProblem(c) : null,
         parents: c.status === 'todo' ? c.parents.flatMap((p) => byId.get(p) ?? this.cardOrNone(p)) : [],
         reviewStall: c.status === 'review' ? this.reviewStall(c) : null,
-        queue: c.status === 'review' ? this.reviewQueue(c) : null,
       });
       this.apply(c, stall);
     }

@@ -3,7 +3,7 @@ import { execFileSync } from 'node:child_process';
 import { mkdirSync, mkdtempSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { clashes, describe, parseMigration, renumber } from './migrations.mjs';
+import { clashes, describe, parseMigration } from './migrations.mjs';
 
 const D = 'packages/engine/src/store/migrations';
 const main = [`${D}/0050_a.sql`, `${D}/0051_b.sql`, 'README.md', 'other/migrations/0003_z.sql'];
@@ -21,14 +21,6 @@ group('migration numbers of a PR (#236)', () => {
     expect(clashes([`${D}/0049_c.sql`], main)).toHaveLength(1);
     expect(clashes(['other/migrations/0004_y.sql', 'new/migrations/0001_q.sql'], main)).toEqual([]);
     expect(describe(clashes([`${D}/0051_c.sql`], main)[0]!)).toMatch(/0051 is not above 0051/);
-  });
-  it('renumbers only the clashing folder, keeping the PR order', () => {
-    expect(renumber([`${D}/0052_c.sql`], main)).toEqual([]);
-    expect(renumber([`${D}/0051_c.sql`], main)).toEqual([{ from: `${D}/0051_c.sql`, to: `${D}/0052_c.sql`, fromStem: '0051_c', toStem: '0052_c' }]);
-    expect(renumber([`${D}/0052_d.sql`, `${D}/0051_c.sql`, 'other/migrations/0004_y.sql'], main)).toEqual([
-      { from: `${D}/0051_c.sql`, to: `${D}/0052_c.sql`, fromStem: '0051_c', toStem: '0052_c' },
-      { from: `${D}/0052_d.sql`, to: `${D}/0053_d.sql`, fromStem: '0052_d', toStem: '0053_d' },
-    ]);
   });
   it('the CI check fails on a clash, passes otherwise', { timeout: 30_000 }, () => {
     const dir = mkdtempSync(join(tmpdir(), 'mig-'));

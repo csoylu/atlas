@@ -8,7 +8,6 @@ import type { Agents } from './agents.ts';
 import type { Runner } from './runner.ts';
 import { insertNotification } from './notifications.ts';
 import { isMember, projectRow } from './projects.ts';
-import type { SyncResult } from './prSync.ts';
 
 /**
  * Tasks linked to their pull requests (#189, design §7.1). A task In review has open PRs; this module reads them from
@@ -18,12 +17,7 @@ import type { SyncResult } from './prSync.ts';
  * - CI red, a conflict with the base, `qa/validated` failed, or every PR closed unmerged → ready, the reason as a note;
  * - CI green on a head the reviewer hasn't seen → start the reviewer's run in the task's own thread.
  * GitHub unreadable: nothing moves on old data; the card says why, and after 15 min one Inbox item says so.
- * Merge queue (#236): the tasks In review of a project are reviewed one at a time, in the order they asked
- * (cards.review_queued_at). Only the head gets a reviewer run, and only once its PRs are up to date with main: Atlas
- * rebases them first (prSync.ts, in the reviewer's clone; new migrations renumbered above main's) and waits for CI on
- * the new head. A rebase that conflicts sends the task back with the files named and the queue moves on. A merge
- * (the queue's or one from Master's terminal) marks the other queued PRs to be brought up to date again.
- * Everything lives in card_prs and cards: a restart resumes from the tables.
+ * Everything lives in card_prs: a restart resumes from the table.
  */
 
 export const POLL_MS = 60_000;
@@ -45,8 +39,6 @@ export interface GhPr {
   ciFailed?: CardPr['ciFailed'];
 }
 export type GhRead = (repo: string, number: number) => Promise<GhPr>;
-/** Bring one PR of the head of a queue up to date with main (prSync.ts syncBranch in the reviewer's clone). */
-export type PrSync = (a: { repo: string; branch: string; sha: string; base: string; reviewer: string; projectId: string }) => Promise<SyncResult>;
 
 /** https://github.com/owner/name/pull/12 (any suffix) → its repo and number. */
 export function parsePrUrl(url: string): { repo: string; number: number; url: string } {
@@ -76,8 +68,6 @@ interface PrRow {
   ci_failed_name: string | null;
   ci_failed_url: string | null;
   failed_sha: string | null;
-  synced_sha: string | null;
-  sync_error: string | null;
 }
 
 const toPr = (r: PrRow): CardPr => ({
@@ -125,7 +115,6 @@ export const REVIEW_TRIES = 2;
 
 export interface PrsOptions {
   read: GhRead;
-  sync: PrSync;
   /** false: no timer (tests call poll()). */
   intervalMs?: number | false;
   now?: () => number;
@@ -206,107 +195,6 @@ export class Prs {
         console.error(`pull requests of ${card.id}: deciding failed`, e);
       }
     }
-    const projects = this.db.prepare("SELECT DISTINCT project_id AS id FROM cards WHERE status = 'review'").all() as { id: string }[];
-    for (const { id } of projects) {
-      try {
-        await this.advance(id);
-      } catch (e) {
-        console.error(`merge queue of project ${id}: advancing failed`, e);
-      }
-    }
-  }
-
-  /** The tasks In review of a project with a PR, in queue order (#236). */
-  queue(projectId: string): string[] {
-    return (
-      this.db
-        .prepare(
-          `SELECT id FROM cards WHERE project_id = ? AND status = 'review' AND EXISTS (SELECT 1 FROM card_prs p WHERE p.card_id = cards.id)
-           ORDER BY review_queued_at IS NULL, review_queued_at, rowid`,
-        )
-        .all(projectId) as { id: string }[]
-    ).map((r) => r.id);
-  }
-
-  private row(cardId: string, p: CardPr): PrRow {
-    return this.db.prepare('SELECT * FROM card_prs WHERE card_id = ? AND repo = ? AND number = ?').get(cardId, p.repo, p.number) as PrRow;
-  }
-
-  /**
-   * The head of the project's queue: up to date with main first, then decide() may start its review. A head whose
-   * rebase conflicts goes back to its builder and the next one comes up, in the same poll.
-   */
-  private async advance(projectId: string): Promise<void> {
-    const at = () => new Date(this.now()).toISOString();
-    // Moved to review without task_request_review: at the end of the queue.
-    this.db.prepare("UPDATE cards SET review_queued_at = ? WHERE project_id = ? AND status = 'review' AND review_queued_at IS NULL").run(at(), projectId);
-    try {
-      await this.advanceHead(projectId, at);
-    } finally {
-      // Positions shown on the cards (« 2nd in the queue… »): when the queue changed, every member's card is re-sent.
-      const q = this.queue(projectId);
-      if (this.shown.get(projectId) !== q.join(',')) {
-        this.shown.set(projectId, q.join(','));
-        for (const id of q) this.kanban.emit(id);
-      }
-    }
-  }
-
-  /** The queue's order as last shown, per project (display only: re-sent on change, rebuilt after a restart). */
-  private shown = new Map<string, string>();
-
-  private async advanceHead(projectId: string, at: () => string): Promise<void> {
-    for (;;) {
-      const headId = this.queue(projectId)[0];
-      if (!headId) return;
-      if (this.db.prepare('UPDATE cards SET review_head_at = ? WHERE id = ? AND review_head_at IS NULL').run(at(), headId).changes) this.kanban.emit(headId);
-      const card = this.kanban.get(headId);
-      if (card.prs.some((p) => p.error || !p.checkedAt)) return; // nothing moves on old data
-      const open = card.prs.filter((p) => p.state === 'open');
-      let gone = false;
-      for (const p of open.filter((x) => x.headSha && this.row(headId, x).synced_sha !== x.headSha)) {
-        let r: SyncResult;
-        try {
-          if (!card.reviewer) throw new Error('no reviewer: set the review agent in Settings → Board & triage');
-          r = await this.opts.sync({ repo: p.repo, branch: p.branch ?? '', sha: p.headSha!, base: p.base ?? 'main', reviewer: card.reviewer, projectId });
-        } catch (e) {
-          const why = (e instanceof Error ? e.message : String(e)).trim().split('\n')[0] || 'unknown error';
-          this.db.prepare('UPDATE card_prs SET sync_error = ? WHERE card_id = ? AND repo = ? AND number = ?').run(why, headId, p.repo, p.number);
-          this.kanban.emit(headId);
-          return; // shown on the card, tried again at the next poll
-        }
-        if (!this.cardOrNull(headId) || this.kanban.get(headId).status !== 'review') return;
-        const set = (sha: string | null) => this.db.prepare('UPDATE card_prs SET synced_sha = ?, sync_error = NULL WHERE card_id = ? AND repo = ? AND number = ?').run(sha, headId, p.repo, p.number);
-        if (r.kind === 'current') set(p.headSha);
-        else if (r.kind === 'moved') set(null); // a new head: read it first
-        else if (r.kind === 'pushed') {
-          const what = [
-            r.rebased ? `PR #${p.number} rebased onto ${p.base ?? 'main'} ${short(r.onto)}` : `PR #${p.number} updated`,
-            ...r.renamed.map((m) => `migration ${m.fromStem} renamed ${m.toStem}`),
-          ];
-          this.db.transaction(() => {
-            set(r.newHead);
-            this.kanban.appendMessage(headId, 'user', 'system', [
-              { type: 'text', text: `Merge queue: ${what.join('; ')}. New head ${short(r.newHead)} (was ${short(r.oldHead)}): the review starts when CI is green on it.` },
-            ]);
-            this.kanban.event(headId, 'queue_updated', { by: 'github', pr: p.number, from: r.oldHead, to: r.newHead, onto: r.onto, renamed: r.renamed.map((m) => ({ from: m.from, to: m.to })) });
-          })();
-        } else {
-          this.sendBack(card, p, `PR #${p.number} conflicts with ${p.base ?? 'main'} in ${r.files.join(', ')}: rebase it on ${p.base ?? 'main'}`);
-          gone = true;
-          break;
-        }
-        this.kanban.emit(headId);
-      }
-      if (gone) continue; // the next task in the queue comes up
-      this.decide(headId);
-      return;
-    }
-  }
-
-  /** Main moved (a merge): every queued PR of the project is brought up to date again before its review. */
-  private mainMoved(projectId: string): void {
-    this.db.prepare("UPDATE card_prs SET synced_sha = NULL WHERE card_id IN (SELECT id FROM cards WHERE project_id = ? AND status = 'review')").run(projectId);
   }
 
   private async read(cardId: string, pr: CardPr): Promise<void> {
@@ -375,7 +263,6 @@ export class Prs {
         const text = merged.map((p) => `PR #${p.number} merged into ${p.base ?? 'its base'} (${short(p.mergeSha)})`).join(', ');
         this.kanban.update(cardId, { status: 'done' }, 'github', text);
         this.kanban.event(cardId, 'completed', { by: 'github', summary: text });
-        this.mainMoved(card.projectId);
       } else this.sendBack(card, null, prs.map((p) => `PR #${p.number} was closed without merging`).join(', '));
       return;
     }
@@ -393,9 +280,6 @@ export class Prs {
               : null;
       if (why) return this.sendBack(card, p, `PR #${p.number}: ${why}`);
     }
-    // The merge queue (#236): only its head is reviewed, once its PRs are up to date with main (advance()).
-    if (card.status !== 'review' || this.queue(card.projectId)[0] !== cardId) return;
-    if (open.some((p) => this.row(cardId, p).synced_sha !== p.headSha)) return;
     // The reviewer's run ended and GitHub says nothing about the head (#221): not a review. Once more, then shown.
     const stall = this.stall(card);
     let again = false;
@@ -486,14 +370,6 @@ export class Prs {
     return null;
   }
 
-  /** The task's place in its project's merge queue (0 = the head) and when it became the head (#237); null: not queued. */
-  queueSpot(card: Card): { position: number; headAt: string | null } | null {
-    const position = this.queue(card.projectId).indexOf(card.id);
-    if (position < 0) return null;
-    const headAt = (this.db.prepare('SELECT review_head_at AS at FROM cards WHERE id = ?').get(card.id) as { at: string | null } | undefined)?.at ?? null;
-    return { position, headAt };
-  }
-
   /** The plain-words « why isn't this moving » of a task In review. */
   reason(card: Card): string | null {
     if (!card.prs.length) return 'in review: no pull request linked';
@@ -502,21 +378,6 @@ export class Prs {
     const open = card.prs.filter((p) => p.state === 'open');
     if (card.prs.some((p) => !p.checkedAt)) return 'reading the pull request from GitHub…';
     if (!open.length) return 'pull request closed: moving…';
-    // The merge queue (#236): its position, and how long the head has been there.
-    const q = this.queue(card.projectId);
-    const pos = q.indexOf(card.id);
-    if (pos > 0) return `${ordinal(pos + 1)} in the queue, behind ${refs(q.slice(0, pos).map((id) => this.kanban.ref(id)))}`;
-    const since = (this.db.prepare('SELECT review_head_at AS at FROM cards WHERE id = ?').get(card.id) as { at: string | null } | undefined)?.at;
-    const why = this.headReason(card, open);
-    return pos === 0 && since ? `1st in the queue for ${ago(this.now() - Date.parse(since))} · ${why}` : why;
-  }
-
-  private headReason(card: Card, open: CardPr[]): string {
-    const rows = open.map((p) => ({ p, r: this.row(card.id, p) }));
-    const failing = rows.find((x) => x.r.sync_error);
-    if (failing) return `can't bring PR #${failing.p.number} up to date with ${failing.p.base ?? 'main'}: ${failing.r.sync_error} (tried again every minute)`;
-    const behind = rows.filter((x) => x.r.synced_sha !== x.p.headSha);
-    if (behind.length) return `bringing ${behind.map((x) => `PR #${x.p.number}`).join(', ')} up to date with ${behind[0]!.p.base ?? 'main'}…`;
     const cur = this.runner.current(card.id);
     if (cur && cur.agentId === card.reviewer) return `@${card.reviewer} is checking ${open.map((p) => short(p.headSha)).join(', ')}`;
     if (open.some((p) => p.ci === 'pending' || p.ci === null)) return 'QA starts when CI is green';
@@ -543,18 +404,6 @@ export class Prs {
   private cardOrNull(id: string): Card | null {
     return this.db.prepare('SELECT 1 FROM cards WHERE id = ?').get(id) ? this.kanban.get(id) : null;
   }
-}
-
-const ordinal = (n: number) => `${n}${n % 100 >= 11 && n % 100 <= 13 ? 'th' : (['th', 'st', 'nd', 'rd'][n % 10] ?? 'th')}`;
-/** #214, #215 and #216; past three: « #214, #215, #216 and 2 more ». */
-const refs = (r: string[]) => (r.length > 3 ? `${r.slice(0, 3).join(', ')} and ${r.length - 3} more` : r.length > 1 ? `${r.slice(0, -1).join(', ')} and ${r.at(-1)}` : (r[0] ?? ''));
-/** 0 min, 25 min, 2 h, 2 h 5 min, 3 d 4 h. */
-function ago(ms: number): string {
-  const m = Math.max(0, Math.floor(ms / 60_000));
-  if (m < 60) return `${m} min`;
-  const h = Math.floor(m / 60);
-  if (h < 24) return m % 60 ? `${h} h ${m % 60} min` : `${h} h`;
-  return h % 24 ? `${Math.floor(h / 24)} d ${h % 24} h` : `${Math.floor(h / 24)} d`;
 }
 
 /** The real reader: `gh api` with the user's own gh login (env: the login shell's PATH, so Homebrew's gh is found). */

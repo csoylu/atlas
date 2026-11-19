@@ -66,8 +66,8 @@ jobs:
       - name: One new changelog entry in this pull request
         if: github.event_name == 'pull_request'
         run: node scripts/release/changelog.mjs check HEAD^1 --pr
-      # The repo's migration rule (#236, rule 4): a new migration is numbered above every one on the base (the merge queue
-      # renumbers a clash when it rebases the PR).
+      # The repo's migration rule (#236, rule 4): a new migration is numbered above every one on the base (a clash: the
+      # builder renumbers it above and rebases).
       - name: New migrations numbered above the base's
         if: github.event_name == 'pull_request'
         run: node scripts/pr/migrations.mjs check HEAD^1 HEAD
