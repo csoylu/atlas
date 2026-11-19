@@ -1,5 +1,5 @@
 import { rehypeSecrets } from './secretsView.ts';
-import { Fragment, forwardRef, useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from 'react';
+import { Fragment, forwardRef, useCallback, useEffect, useMemo, useRef, useState, type ReactNode, type RefObject } from 'react';
 import { AgentFace } from './AgentFace.tsx';
 import Markdown from 'react-markdown';
 import remarkGfm from 'remark-gfm';
@@ -219,7 +219,7 @@ export function CardNotices({ card, onError }: { card: Card; onError(e: unknown)
       </div>
     );
   }
-  // GitHub unreadable: the task view's banner already says it (PrRows).
+  // GitHub unreadable: the task view's « Now » box says it (TaskNow).
   if (!card.waiting || card.block || (card.status === 'review' && card.prs.some((p) => p.error))) return null;
   return (
     <div className="waiting-line">
@@ -291,6 +291,11 @@ export function Activity(props: {
   onUndo?(rewindId: string): Promise<unknown>;
   /** Failed answers from the question's buttons (option, approve, retry). */
   onError(e: unknown): void;
+  /**
+   * The task sheet (#269) shows a blocked task's question in its « Now » box: the conversation then doesn't repeat it,
+   * and opens scrolled to that box instead of the end.
+   */
+  askAt?: RefObject<HTMLElement | null>;
 }) {
   const { messages, results, timings, run, timeline } = props.convo;
   // The streaming reply, re-rendered as markdown at most every few dozen ms (#79): its thinking rows above its text (#80).
@@ -315,15 +320,19 @@ export function Activity(props: {
   useEffect(() => setExpanded(false), [fold, card.id]);
   const shown = messages.filter((m) => m.author !== 'tool' && (expanded || m.seq > fold));
   // In review waits for QA, not the user (#189): its reason is a notice line, not a question.
-  const asking = !!card.block;
+  const asking = !!card.block && !props.askAt;
   // The question is the agent's last message: highlight that one instead of repeating it.
   const last = shown.at(-1);
-  const inline = !!card.block && !draft && last?.role === 'assistant' && msgText(last) === card.block.reason.trim();
+  // In the task sheet that message is the « Now » box's question: it is not shown twice (unless it also ran steps).
+  const inline =
+    !!card.block && !draft && last?.role === 'assistant' && msgText(last) === card.block.reason.trim() && (asking || last.content.every((b) => b.type === 'text'));
   const list = inline ? shown.slice(0, -1) : shown;
   // Opens at the question's start (a long one is read from its top), else at the end of the conversation.
   // Block body on purpose: scrollIntoView returns a Promise in recent Chromium, which must not become the cleanup.
   useEffect(() => {
+    const box = card.block ? props.askAt?.current : null;
     if (askRef.current) askRef.current.scrollIntoView({ block: 'start' });
+    else if (box) box.scrollIntoView({ block: 'nearest' }); // the sheet's top: title, then the question
     else end.current?.scrollIntoView({ block: 'end' });
   }, [messages.length, shownDraft, asking, card.block?.reason]);
   // A memory's source link (?msg=<seq>, #82): scroll to that message once it is loaded and flash it.
@@ -773,7 +782,7 @@ export const CardComposer = forwardRef<
   },
 );
 
-const blockLabel: Record<NonNullable<Card['block']>['kind'], string> = {
+export const blockLabel: Record<NonNullable<Card['block']>['kind'], string> = {
   needs_input: 'Question for you',
   dependency: 'Waiting on other work',
   capability: 'Missing access or a broken setup',

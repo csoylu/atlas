@@ -59,7 +59,7 @@ test('board flow: In review with its PR, failed → Ready with the reason, merge
     await expect.poll(async () => (await atlas.card(task.id)).status).toBe('done');
     await page.setViewportSize({ width: 390, height: 844 });
     await page.goto(`${atlas.url}/#/board?card=${task.id}`);
-    await expect(page.locator('.prc-row')).toContainText('merged');
+    await expect(page.locator('.thread-panel .cm-now .pr-pill')).toContainText('merged');
     await page.screenshot({ path: join(SHOTS, 'done-390.png') });
   } finally {
     await atlas.stop();
