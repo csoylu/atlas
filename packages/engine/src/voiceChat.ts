@@ -1,8 +1,28 @@
 import { USER, VOICE_MARK } from '@atlas/shared';
 import type { Agents } from './agents.ts';
 import type { Bus } from './events.ts';
-import type { Kanban } from './kanban.ts';
+import type { Kanban, Transition } from './kanban.ts';
 import type { Db } from './store/db.ts';
+
+/** What the voice says for a task note in the voice chat (#52, #251): the news in one sentence, no summary or question text. */
+export function spokenNote(n: { transition: Transition; title: string; number: number | null }): string {
+  const task = n.number != null ? `Task ${n.number}` : 'A task';
+  const title = n.title.trim().replace(/[.!?…:;,\s]+$/, '');
+  switch (n.transition) {
+    case 'done':
+      return `${task} is finished: ${title}.`;
+    case 'review':
+      return `${task} is ready for your review: ${title}.`;
+    case 'closed':
+      return `${task} is closed: ${title}.`;
+    case 'stopped':
+      return `You stopped ${task.toLowerCase()}: ${title}.`;
+    case 'needs_input':
+      return `${task} needs your OK: ${title}.`;
+    case 'capability':
+      return `${task} is blocked: ${title}.`;
+  }
+}
 
 /** The agent that answers by voice, when it exists and is enabled; otherwise the first enabled agent. */
 const VOICE_AGENT = 'atlas';
@@ -127,6 +147,16 @@ export class VoiceChat {
   watch(onReply: (text: string) => void): () => void {
     const texts = new Map<string, string>();
     return this.bus.on((e) => {
+      if (e.type === 'message.appended') {
+        // a task note: since #143 it wakes no agent, so no reply run says it; spoken as one short line (the rest stays in the chat)
+        const id = this.get();
+        if (!id || e.message.conversationId !== this.kanban.get(id).conversationId || !this.speaking(id)) return;
+        const note = this.db
+          .prepare('SELECT r.transition, c.title, c.number FROM card_reports r JOIN cards c ON c.id = r.card_id WHERE r.message_id = ?')
+          .get(e.message.id) as { transition: Transition; title: string; number: number | null } | undefined;
+        if (note) onReply(spokenNote(note));
+        return;
+      }
       if (e.type === 'run.delta') {
         const id = this.get();
         if (!id || e.conversationId !== this.kanban.get(id).conversationId) return;
