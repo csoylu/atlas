@@ -232,8 +232,20 @@ Project how-tos live in this file, not in agent memory. Add one here (through a 
 
 **Tests**
 - Under load (several agents, load average ~30) `npm test` fails at random (changelog, dispatcher, lifecycle, rewind,
-  runner), and in `test:full` the voiceLoop barge-in test too. Rerun the failing files alone
-  (`npx vitest run --project fast <files>`, `--project slow` for voice) before calling it a regression.
+  runner). Rerun the failing files alone (`npx vitest run --project fast <files>`, `--project slow` for voice) before
+  calling it a regression.
+- **Voice tests (`voiceLoop.test.ts`, slow project) run real Whisper and Supertonic, so their input is not repeatable**
+  (#255): Supertonic draws new noise on every synthesis (two renders of « Yes, Master? » are never the same samples), and
+  Whisper then writes « Yesta. », « Yes, Moss. » or « Yeter. Y » for what was said in ~1 run in 10 (not load: it happens
+  at load 1; the barge-in itself never missed a stop word in ~75 runs, cut after 150–700 ms). Never assert one exact
+  transcript of a model's reading of audio the test did not fix: assert what the loop does with it. A loop that
+  mishandles a mis-heard transcript is a product bug: report it to atlas with the repro, and the test keeps failing
+  until it is fixed (#257 did it for both above): no retry on a reading the loop should handle. A retry is only for a
+  reading the scenario cannot use at all (the echo « yes do it » is a command, not an ack): check it with `heard` (the
+  `onHeard` log), use the kit's `retry` with `retryIf` on a dedicated error and the reading in the log line, never a
+  bare retry. Where the audio is the same and only the spelling varies, widen the regex (« kart ?a[çşc] »). Recipe: 20
+  runs, one at a time (`for i in $(seq 20); do npx vitest run --project slow packages/engine/src/voiceLoop.test.ts;
+  done`, ~2.5 min each; a second run on the machine is load).
 - Engine tests with a scripted FakeProvider call `startEngine({ memoryReview: false, … })`, or the background memory
   review eats the script.
 - E2E: `npm run build`, then in `e2e/`: `E2E_CHANNEL=chrome npx playwright test --reporter=line` (~20–50 s).
