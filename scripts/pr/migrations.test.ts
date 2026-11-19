@@ -30,7 +30,7 @@ group('migration numbers of a PR (#236)', () => {
       { from: `${D}/0052_d.sql`, to: `${D}/0053_d.sql`, fromStem: '0052_d', toStem: '0053_d' },
     ]);
   });
-  it('the CI check fails on a clash, passes otherwise', () => {
+  it('the CI check fails on a clash, passes otherwise', { timeout: 30_000 }, () => {
     const dir = mkdtempSync(join(tmpdir(), 'mig-'));
     const git = (...a: string[]) => execFileSync('git', ['-C', dir, ...a], { encoding: 'utf8', env: { ...process.env, GIT_AUTHOR_NAME: 't', GIT_AUTHOR_EMAIL: 't@t', GIT_COMMITTER_NAME: 't', GIT_COMMITTER_EMAIL: 't@t' } });
     git('init', '-q', '-b', 'main');

@@ -6,7 +6,7 @@ import { repoKit } from '../test/repoKit.ts';
 
 const M = 'pkg/migrations';
 
-describe('merge queue: bring a PR up to date with main (#236)', () => {
+describe('merge queue: bring a PR up to date with main (#236)', { timeout: 30_000 }, () => {
   it('a PR that already contains main: nothing pushed', async () => {
     const k = repoKit();
     const sha = k.commit('feat/1-a', { 'src/b.ts': 'b\n' });

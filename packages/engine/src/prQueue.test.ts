@@ -79,7 +79,8 @@ function ask(e: E, ns: number[], prOf?: Map<string, number>): { id: string }[] {
   });
 }
 
-describe('merge queue per project (#236)', () => {
+// Real git in every step (a few hundred ms each, seconds under load): a minute per test.
+describe('merge queue per project (#236)', { timeout: 60_000 }, () => {
   it('three PRs asked in order are reviewed and merged in that order, one reviewer run at a time; the next is rebased and reviewed on its new head', async () => {
     const w = world();
     const prOf = new Map<string, number>();
@@ -96,7 +97,7 @@ describe('merge queue per project (#236)', () => {
     expect(e.runner.runs(b.id)).toHaveLength(0);
     expect(e.kanban.get(b.id).waiting).toBe(`2nd in the queue, behind ${ref(a)}`);
     expect(e.kanban.get(c.id).waiting).toBe(`3rd in the queue, behind ${ref(a)} and ${ref(b)}`);
-    await t.idle(a.id);
+    await t.idle(a.id, 30_000);
 
     // A merged: A done, B brought up to date with main (rebased, pushed), not reviewed before CI on its new head.
     await e.prs.poll();
@@ -113,12 +114,12 @@ describe('merge queue per project (#236)', () => {
     await e.prs.poll();
     expect(e.runner.runs(b.id)).toHaveLength(1);
     expect(e.runner.runs(c.id)).toHaveLength(0);
-    await t.idle(b.id);
+    await t.idle(b.id, 30_000);
 
     await e.prs.poll(); // B merged, C rebased
     w.green.add(w.k.head('feat/3-x'));
     await e.prs.poll(); // C's new head read
-    await t.idle(c.id);
+    await t.idle(c.id, 30_000);
     await e.prs.poll();
     expect([a, b, c].map((x) => e.kanban.get(x.id).status)).toEqual(['done', 'done', 'done']);
     expect(w.reviewed.map((r) => r.pr)).toEqual([1, 2, 3]);
@@ -138,7 +139,7 @@ describe('merge queue per project (#236)', () => {
     w.open(3, { 'src/c.ts': 'c\n' });
     const [a, b, c] = ask(e, [1, 2, 3], prOf) as [{ id: string }, { id: string }, { id: string }];
     await e.prs.poll();
-    await t.idle(a.id);
+    await t.idle(a.id, 30_000);
     const bBefore = w.k.head('feat/2-x');
     await e.prs.poll();
     expect(e.kanban.get(b.id).status).toBe('ready');
@@ -174,7 +175,7 @@ describe('merge queue per project (#236)', () => {
     await restart([step()]); // queued, nothing read yet
     expect(eng.prs.queue('atlas')).toEqual([a.id, b.id]);
     await eng.prs.poll();
-    await t.idle(a.id);
+    await t.idle(a.id, 30_000);
     await restart([step()]); // A merged on GitHub, not read yet
     expect(eng.kanban.get(a.id).status).toBe('review');
     await eng.prs.poll();
@@ -192,7 +193,7 @@ describe('merge queue per project (#236)', () => {
     await restart([step()]);
     await eng.prs.poll();
     expect(eng.runner.runs(b.id)).toHaveLength(1);
-    await t.idle(b.id);
+    await t.idle(b.id, 30_000);
     await restart();
     await eng.prs.poll();
     expect(eng.runner.runs(b.id)).toHaveLength(1); // the restart did not start it again
@@ -232,5 +233,37 @@ describe('merge queue per project (#236)', () => {
     expect(e.kanban.get(b.id).status).toBe('done');
     expect(JSON.stringify(e.kanban.messages(a.id).at(-1)!.content)).toMatch(/PR #1 rebased onto main/);
     expect(e.prs.queue('nope')).toEqual([]);
+  });
+
+  it('killed between the push and saving it: the next poll finds the pushed head up to date, no second push', async () => {
+    const w = world();
+    let die = true;
+    const t = await launch({
+      script: [],
+      dispatch: false,
+      prs: {
+        read: w.read,
+        sync: async (a) => {
+          const r = await syncBranch({ clone: w.k.clone, branch: a.branch, sha: a.sha, base: a.base, env: w.k.env });
+          if (die) throw new Error('engine killed after the push');
+          return r;
+        },
+        intervalMs: false,
+      },
+    });
+    const e = t.engine;
+    if (!e.agents.list().some((a) => a.id === 'zurich')) e.agents.create({ id: 'zurich', modelId: e.agents.get('atlas').modelId });
+    e.settings.update({ reviewAgent: 'zurich', triageAgent: 'atlas' });
+    w.open(1, { [`${M}/0002_a.sql`]: 'a\n' });
+    w.k.commit('main', { [`${M}/0002_b.sql`]: 'b\n' });
+    const [a] = ask(e, [1]) as [{ id: string }];
+    await e.prs.poll();
+    const pushed = w.k.head('feat/1-x');
+    expect(w.k.files(pushed)).toContain(`${M}/0003_a.sql`);
+    die = false;
+    w.green.add(pushed);
+    await e.prs.poll();
+    expect(w.k.head('feat/1-x')).toBe(pushed);
+    expect(e.runner.runs(a.id)).toHaveLength(1);
   });
 });
