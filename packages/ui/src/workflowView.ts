@@ -102,6 +102,7 @@ const EVENT_WORDS: Record<string, string> = {
 };
 /** « When a task is done », « When a PR is merged » (#258; the editor for these comes in 2/6). */
 export function eventText(t: Extract<TriggerConfig, { kind: 'task' | 'pr' }>): string {
+  if (t.kind === 'pr' && t.event === 'ci_finished' && t.result) return `When CI turns ${t.result === 'failure' ? 'red' : 'green'} on a PR`;
   return `When a ${t.kind === 'task' ? 'task' : 'PR'} ${EVENT_WORDS[t.event] ?? t.event}`;
 }
 
@@ -329,6 +330,7 @@ export function nodeClass(s: NodeRunState): string {
   if (s === 'waiting') return 'wait';
   if (s === 'failed' || s === 'rejected') return 'bad';
   if (s === 'skipped') return 'skip';
+  if (s === 'not-reached') return 'unreached';
   return '';
 }
 
@@ -497,3 +499,186 @@ export const TEMPLATES: Template[] = [
     }),
   },
 ];
+
+/* ── Workflows v2 stage 1 (#259): the trigger picker, its filters, fields, back-edge labels ── */
+
+export type TriggerKind = TriggerConfig['kind'];
+/** The trigger picker, in the mockup's order (Webhook comes with 3/6). */
+export const TRIGGER_KINDS: { kind: TriggerKind; label: string; help: string; isNew?: boolean }[] = [
+  { kind: 'time', label: 'At set times', help: 'Every day, weekdays, weekly, hourly, once, or cron' },
+  { kind: 'task', label: 'Task event', help: 'Created, status changed to…, blocked, asks for review', isNew: true },
+  { kind: 'pr', label: 'Pull request event', help: 'Opened, CI green or red, conflict, merged', isNew: true },
+  { kind: 'manual', label: 'Only by hand', help: 'Run now, from the workflow or on a task' },
+];
+
+type EventTrigger = Extract<TriggerConfig, { kind: 'task' | 'pr' }>;
+/** One event button: the event, and for CI the result it implies (« CI turns red » = ci_finished + failure). */
+export interface EventChoice {
+  key: string;
+  label: string;
+  event: EventTrigger['event'];
+  result?: 'success' | 'failure';
+}
+export const TASK_EVENT_CHOICES: EventChoice[] = [
+  { key: 'created', label: 'is created', event: 'created' },
+  { key: 'status_changed', label: 'changes status', event: 'status_changed' },
+  { key: 'assignee_changed', label: 'changes assignee', event: 'assignee_changed' },
+  { key: 'blocked', label: 'is blocked', event: 'blocked' },
+  { key: 'review_requested', label: 'asks for review', event: 'review_requested' },
+  { key: 'done', label: 'is done', event: 'done' },
+];
+export const PR_EVENT_CHOICES: EventChoice[] = [
+  { key: 'opened', label: 'is opened', event: 'opened' },
+  { key: 'pushed', label: 'gets a new commit', event: 'pushed' },
+  { key: 'ci_red', label: 'CI turns red', event: 'ci_finished', result: 'failure' },
+  { key: 'ci_green', label: 'CI turns green', event: 'ci_finished', result: 'success' },
+  { key: 'ci_any', label: 'CI finishes', event: 'ci_finished' },
+  { key: 'conflict', label: 'has a conflict', event: 'conflict' },
+  { key: 'validated', label: 'is validated by QA', event: 'validated' },
+  { key: 'merged', label: 'is merged', event: 'merged' },
+  { key: 'closed', label: 'is closed', event: 'closed' },
+];
+
+/** The event button that is on for a trigger. */
+export function eventChoiceOf(t: EventTrigger): string {
+  if (t.kind === 'pr' && t.event === 'ci_finished') return t.result === 'failure' ? 'ci_red' : t.result === 'success' ? 'ci_green' : 'ci_any';
+  return t.event;
+}
+
+/** The trigger after a click on an event button: filters kept, the result follows the CI choice. */
+export function withEvent(t: EventTrigger, choice: EventChoice): EventTrigger {
+  if (t.kind === 'task') return { ...t, event: choice.event as Extract<TriggerConfig, { kind: 'task' }>['event'], from: choice.event === 'status_changed' ? t.from : [] };
+  const keepResult = choice.event === 'validated' ? t.result : '';
+  return { ...t, event: choice.event as Extract<TriggerConfig, { kind: 'pr' }>['event'], result: choice.result ?? keepResult };
+}
+
+/** A fresh trigger of a kind, keeping what can be kept (the loop guard). */
+export function blankTrigger(kind: TriggerKind, prev: TriggerConfig, tz = BROWSER_TZ): TriggerConfig {
+  const guard = prev.kind === 'task' || prev.kind === 'pr' ? prev.maxRunsPerHour : 5;
+  if (kind === 'manual') return { kind: 'manual' };
+  if (kind === 'time') return { kind: 'time', repeat: 'cron', cron: '0 9 * * 1-5', at: null, timezone: tz };
+  if (kind === 'task') return { kind: 'task', event: 'review_requested', from: [], status: [], assignee: [], maxRunsPerHour: guard };
+  return { kind: 'pr', event: 'ci_finished', repo: '', base: '', result: 'failure', status: [], assignee: [], maxRunsPerHour: guard };
+}
+
+/** One « Only if » row: a field and one value; several rows of one field mean « any of them ». */
+export type FilterKey = 'status' | 'from' | 'assignee' | 'repo' | 'base' | 'result';
+export interface FilterRow {
+  key: FilterKey;
+  value: string;
+}
+export const FILTER_LABEL: Record<FilterKey, string> = {
+  status: 'Task › Status',
+  from: 'Task › Status before',
+  assignee: 'Task › Assignee',
+  repo: 'PR › Repo',
+  base: 'PR › Base branch',
+  result: 'PR › Result',
+};
+
+/** The filters a trigger can take (the result only for a QA validation; CI's comes with its event button). */
+export function filterKeys(t: EventTrigger): FilterKey[] {
+  if (t.kind === 'task') return t.event === 'status_changed' ? ['status', 'from', 'assignee'] : ['status', 'assignee'];
+  return t.event === 'validated' ? ['repo', 'base', 'result', 'status', 'assignee'] : ['repo', 'base', 'status', 'assignee'];
+}
+
+export function filterRows(t: EventTrigger): FilterRow[] {
+  const rows: FilterRow[] = [];
+  if (t.kind === 'pr') {
+    if (t.repo) rows.push({ key: 'repo', value: t.repo });
+    if (t.base) rows.push({ key: 'base', value: t.base });
+    if (t.event === 'validated' && t.result) rows.push({ key: 'result', value: t.result });
+  }
+  if (t.kind === 'task') for (const v of t.from) rows.push({ key: 'from', value: v });
+  for (const v of t.status) rows.push({ key: 'status', value: v });
+  for (const v of t.assignee) rows.push({ key: 'assignee', value: v });
+  return rows;
+}
+
+/** The trigger with these « Only if » rows (rows of a field the trigger can't take are dropped). */
+export function withFilters(t: EventTrigger, rows: FilterRow[]): EventTrigger {
+  const ok = new Set(filterKeys(t));
+  const of = (k: FilterKey) => [...new Set(rows.filter((r) => r.key === k && ok.has(k) && r.value).map((r) => r.value))];
+  const status = of('status') as EventTrigger['status'];
+  const assignee = of('assignee');
+  if (t.kind === 'task') return { ...t, status, assignee, from: of('from') as EventTrigger['status'] };
+  const result = t.event === 'validated' ? ((of('result')[0] ?? '') as '' | 'success' | 'failure') : t.result;
+  return { ...t, status, assignee, repo: of('repo')[0] ?? '', base: of('base')[0] ?? '', result };
+}
+
+/** What a run of this trigger knows, as the groups of « The run gets ». */
+export function runGets(t: TriggerConfig, hasProject: boolean): string[] {
+  if (t.kind === 'task') return ['project', 'task'];
+  if (t.kind === 'pr') return ['project', 'pr', 'task'];
+  if (t.kind === 'manual') return [...(hasProject ? ['project'] : []), 'task', 'pr'];
+  return hasProject ? ['project'] : [];
+}
+
+/** The « Insert a field » groups, in the mockup's order. */
+export const FIELD_GROUPS: { key: string; label: string }[] = [
+  { key: 'task', label: 'Task' },
+  { key: 'pr', label: 'Pull request' },
+  { key: 'event', label: 'Event' },
+  { key: 'steps', label: 'Earlier steps' },
+  { key: 'previous', label: 'Earlier steps' },
+  { key: 'project', label: 'Project' },
+  { key: 'run', label: 'This run' },
+  { key: 'workflow', label: 'This run' },
+];
+/** Group the fields: { label, fields } in FIELD_GROUPS order, groups with the same label merged. */
+export function groupFields<F extends { field: string; label: string }>(fields: F[], query = ''): { label: string; fields: F[] }[] {
+  const q = query.trim().toLowerCase();
+  const out: { label: string; fields: F[] }[] = [];
+  for (const f of fields) {
+    if (q && !f.label.toLowerCase().includes(q) && !f.field.toLowerCase().includes(q)) continue;
+    const prefix = f.field.split('.')[0]!;
+    const label = FIELD_GROUPS.find((g) => g.key === prefix)?.label ?? 'Other';
+    let g = out.find((x) => x.label === label);
+    if (!g) out.push((g = { label, fields: [] }));
+    g.fields.push(f);
+  }
+  const order = (l: string) => {
+    const i = FIELD_GROUPS.findIndex((g) => g.label === l);
+    return i < 0 ? 99 : i;
+  };
+  return out.sort((a, b) => order(a.label) - order(b.label));
+}
+
+/** Split step text into plain parts and {{field}} parts (the chips). */
+export function fieldParts(text: string): { text: string; field: boolean }[] {
+  const out: { text: string; field: boolean }[] = [];
+  const re = /\{\{\s*[\w.-]+\s*\}\}/g;
+  let at = 0;
+  for (let m = re.exec(text); m; m = re.exec(text)) {
+    if (m.index > at) out.push({ text: text.slice(at, m.index), field: false });
+    out.push({ text: m[0], field: true });
+    at = m.index + m[0].length;
+  }
+  if (at < text.length) out.push({ text: text.slice(at), field: false });
+  return out;
+}
+
+/** Where an edge's exit name goes when the edge leaves the node's column backwards or downwards: the middle of its lane. Null for a forward edge. */
+export function edgeLabelAt(a: Pt, b: Pt, srcBottom: number, dstTop: number, bottom: number): Pt | null {
+  if (b[0] > a[0] + 20) return null;
+  const lane = r1(dstTop > srcBottom ? (srcBottom + dstTop) / 2 : bottom + 22);
+  return [r1((a[0] + 12 + b[0] - 14) / 2), lane];
+}
+
+/** What started a run, in words, after its subject's ref: « asks for review », « by hand », « at its set time ». */
+export function startedBy(run: Pick<WorkflowRun, 'trigger' | 'event'>): string {
+  if (run.trigger === 'time') return 'at its set time';
+  if (run.trigger === 'manual') return 'by hand';
+  return (run.event && EVENT_WORDS[run.event]) || run.event || run.trigger;
+}
+
+/** A PR url → « PR #74 ». */
+export function prLabel(url: string): string {
+  const m = /\/pull\/(\d+)/.exec(url);
+  return m ? `PR #${m[1]}` : url;
+}
+
+/** A workflow stopped by the loop guard: off, and its last error says so. */
+export function loopGuardHit(w: Pick<Workflow, 'enabled' | 'lastError'>): boolean {
+  return !w.enabled && !!w.lastError && w.lastError.startsWith('loop guard');
+}

@@ -1,4 +1,4 @@
-import type { About, Account, Agent, Card, CardStatus, ChatGptModel, ChatGptStatus, ChatUsage, ClaudePlanModel, ClaudePlanStatus, ClearEvent, CompactResult, CreateAccount, CreateAgent, CreateCard, CreateModelRequest, CreatePlanAccount, CreateWorkflow, Doc, DocContent, DocHit, DocRef, DocVersion, FileChange, Folder, Inbox, LocalModel, LocalPull, LocalStatus, Memory, MemoryBudget, MemoryChange, MemoryProposal, MemoryQuery, Message, Model, ModelTest, Notification, PanelTab, PlanProvider, RewindPreview, RewindResult, Run, CreateSecret, SecretInfo, SecretList, SecretStoreStatus, UpdateSecret, SaveWorkflowGraph, ServerEvent, Settings, Timeline, ToolCallTiming, UpdateAccount, UpdateAgent, UpdateChatGpt, UpdateClaudePlan, UpdateLocal, UpdateMemory, UpdateModelRequest, UpdatePlanAccount, UpdateStatus, UpdateVoice, Upload, UsageSummary, VoiceName, VoiceStatus, TriggerPreview, UpdateWorkflow, Workflow, WorkflowRun, Project, CreateProject, UpdateProject, RepoCheck } from '@atlas/shared';
+import type { About, Account, Agent, Card, CardStatus, ChatGptModel, ChatGptStatus, ChatUsage, ClaudePlanModel, ClaudePlanStatus, ClearEvent, CompactResult, CreateAccount, CreateAgent, CreateCard, CreateModelRequest, CreatePlanAccount, CreateWorkflow, Doc, DocContent, DocHit, DocRef, DocVersion, FileChange, Folder, Inbox, LocalModel, LocalPull, LocalStatus, Memory, MemoryBudget, MemoryChange, MemoryProposal, MemoryQuery, Message, Model, ModelTest, Notification, PanelTab, PlanProvider, RewindPreview, RewindResult, Run, CreateSecret, SecretInfo, SecretList, SecretStoreStatus, UpdateSecret, SaveWorkflowGraph, ServerEvent, Settings, Timeline, ToolCallTiming, UpdateAccount, UpdateAgent, UpdateChatGpt, UpdateClaudePlan, UpdateLocal, UpdateMemory, UpdateModelRequest, UpdatePlanAccount, UpdateStatus, UpdateVoice, Upload, UsageSummary, VoiceName, VoiceStatus, TriggerPreview, UpdateWorkflow, Workflow, WorkflowRun, WorkflowField, WorkflowRunContext, TaskWorkflow, RunWorkflow, Project, CreateProject, UpdateProject, RepoCheck } from '@atlas/shared';
 
 /** HTTP error with the parsed body (e.g. a 409's details). */
 export class ApiError extends Error {
@@ -215,7 +215,10 @@ export const api = {
   saveWorkflowGraph: (id: string, g: SaveWorkflowGraph) => call<Workflow>('PUT', `/workflows/${id}/graph`, g),
   updateWorkflow: (id: string, patch: UpdateWorkflow) => call<Workflow>('PATCH', `/workflows/${id}`, patch),
   deleteWorkflow: (id: string) => call<void>('DELETE', `/workflows/${id}`),
-  runWorkflow: (id: string) => call<WorkflowRun>('POST', `/workflows/${id}/run`),
+  runWorkflow: (id: string, on: RunWorkflow = {}) => call<WorkflowRun>('POST', `/workflows/${id}/run`, on),
+  workflowFields: (id: string, node?: string) => call<WorkflowField[]>('GET', `/workflows/${id}/fields` + (node ? `?node=${encodeURIComponent(node)}` : '')),
+  workflowRunContext: (id: string) => call<WorkflowRunContext>('GET', `/workflow-runs/${id}/context`),
+  cardWorkflows: (id: string) => call<TaskWorkflow[]>('GET', `/cards/${encodeURIComponent(id)}/workflows`),
   workflowRuns: (id: string) => call<WorkflowRun[]>('GET', `/workflows/${id}/runs`),
   workflowRun: (id: string) => call<WorkflowRun>('GET', `/workflow-runs/${id}`),
   stopWorkflowRun: (id: string) => call<WorkflowRun>('POST', `/workflow-runs/${id}/stop`),

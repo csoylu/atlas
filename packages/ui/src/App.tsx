@@ -30,7 +30,7 @@ import { Palette, ShortcutsSheet, type PaletteContext } from './Palette.tsx';
 import { GO_HASH, globalKey, nextRow } from './keys.ts';
 import { LAST_AGENT, TOGGLE_PANEL } from './ChatView.tsx';
 import { groupCount } from './workflowView.ts';
-import { effectiveFilter, inFilter, ProjDot, ProjectsCtx, projectsInfo, useProjectFilter } from './projects.tsx';
+import { effectiveFilter, inFilter, ProjDot, ProjTag, ProjectsCtx, projectsInfo, useProjectFilter } from './projects.tsx';
 import { backOf, groupCollapsed, NARROW, setGroupCollapsed, tabOf, type Tab } from './shell.ts';
 import { useMedia } from './Inbox.tsx';
 
@@ -222,7 +222,10 @@ export function App() {
         else if (e.type === 'project.updated')
           setProjects((ps) => (ps.some((p) => p.id === e.project.id) ? ps.map((p) => (p.id === e.project.id ? e.project : p)) : [...ps, e.project]));
         else if (e.type === 'workflow.deleted') setWorkflows((ws) => ws.filter(w => w.id !== e.id));
-        else if (e.type === 'workflow.run') stream.push('workflow-runs:' + e.run.workflowId, { type: 'workflowRun', run: e.run });
+        else if (e.type === 'workflow.run') {
+          stream.push('workflow-runs:' + e.run.workflowId, { type: 'workflowRun', run: e.run });
+          stream.push('workflow-runs', { type: 'workflowRun', run: e.run }); // every run: the task view's « Workflows on this task » (#259)
+        }
         else if (e.type === 'local.updated') stream.push('local', { type: 'local', status: e.status });
         else if (e.type === 'local.pull') stream.push('local', { type: 'pull', pull: e.pull });
         else if (e.type === 'voice.updated') stream.push('voice', { type: 'voice', status: e.status });
@@ -434,7 +437,7 @@ export function App() {
   const agentDot = (id: string) => (
     <AgentFace id={id} />
   );
-  const crumb: { parts: ReactNode[]; title: string; titleIcon?: ReactNode; sub?: string } =
+  const crumb: { parts: ReactNode[]; title: string; titleIcon?: ReactNode; sub?: string; tag?: ReactNode } =
     route.view === 'chat'
       ? openChat && openIsMain
         ? { parts: projCrumb ? [projCrumb] : [], title: openChat.assignee ?? openChat.title, titleIcon: agentDot(openChat.assignee ?? '') }
@@ -460,7 +463,7 @@ export function App() {
             : { parts: [], title: 'Library' }
           : route.view === 'workflows'
             ? route.target
-              ? { parts: [<a key="w" className="crumb-link" href="#/workflows">Workflows</a>], title: openWorkflow?.name ?? 'Workflow' }
+              ? { parts: [<a key="w" className="crumb-link" href="#/workflows">Workflows</a>], title: openWorkflow?.name ?? 'Workflow', tag: openWorkflow && <ProjTag id={openWorkflow.projectId} global /> }
               : { parts: [], title: 'Workflows', sub: groupCount(wfShown) }
             : route.view === 'settings'
               ? route.target === 'projects' && route.rest
@@ -670,6 +673,7 @@ export function App() {
               ))}
               {crumb.titleIcon}
               <h1>{crumb.title}</h1>
+              {crumb.tag}
             </div>
             {crumb.sub && <span className="crumb-sub">{crumb.sub}</span>}
             <div className="head-actions" ref={setHeadSlot} />
