@@ -302,6 +302,8 @@ function WorkflowRow(props: { w: Workflow; cards: Card[]; onOpen(): void; onOpen
           </>
         ) : t?.kind === 'manual' ? (
           <span>Only when you click ▶</span>
+        ) : t?.kind === 'task' || t?.kind === 'pr' ? (
+          <span>On each matching {t.kind === 'task' ? 'task' : 'PR'} event</span>
         ) : null}
       </div>
       <div className="wfl-acts">
