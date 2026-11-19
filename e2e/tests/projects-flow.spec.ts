@@ -172,7 +172,7 @@ test('create Datinel from a repo: check, cloning, ready; then an agent of Atlas 
     await expect.poll(async () => (await atlas.card(task.id)).status).toBe('done');
     expect((await atlas.card(task.id)).prs[0]).toMatchObject({ repo: 'datinel/datinel', number: 7 });
     await page.goto(`${atlas.url}/#/board?card=${task.id}`);
-    await expect(page.locator('.prc-row')).toContainText('merged');
+    await expect(page.locator('.thread-panel .cm-now .pr-pill')).toContainText('merged');
     await page.screenshot({ path: join(SHOTS, '6-done.png') });
 
     // 7. Remove zurich from Datinel: its chat there is archived, its clone is kept, Atlas is untouched.

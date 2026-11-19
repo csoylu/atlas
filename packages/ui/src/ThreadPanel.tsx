@@ -10,7 +10,7 @@ import { CHAT_MIN, taskPanelMode, type PanelMode } from './docPanel.ts';
  * The task view (#107, #222): the whole task (CardView) in the side panel, wherever it is opened (chat, board in
  * kanban or list mode, inbox, sidebar, search, a #N link). Side by side above 960px, over the screen from the right
  * down to 760px, full screen with « ‹ Back » on phones. × and Esc close it (a menu, an editor or a dialog takes Esc
- * first); Delete and Close task close it too. A long description is clamped so the conversation and composer stay in view.
+ * first); Delete and Close task (in ⋯) close it too. A long description is clamped so the conversation and composer stay in view.
  */
 export function ThreadPanel(
   props: CardViewProps & {
@@ -55,17 +55,19 @@ export function ThreadPanel(
         {...view}
         ref={composer}
         clamp
+        lead={
+          mode !== 'side' && (
+            <button type="button" className="sd-btn cm-back" title={'Back to the ' + back.toLowerCase()} onClick={onClose}>
+              ‹ {back}
+            </button>
+          )
+        }
         close={
-          <>
-            {mode !== 'side' && (
-              <button type="button" className="sd-btn" title={'Back to the ' + back.toLowerCase()} onClick={onClose}>
-                ‹ {back}
-              </button>
-            )}
+          mode !== 'full' && (
             <button type="button" className="sd-btn icon-only" title="Close the task (Esc)" aria-label="Close the task" onClick={onClose}>
               <Icon.x />
             </button>
-          </>
+          )
         }
       />
     </aside>

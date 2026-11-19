@@ -110,7 +110,6 @@ export const SPEC_AUDIT = (W, scale, exceptions, minContrast) => `((W, SCALE, EX
   if (!phone) for (const e of document.querySelectorAll('.chat-pane .composer')) { if (shown(e) && e.getBoundingClientRect().width > 781) { issues.push('composer wider than the 780 px column: ' + Math.round(e.getBoundingClientRect().width)); break; } }
 
   // ── 5: status words are chips
-  for (const e of document.querySelectorAll('.cm-pill')) if (shown(e) && /^(running|blocked|done|review|working)/i.test(txt(e)) && !e.classList.contains('st-chip') && !e.closest('.prop-pill')) issues.push('status pill is not a .st-chip: "' + txt(e) + '"');
   for (const e of document.querySelectorAll('.chat-row.card-report')) if (shown(e) && /finished/i.test(e.textContent) && !e.querySelector('.st-chip')) issues.push('finished report without Done chip: "' + txt(e) + '"');
   for (const e of document.querySelectorAll('.st-chip')) if (shown(e) && /^running$/i.test(txt(e))) issues.push('chip says "running", should say Working');
   for (const e of document.querySelectorAll('.st-chip')) if (shown(e)) { const a = getComputedStyle(e, '::before'); if (a.animationName !== 'none') issues.push('chip dot pulses (' + a.animationName + ')'); }

@@ -3,19 +3,20 @@ import { AgentFace } from './AgentFace.tsx';
 import { pastedImages, TASK, TaskImages, useAttachments, useFileDrop } from './Images.tsx';
 import Markdown from 'react-markdown';
 import remarkGfm from 'remark-gfm';
-import { CARD_STATUSES, cardRef, type Doc, type Agent, type Card, type Model } from '@atlas/shared';
+import { CARD_STATUSES, cardRef, type Doc, type Agent, type Card, type Model, type Run } from '@atlas/shared';
 import { api } from './api.ts';
 import type { MessageStream } from './useMessages.ts';
-import { Activity, CardComposer, CardNotices, RunLine, useCardConversation, type MessageRef } from './CardPanel.tsx';
+import { Activity, CardComposer, useCardConversation, type MessageRef } from './CardPanel.tsx';
 import { pillStatus } from './cardModal.ts';
+import { PopButton, PopItem, PopRow } from './HeadMenu.tsx';
+import { Icon } from './ScreenHeader.tsx';
+import { TaskNow } from './TaskNow.tsx';
+import { PRIORITIES, priorityHint, priorityName } from './priority.ts';
 import { CardDocs, TaskDocReader, type DocToRead } from './DocPanel.tsx';
 import { RewindConfirm, RewindNote, useRewind } from './Rewind.tsx';
 import { StatusIcon, STATUS_LABEL } from './StatusIcon.tsx';
-import { PrRows } from './PrChips.tsx';
-import { StatusChip } from './Kit.tsx';
+import { PriorityMark } from './Kit.tsx';
 import { ProjTag } from './projects.tsx';
-import { timeInState } from './boardView.ts';
-import { useMinute } from './useMinute.ts';
 import { TaskWorkflows } from './WorkflowRunParts.tsx';
 
 export interface CardViewProps {
@@ -43,18 +44,18 @@ export interface CardViewProps {
 }
 
 /**
- * The whole task (#107): ref, live status, assignee, origin, Move to, title, description, relations, documents,
- * activity, notices, composer and footer. Shown in one shell: the task panel on the right of any screen (ThreadPanel, #222). `close` is the shell's own close controls, at the
- * end of the first header row. `clamp` (the panel): a long description shows its first lines and « Show more », so
+ * The whole task (#107; task sheet of the redesign, #269): one header row (the status control, #N, ⋯ with Close task
+ * and Delete), then title, the meta row (assignee, reviewer, project, priority, origin), the « Now » box (TaskNow),
+ * description, relations, documents, activity and composer. Shown in one shell: the task panel on the right of any
+ * screen (ThreadPanel, #222). `lead` starts the header row (‹ Back on phones), `close` ends it (×). `clamp` (the panel): a long description shows its first lines and « Show more », so
  * the latest messages and the composer stay in view.
  */
-export const CardView = forwardRef<HTMLTextAreaElement, CardViewProps & { close: ReactNode; clamp?: boolean; titleId?: string }>(
+export const CardView = forwardRef<HTMLTextAreaElement, CardViewProps & { lead?: ReactNode; close: ReactNode; clamp?: boolean; titleId?: string }>(
   function CardView(props, composer) {
     const { card, stream, onError, onClose } = props;
     const convo = useCardConversation(card, stream, onError);
     const rw = useRewind(card, convo.run, onError, { globalEsc: false });
     const [title, setTitle] = useState(card.title);
-    const now = useMinute();
     const [body, setBody] = useState(card.body);
     // The description reads as rendered markdown; a click (or Edit) switches to the raw text.
     const [editing, setEditing] = useState(false);
@@ -73,6 +74,7 @@ export const CardView = forwardRef<HTMLTextAreaElement, CardViewProps & { close:
       if (document.activeElement !== bodyRef.current) setBody(card.body);
     }, [card.body]);
 
+    const nowRef = useRef<HTMLElement>(null);
     const save = (patch: Partial<Card>) => api.updateCard(card.id, patch).catch(onError);
     // The task's own images (#119): each one is staged, then added to the task at once (no Save step).
     // The answer of an add / remove shows at once; the live card (its event) takes over when it is as new.
@@ -104,13 +106,10 @@ export const CardView = forwardRef<HTMLTextAreaElement, CardViewProps & { close:
       e.preventDefault(); // an image, not its file name as text
       att.add(files);
     };
-    const status = pillStatus(card, convo.run);
-    const running = card.status === 'running' || convo.run?.status === 'running';
     const byId = new Map(props.cards.map((c) => [c.id, c]));
     const children = props.cards.filter((c) => c.parents.includes(card.id));
     const linkable = props.cards.filter((c) => c.id !== card.id && !card.parents.includes(c.id));
     const origin = card.originCard ? props.chats.find((c) => c.id === card.originCard) : undefined;
-    const since = timeInState(card, now);
     const finished = card.status === 'closed' || card.status === 'done' || card.status === 'archived';
     const leaveEditing = () => {
       setEditing(false);
@@ -121,66 +120,41 @@ export const CardView = forwardRef<HTMLTextAreaElement, CardViewProps & { close:
       <>
         <header className="cm-head">
           <div className="cm-row">
-            <span className="id cm-id" title={card.id}>{cardRef(card)}</span>
-            <ProjTag id={card.projectId} title="Project (set when the task was made)" />
-            {status === 'stopped' ? <StatusChip status="failed" label="Stopped by you" title="Status (live)" /> : <StatusChip status={status} title="Status (live)" />}
-            {since && (
-              <span className={'st-since' + (card.stall ? ' stuck' : '')} title={`${STATUS_LABEL[card.status]} for ${since}, since ${new Date(card.statusSince!).toLocaleString()}`}>
-                {since}
-              </span>
-            )}
-            <label className="prop-pill" title="Assignee">
-              {card.assignee ? (
-                <AgentFace id={card.assignee} />
-              ) : (
-                <span className="avatar-none" />
-              )}
-              <select value={card.assignee ?? ''} onChange={(e) => save({ assignee: e.target.value || null })} aria-label="Assignee">
-                <option value="">unassigned</option>
-                {props.agents.map((a) => (
-                  <option key={a.id} value={a.id}>
-                    @{a.id}
-                  </option>
-                ))}
-              </select>
-            </label>
-            {card.status === 'review' && card.reviewer && (
-              <span className="prop-pill rv-face" title="Reviewer: checks and merges the pull request">
-                <AgentFace id={card.reviewer} />
-                review @{card.reviewer}
-              </span>
-            )}
-            {card.originCard ? (
-              origin ? (
-                <button type="button" className="cm-origin" onClick={() => props.onOpenChat(origin.id)} title="Open that chat">
-                  from chat with @{origin.assignee}
-                </button>
-              ) : (
-                <span className="cm-faint">from a deleted chat</span>
-              )
-            ) : (
-              <span className="cm-faint">by {card.createdBy === 'user' ? (props.userName ?? 'you') : '@' + card.createdBy}</span>
-            )}
+            {props.lead}
+            <StatusControl card={card} run={convo.run} onMove={(st) => save({ status: st })} />
+            <span className="id cm-id" title={card.id}>
+              {cardRef(card)}
+            </span>
             <span className="cm-sp" />
-            <label className="prop-pill" title="Move to">
-              <StatusIcon status={card.status} />
-              <select value={card.status} onChange={(e) => save({ status: e.target.value as Card['status'] })} aria-label="Status">
-                {CARD_STATUSES.map((s) =>
-                  // Running is set when a run starts; the engine refuses it by hand (#121), so say so here.
-                  s === 'running' && card.status !== 'running' ? (
-                    <option key={s} value={s} disabled>
-                      {STATUS_LABEL[s]} (starts with a run)
-                    </option>
-                  ) : (
-                    <option key={s} value={s}>
-                      {STATUS_LABEL[s]}
-                    </option>
-                  ),
-                )}
-              </select>
-            </label>
+            <PopButton className="sd-btn icon-only cm-more-btn" title="Task menu: close task, delete" ariaLabel="Task menu" width={200} label={<Icon.dots />}>
+              {(close) => (
+                <>
+                  {!finished && (
+                    <PopItem
+                      onClick={() => {
+                        close();
+                        api.updateCard(card.id, { status: 'closed' }).then(onClose, onError);
+                      }}
+                    >
+                      Close task
+                    </PopItem>
+                  )}
+                  <PopItem
+                    danger
+                    onClick={() => {
+                      close();
+                      if (confirm(`Delete ${cardRef(card)} and its chat?`)) api.deleteCard(card.id).then(onClose, onError);
+                    }}
+                  >
+                    Delete…
+                  </PopItem>
+                </>
+              )}
+            </PopButton>
             {props.close}
           </div>
+        </header>
+        <div className="cm-body">
           {/* A textarea sized to its text: a long title wraps instead of scrolling out of sight; Enter saves. */}
           <textarea
             id={props.titleId}
@@ -197,10 +171,56 @@ export const CardView = forwardRef<HTMLTextAreaElement, CardViewProps & { close:
               e.currentTarget.blur();
             }}
           />
-          <PrRows card={card} />
-        </header>
-        <div className="cm-body">
-          <TaskWorkflows cardId={card.id} cards={props.cards} stream={stream} onOpenCard={props.onOpen} onError={onError} />
+          <div className="cm-meta">
+            <label className="cm-who" title="Assignee">
+              {card.assignee ? <AgentFace id={card.assignee} /> : <span className="avatar-none" />}
+              <select value={card.assignee ?? ''} onChange={(e) => save({ assignee: e.target.value || null })} aria-label="Assignee">
+                <option value="">unassigned</option>
+                {props.agents.map((a) => (
+                  <option key={a.id} value={a.id}>
+                    {a.id}
+                  </option>
+                ))}
+              </select>
+            </label>
+            {card.status === 'review' && card.reviewer && (
+              <span className="cm-rv" title="Reviewer: checks and merges the pull request">
+                review <AgentFace id={card.reviewer} />
+                {card.reviewer}
+              </span>
+            )}
+            <ProjTag id={card.projectId} title="Project (set when the task was made)" />
+            <PopButton className="cm-prio" title={priorityHint(card.priority) + '. Click to change'} ariaLabel={'Priority ' + priorityName(card.priority) + ': change'} width={180} label={<PriorityMark p={card.priority} />}>
+              {(close) =>
+                PRIORITIES.map((p) => (
+                  <PopRow
+                    key={p}
+                    on={p === card.priority}
+                    onClick={() => {
+                      close();
+                      if (p !== card.priority) save({ priority: p });
+                    }}
+                  >
+                    <PriorityMark p={p} />
+                  </PopRow>
+                ))
+              }
+            </PopButton>
+            {card.originCard ? (
+              origin ? (
+                <button type="button" className="cm-origin" onClick={() => props.onOpenChat(origin.id)} title="Open that chat">
+                  from chat with @{origin.assignee}
+                </button>
+              ) : (
+                <span className="cm-faint">from a deleted chat</span>
+              )
+            ) : (
+              <span className="cm-faint">by {card.createdBy === 'user' ? (props.userName ?? 'you') : '@' + card.createdBy}</span>
+            )}
+          </div>
+          <TaskNow ref={nowRef} card={card} run={convo.run} onStop={() => void rw.stopTurn()} onError={onError}>
+            <TaskWorkflows cardId={card.id} cards={props.cards} stream={stream} onOpenCard={props.onOpen} onError={onError} />
+          </TaskNow>
           <div className={'cm-desc-area drop-zone' + (drop.dragging ? ' dropping' : '')} {...drop.props} onPaste={onPaste}>
           {editing || !body.trim() ? (
             <textarea
@@ -280,44 +300,70 @@ export const CardView = forwardRef<HTMLTextAreaElement, CardViewProps & { close:
               onRewind={rw.ask}
               onUndo={rw.undoById}
               onError={onError}
+              askAt={nowRef}
               empty={card.assignee ? `Write to @${card.assignee}: it works here and answers live.` : 'Assign an agent, then write to it here.'}
             />
           </div>
         </div>
         <div className="cm-notices">
-          <CardNotices card={card} onError={onError} />
           <RewindNote rw={rw} />
-          {!rw.hideRun && <RunLine run={convo.run} stop={false} onStop={() => undefined} />}
         </div>
         <CardComposer ref={composer} card={card} agents={props.agents} models={props.models} plan={props.plan} stream={stream} onError={onError} rewind={rw} />
-        <footer className="cm-foot">
-          {running && (
-            <button type="button" className="cm-stop" onClick={() => void rw.stopTurn()} title="Stop. If it was answering your last message, that turn is rewound (Esc)">
-              ■ Stop
-            </button>
-          )}
-          {!finished && (
-            <button type="button" className="cm-btn" onClick={() => api.updateCard(card.id, { status: 'closed' }).then(onClose, onError)}>
-              Close task
-            </button>
-          )}
-          <span className="cm-sp" />
-          <button
-            type="button"
-            className="btn ghost danger cm-delete"
-            onClick={() => {
-              if (confirm(`Delete ${cardRef(card)} and its chat?`)) api.deleteCard(card.id).then(onClose, onError);
-            }}
-          >
-            Delete
-          </button>
-        </footer>
         <RewindConfirm rw={rw} />
         {reading && <TaskDocReader read={reading} stream={stream} onOpenInPanel={props.onOpenDoc} onBack={() => setReading(null)} onError={onError} />}
       </>
     );
   },
 );
+
+/**
+ * The one status control (#269): the live status as a chip that opens « Move to ». Running is set when a run starts:
+ * the engine refuses it by hand (#121), so it is listed but disabled. A task stopped by you reads « Stopped by you ».
+ */
+function StatusControl({ card, run, onMove }: { card: Card; run: Run | null; onMove(status: Card['status']): void }) {
+  const pill = pillStatus(card, run);
+  const label = pill === 'stopped' ? 'Stopped by you' : STATUS_LABEL[card.status];
+  return (
+    <PopButton
+      className={'cm-st' + (pill === 'stopped' ? ' stopped' : '')}
+      title="Status (live). Click to move the task"
+      ariaLabel={`Status: ${label}. Move to`}
+      width={220}
+      label={
+        <>
+          <StatusIcon status={pill === 'stopped' ? 'failed' : card.status} title="" />
+          {label}
+          <Icon.chevDown />
+        </>
+      }
+    >
+      {(close) =>
+        CARD_STATUSES.map((s) => {
+          const disabled = s === 'running' && card.status !== 'running';
+          return (
+            <button
+              key={s}
+              type="button"
+              role="menuitemradio"
+              aria-checked={s === card.status}
+              disabled={disabled}
+              title={disabled ? 'Running starts with a run' : undefined}
+              className={'pop-row' + (s === card.status ? ' on' : '')}
+              onClick={() => {
+                close();
+                if (s !== card.status) onMove(s);
+              }}
+            >
+              <StatusIcon status={s} title="" />
+              <span className="pop-t">{STATUS_LABEL[s]}</span>
+              {disabled && <span className="pop-sub">with a run</span>}
+            </button>
+          );
+        })
+      }
+    </PopButton>
+  );
+}
 
 /** The rendered description; click to edit. Clamped (the panel): the first lines, then « Show more » if it is longer. */
 function Description({ body, clamp, onEdit }: { body: string; clamp: boolean; onEdit(): void }) {
