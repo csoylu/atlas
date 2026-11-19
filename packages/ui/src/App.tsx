@@ -11,7 +11,7 @@ import { findCard, splitHash, withCard } from './cardModal.ts';
 import { useMessageStream } from './useMessages.ts';
 import { useMemoryDigest } from './MemoryDigest.tsx';
 import { withDigest } from './memoryView.ts';
-import { Library } from './Library.tsx';
+import { Library, type LibraryDocHead } from './Library.tsx';
 import { WorkflowsView } from './WorkflowsView.tsx';
 import { Welcome } from './Profile.tsx';
 import { ChatView } from './ChatView.tsx';
@@ -364,8 +364,8 @@ export function App() {
     window.addEventListener('keydown', onKey);
     return () => window.removeEventListener('keydown', onKey);
   }, []);
-  /** The open Library document's title, for the breadcrumb. */
-  const [libraryTitle, setLibraryTitle] = useState<string | null>(null);
+  /** The open Library document, for the header: « Library / folder / title » and its project tag. */
+  const [libraryDoc, setLibraryDoc] = useState<LibraryDocHead | null>(null);
   /** An agent's main chat (v3): created on first use; replaces the #/chat/<agent> or #/chat/new entry in the history. */
   const openMain = useCallback((agentId: string, project?: Project) => {
     const other = project && !project.isDefault ? project : undefined;
@@ -472,7 +472,14 @@ export function App() {
         ? { parts: [], title: 'Tasks' }
         : route.view === 'library'
           ? route.target
-            ? { parts: [<a key="l" className="crumb-link" href="#/library">Library</a>], title: libraryTitle ?? 'Document' }
+            ? {
+                parts: [
+                  <a key="l" className="crumb-link" href="#/library">Library</a>,
+                  ...(libraryDoc?.folder ? [<span key="f" className="crumb-folder">{libraryDoc.folder}</span>] : []),
+                ],
+                title: libraryDoc?.title ?? 'Document',
+                tag: libraryDoc && pinfo.multi && <ProjTag id={libraryDoc.projectId} />,
+              }
             : { parts: [], title: 'Library' }
           : route.view === 'workflows'
             ? route.target
@@ -510,6 +517,19 @@ export function App() {
     const target = card.originCard && chats.some((c) => c.id === card.originCard) ? card.originCard : (openChat?.id ?? null);
     if (!target) return go('#/library/' + doc.id);
     api.panelOpen(target, doc.id).then(() => go('#/chat/' + target), fail);
+  };
+
+  /** The Library viewer's « Open in side panel »: beside the chat the artifact came from, else its author's main chat. */
+  const openInPanel = (doc: Doc) => {
+    const proj = pinfo.byId(doc.projectId);
+    const chat =
+      doc.chatId && chats.some((c) => c.id === doc.chatId)
+        ? Promise.resolve(doc.chatId)
+        : api.mainChat(doc.agentId, proj && !proj.isDefault ? proj.id : undefined).then((c) => {
+            setChats((cs) => (cs.some((x) => x.id === c.id) ? cs : [c, ...cs]));
+            return c.id;
+          });
+    chat.then((id) => api.panelOpen(id, doc.id).then(() => go('#/chat/' + id)), fail);
   };
 
   const wsRow = (
@@ -790,7 +810,8 @@ export function App() {
             chats={chats}
             stream={stream}
             onOpenCard={setOpenId}
-            onTitle={setLibraryTitle}
+            onDoc={setLibraryDoc}
+            onOpenInPanel={openInPanel}
             onError={fail}
           />
         ) : route.view === 'chats' ? (

@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useRef, useState, type ReactNode } from 'react';
-import { cardRef, type Card, type Doc, type DocHit, type Folder } from '@atlas/shared';
+import { cardRef, USER, type Card, type Doc, type DocHit, type Folder } from '@atlas/shared';
 import { api } from './api.ts';
 import type { MessageStream } from './useMessages.ts';
 import { HeaderActions, Icon } from './ScreenHeader.tsx';
@@ -10,15 +10,23 @@ import { StatusIcon } from './StatusIcon.tsx';
 import { shortAgo } from './inboxView.ts';
 import { ArtifactPreview, ArtifactViewer, DeleteArtifactDialog, KindIcon } from './Viewer.tsx';
 import { folderName, useFolders } from './artifacts.ts';
-import { clearFilter, filterCount, folderCounts, groupDocs, inFolder, LIB_TABS, libraryHref, matches, parseLibView, recentDocs, relAgo, TYPE_LABEL, type LibFolder, type LibView } from './library.ts';
+import { clearFilter, filterCount, folderCounts, folderLabel, groupDocs, inFolder, isOldCanvases, LIB_TABS, libraryHref, matches, orderFolders, parseLibView, recentDocs, TYPE_LABEL, type LibFolder, type LibView } from './library.ts';
+
+/** The open document as the screen header shows it: « Library › folder › title » and its project tag (#270). */
+export interface LibraryDocHead {
+  title: string;
+  folder: string | null;
+  projectId: string | null;
+}
 
 /**
- * The Library (#120, mockup #106 v2): every artifact (docs, pages, diagrams, links) in flat folders. A folders column
- * (chips on phones) with All artifacts, Unfiled and each folder (⋯: Rename, Delete: its artifacts go to Unfiled);
- * « Recently modified » as 4 large tiles showing the real content; Pinned (on top of each folder), then This week /
- * Earlier. Rows have a folder badge and ⋯ (Open, Pin, Move to). Search in the header covers titles and content in
- * every folder. #/library/<docId> shows one in the shared viewer (⋯: Pin, Move to, Delete…). Rows' ⋯ has Delete… too
- * (#242: the artifact, its versions and its file go for good, after a confirm).
+ * The Library (#120, redesign #270): every artifact (docs, pages, diagrams, links) in flat folders. One header row
+ * (project, type tabs, search with « / », filter); a folders column (chips on phones) with All, Unfiled and each folder
+ * (⋯: Rename, Delete: its artifacts go to Unfiled), the old converted canvases last as « Canvases (old) »; « Recent » as
+ * 3 tiles showing the real content; Pinned (on top of each folder), then This week / Earlier. A row: kind, title, project
+ * tag, folder as text, the task's number, version, author, time, ⋯ (Open, Pin, Move to, Delete…). #/library/<docId> shows
+ * one in the shared viewer, its controls in the screen header (version picker with author and time, open beside a chat,
+ * ⋯: Pin, Move to, Delete… #242).
  */
 export function Library(props: {
   docId: string | null;
@@ -26,15 +34,20 @@ export function Library(props: {
   chats: Card[];
   stream: MessageStream;
   onOpenCard(id: string): void;
-  /** The open artifact's title (the screen header's breadcrumb). */
-  onTitle(title: string | null): void;
+  /** The open artifact, for the screen header's breadcrumb and project tag. */
+  onDoc(head: LibraryDocHead | null): void;
+  /** Shows the artifact in the side panel of a chat (the one it came from, else its author's). */
+  onOpenInPanel(doc: Doc): void;
   onError(e: unknown): void;
 }) {
-  const { stream, onError, onTitle } = props;
+  const { stream, onError, onDoc } = props;
   const [docs, setDocs] = useState<Doc[] | null>(null);
   const [view, setView] = useState(() => parseLibView(localStorage.getItem('atlas.library.view')));
   const [menu, setMenu] = useState(false);
   const [q, setQ] = useState('');
+  /** Phone: the search field shows under the header once its icon is tapped. */
+  const [searching, setSearching] = useState(false);
+  const searchRef = useRef<HTMLInputElement>(null);
   const [hits, setHits] = useState<DocHit[] | null>(null);
   /** The folder being renamed, or 'new' while one is created. */
   const [editing, setEditing] = useState<string | null>(null);
@@ -100,7 +113,26 @@ export function Library(props: {
 
   const card = (id: string | null) => (id ? props.cards.find((c) => c.id === id) : undefined);
   const open = props.docId ? docs?.find((d) => d.id === props.docId) : undefined;
-  useEffect(() => onTitle(open?.title ?? null), [open?.title, onTitle]);
+  const openFolder = open?.folderId ? folders.find((f) => f.id === open.folderId) : undefined;
+  const head = open ? JSON.stringify({ title: open.title, folder: openFolder ? folderLabel(openFolder) : open.folderId ? null : 'Unfiled', projectId: open.projectId }) : null;
+  useEffect(() => onDoc(head ? (JSON.parse(head) as LibraryDocHead) : null), [head, onDoc]);
+  useEffect(() => () => onDoc(null), [onDoc]);
+
+  // « / » focuses the search (not while typing somewhere else).
+  useEffect(() => {
+    if (props.docId) return;
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key !== '/' || e.metaKey || e.ctrlKey || e.altKey) return;
+      const t = e.target as HTMLElement | null;
+      if (t && (t.isContentEditable || /^(INPUT|TEXTAREA|SELECT)$/.test(t.tagName))) return;
+      const input = [...document.querySelectorAll<HTMLInputElement>('.library-search input')].find((x) => x.offsetParent);
+      if (!input) return;
+      e.preventDefault();
+      input.focus();
+    };
+    window.addEventListener('keydown', onKey);
+    return () => window.removeEventListener('keydown', onKey);
+  }, [props.docId]);
 
   /** Pin and Move to: the row's ⋯ and the viewer's ⋯. */
   const fileItems = (d: Doc, close: () => void) => (
@@ -128,7 +160,7 @@ export function Library(props: {
           }}
         >
           {f ? <Icon.folder /> : <Icon.inbox />}
-          <span className="pop-t">{f?.name ?? 'Unfiled'}</span>
+          <span className="pop-t">{f ? folderLabel(f) : 'Unfiled'}</span>
           {d.folderId === (f?.id ?? null) && (
             <span className="pop-check">
               <Icon.check />
@@ -157,15 +189,12 @@ export function Library(props: {
           key={open.id}
           doc={open}
           mode="library"
-          lead={
-            <a className="sd-btn" href="#/library" title="Back to the Library">
-              ‹ Library
-            </a>
-          }
           tools={
-            <button type="button" className={'sd-btn icon-only' + (open.pinned ? ' on' : '')} aria-pressed={open.pinned} title={open.pinned ? 'Unpin' : 'Pin on top of its folder'} aria-label="Pin" onClick={() => pin(open)}>
-              <Icon.pin />
-            </button>
+            (open.chatId || open.agentId !== USER) && (
+              <button type="button" className="sd-btn icon-only" title="Open in the side panel of a chat" aria-label="Open in side panel" onClick={() => props.onOpenInPanel(open)}>
+                <Icon.panel />
+              </button>
+            )
           }
           onDeleted={() => {
             location.hash = '#/library';
@@ -198,7 +227,7 @@ export function Library(props: {
   const all = inProj.filter((d) => matches(d, view.tab, view.filter));
   const counts = folderCounts(inProj);
   // One project picked: its folders only, and its rows carry no tag.
-  const shownFolders = pinfo.byId(pf) ? folders.filter((f) => f.projectId === pf) : folders;
+  const shownFolders = orderFolders(pinfo.byId(pf) ? folders.filter((f) => f.projectId === pf) : folders);
   const tagged = pinfo.multi && !pinfo.byId(pf);
   const inView = all.filter((d) => inFolder(d, folder));
   const n = filterCount(view.filter);
@@ -228,9 +257,26 @@ export function Library(props: {
     </div>
   );
   const searchBox = (cls: string) => (
-    <label className={'mem-search ' + cls}>
+    <label className={'mem-search library-search ' + cls}>
       <Icon.search />
-      <input type="search" value={q} placeholder="Search titles and content…" aria-label="Search the Library" onChange={(e) => setQ(e.target.value)} onKeyDown={(e) => e.key === 'Escape' && setQ('')} />
+      <input
+        ref={cls ? undefined : searchRef}
+        type="search"
+        value={q}
+        placeholder="Search titles and content"
+        aria-label="Search the Library"
+        onChange={(e) => setQ(e.target.value)}
+        onKeyDown={(e) => {
+          if (e.key !== 'Escape') return;
+          setQ('');
+          e.currentTarget.blur();
+        }}
+      />
+      {cls && !q && (
+        <kbd className="kbd" aria-hidden="true">
+          /
+        </kbd>
+      )}
     </label>
   );
   const folderMenu = (f: Folder, className: string) => (
@@ -269,6 +315,7 @@ export function Library(props: {
 
   const row = (d: Doc, snippet?: string | null) => {
     const c = card(d.cardId);
+    const f = d.folderId ? folders.find((x) => x.id === d.folderId) : undefined;
     return (
       <div key={d.id} className="lib-row">
         <a className="lib-main" data-row href={libraryHref(d.id)} title={d.path}>
@@ -277,6 +324,11 @@ export function Library(props: {
             <span>{TYPE_LABEL[d.kind]}</span>
           </span>
           <span className="lib-t">
+            {d.pinned && (
+              <span className="lib-pinned" title="Pinned on top of its folder" aria-label="Pinned">
+                <Icon.pin />
+              </span>
+            )}
             <Highlight text={d.title} q={query} />
             {snippet && (
               <span className="lib-snip">
@@ -289,19 +341,19 @@ export function Library(props: {
           {tagged && <ProjTag id={d.projectId} />}
           {(query || folder === 'all') && (
             <span className="lib-fold" title="Folder">
-              <Icon.folder />
-              {folderName(folders, d.folderId)}
+              {f ? folderLabel(f) : folderName(folders, d.folderId)}
             </span>
           )}
-          {c && (
-            <button type="button" className="card-ref" title={`${c.title} · open the task`} onClick={() => props.onOpenCard(c.id)}>
-              <StatusIcon status={c.status} size={12} />
-              {cardRef(c)}
-            </button>
-          )}
-          <button type="button" className={'lib-pin' + (d.pinned ? ' on' : '')} aria-pressed={d.pinned} title={d.pinned ? 'Unpin' : 'Pin on top of its folder'} aria-label={(d.pinned ? 'Unpin ' : 'Pin ') + d.title} onClick={() => pin(d)}>
-            <Icon.pin />
-          </button>
+          <span className="lib-task">
+            {c && (
+              <button type="button" className="lib-num" title={`${c.title} · open the task`} onClick={() => props.onOpenCard(c.id)}>
+                {cardRef(c)}
+              </button>
+            )}
+          </span>
+          <span className="lib-ver" title={`Version ${d.version}`}>
+            v{d.version}
+          </span>
           <Avatar id={d.agentId} />
           <span className="lib-when" title={new Date(d.updatedAt).toLocaleString()}>
             {shortAgo(d.updatedAt)}
@@ -335,9 +387,7 @@ export function Library(props: {
   const group = (id: string, label: string, list: ReactNode[]) =>
     list.length > 0 && (
       <section key={id} className="list-group" aria-label={label}>
-        <h2 className="lg">
-          {label} <span className="count">{list.length}</span>
-        </h2>
+        <h2 className="lg">{label}</h2>
         {list}
       </section>
     );
@@ -376,27 +426,18 @@ export function Library(props: {
     const recent = recentDocs(inView);
     body = (
       <>
-        <section className="list-group lib-recent" aria-label="Recently modified">
-          <h2 className="lg">
-            Recently modified <span className="count">{recent.length}</span>
-          </h2>
+        <section className="list-group lib-recent" aria-label="Recent">
+          <h2 className="lg">Recent</h2>
           <div className="lib-tiles">
             {recent.map((d) => (
               <a key={d.id} className="lib-tile" href={libraryHref(d.id)} title={d.path}>
                 <ArtifactPreview doc={d} onError={onError} />
                 <span className="lib-tile-t">
-                  <KindIcon kind={d.kind} />
                   <b>{d.title}</b>
                 </span>
                 <span className="lib-tile-m">
                   <Avatar id={d.agentId} />
-                  <span>
-                    {relAgo(d.updatedAt)} · v{d.version}
-                  </span>
-                  <span className="lib-fold" title={folderName(folders, d.folderId)}>
-                    <Icon.folder />
-                    <span className="lib-fold-n">{folderName(folders, d.folderId)}</span>
-                  </span>
+                  <span>{shortAgo(d.updatedAt)}</span>
                 </span>
               </a>
             ))}
@@ -411,7 +452,7 @@ export function Library(props: {
     f && editing === f.id ? (
       nameInput(f)
     ) : (
-      <div key={id} className="lib-fold-row">
+      <div key={id} className={'lib-fold-row' + (f && isOldCanvases(f) ? ' old' : '')}>
         <button type="button" className={'nav-item' + (!query && folder === id ? ' active' : '')} onClick={() => pick(id)}>
           {icon}
           <span>{name}</span>
@@ -436,18 +477,42 @@ export function Library(props: {
         {typeTabs('view-tabs lib-tabs-head')}
         <span className="head-sp" />
         {searchBox('lib-head-search')}
+        <button
+          type="button"
+          className={'icon-btn lib-search-btn' + (searching || query ? ' on' : '')}
+          title="Search titles and content"
+          aria-label="Search"
+          aria-pressed={searching || !!query}
+          onClick={() => {
+            if (searching) setQ('');
+            setSearching(!searching);
+            if (!searching) setTimeout(() => searchRef.current?.focus(), 0);
+          }}
+        >
+          <Icon.search />
+        </button>
         <Menu
           open={menu}
           onOpen={setMenu}
-          title="Filter by agent, task or chat"
+          className="lib-filter"
+          btnClass={'icon-only' + (n > 0 || view.tab !== 'all' ? ' on' : '')}
+          title="Filter by type, agent, task or chat"
           label={
             <>
               <Icon.filter />
-              <span className="btn-text">Filter</span>
               {n > 0 && <span className="tab-n">{n}</span>}
             </>
           }
         >
+          {/* Phone: no type tabs in the header, the type is picked here. */}
+          <div className="lib-type-pick">
+            <div className="pop-k">Type</div>
+            {LIB_TABS.map((t) => (
+              <PopRow key={t.id} on={view.tab === t.id} onClick={() => save({ ...view, tab: t.id })}>
+                {t.label}
+              </PopRow>
+            ))}
+          </div>
           <div className="pop-k">Agent</div>
           <PopRow on={view.filter.agent === null} onClick={() => setFilter('agent', null)}>
             Any agent
@@ -490,25 +555,26 @@ export function Library(props: {
             </button>
           )}
         </Menu>
-        <button type="button" className="btn" onClick={() => setEditing('new')} title="New folder" aria-label="New folder">
-          <Icon.plus />
-          <span className="btn-text">New folder</span>
-        </button>
       </HeaderActions>
-      {typeTabs('lib-tabs-bar')}
       <div className="lib-bar">
-        {searchBox('')}
+        {(searching || query) && searchBox('')}
         <div className="lib-chips" aria-label="Folders">
-          {chip('all', 'All artifacts')}
+          {chip('all', 'All')}
           {chip('unfiled', 'Unfiled')}
-          {shownFolders.map((f) => chip(f.id, f.name, f))}
-          {editing === 'new' && nameInput(null)}
+          {shownFolders.map((f) => chip(f.id, folderLabel(f), f))}
+          {editing === 'new' ? (
+            nameInput(null)
+          ) : (
+            <button type="button" className="mem-chip" title="New folder" aria-label="New folder" onClick={() => setEditing('new')}>
+              <Icon.plus />
+            </button>
+          )}
           {current && !query && folderMenu(current, 'mem-chip')}
         </div>
       </div>
       <div className="lib-split">
         <nav className="lib-folders" aria-label="Folders">
-          {folderItem('all', <Icon.stack />, 'All artifacts')}
+          {folderItem('all', <Icon.library />, 'All')}
           {folderItem('unfiled', <Icon.inbox />, 'Unfiled')}
           <div className="side-group">
             Folders
@@ -516,7 +582,7 @@ export function Library(props: {
               <Icon.plus />
             </button>
           </div>
-          {shownFolders.map((f) => folderItem(f.id, <Icon.folder16 />, f.name, f))}
+          {shownFolders.map((f) => folderItem(f.id, <Icon.folder16 />, folderLabel(f), f))}
           {editing === 'new' && nameInput(null)}
         </nav>
         <div className="lib-main-col">
