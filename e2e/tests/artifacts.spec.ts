@@ -180,13 +180,13 @@ test('library: folders with counts, tabs, tiles, search, empty state', async ({ 
   await seedLibrary(atlas);
   await page.goto(`${atlas.url}/#/library`);
   const nav = page.locator('nav.lib-folders');
-  await expect(nav.locator('.nav-item', { hasText: /All artifacts/ })).toContainText('6');
+  await expect(nav.locator('.nav-item', { hasText: /^All/ })).toContainText('6');
   await expect(nav.locator('.nav-item', { hasText: /Unfiled/ })).toContainText('2');
   await expect(nav.locator('.nav-item', { hasText: /Design/ })).toContainText('3');
   await expect(nav.locator('.nav-item', { hasText: /Research/ })).toContainText('1');
-  // tiles: at most 4, each a live render
+  // Recent: 3 tiles, each a live render
   const tiles = page.locator('.lib-tile');
-  await expect(tiles).toHaveCount(4);
+  await expect(tiles).toHaveCount(3);
   await expect(page.locator('.lib-tile').first().locator('iframe, img, .doc-md, .lib-pv-doc').first()).toBeVisible();
   // type tabs
   for (const t of ['All', 'Docs', 'Pages', 'Diagrams', 'Links']) await expect(page.getByRole('tab', { name: t, exact: true }).first()).toBeAttached();
@@ -246,25 +246,30 @@ test('library: pin on top, move to, folder rename + delete → Unfiled, new fold
   const confirm = page.getByRole('button', { name: /^Delete/ });
   if (await confirm.count()) await confirm.last().click();
   await expect(nav.locator('.nav-item', { hasText: /Unfiled/ })).toContainText('4');
-  await expect(nav.locator('.nav-item', { hasText: /All artifacts/ })).toContainText('6');
+  await expect(nav.locator('.nav-item', { hasText: /^All/ })).toContainText('6');
   await expect(nav.locator('.nav-item', { hasText: /Design/ })).toHaveCount(0);
 });
 
-test('library viewer: ⋯ has Pin and Move to; ‹ Library goes back', async ({ atlas, page }) => {
+test('library viewer: one header (crumb, project, version), ⋯ has Pin and Move to; the « Library » crumb goes back', async ({ atlas, page }) => {
   await seedLibrary(atlas);
   const docs = (await (await fetch(atlas.url + '/api/documents')).json()) as { id: string; title: string }[];
   const alpha = docs.find((d) => d.title === 'Alpha spec')!;
   await page.goto(`${atlas.url}/#/library/${alpha.id}`);
   const v = page.locator('.viewer.library');
-  await expect(v.locator('.sd-head')).toHaveCount(1);
-  await v.getByRole('button', { name: 'More' }).click();
+  await expect(v.locator('.sd-head')).toHaveCount(0); // its controls are in the screen header (#270)
+  const head = page.locator('.screen-head');
+  await expect(head.locator('h1')).toHaveText('Alpha spec');
+  await expect(head.locator('.crumb-folder')).toHaveText('Design');
+  await expect(head.locator('.sd-ver-btn')).toContainText('v1');
+  await expect(page.locator('.doc-path')).toContainText('.md');
+  await head.getByRole('button', { name: 'More' }).click();
   const pop = page.locator('.fixed-pop');
   await expect(pop.getByText('Pin on top of its folder')).toBeVisible();
   await expect(pop.getByText('Move to')).toBeVisible();
   await expect(pop.getByRole('menuitemradio')).toHaveCount(3); // Design, Research, Unfiled
   await pop.getByRole('menuitemradio', { name: /Research/ }).click();
   await expect.poll(async () => ((await (await fetch(atlas.url + '/api/documents/' + alpha.id)).json()) as { folderId: string | null }).folderId).not.toBeNull();
-  await v.getByRole('link', { name: /Library/ }).click();
+  await head.locator('.crumb-link', { hasText: 'Library' }).click();
   await expect(page.locator('.lib-row').first()).toBeVisible();
 });
 
@@ -316,11 +321,11 @@ test('phone library: folders are chips, tiles swipe sideways, chip ⋯ renames a
   await page.goto(`${atlas.url}/#/library`);
   await expect(page.locator('nav.lib-folders')).toBeHidden();
   const chips = page.locator('.lib-chips');
-  await expect(chips.getByRole('button', { name: /All artifacts\s*6/ })).toBeVisible();
+  await expect(chips.getByRole('button', { name: /^All\s*6/ })).toBeVisible();
   await expect(chips.getByRole('button', { name: /Design\s*3/ })).toBeVisible();
   // tiles are a horizontally scrolling row
   const tiles = page.locator('.lib-tiles');
-  await expect(page.locator('.lib-tile')).toHaveCount(4);
+  await expect(page.locator('.lib-tile')).toHaveCount(3);
   const sw = await tiles.evaluate((el) => ({ sw: el.scrollWidth, cw: el.clientWidth, ox: getComputedStyle(el).overflowX }));
   expect(sw.sw).toBeGreaterThan(sw.cw);
   expect(['auto', 'scroll']).toContain(sw.ox);

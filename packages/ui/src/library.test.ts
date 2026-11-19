@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import type { Doc } from '@atlas/shared';
-import { filterCount, folderCounts, groupDocs, inFolder, matches, parseLibView, recentDocs, relAgo } from './library.ts';
+import { filterCount, folderCounts, folderLabel, groupDocs, inFolder, matches, orderFolders, parseLibView, recentDocs, relAgo } from './library.ts';
 
 const NOW = Date.parse('2026-11-13T12:00:00Z');
 const ago = (h: number) => new Date(NOW - h * 3600_000).toISOString();
@@ -34,12 +34,17 @@ describe('library view', () => {
     expect(parseLibView('not json').tab).toBe('all');
   });
 
-  it('folders: counts, membership, and the 4 recently modified', () => {
+  it('folders: counts, membership, and the 3 recent ones', () => {
     const ds = [doc('a', { folderId: 'f1', updatedAt: ago(5) }), doc('b', { updatedAt: ago(1) }), doc('c', { folderId: 'f1', updatedAt: ago(3) }), doc('d', { updatedAt: ago(9) }), doc('e', { updatedAt: ago(2) })];
     expect(Object.fromEntries(folderCounts(ds))).toEqual({ all: 5, unfiled: 3, f1: 2 });
     expect(ds.filter((d) => inFolder(d, 'f1')).map((d) => d.id)).toEqual(['a', 'c']);
     expect(ds.filter((d) => inFolder(d, 'unfiled')).map((d) => d.id)).toEqual(['b', 'd', 'e']);
-    expect(recentDocs(ds).map((d) => d.id)).toEqual(['b', 'e', 'c', 'a']);
+    expect(recentDocs(ds).map((d) => d.id)).toEqual(['b', 'e', 'c']);
+  });
+
+  it('puts the old canvases folder last, as « Canvases (old) »', () => {
+    const fs = [{ name: 'Canvases' }, { name: 'QA' }, { name: 'Designs' }];
+    expect(orderFolders(fs).map(folderLabel)).toEqual(['QA', 'Designs', 'Canvases (old)']);
   });
 
   it('says how long ago', () => {

@@ -6,7 +6,8 @@ import { changedSections, findSection, linkOf, splitSections, USER, type Doc, ty
 import { api, ApiError } from './api.ts';
 import type { MessageStream } from './useMessages.ts';
 import { diagramWidth } from './docPanel.ts';
-import { Icon } from './ScreenHeader.tsx';
+import { HeaderActions, Icon } from './ScreenHeader.tsx';
+import { AgentFace } from './AgentFace.tsx';
 import { PopButton, PopItem } from './HeadMenu.tsx';
 import { relAgo } from './library.ts';
 import { fileUrl, folderName, isImageUrl, sandboxFor, SANDBOX, useFolders, versionLabel } from './artifacts.ts';
@@ -99,123 +100,143 @@ export function ArtifactViewer(props: {
   const old = version !== null && version < doc.version;
   const restore = (v: number) => api.restoreDoc(doc.id, v).then(() => setVersion(null), onError);
   const isLink = doc.kind === 'url';
+  const lib = props.mode === 'library';
 
-  return (
-    <div className={'viewer ' + props.mode}>
-      <div className="sd-head">
-        {props.lead}
-        {props.tabs ? (
-          <div className="sd-tabs" role="tablist" aria-label="Artifacts">
-            {props.tabs.map((t) => (
-              <div key={t.doc.id} className={'sd-tab' + (t.doc.id === doc.id ? ' on' : '')}>
-                <button role="tab" aria-selected={t.doc.id === doc.id} title={t.doc.path} onClick={() => t.doc.id !== doc.id && props.onTab?.(t.doc)}>
-                  <KindIcon kind={t.doc.kind} />
-                  <span className="sd-tab-t">{t.doc.title}</span>
-                  {t.dot && <span className="sd-dot" title="Changed since you looked" />}
-                </button>
-                {t.onClose && (
-                  <button className="sd-tab-x" aria-label={`Close ${t.doc.title}`} onClick={t.onClose}>
-                    ×
-                  </button>
-                )}
-              </div>
-            ))}
-          </div>
-        ) : (
-          <div className="sd-title">
-            <KindIcon kind={doc.kind} />
-            <b>{doc.title}</b>
-            {props.mode === 'library' && <span className="sd-path">{doc.path}</span>}
-          </div>
-        )}
-        <PopButton
-          className={'sd-ver-btn' + (old ? ' old' : '')}
-          title={old ? `Showing v${shown}; the latest is v${doc.version}` : `Versions (v${doc.version}, ${relAgo(doc.updatedAt)})`}
-          ariaLabel={`Version ${versionLabel(shown, doc.version)}: versions`}
-          label={
+  /** The version picker, Latest, Source, the caller's tools, ⋯ and its end: in the head row, or in the Library's screen header. */
+  const controls = (
+    <>
+      <PopButton
+        className={'sd-ver-btn' + (old ? ' old' : '') + (lib ? ' sd-ver-lib' : '')}
+        title={old ? `Showing v${shown}; the latest is v${doc.version}` : `Versions (v${doc.version}, ${relAgo(doc.updatedAt)})`}
+        ariaLabel={`Version ${versionLabel(shown, doc.version)}: versions`}
+        label={
+          lib ? (
+            <>
+              <AgentFace id={doc.updatedBy || doc.agentId} />
+              <span>{versionLabel(shown, doc.version)}</span>
+              {!old && <span className="sd-ver-ago">· {relAgo(doc.updatedAt)}</span>}
+              <Icon.chevDown />
+            </>
+          ) : (
             <>
               {versionLabel(shown, doc.version)}
               <Icon.chevDown />
             </>
-          }
-        >
-          {(close) => (
-            <VersionMenu
-              doc={doc}
-              shown={shown}
-              onView={(v) => {
-                setVersion(v === doc.version ? null : v);
+          )
+        }
+      >
+        {(close) => (
+          <VersionMenu
+            doc={doc}
+            shown={shown}
+            onView={(v) => {
+              setVersion(v === doc.version ? null : v);
+              close();
+            }}
+            onRestore={(v) => {
+              close();
+              void restore(v);
+            }}
+            onError={onError}
+          />
+        )}
+      </PopButton>
+      {old && (
+        <button type="button" className="sd-btn sd-latest-btn" title="Back to the latest version" onClick={() => setVersion(null)}>
+          Latest
+        </button>
+      )}
+      {src && (
+        <button type="button" className="sd-btn sd-src-on" title="Back to the preview" onClick={() => setSrc(false)}>
+          {isLink ? 'Address' : 'Source'} ×
+        </button>
+      )}
+      {props.tools}
+      <PopButton className="sd-btn icon-only" title="More" ariaLabel="More" label={<Icon.dots />}>
+        {(close) => (
+          <>
+            <div className="pop-info">
+              <span>{props.by ?? `By ${who(doc.agentId)}`}</span>
+              <span>
+                <Icon.folder />
+                {folderName(folders, doc.folderId)}
+              </span>
+              <span className="pop-path">{doc.path}</span>
+            </div>
+            <div className="pop-sep" />
+            <PopItem
+              icon={<Icon.code />}
+              onClick={() => {
+                setSrc(!src);
                 close();
               }}
-              onRestore={(v) => {
-                close();
-                void restore(v);
-              }}
-              onError={onError}
-            />
-          )}
-        </PopButton>
-        {old && (
-          <button type="button" className="sd-btn sd-latest-btn" title="Back to the latest version" onClick={() => setVersion(null)}>
-            Latest
-          </button>
-        )}
-        {src && (
-          <button type="button" className="sd-btn sd-src-on" title="Back to the preview" onClick={() => setSrc(false)}>
-            {isLink ? 'Address' : 'Source'} ×
-          </button>
-        )}
-        {props.tools}
-        <PopButton className="sd-btn icon-only" title="More" ariaLabel="More" label={<Icon.dots />}>
-          {(close) => (
-            <>
-              <div className="pop-info">
-                <span>{props.by ?? `By ${who(doc.agentId)}`}</span>
-                <span>
-                  <Icon.folder />
-                  {folderName(folders, doc.folderId)}
-                </span>
-                <span className="pop-path">{doc.path}</span>
-              </div>
-              <div className="pop-sep" />
+            >
+              {src ? 'Show the preview' : isLink ? 'Show the address' : 'Show the source'}
+            </PopItem>
+            {isLink && <OpenInBrowser doc={doc} version={version} onDone={close} onError={onError} />}
+            {props.onAsk && doc.kind !== 'markdown' && (
               <PopItem
-                icon={<Icon.code />}
+                icon={<Icon.ask />}
                 onClick={() => {
-                  setSrc(!src);
+                  props.onAsk!(null, shown);
                   close();
                 }}
               >
-                {src ? 'Show the preview' : isLink ? 'Show the address' : 'Show the source'}
+                Ask about this
               </PopItem>
-              {isLink && <OpenInBrowser doc={doc} version={version} onDone={close} onError={onError} />}
-              {props.onAsk && doc.kind !== 'markdown' && (
-                <PopItem
-                  icon={<Icon.ask />}
-                  onClick={() => {
-                    props.onAsk!(null, shown);
-                    close();
-                  }}
-                >
-                  Ask about this
-                </PopItem>
-              )}
-              {props.menu?.(close)}
-              <div className="pop-sep" />
-              <PopItem
-                danger
-                icon={<Icon.trash />}
-                onClick={() => {
-                  close();
-                  setDeleting(true);
-                }}
-              >
-                Delete…
-              </PopItem>
-            </>
+            )}
+            {props.menu?.(close)}
+            <div className="pop-sep" />
+            <PopItem
+              danger
+              icon={<Icon.trash />}
+              onClick={() => {
+                close();
+                setDeleting(true);
+              }}
+            >
+              Delete…
+            </PopItem>
+          </>
+        )}
+      </PopButton>
+      {props.end}
+    </>
+  );
+  return (
+    <div className={'viewer ' + props.mode}>
+      {lib ? (
+        // The Library (redesign #270): one screen header (breadcrumb, title, project tag in App), these on its right.
+        <HeaderActions>{controls}</HeaderActions>
+      ) : (
+        <div className="sd-head">
+          {props.lead}
+          {props.tabs ? (
+            <div className="sd-tabs" role="tablist" aria-label="Artifacts">
+              {props.tabs.map((t) => (
+                <div key={t.doc.id} className={'sd-tab' + (t.doc.id === doc.id ? ' on' : '')}>
+                  <button role="tab" aria-selected={t.doc.id === doc.id} title={t.doc.path} onClick={() => t.doc.id !== doc.id && props.onTab?.(t.doc)}>
+                    <KindIcon kind={t.doc.kind} />
+                    <span className="sd-tab-t">{t.doc.title}</span>
+                    {t.dot && <span className="sd-dot" title="Changed since you looked" />}
+                  </button>
+                  {t.onClose && (
+                    <button className="sd-tab-x" aria-label={`Close ${t.doc.title}`} onClick={t.onClose}>
+                      ×
+                    </button>
+                  )}
+                </div>
+              ))}
+            </div>
+          ) : (
+            <div className="sd-title">
+              <KindIcon kind={doc.kind} />
+              <b>{doc.title}</b>
+            </div>
           )}
-        </PopButton>
-        {props.end}
-      </div>
+          {controls}
+        </div>
+      )}
       {deleting && <DeleteArtifactDialog doc={doc} onCancel={() => setDeleting(false)} onDeleted={() => props.onDeleted?.()} onError={onError} />}
       {src ? (
         <Source key={doc.id} doc={doc} version={version} onError={onError} />
@@ -227,6 +248,7 @@ export function ArtifactViewer(props: {
           section={props.section}
           scrollKey={props.scrollKey}
           seenVersion={props.seenVersion}
+          path={lib}
           onAsk={props.onAsk}
           onSeen={props.onSeen}
           onError={onError}
@@ -380,6 +402,8 @@ function DocBody(props: {
   section?: string | null;
   scrollKey?: string;
   seenVersion?: number;
+  /** The file path as a quiet line on top of a document (the Library). */
+  path?: boolean;
   onAsk?(section: DocSection | null, version: number): void;
   onSeen?(): void;
   onError(e: unknown): void;
@@ -433,6 +457,7 @@ function DocBody(props: {
     <div className={'sd-body ' + doc.kind}>
       {doc.kind === 'markdown' ? (
         <article className="doc-md md">
+          {props.path && <p className="doc-path">{doc.path}</p>}
           {sections.map((s) => (
             <section key={s.id || '_intro'} id={secId(doc.id, s.id)} className={'doc-sec' + (changed.has(s.id) ? ' changed' : '')}>
               <div className="doc-sec-tools">

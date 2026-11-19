@@ -1750,22 +1750,16 @@ button.msg-quote:hover { color: var(--text); }
 .lib-m { flex: none; display: flex; align-items: center; gap: 10px; color: var(--faint); font-size: var(--fs-small); }
 .lib-when { width: 52px; text-align: right; white-space: nowrap; font-variant-numeric: tabular-nums; }
 .lib-pin { border: 0; background: none; color: var(--faint); width: 24px; height: 24px; border-radius: 5px; padding: 0; display: grid; place-items: center; opacity: 0; }
-.lib-row:hover .lib-pin, .lib-pin:focus-visible, .lib-pin.on { opacity: 1; }
+.mem-row:hover .lib-pin, .lib-pin:focus-visible, .lib-pin.on { opacity: 1; }
 .lib-pin.on { color: var(--accent); }
 .lib-pin:hover { background: var(--active); color: var(--text); }
 .library > .state-empty, .lib-list > .state-empty { margin: 24px; }
-.lib-doc .viewer > .sd-head { padding-left: 6px; }
 .crumb-link { color: var(--muted); text-decoration: none; }
 .crumb-link:hover { color: var(--text); }
 .pop-t { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; max-width: 260px; }
-.lib-tabs-bar { display: none; }
 @media (pointer: coarse) { .lib-pin { opacity: 1; } }
 @media (max-width: 640px) {
-  .lib-row .card-ref, .lib-row .dot-avatar { display: none; }
   .lib-tabs-head { display: none; }
-  .lib-tabs-bar { display: flex; gap: 2px; flex: none; padding: 6px 10px; border-bottom: 1px solid var(--line); overflow-x: auto; scrollbar-width: none; }
-  .ty { width: auto; }
-  .ty span { display: none; }
   .sd-path { display: none; }
 }
 .art-icon .kind-icon { color: inherit; }
@@ -2093,11 +2087,61 @@ a.pop-row[aria-disabled='true'] { opacity: 0.5; pointer-events: none; }
 /* #180: the time stays whole; the folder chip shrinks first and ellipsizes its name. */
 .lib-tile-m > span:not(.lib-fold) { flex: none; }
 .lib-bar .lib-chips .lib-fold-in { flex: none; }
+
+/* ── Library redesign (#270, mockup « Library » and « Doc »): plain rows, three tiles, one header ─────────────── */
+.library .list-group .lg { background: var(--panel); border-bottom: 1px solid var(--line); color: var(--muted); padding-top: 6px; }
+.library .ty { width: 66px; height: auto; padding: 0; border: 0; border-radius: 0; font-weight: var(--fw-regular); gap: 6px; }
+.library .ty .kind-icon { width: 14px; height: 14px; }
+.lib-pinned { display: inline-grid; place-items: center; margin-right: 6px; color: var(--accent); vertical-align: -2px; }
+.lib-pinned .icon { width: 13px; height: 13px; }
+.lib-m { gap: 12px; color: var(--muted); }
+.lib-row .lib-fold { height: auto; max-width: 160px; padding: 0; border: 0; border-radius: 0; display: block; color: var(--muted); text-align: right; }
+.lib-task { width: 48px; flex: none; text-align: right; }
+.lib-num { border: 0; background: none; padding: 0 2px; border-radius: 4px; color: var(--muted); font: inherit; font-variant-numeric: tabular-nums; cursor: pointer; }
+.lib-num:hover { color: var(--text); text-decoration: underline; }
+.lib-ver { width: 28px; flex: none; text-align: right; font-variant-numeric: tabular-nums; }
+.lib-row .lib-when { width: 44px; }
+.lib-fold-row.old .nav-item:not(.active) { color: var(--muted); }
+.crumb-folder { color: var(--muted); max-width: 200px; overflow: hidden; text-overflow: ellipsis; display: inline-block; vertical-align: bottom; }
+/* Header: search with its « / » key, filter as an icon; the phone's search is an icon that opens a field under the header. */
+.lib-head-search { flex: 0 1 260px; }
+.lib-head-search .kbd { flex: none; }
+.lib-search-btn { display: none; }
+.lib-search-btn.on, .lib-filter .btn.on { color: var(--accent); }
+.lib-filter .btn.icon-only { width: 30px; padding: 0; justify-content: center; gap: 2px; }
+.lib-filter .btn.icon-only:has(.tab-n) { width: auto; padding: 0 8px; }
+.lib-type-pick { display: none; }
+/* The document's controls keep their width; the title ellipsizes. */
+.head-actions:has(.sd-ver-lib) { flex: none; }
+/* A content match needs room beside the title: below 1200 px the row shows the title alone. */
+@media (max-width: 1200px) { .lib-snip { display: none; } }
+/* Recent: three tiles, the live preview on top, then the title and who / when. */
+.lib-tiles { grid-template-columns: repeat(3, minmax(0, 1fr)); max-width: 900px; gap: 12px; padding: 8px 16px 14px; }
+.lib-tile { padding: 0; gap: 0; overflow: hidden; }
+.lib-tile .lib-pv { height: 120px; border: 0; border-bottom: 1px solid var(--line); border-radius: 0; }
+.lib-tile-t { padding: 8px 10px 2px; font-size: var(--fs-base); }
+.lib-tile-m { padding: 2px 10px 8px; }
+/* The document: its controls sit in the screen header; the file path is a quiet line on top of the text. */
+.sd-ver-lib { height: 28px; gap: 6px; padding: 0 8px; border-color: transparent; color: var(--muted); font-weight: var(--fw-regular); }
+.sd-ver-lib .dot-avatar { width: 16px; height: 16px; }
+.sd-ver-lib.old .dot-avatar { display: none; }
+.doc-path { margin: 0 0 12px; font-family: var(--mono); font-size: var(--fs-small); color: var(--muted); overflow-wrap: anywhere; }
 @media (max-width: 640px) {
-  /* Phone rows: the ⋯ menu has Pin; the pin button only shows when pinned. The tile's folder takes its own line. */
-  .lib-row .lib-pin:not(.on) { display: none; }
-  .lib-tile-m { flex-wrap: wrap; row-gap: 6px; }
-  .lib-tile-m .lib-fold { margin-left: 0; max-width: 100%; }
+  .lib-search-btn { display: inline-grid; }
+  .lib-type-pick { display: block; }
+  .lib-bar { padding: 8px 12px; }
+  .lib-row { padding-left: 12px; }
+  .lib-row .lib-main { gap: 8px; }
+  .library .ty { width: 44px; }
+  .library .ty .kind-icon { display: none; }
+  .lib-row .proj-tag, .lib-row .lib-fold, .lib-task, .lib-ver { display: none; }
+  .lib-m { gap: 8px; }
+  .lib-tiles { padding: 8px 12px 14px; }
+  .lib-tile { width: 140px; }
+  .lib-tile .lib-pv { height: 110px; }
+  .sd-ver-lib .dot-avatar, .sd-ver-ago { display: none; }
+  /* Phone document header: the title alone (‹ goes back), its version and actions. */
+  .screen-head:has(.sd-ver-lib) .crumb-part { display: none; }
 }
 /* ── Slash commands in the composer (card #99): the popup above the box, the busy line ─────────────────────── */
 .composer { position: relative; }

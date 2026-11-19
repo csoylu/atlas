@@ -1,4 +1,4 @@
-import type { Doc, DocKind } from '@atlas/shared';
+import type { Doc, DocKind, Folder } from '@atlas/shared';
 
 /** The Library's type tabs (design §16, #120): All, Docs, Pages, Diagrams, Links. */
 export type LibTab = 'all' | 'docs' | 'pages' | 'diagrams' | 'links';
@@ -56,8 +56,8 @@ export function folderCounts(docs: Doc[]): Map<LibFolder, number> {
   return n;
 }
 
-/** « Recently modified »: the 4 latest-changed, as live tiles on top of the list. */
-export const recentDocs = (docs: Doc[], n = 4): Doc[] => [...docs].sort((a, b) => b.updatedAt.localeCompare(a.updatedAt)).slice(0, n);
+/** « Recent »: the 3 latest-changed, as live tiles on top of the list (redesign #270). */
+export const recentDocs = (docs: Doc[], n = 3): Doc[] => [...docs].sort((a, b) => b.updatedAt.localeCompare(a.updatedAt)).slice(0, n);
 
 export function matches(d: Doc, tab: LibTab, f: LibFilter): boolean {
   const kind = LIB_TABS.find((t) => t.id === tab)?.kind;
@@ -98,3 +98,10 @@ export function relAgo(iso: string, now = Date.now()): string {
 
 /** The Library route of a document: #/library/<docId>. */
 export const libraryHref = (docId: string) => '#/library/' + encodeURIComponent(docId);
+
+/** The folder migration 0041 filled with the old canvases (converted to pages): last in the column, « Canvases (old) ». */
+export const isOldCanvases = (f: Pick<Folder, 'name'>) => f.name === 'Canvases';
+/** A folder's name in the Library column and chips. */
+export const folderLabel = (f: Pick<Folder, 'name'>) => (isOldCanvases(f) ? 'Canvases (old)' : f.name);
+/** The folders column order: as the engine gives them, the old canvases last. */
+export const orderFolders = <F extends Pick<Folder, 'name'>>(fs: F[]): F[] => [...fs.filter((f) => !isOldCanvases(f)), ...fs.filter(isOldCanvases)];
