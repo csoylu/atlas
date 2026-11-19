@@ -411,6 +411,12 @@ describe('voice loop helpers', async () => {
     for (const t of ['No, I meant tomorrow.', 'Hayır, yarın için.', 'Wait, what about the login bug?', 'Dur, kartı kapat.', '', '...'])
       expect(isQuiet(t), t).toBe(false);
   });
+  it('#257: a stop word said again and cut off by the end of the audio is still quiet; a real word after it is not', () => {
+    for (const t of ['Yeter. Y', 'Hayyuz. Hayy', 'Stop. St', 'Dur, d', 'Tamam, yeter. Yet'])
+      expect(isQuiet(t), t).toBe(true);
+    for (const t of ['Stop, go on.', 'Dur, bak.', 'Yeter. Yaz', 'Y', 'Yeter. Y. Bak'])
+      expect(isQuiet(t), t).toBe(false);
+  });
   it('cuts a streamed reply into sentences as soon as each is complete, never reading code', () => {
     const s = new SentenceStream();
     expect(s.push('Done')).toEqual([]);
@@ -430,7 +436,18 @@ describe('voice loop helpers', async () => {
   it("strips Atlas's own « Yes, Master? » heard back from a command", () => {
     expect(stripAck('Yes, Master? Create a card.', 'Master')).toBe('Create a card.');
     expect(stripAck('Yes, Can. What time is it?', 'Can')).toBe('What time is it?');
-    expect(stripAck('Yes?', 'the user')).toBe('');
+    expect(stripAck('Yes?', 'the user', true)).toBe('');
     expect(stripAck('Yesterday was busy.', 'Master')).toBe('Yesterday was busy.');
+  });
+  it('#257: right after « Yes, Master? » a short misheard « yes … » is its echo; later, or longer, it is Master', () => {
+    for (const t of ['Yesta.', 'Yes must', 'Yes, Moss.', 'Yes.', 'Yes?', 'Yes, Master?'])
+      expect(stripAck(t, 'Master', true), t).toBe('');
+    expect(stripAck('Yes, Master? Yes must', 'Master', true)).toBe('');
+    expect(stripAck('Yes do it.', 'Master', true)).toBe('Yes do it.'); // 3 words: a command
+    expect(stripAck('Yes, tomorrow.', 'Master', true)).toBe('Yes, tomorrow.'); // a long word: a command
+    expect(stripAck('Yesterday was busy.', 'Master', true)).toBe('Yesterday was busy.');
+    // outside the echo window: Master's own « yes » is sent
+    for (const t of ['Yes.', 'Yes must', 'Yesta.', 'Yes, Moss.']) expect(stripAck(t, 'Master', false), t).toBe(t);
+    expect(stripAck('Yes, Master? Create a card.', 'Master', false)).toBe('Create a card.');
   });
 });
