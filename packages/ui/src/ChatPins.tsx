@@ -2,12 +2,19 @@ import { useEffect, useRef, useState } from 'react';
 import type { Card } from '@atlas/shared';
 import { api } from './api.ts';
 import type { MessageStream } from './useMessages.ts';
-import { FADE_MS, dismissKey, fades, nextPins, pinLabel, type Pin } from './chatPins.ts';
-import { StatusIcon } from './StatusIcon.tsx';
+import { FADE_MS, dismissKey, fades, nextPins, pinLabel, type Pin, type PinKind } from './chatPins.ts';
+import { StatusIcon, type IconStatus } from './StatusIcon.tsx';
+import { PopButton, PopItem } from './HeadMenu.tsx';
+
+/** Chips shown in the header before the rest go into « +N »; one more chip would only replace that « +N ». */
+const MAX_CHIPS = 3;
+
+const pinIcon = (k: PinKind): IconStatus => (k === 'waiting' ? 'todo' : k === 'stopped' ? 'failed' : k === 'deleted' ? 'closed' : k);
 
 /**
- * The cards this chat created, pinned at its top-left with their live state (mockup `mockups/workflow.html`).
- * Click opens the task in the side panel; finished pins fade out after FADE_MS (hover pauses), any non-running pin can be unpinned.
+ * The tasks this chat created, as « From this chat » chips in the chat's header (redesign #271): state icon, #N, title;
+ * a click opens the task beside the chat. A narrow window shows one « N tasks » chip with the list. Finished ones fade
+ * out after FADE_MS (hover pauses), any chip but a running one can be unpinned.
  */
 export function ChatPins(props: { chatId: string; cards: Card[]; stream: MessageStream; onOpen(id: string): void; onError(e: unknown): void }) {
   const { chatId, cards } = props;
@@ -29,19 +36,57 @@ export function ChatPins(props: { chatId: string; cards: Card[]; stream: Message
     setPins((ps) => ps.filter((x) => x.id !== p.id));
   };
   if (!pins.length) return null;
+  const shown = pins.length > MAX_CHIPS ? pins.slice(0, MAX_CHIPS - 1) : pins;
+  const rest = pins.slice(shown.length);
+  const list = (items: Pin[]) => (close: () => void) =>
+    items.map((p) => (
+      <PopItem
+        key={p.id}
+        icon={<StatusIcon status={pinIcon(p.kind)} />}
+        sub={pinLabel(p, now)}
+        onClick={() => {
+          close();
+          props.onOpen(p.id);
+        }}
+      >
+        {p.number !== null && <span className="chat-pin-num">#{p.number} </span>}
+        {p.title}
+      </PopItem>
+    ));
   return (
-    <div className="chat-pins" role="list" aria-label="Tasks from this chat">
-      {pins.map((p) => (
-        <PinView key={p.id} pin={p} now={now} stream={props.stream} onOpen={props.onOpen} onUnpin={() => unpin(p)} onError={props.onError} />
-      ))}
-    </div>
+    <>
+      <div className="chat-pins" role="list" aria-label="Tasks from this chat">
+        <span className="chat-pins-lbl">From this chat</span>
+        {shown.map((p) => (
+          <PinView key={p.id} pin={p} now={now} stream={props.stream} onOpen={props.onOpen} onUnpin={() => unpin(p)} onError={props.onError} />
+        ))}
+        {rest.length > 0 && (
+          <PopButton className="chat-pin chat-pin-more" label={`+${rest.length}`} title="More tasks from this chat" ariaLabel={`${rest.length} more tasks from this chat`} width={320}>
+            {list(rest)}
+          </PopButton>
+        )}
+      </div>
+      <PopButton
+        className="chat-pin chat-pin-count"
+        label={
+          <>
+            <StatusIcon status={pinIcon(pins[0]!.kind)} />
+            {pins.length} task{pins.length === 1 ? '' : 's'}
+          </>
+        }
+        title="Tasks from this chat"
+        width={300}
+      >
+        {list(pins)}
+      </PopButton>
+    </>
   );
 }
 
 function PinView(props: { pin: Pin; now: number; stream: MessageStream; onOpen(id: string): void; onUnpin(): void; onError(e: unknown): void }) {
   const { pin, stream, onUnpin, onError } = props;
   const running = pin.kind === 'running';
-  // The run's real start, for the clock (the card's updatedAt is only a first guess).
+  // The run's real start, for the clock in the tooltip (the card's updatedAt is only a first guess).
   const [runStart, setRunStart] = useState<number | null>(null);
   useEffect(() => {
     if (!running) return setRunStart(null);
@@ -99,18 +144,11 @@ function PinView(props: { pin: Pin; now: number; stream: MessageStream; onOpen(i
 
   const label = pinLabel({ kind: pin.kind, since: runStart ?? pin.since }, props.now);
   return (
-    <div
-      role="listitem"
-      className={`chat-pin ${pin.kind}${fading ? ' fading' : ''}`}
-      onMouseEnter={pause}
-      onMouseLeave={resume}
-      onFocus={pause}
-      onBlur={resume}
-    >
-      <button type="button" className="chat-pin-open" onClick={() => props.onOpen(pin.id)} title={`${pin.title} · ${label}`}>
-        <StatusIcon status={pin.kind === 'waiting' ? 'todo' : pin.kind === 'stopped' ? 'failed' : pin.kind === 'deleted' ? 'closed' : pin.kind} />
+    <div role="listitem" className={`chat-pin ${pin.kind}${fading ? ' fading' : ''}`} onMouseEnter={pause} onMouseLeave={resume} onFocus={pause} onBlur={resume}>
+      <button type="button" className="chat-pin-open" onClick={() => props.onOpen(pin.id)} title={`${pin.number !== null ? '#' + pin.number + ' ' : ''}${pin.title} · ${label}`}>
+        <StatusIcon status={pinIcon(pin.kind)} />
+        {pin.number !== null && <span className="chat-pin-num">#{pin.number}</span>}
         <span className="chat-pin-title">{pin.title}</span>
-        <span className="chat-pin-state">{label}</span>
       </button>
       {!running && (
         <button type="button" className="chat-pin-x" onClick={onUnpin} aria-label={`Unpin “${pin.title}”`} title="Unpin">

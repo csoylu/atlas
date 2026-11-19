@@ -13,6 +13,8 @@ export type PinKind = 'running' | 'waiting' | 'blocked' | 'review' | 'stopped' |
 
 export interface Pin {
   id: string;
+  /** The task's #N (null for an old card without one). */
+  number: number | null;
   title: string;
   kind: PinKind;
   /** When the card started the current run state (ms), for "running · 2:14"; null when unknown. */
@@ -83,7 +85,7 @@ export function nextPins(prev: Pin[], cards: Card[], chatId: string, now: number
       else continue;
     }
     const since = kind !== 'running' ? null : old?.kind === 'running' && old.since !== null ? old.since : Math.min(now, updated);
-    const pin: Pin = { id: c.id, title: c.title, kind, since, finishedAt };
+    const pin: Pin = { id: c.id, number: c.number ?? null, title: c.title, kind, since, finishedAt };
     if (!dismissed.has(dismissKey(pin))) out.push(pin);
   }
   for (const p of prev) {

@@ -6,7 +6,7 @@ import { Activity } from './CardPanel.tsx';
 import type { MessageStream } from './useMessages.ts';
 import { NO_DRAFT } from './streamDraft.ts';
 
-/** #104: a finished task's report reads « #99 [Done] », and only a report that arrived live gets the arrival animation. */
+/** #104, #271: a task update is one line « ✓ #99 Ship it · outcome · time », and only a report that arrived live gets the arrival animation. */
 const AT = '2026-11-18T10:00:00.000Z';
 const card = { id: 'c1', conversationId: 'cv1', assignee: 'munih', status: 'ready', block: null, board: 'direct' } as unknown as Card;
 const stream: MessageStream = { push() {}, listen: () => () => {} };
@@ -21,34 +21,32 @@ function render(messages: Message[], live: string[] = [], cards: Card[] = [task]
 
 describe('card reports in the chat (#104)', () => {
   const done = sys('r1', 2, 'Task “Ship it” (#99) finished: all good.');
-  it('shows a finished task as the ref plus a Done chip, not « finished »', () => {
+  it('shows a finished task as one line: state icon, #N, title, its outcome (#271)', () => {
     const html = render([agent, done]);
     expect(html).toContain('card-report task-note done');
-    expect(html).toContain('<span class="st-chip done">Done</span>');
+    expect(html).toContain('<span class="chat-row-ref">#99</span><span class="chat-row-obj">Ship it</span><span class="tn-sum">all good. · ');
     expect(html).not.toContain('finished');
   });
   it('keeps the verb for other reports', () => {
     const html = render([agent, sys('r2', 2, 'Task “Ship it” (#99) is blocked: needs a key.')]);
     expect(html).toContain('blocked');
-    expect(html).not.toContain('st-chip');
+    expect(html).toContain('<span class="tn-sum">blocked · ');
   });
   it('animates only a report that arrived live, never one loaded with the history', () => {
     expect(render([agent, done])).not.toContain('landed');
     expect(render([agent, done], ['r1'])).toContain('card-report task-note done landed');
   });
-  it('is one link to the task in the Inbox, no expansion, the summary first line under it (#143)', () => {
+  it('is one link that opens the task beside the chat, no expansion, the summary first line as its outcome (#143, #271)', () => {
     const html = render([agent, sys('r3', 2, 'Task “Ship it” (#99) finished: **All** good.\n\nDetails nobody needs here.')]);
-    expect(html).toContain('<a class="chat-row tone-plain card-report task-note done" href="#/inbox/task%3Ac_99"');
-    expect(html).toContain('<span class="tn-word">Inbox</span>');
-    expect(html).toContain('<span class="tn-sum">All good.</span>');
+    expect(html).toMatch(/<a class="chat-row tone-plain card-report task-note done" href="[^"]*card=c_99"/);
+    expect(html).toContain('<span class="tn-sum">All good. · ');
     expect(html).not.toContain('Details nobody needs');
     expect(html).not.toContain('chat-row-chev');
     expect(html).not.toContain('aria-expanded');
   });
-  it('a closed task leads to the task, not the Inbox; a task gone from the board is plain', () => {
+  it('a closed task opens too; a task gone from the board is plain', () => {
     const closed = sys('r4', 2, 'Task “Ship it” (#99) closed by you. Nothing more will be done on it.');
     expect(render([agent, closed])).toMatch(/<a class="[^"]*task-note[^"]*" href="[^"]*card=c_99"/);
-    expect(render([agent, closed])).toContain('<span class="tn-word">Task</span>');
     expect(render([agent, closed], [], [])).not.toContain('<a class');
   });
   it('consecutive memory notes are one quiet row, each id once (#143)', () => {
