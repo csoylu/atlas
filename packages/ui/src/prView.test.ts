@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import type { CardPr } from '@atlas/shared';
-import { prBits, prUnreadable, readAgo, tilePrs } from './prView.ts';
+import { prBits, prPill, prUnreadable, readAgo, tilePrs } from './prView.ts';
 
 const pr = (over: Partial<CardPr> = {}): CardPr => ({
   repo: 'csoylu/atlas', number: 41, url: 'https://github.com/csoylu/atlas/pull/41', branch: 'feat/170-x', base: 'main', headSha: 'aaaaaaa1111',
@@ -21,6 +21,16 @@ describe('pull requests on tasks (#189)', () => {
     expect(tilePrs({ status: 'done', prs: [merged, open] })).toEqual([merged]);
     expect(tilePrs({ status: 'triage', prs: [open] })).toEqual([]);
     expect(prUnreadable({ status: 'review', prs: [pr({ error: 'gh: not logged in' })] })).toBe(true);
+  });
+  it('board pill (#266): one per PR, its worst state', () => {
+    expect(prPill(pr(), 'zurich', false)).toEqual({ text: 'PR #41 · CI running', tone: 'wait' });
+    expect(prPill(pr({ ci: 'failure', mergeable: false }), null, false)).toEqual({ text: 'PR #41 · conflicts', tone: 'bad' });
+    expect(prPill(pr({ ci: 'success', qa: 'failure' }), null, false).text).toBe('PR #41 · QA failed');
+    expect(prPill(pr({ ci: 'success' }), 'zurich', true)).toEqual({ text: 'PR #41 · @zurich checking', tone: 'wait' });
+    expect(prPill(pr({ ci: 'success' }), 'zurich', false)).toEqual({ text: 'PR #41 · CI green', tone: 'ok' });
+    expect(prPill(pr({ ci: 'success', qa: 'success' }), null, false).text).toBe('PR #41 · QA validated');
+    expect(prPill(pr({ error: 'gh: not logged in' }), null, false).tone).toBe('warn');
+    expect(prPill(pr({ state: 'merged' }), null, false)).toEqual({ text: 'PR #41 · merged', tone: 'ok' });
   });
   it('read time', () => {
     expect(readAgo(pr(), Date.parse('2026-11-18T10:00:40Z'))).toBe('read 40 s ago');

@@ -27,6 +27,26 @@ export function prBits(pr: CardPr, reviewer: string | null, checking: boolean): 
   return bits;
 }
 
+/**
+ * A board card's PR pill (#266): « PR #77 · CI running », one pill per PR with its worst state first (can't read,
+ * conflicts, CI or QA red, then what it waits for, then green). tone: bad (red), warn (orange: GitHub can't be read),
+ * wait (yellow: CI or QA under way), ok (green).
+ */
+export type PillTone = 'ok' | 'wait' | 'warn' | 'bad';
+export function prPill(pr: CardPr, reviewer: string | null, checking: boolean): { text: string; tone: PillTone } {
+  const t = (s: string, tone: PillTone) => ({ text: `PR #${pr.number} · ${s}`, tone });
+  if (pr.state === 'merged') return t('merged', 'ok');
+  if (pr.state === 'closed') return t('closed unmerged', 'bad');
+  if (pr.error) return t("can't read GitHub", 'warn');
+  if (pr.mergeable === false) return t('conflicts', 'bad');
+  if (pr.ci === 'failure') return t('CI failed', 'bad');
+  if (pr.qa === 'failure') return t('QA failed', 'bad');
+  if (pr.ci !== 'success') return t('CI running', 'wait');
+  if (pr.qa === 'success') return t('QA validated', 'ok');
+  if (checking && reviewer) return t(`@${reviewer} checking`, 'wait');
+  return t('CI green', 'ok');
+}
+
 /** Which PRs a tile shows: all of them while in review or back in ready; the merged ones when done. */
 export function tilePrs(c: Pick<Card, 'status' | 'prs'>): CardPr[] {
   if (!c.prs.length) return [];

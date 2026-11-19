@@ -9,22 +9,9 @@ import { StatusIcon, STATUS_LABEL } from './StatusIcon.tsx';
 import { PriorityMark } from './Kit.tsx';
 import { PRIORITIES, priorityName } from './priority.ts';
 import { Menu, PopRow } from './HeadMenu.tsx';
-import {
-  columnsFor,
-  CREATE_IN,
-  filterCount,
-  matches,
-  parseView,
-  phoneColumn,
-  showAfterLabel,
-  whyLine,
-  timeInState,
-  type BoardFilter,
-  type BoardLayout,
-  type BoardTab,
-} from './boardView.ts';
-import { PrLine } from './PrChips.tsx';
-import { prUnreadable } from './prView.ts';
+import { cardNote, columnsFor, CREATE_IN, filterCount, matches, parseView, phoneColumn, stripColumns, timeInState, type BoardTab } from './boardView.ts';
+import { PrPills } from './PrChips.tsx';
+import { prUnreadable, tilePrs } from './prView.ts';
 import { useMinute } from './useMinute.ts';
 import { useMedia } from './Inbox.tsx';
 
@@ -36,16 +23,20 @@ const HINT: Partial<Record<CardStatus, string>> = {
   blocked: 'Needs an answer or access.',
   review: 'Its pull request is with QA. Merged → Done by itself.',
 };
-const TABS: { id: BoardTab; label: string; long?: string }[] = [
-  { id: 'all', label: 'All', long: ' tasks' },
+const TABS: { id: BoardTab; label: string }[] = [
+  { id: 'all', label: 'All' },
   { id: 'needs', label: 'Needs you' },
   { id: 'running', label: 'Running' },
 ];
+/** The phone strip's short names (« Review », not « In review »). */
+const STRIP_LABEL: Partial<Record<CardStatus, string>> = { review: 'Review' };
 
 /**
- * The Board in the Linear direction (design §16): header tabs All cards / Needs you / Running, Filter (agent,
- * priority), Display (board or list), New card (C). Columns: status icon, name, count, « + »; dense cards: number,
- * agent, status icon, title, labels, the « why » line. Drag a card onto another column to move it.
+ * Tasks (redesign screen « Tasks », #266). One header row: the project filter, All / Needs you / Running, Filter (agent,
+ * priority), the board/list toggle, New task (C). Columns of 228 px; an empty column, or a folded one (Done and Closed
+ * start folded), is a 40 px rail. Cards: title, then avatar, number, project, priority and time in the column, then one
+ * note (« waits for #N », « Needs your answer », why it is stuck) and the PR pill. Phone: one status at a time, picked
+ * from the status strip. Drag a card onto another column to move it.
  */
 export function Board(props: {
   cards: Card[];
@@ -59,16 +50,19 @@ export function Board(props: {
   createAsk?: number;
   onCreateAsked?(): void;
 }) {
-  const [view, setView] = useState(() => parseView(localStorage.getItem('atlas.board.view')));
-  const save = (next: typeof view) => {
+  const [saved, setView] = useState(() => parseView(localStorage.getItem('atlas.board.view')));
+  const save = (next: typeof saved) => {
     setView(next);
     localStorage.setItem('atlas.board.view', JSON.stringify(next));
   };
+  // Phone (#229, #266): the board only, every status, one column at a time picked from the strip.
+  const phone = useMedia('(max-width: 640px)');
+  const view = phone ? { ...saved, tab: 'all' as const, layout: 'board' as const } : saved;
   const [over, setOver] = useState<CardStatus | null>(null);
   const now = useMinute();
   const [creating, setCreating] = useState<CardStatus | null>(null);
-  const [menu, setMenu] = useState<'filter' | 'display' | null>(null);
-  // Columns folded to a slim rail (kept across reloads). Done and Closed start folded: history, the rest is work.
+  const [menu, setMenu] = useState(false);
+  // Columns folded to a rail (kept across reloads). Done and Closed start folded: history, the rest is work.
   const [folded, setFolded] = useState<Set<string>>(() => {
     const saved = localStorage.getItem('atlas.board.folded');
     return new Set(saved ? (JSON.parse(saved) as string[]) : ['done', 'closed']);
@@ -101,8 +95,7 @@ export function Board(props: {
   }, [hasArchived, pinfo, onError]);
   const pool = pf === 'archived' ? archivedCards : props.cards;
   const inProject = pool.filter((c) => inFilter(pf, c.projectId, pinfo));
-  // One project picked: its cards carry no tag (they all have it).
-  const tagged = pinfo.multi && !pinfo.byId(pf);
+  // Two projects or more: every card carries its project tag (ProjTag draws nothing with one project).
   const shown = inProject.filter((c) => matches(c, view.tab, view.filter));
   const columns = columnsFor(view.tab);
   const nFilters = filterCount(view.filter);
@@ -112,11 +105,10 @@ export function Board(props: {
     running: inProject.filter((c) => matches(c, 'running', view.filter)).length,
   };
 
-  // Phone (#229): one column at a time, picked from a row of status chips (name + count); no folded rails.
-  const phone = useMedia('(max-width: 640px)');
   const [savedCol, setSavedCol] = useState(() => localStorage.getItem('atlas.board.col'));
   const countIn = (s: CardStatus) => shown.filter((c) => c.status === s).length;
-  const phoneCol = phoneColumn(columns, savedCol, countIn);
+  const strip = stripColumns(columns, countIn);
+  const phoneCol = phoneColumn(strip, savedCol, countIn);
   const pickCol = (s: CardStatus) => {
     setSavedCol(s);
     localStorage.setItem('atlas.board.col', s);
@@ -142,85 +134,80 @@ export function Board(props: {
       if (card && card.status !== status) props.onMove(id, status);
     },
   });
+  const addBtn = (status: CardStatus) =>
+    CREATE_IN.includes(status) && (
+      <button type="button" className="icon-btn col-add" onClick={() => setCreating(status)} aria-label={`New task in ${STATUS_LABEL[status]}`} title={`New task in ${STATUS_LABEL[status]}`}>
+        <Icon.plus />
+      </button>
+    );
 
   return (
     <div className={'board-screen ' + view.layout}>
       <HeaderActions>
         <ProjectFilterButton value={pf} onChange={setPf} count={(f) => (f === 'archived' ? archivedCards.length : props.cards.filter((c) => inFilter(f, c.projectId, pinfo)).length)} />
-        <div className="view-tabs board-tabs" role="tablist" aria-label="Tasks">
-          {TABS.map((t) => (
-            <button
-              key={t.id}
-              type="button"
-              role="tab"
-              aria-selected={view.tab === t.id}
-              className={'tabbtn' + (view.tab === t.id ? ' on' : '')}
-              onClick={() => save({ ...view, tab: t.id })}
-            >
-              {t.label}
-              {t.long && <span className="tab-long">{t.long}</span>}
-              {t.id !== 'all' && counts[t.id] > 0 && <span className="tab-n">{counts[t.id]}</span>}
-            </button>
-          ))}
-        </div>
+        {!phone && (
+          <div className="view-tabs board-tabs" role="tablist" aria-label="Tasks">
+            {TABS.map((t) => (
+              <button
+                key={t.id}
+                type="button"
+                role="tab"
+                aria-selected={view.tab === t.id}
+                className={'tabbtn' + (view.tab === t.id ? ' on' : '')}
+                onClick={() => save({ ...saved, tab: t.id })}
+              >
+                {t.label}
+                {t.id !== 'all' && counts[t.id] > 0 && <span className="tab-n">{counts[t.id]}</span>}
+              </button>
+            ))}
+          </div>
+        )}
         <span className="head-sp" />
         <Menu
-          open={menu === 'filter'}
-          onOpen={(o) => setMenu(o ? 'filter' : null)}
+          open={menu}
+          onOpen={setMenu}
+          btnClass="ghost icon-only"
           label={
             <>
               <Icon.filter />
-              <span className="btn-text">Filter</span>
               {nFilters > 0 && <span className="tab-n">{nFilters}</span>}
             </>
           }
           title="Filter by agent or priority"
         >
           <div className="pop-k">Agent</div>
-          <PopRow on={view.filter.agent === null} onClick={() => save({ ...view, filter: { ...view.filter, agent: null } })}>Any agent</PopRow>
+          <PopRow on={view.filter.agent === null} onClick={() => save({ ...saved, filter: { ...view.filter, agent: null } })}>Any agent</PopRow>
           {props.agents.map((a) => (
-            <PopRow key={a.id} on={view.filter.agent === a.id} onClick={() => save({ ...view, filter: { ...view.filter, agent: a.id } })}>
+            <PopRow key={a.id} on={view.filter.agent === a.id} onClick={() => save({ ...saved, filter: { ...view.filter, agent: a.id } })}>
               <Avatar id={a.id} />@{a.id}
             </PopRow>
           ))}
-          <PopRow on={view.filter.agent === ''} onClick={() => save({ ...view, filter: { ...view.filter, agent: '' } })}>Unassigned</PopRow>
+          <PopRow on={view.filter.agent === ''} onClick={() => save({ ...saved, filter: { ...view.filter, agent: '' } })}>Unassigned</PopRow>
           <div className="pop-k">Priority</div>
-          <PopRow on={view.filter.priority === null} onClick={() => save({ ...view, filter: { ...view.filter, priority: null } })}>Any priority</PopRow>
+          <PopRow on={view.filter.priority === null} onClick={() => save({ ...saved, filter: { ...view.filter, priority: null } })}>Any priority</PopRow>
           {PRIORITIES.map((p) => (
-            <PopRow key={p} on={view.filter.priority === p} onClick={() => save({ ...view, filter: { ...view.filter, priority: p } })}>
+            <PopRow key={p} on={view.filter.priority === p} onClick={() => save({ ...saved, filter: { ...view.filter, priority: p } })}>
               <PriorityMark p={p} />
             </PopRow>
           ))}
           {nFilters > 0 && (
-            <button type="button" className="pop-clear" onClick={() => save({ ...view, filter: { agent: null, priority: null } })}>
+            <button type="button" className="pop-clear" onClick={() => save({ ...saved, filter: { agent: null, priority: null } })}>
               Clear filters
             </button>
           )}
         </Menu>
-        <Menu
-          open={menu === 'display'}
-          onOpen={(o) => setMenu(o ? 'display' : null)}
-          label={
-            <>
-              {view.layout === 'board' ? <Icon.board /> : <Icon.list />}
-              <span className="btn-text">Display</span>
-            </>
-          }
-          title="Board or list"
-        >
-          <div className="pop-k">Layout</div>
-          {(['board', 'list'] as BoardLayout[]).map((l) => (
-            <PopRow key={l} on={view.layout === l} onClick={() => (save({ ...view, layout: l }), setMenu(null))}>
-              {l === 'board' ? <Icon.board /> : <Icon.list />}
-              {l === 'board' ? 'Board' : 'List'}
-            </PopRow>
-          ))}
-          <div className="pop-k">Options</div>
-          <button type="button" role="menuitemcheckbox" aria-checked={view.showEmpty} className={'pop-row' + (view.showEmpty ? ' on' : '')} onClick={() => save({ ...view, showEmpty: !view.showEmpty })}>
-            Show empty columns
-            <span className={'pop-switch' + (view.showEmpty ? ' on' : '')} aria-hidden="true" />
+        {!phone && (
+          <button
+            type="button"
+            className="btn ghost icon-only"
+            aria-pressed={view.layout === 'list'}
+            aria-label={view.layout === 'board' ? 'List view' : 'Board view'}
+            title={view.layout === 'board' ? 'Show as a list' : 'Show as a board'}
+            onClick={() => save({ ...saved, layout: view.layout === 'board' ? 'list' : 'board' })}
+          >
+            {view.layout === 'board' ? <Icon.list /> : <Icon.board />}
           </button>
-        </Menu>
+        )}
         <button type="button" className="btn primary" onClick={() => setCreating('triage')} title="New task (C)" aria-label="New task">
           <Icon.plus />
           <span className="btn-text">New task</span>
@@ -228,9 +215,9 @@ export function Board(props: {
         </button>
       </HeaderActions>
 
-      {view.layout === 'board' && phone && columns.length > 1 && (
+      {phone && (
         <div className="board-chips" role="tablist" aria-label="Status" ref={chipsRef}>
-          {columns.map((status) => (
+          {strip.map((status) => (
             <button
               key={status}
               type="button"
@@ -240,8 +227,8 @@ export function Board(props: {
               onClick={() => pickCol(status)}
             >
               <StatusIcon status={status} />
-              {STATUS_LABEL[status]}
-              <span className="tab-n">{countIn(status)}</span>
+              {STRIP_LABEL[status] ?? STATUS_LABEL[status]}
+              {countIn(status) > 0 && <span className="tab-n">{countIn(status)}</span>}
             </button>
           ))}
         </div>
@@ -250,34 +237,31 @@ export function Board(props: {
         <div className={'board' + (phone ? ' one' : '')}>
           {(phone ? [phoneCol] : columns).map((status) => {
             const cards = shown.filter((c) => c.status === status);
-            // An empty column is a slim rail (still a drop target) unless Display → « Show empty columns ». On a phone
+            // An empty column is a rail (still a drop target); a full one folds to a rail from its header. On a phone
             // the one column shown is always open.
-            const empty = cards.length === 0 && !view.showEmpty && !phone;
+            const empty = cards.length === 0 && !phone;
             const isFolded = empty || (!phone && folded.has(status));
             return (
               <section key={status} className={'column ' + status + (over === status ? ' over' : '') + (isFolded ? ' folded' : '') + (empty ? ' col-empty' : '')} {...drop(status)}>
                 <h2 className="col-head">
                   <button
                     className="fold"
-                    onClick={() => (phone ? undefined : empty ? save({ ...view, showEmpty: true }) : toggle(status))}
+                    onClick={() => (phone || empty ? undefined : toggle(status))}
                     aria-expanded={!isFolded}
-                    title={empty ? `No ${STATUS_LABEL[status]} tasks: click to show empty columns` : isFolded ? `Show ${STATUS_LABEL[status]}` : `Fold ${STATUS_LABEL[status]}`}
+                    aria-disabled={empty || undefined}
+                    title={empty ? `No ${STATUS_LABEL[status]} tasks` : phone ? undefined : isFolded ? `Show ${STATUS_LABEL[status]}` : `Fold ${STATUS_LABEL[status]}`}
                   >
                     <StatusIcon status={status} />
                     <span className="name">{STATUS_LABEL[status]}</span>
                     <span className="count">{cards.length}</span>
                   </button>
-                  {!isFolded && CREATE_IN.includes(status) && (
-                    <button type="button" className="icon-btn col-add" onClick={() => setCreating(status)} aria-label={`New task in ${STATUS_LABEL[status]}`} title={`New task in ${STATUS_LABEL[status]}`}>
-                      <Icon.plus />
-                    </button>
-                  )}
+                  {!isFolded && addBtn(status)}
                 </h2>
                 {!isFolded && (
                   <div className="cards">
                     {cards.length === 0 && HINT[status] && <p className="hint">{HINT[status]}</p>}
                     {cards.map((c) => (
-                      <BoardCard key={c.id} card={c} cards={props.cards} tagged={tagged} open={props.openId === c.id} onOpen={props.onOpen} now={now} />
+                      <BoardCard key={c.id} card={c} open={props.openId === c.id} onOpen={props.onOpen} now={now} />
                     ))}
                   </div>
                 )}
@@ -289,48 +273,38 @@ export function Board(props: {
         <div className="board-list">
           {columns.map((status) => {
             const cards = shown.filter((c) => c.status === status);
-            if (cards.length === 0 && !view.showEmpty) return null;
+            if (cards.length === 0) return null;
             return (
-              <section key={status} className={'list-group' + (over === status ? ' over' : '')} {...drop(status)}>
+              <section key={status} className={'list-group ' + status + (over === status ? ' over' : '')} {...drop(status)}>
                 <h2 className="lg">
                   <StatusIcon status={status} />
                   <span className="name">{STATUS_LABEL[status]}</span>
                   <span className="count">{cards.length}</span>
-                  {CREATE_IN.includes(status) && (
-                    <button type="button" className="icon-btn col-add" onClick={() => setCreating(status)} aria-label={`New task in ${STATUS_LABEL[status]}`} title={`New task in ${STATUS_LABEL[status]}`}>
-                      <Icon.plus />
-                    </button>
-                  )}
+                  {addBtn(status)}
                 </h2>
-                {cards.map((c) => {
-                  const why = whyLine(c, now);
-                  const since = timeInState(c, now);
-                  return (
-                    <div
-                      key={c.id}
-                      role="button"
-                      tabIndex={0}
-                      data-row
-                      className={'list-row' + (props.openId === c.id ? ' open' : '')}
-                      draggable
-                      onDragStart={(e) => e.dataTransfer.setData('text/card-id', c.id)}
-                      onClick={() => props.onOpen(c.id)}
-                      onKeyDown={(e) => e.key === 'Enter' && props.onOpen(c.id)}
-                    >
-                      <span className="id">{cardRef(c)}</span>
-                      <StatusIcon status={c.status} />
-                      <span className="card-title">{c.title}</span>
-                      <PrLine card={c} />
-                      {why && <span className={'why' + (why.blocked ? ' blocked' : '') + (why.stuck ? ' stuck prc-unreadable' : '')} title={why.text}>{why.text}</span>}
-                      {since && <span className={'st-since' + (c.stall ? ' stuck' : '')} title={why?.stuck ? why.text : `${STATUS_LABEL[c.status]} for ${since}`}>{since}</span>}
-                      <Labels card={c} cards={props.cards} tagged={tagged} />
-                      {c.assignee ? <Avatar id={c.assignee} /> : <span className="avatar-none" />}
-                    </div>
-                  );
-                })}
+                {cards.map((c) => (
+                  <div
+                    key={c.id}
+                    role="button"
+                    tabIndex={0}
+                    data-row
+                    className={'list-row' + (props.openId === c.id ? ' open' : '')}
+                    draggable
+                    onDragStart={(e) => e.dataTransfer.setData('text/card-id', c.id)}
+                    onClick={() => props.onOpen(c.id)}
+                    onKeyDown={(e) => e.key === 'Enter' && props.onOpen(c.id)}
+                  >
+                    <StatusIcon status={c.status} />
+                    <span className="card-title">{c.title}</span>
+                    <Note card={c} now={now} />
+                    <PrPills card={c} />
+                    <Marks card={c} now={now} />
+                  </div>
+                ))}
               </section>
             );
           })}
+          {shown.length === 0 && <p className="hint board-list-empty">No tasks here.</p>}
         </div>
       )}
       {creating && (
@@ -352,9 +326,9 @@ export function Board(props: {
   );
 }
 
-function BoardCard({ card: c, cards, open, tagged, onOpen, now }: { card: Card; cards: Card[]; open: boolean; tagged: boolean; onOpen(id: string): void; now: number }) {
-  const why = whyLine(c, now);
-  const since = timeInState(c, now);
+function BoardCard({ card: c, open, onOpen, now }: { card: Card; open: boolean; onOpen(id: string): void; now: number }) {
+  const note = <Note card={c} now={now} />;
+  const pills = <PrPills card={c} />;
   return (
     <article
       className={'card' + (open ? ' open' : '')}
@@ -366,50 +340,40 @@ function BoardCard({ card: c, cards, open, tagged, onOpen, now }: { card: Card; 
       onKeyDown={(e) => e.key === 'Enter' && onOpen(c.id)}
       data-status={c.status}
     >
-      <div className="card-top">
-        <span className="id" title={c.id}>{cardRef(c)}</span>
-        {since && <span className={'st-since' + (c.stall ? ' stuck' : '')} title={`${STATUS_LABEL[c.status]} for ${since}`}>{STATUS_LABEL[c.status]} · {since}</span>}
-        {c.assignee ? <Avatar id={c.assignee} /> : <span className="unassigned">unassigned</span>}
-        {c.status === 'review' && c.reviewer && (
-          <span className="rv-face" title={'reviewer @' + c.reviewer}>
-            <AgentFace id={c.reviewer} title={'reviewer @' + c.reviewer} />
-          </span>
-        )}
+      <span className="card-title">{c.title}</span>
+      <div className="card-m">
+        <Marks card={c} now={now} />
       </div>
-      <div className="card-tt">
-        <StatusIcon status={c.status} />
-        <span className="card-title">{c.title}</span>
-      </div>
-      <PrLine card={c} />
-      {why && (
-        <div className={'why' + (why.blocked ? ' blocked' : '') + (why.stuck ? ' stuck' : '') + (why.stuck || prUnreadable(c) ? ' prc-unreadable' : '')} title={why.stuck ? why.text : (c.block?.reason ?? c.waiting ?? undefined)}>
-          {why.blocked && <StatusIcon status="blocked" size={12} />}
-          <span>{why.text}</span>
-        </div>
-      )}
-      <Labels card={c} cards={cards} tagged={tagged} />
+      {cardNote(c, now) && <div className="card-x">{note}</div>}
+      {tilePrs(c).length > 0 && <div className="card-x">{pills}</div>}
     </article>
   );
 }
 
-/** The card's labels: priority and « after N » (Atlas cards have no free labels yet). */
-function Labels({ card: c, cards, tagged }: { card: Card; cards: Card[]; tagged: boolean }) {
-  const after = c.parents.map((p) => {
-    const x = cards.find((y) => y.id === p);
-    return x ? cardRef(x) : p;
-  });
-  const showAfter = showAfterLabel(c, after);
-  if (c.priority === 0 && !showAfter && !tagged) return null;
+/** The card's marks, the same on the board and in the list: avatar, number, project, priority, time in the column. */
+function Marks({ card: c, now }: { card: Card; now: number }) {
+  const since = timeInState(c, now);
   return (
-    <div className="labels">
-      {tagged && <ProjTag id={c.projectId} />}
-      {c.priority !== 0 && <PriorityMark p={c.priority} />}
-      {showAfter && (
-        <span className="lab" title={'After ' + after.join(', ')}>
-          after {after.length === 1 ? after[0] : after.length}
-        </span>
-      )}
-    </div>
+    <>
+      {c.assignee ? <Avatar id={c.assignee} /> : <span className="avatar-none" title="unassigned" />}
+      <span className="id" title={c.id}>{cardRef(c)}</span>
+      <ProjTag id={c.projectId} />
+      <PriorityMark p={c.priority} />
+      <span className="card-sp" />
+      {since && <span className={'st-since' + (c.stall ? ' stuck' : '')} title={`${STATUS_LABEL[c.status]} for ${since}`}>{since}</span>}
+    </>
+  );
+}
+
+/** The card's one note: « waits for #N », « Needs your answer », why it is stuck (cardNote). GitHub unreadable: orange. */
+function Note({ card: c, now }: { card: Card; now: number }) {
+  const n = cardNote(c, now);
+  if (!n) return null;
+  const tone = n.tone === 'muted' && prUnreadable(c) ? 'stuck' : n.tone;
+  return (
+    <span className={'card-note ' + tone} title={n.title}>
+      {n.text}
+    </span>
   );
 }
 

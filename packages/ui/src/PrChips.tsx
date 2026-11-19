@@ -1,5 +1,5 @@
 import type { Card } from '@atlas/shared';
-import { prBits, readAgo, tilePrs } from './prView.ts';
+import { prBits, prPill, readAgo, tilePrs } from './prView.ts';
 
 /** « PR #N » linking to GitHub (opens outside the app). */
 function PrLink({ url, number }: { url: string; number: number }) {
@@ -12,23 +12,21 @@ function PrLink({ url, number }: { url: string; number: number }) {
 
 const checking = (c: Card) => c.status === 'review' && !!c.waiting?.includes('is checking');
 
-/** The board tile's line: one « PR #N ✓ CI » per PR shown (#189). */
-export function PrLine({ card }: { card: Card }) {
+/** The board card's PR pills (#266): one link per PR shown, « PR #N · its worst state ». */
+export function PrPills({ card }: { card: Card }) {
   const prs = tilePrs(card);
   if (!prs.length) return null;
   return (
-    <div className="prc-line">
-      {prs.map((p) => (
-        <span key={p.repo + p.number} className="prc-one">
-          <PrLink url={p.url} number={p.number} />
-          {prBits(p, card.reviewer, checking(card)).map((b) => (
-            <span key={b.text} className={'prc-bit prc-' + b.tone}>
-              {b.text}
-            </span>
-          ))}
-        </span>
-      ))}
-    </div>
+    <>
+      {prs.map((p) => {
+        const pill = prPill(p, card.reviewer, checking(card));
+        return (
+          <a key={p.repo + p.number} className={'pr-pill ' + pill.tone} href={p.url} target="_blank" rel="noreferrer" title={`${p.url}\nCI, conflicts and QA in one pill: it shows the worst state`} onClick={(e) => e.stopPropagation()}>
+            {pill.text}
+          </a>
+        );
+      })}
+    </>
   );
 }
 

@@ -23,6 +23,7 @@ export const Icon = {
   inbox: svg(<><path d="M2 9.5 3.5 3h9L14 9.5V13H2z" /><path d="M2 9.5h3.5l1 1.5h3l1-1.5H14" /></>),
   dots: svg(<><circle cx="3.5" cy="8" r=".6" /><circle cx="8" cy="8" r=".6" /><circle cx="12.5" cy="8" r=".6" /></>, 14),
   back: svg(<path d="m10 4-4 4 4 4" />, 14),
+  grid: svg(<><rect x="2.5" y="2.5" width="4.5" height="4.5" rx="1" /><rect x="9" y="2.5" width="4.5" height="4.5" rx="1" /><rect x="2.5" y="9" width="4.5" height="4.5" rx="1" /><rect x="9" y="9" width="4.5" height="4.5" rx="1" /></>, 14),
   board: svg(<><rect x="2" y="2.5" width="3.5" height="11" rx="1" /><rect x="6.25" y="2.5" width="3.5" height="7" rx="1" /><rect x="10.5" y="2.5" width="3.5" height="9" rx="1" /></>),
   library: svg(<><path d="M3 2.5h3v11H3zM7 2.5h3v11H7z" /><path d="m11 3.2 2.6-.6 1.4 10.6-2.6.5z" /></>),
   pin: svg(<><path d="M6 2.5h4l-.6 4 2.1 2H4.5l2.1-2z" /><path d="M8 8.5v5" /></>, 14),
