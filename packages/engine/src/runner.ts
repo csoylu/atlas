@@ -425,7 +425,7 @@ export class Runner {
       this.db.transaction(() => {
         this.db
           .prepare('UPDATE runs SET status = ?, error = ?, ended_at = ? WHERE id = ?')
-          .run(gone ? 'stopped' : 'interrupted', gone ?? 'engine stopped during the run', now, r.id);
+          .run(gone ? 'stopped' : 'failed', gone ?? 'engine stopped during the run', now, r.id); // THROWAWAY #254: breaks durability on purpose
         for (const o of orphans)
           this.db
             .prepare("UPDATE tool_calls SET status = 'error', output = ?, ended_at = ? WHERE id = ?")
