@@ -34,6 +34,7 @@ import { Voice, type VoiceHost } from './voice.ts';
 import { VoiceChat } from './voiceChat.ts';
 import { Updater, type UpdateHost } from './updater.ts';
 import { ShellEnv, type ShellPathOptions } from './shellEnv.ts';
+import type { CheckoutOptions } from './workflowCommand.ts';
 import { Prs, ghReader, type GhRead } from './prs.ts';
 import { Projects, ghClone, ghRunner, type CloneRun, type GhRun } from './projects.ts';
 import { Stalls } from './stalls.ts';
@@ -93,6 +94,8 @@ export interface EngineOptions {
    * workspace is cloned (#214, default: gh repo clone, same env).
    */
   projects?: { gh?: GhRun; clone?: CloneRun };
+  /** « Run a command » steps (#273) in tests: the first clone of a repo (default gh repo clone), and a shorter minute for limits. */
+  workflowCommand?: { clone?: CheckoutOptions['clone']; minuteMs?: number };
   /**
    * App updates from GitHub releases (#123). The packaged Mac app passes a host (it can install); without it the
    * engine can't install and doesn't check by itself (dev, server). Tests point api/fetch at a fake release server.
@@ -163,6 +166,8 @@ export async function startEngine(opts: EngineOptions): Promise<Engine> {
   // Merge steps (#261) use the user's own gh login, with the login shell's PATH (shellEnv is made below, read when a step runs).
   const workflows = new Workflows(db, bus, kanban, undefined, {
     gh: opts.prs?.validate?.gh ? () => opts.prs!.validate!.gh! : async () => ghClient({ bin: ghBinary(), env: await shellEnv.engineEnv() }),
+    // Command steps (#273): the engine's login-shell env is the base, scrubbed by Secrets.envForStep.
+    command: { dataDir: opts.dataDir, secrets: () => secrets, env: () => shellEnv.engineEnv(), clone: opts.workflowCommand?.clone, minuteMs: opts.workflowCommand?.minuteMs },
   });
   const cleanup = new MemoryCleanup(db, bus, memories);
   const settings = new Settings(db);
@@ -200,6 +205,8 @@ export async function startEngine(opts: EngineOptions): Promise<Engine> {
   if (opts.memoryReview === false) review.after = () => {};
   const effects = new SideEffects(db, kanban, memories, workflows);
   const runner = new Runner(db, bus, kanban, agents, models, memories, workflows, { fileLog, effects, dataDir: opts.dataDir, leaseMs: opts.leaseMs, maxTurns: opts.maxTurns, usage, user: () => settings.user(), documents, cleanup, review, isVoiceChat: voiceChat ? (id) => voiceChat.isVoiceChat(id) : undefined, engine: () => ({ url, cookie: () => (auth.enabled ? auth.issue().token : null), answer: (method, path) => screenshotAnswer(kanban, method, path) }), shellEnv, secrets, prTool: opts.prs?.validate });
+  // Agent steps in the task thread (#273): the agent starts on the run's task, the prompt posted as its kick (#221).
+  workflows.threads = { wake: (cardId, agentId, prompt) => runner.wake(cardId, { agentId, kind: 'work', kick: prompt, kickAlways: true }) };
   const rewinds = new Rewinds(db, bus, kanban, agents, runner, opts.dataDir, fileLog, effects);
   const dispatcher = new Dispatcher(bus, kanban, agents, models, settings, runner);
   const slash = new Slash(db, bus, kanban, runner);
@@ -326,6 +333,7 @@ export async function startEngine(opts: EngineOptions): Promise<Engine> {
       prs.stop();
       updater.stop();
       workflows.stop();
+      await workflows.commandsIdle();
       voice?.stop();
       dispatcher.stop();
       await prs.idle();

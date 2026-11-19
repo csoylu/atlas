@@ -868,6 +868,16 @@ export function createApi(deps: {
     res.json(workflows.saveGraph(req.params.id, req.body));
   });
   /** Rename, on/off. */
+  /**
+   * Master approves every « Run a command » step of that revision (#273): exactly the command, secrets and limit shown.
+   * A stale revision is refused (409). Only Master: no agent tool calls these two routes.
+   */
+  app.post('/api/workflows/:id/approve', (req, res) => {
+    res.json(workflows.approve(req.params.id, req.body ?? {}));
+  });
+  app.post('/api/workflows/:id/reject', (req, res) => {
+    res.json(workflows.reject(req.params.id));
+  });
   app.patch('/api/workflows/:id', (req, res) => {
     res.json(workflows.update(req.params.id, req.body));
   });

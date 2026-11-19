@@ -34,6 +34,8 @@ export interface SecretLock {
 /** Same text as secretFile.ts SECRETS_LOCKED (kept here so this file needs no import from it). */
 const LOCKED = 'secret store locked: unlock it in Settings → Secrets';
 const isLocked = (store?: SecretStore) => !!store?.lock?.status().locked;
+/** The store can't give a value now (locked, unreadable, a value missing): a workflow step couldn't run (#273). */
+export class SecretsUnavailable extends Error {}
 
 export const SECRET_NAME = /^[A-Z][A-Z0-9_]{1,63}$/;
 /**
@@ -548,6 +550,60 @@ export class Secrets {
       this.db.transaction(() => used.forEach((n) => mark.run(now, agentId, n)))();
       this.bus.emit({ type: 'secrets.updated' });
     }
+    return env;
+  }
+
+  /**
+   * Why a workflow command step may not name these secrets (#273, refused at save), or null: each must be an agent
+   * secret (never a model key or a plan token), global or of the workflow's project. Another project's secret reads
+   * as unknown: its name is never confirmed.
+   */
+  stepSecretProblem(names: string[], projectId: string): string | null {
+    for (const n of names) {
+      const r = this.db.prepare('SELECT * FROM secrets WHERE name = ?').get(n) as SecretRow | undefined;
+      if (isTokenEntry(n) || r?.kind === 'model_key' || this.modelKeyNames().includes(n) || ENGINE_ONLY.includes(n)) return `${n} is a model key or a sign-in: a command step never gets it`;
+      if (!r || r.kind !== 'agent' || (r.project !== null && r.project !== projectId)) return `there is no secret ${n} for this project (Settings → Secrets)`;
+    }
+    return null;
+  }
+
+  /**
+   * The environment of a workflow command step (#273, design §10b): built like envFor (no model key, plan token,
+   * engine password, nor any agent secret outside `names`, whatever the base holds), plus exactly the step's approved
+   * secrets, read now. Throws SecretsUnavailable (the step couldn't run) when the store is locked or unreadable or a
+   * listed secret has no value: the command does not start. `usedBy`: `workflow:<id>/<node>`.
+   */
+  envForStep(names: string[], projectId: string, base: NodeJS.ProcessEnv, usedBy: string): NodeJS.ProcessEnv {
+    const env = { ...base };
+    for (const n of [...this.modelKeyNames(), ...ENGINE_ONLY]) delete env[n];
+    const rows = this.db.prepare('SELECT * FROM secrets').all() as SecretRow[];
+    for (const r of rows) if (r.kind === 'model_key' || r.kind === 'agent') delete env[r.name];
+    for (const n of Object.keys(env)) if (isTokenEntry(n)) delete env[n];
+    const problem = this.stepSecretProblem(names, projectId);
+    if (problem) throw new Error(problem);
+    if (!names.length) return env;
+    if (!this.store) throw new SecretsUnavailable('secrets are not available: this engine has no secret store');
+    if (this.locked()) throw new SecretsUnavailable(LOCKED);
+    let stored: Set<string>;
+    try {
+      stored = this.stored();
+    } catch (e) {
+      throw new SecretsUnavailable(`the secret store (${this.store.label}) is unavailable: ${e instanceof Error ? e.message : String(e)}`);
+    }
+    for (const n of names) {
+      let v: string | undefined;
+      try {
+        v = stored.has(n) ? this.store.get(n) : undefined;
+      } catch (e) {
+        throw new SecretsUnavailable(`the secret store (${this.store.label}) could not read ${n}: ${e instanceof Error ? e.message : String(e)}`);
+      }
+      if (v === undefined) throw new SecretsUnavailable(`secret ${n} has no value: add it in Settings → Secrets`);
+      env[n] = v;
+    }
+    const now = new Date().toISOString();
+    const mark = this.db.prepare('UPDATE secrets SET last_used_at = ?, last_used_by = ? WHERE name = ?');
+    this.db.transaction(() => names.forEach((n) => mark.run(now, usedBy, n)))();
+    this.bus.emit({ type: 'secrets.updated' });
     return env;
   }
 

@@ -740,24 +740,30 @@ export type WorkflowNodeKind = (typeof WORKFLOW_NODE_KINDS)[number];
  */
 export const WORKFLOW_EXITS = {
   trigger: ['start'],
-  agent: ['done', 'failed'],
+  agent: ['done', 'failed', 'not done', 'approved', 'changes asked'],
   approval: ['approved', 'rejected'],
   condition: ['yes', 'no'],
-  action: ['done', 'merged', 'refused'],
+  action: ['done', 'merged', 'refused', 'exit 0', 'other exit'],
   wait: ['event', 'timed out'],
 } as const satisfies Record<WorkflowNodeKind, readonly string[]>;
 /** Exits that end a run as Failed when nothing is wired to them; every other unwired exit ends it Done. */
-export const WORKFLOW_FAILING_EXITS = ['failed', 'rejected', 'refused', 'timed out'] as const;
+export const WORKFLOW_FAILING_EXITS = ['failed', 'rejected', 'refused', 'timed out', 'not done', 'changes asked', 'other exit'] as const;
 /**
  * The exit « Follow the negative exit » takes when a step couldn't run (#261): the outcome that sends the work back.
  * None: the step has no negative outcome (Retry now or Stop run).
  */
 export function negativeExit(n: { kind: WorkflowNodeKind; config: unknown }): string | null {
-  if (n.kind === 'agent') return 'failed';
+  if (n.kind === 'agent') {
+    const c = n.config as { inThread?: boolean; reviewAgent?: boolean };
+    return c.inThread ? (c.reviewAgent ? 'changes asked' : 'not done') : 'failed';
+  }
   if (n.kind === 'approval') return 'rejected';
   if (n.kind === 'condition') return 'no';
   if (n.kind === 'wait') return 'timed out';
-  if (n.kind === 'action') return (n.config as { do?: string }).do === 'mergePr' ? 'refused' : null;
+  if (n.kind === 'action') {
+    const d = (n.config as { do?: string }).do;
+    return d === 'mergePr' ? 'refused' : d === 'command' ? 'other exit' : null;
+  }
   return null;
 }
 
@@ -809,14 +815,22 @@ export const PrTrigger = z.object({
 });
 export const TriggerConfig = z.discriminatedUnion('kind', [TimeTrigger, z.object({ kind: z.literal('manual') }), TaskTrigger, PrTrigger]);
 export type TriggerConfig = z.infer<typeof TriggerConfig>;
-/** An agent gets the prompt as a task: a new task each run, or one task reopened each run that keeps the history. */
+/**
+ * An agent gets the prompt as a task: a new task each run, or one task reopened each run that keeps the history; or
+ * (#273) in the thread of the run's task, the way a review runs (exits done / not done; with the review agent:
+ * approved / changes asked from its pr_validate verdict).
+ */
 export const AgentStepConfig = z.object({
   title: z.string().trim().max(200).default(''),
-  /** null: not chosen yet (a run reaching it fails and says so). */
+  /** null: not chosen yet (a run reaching it fails and says so). Unused with reviewAgent. */
   agentId: z.string().min(1).nullable().default(null),
   /** Fields: {{task.title}}, {{pr.url}}, {{steps.<id>.summary}}… (GET /api/workflows/:id/fields); an unknown one fails the step. */
   prompt: z.string().max(20_000).default(''),
   newTaskEachRun: z.boolean().default(false),
+  /** Works in the thread of the run's task (#273): its history and PRs stay, the assignee stays; no task of its own. */
+  inThread: z.boolean().optional(),
+  /** inThread only: the agent is the task's reviewer (the project's review agent; the lead on its own PRs, #252). */
+  reviewAgent: z.boolean().optional(),
 });
 /** A task blocked on Master in the Inbox, with Approve / Reject. */
 export const ApprovalConfig = z.object({ title: z.string().trim().max(200).default(''), question: z.string().max(5_000).default('') });
@@ -853,6 +867,18 @@ export const ActionConfig = z.discriminatedUnion('do', [
   z.object({ do: z.literal('setAssignee'), title: z.string().trim().max(200).default(''), assignee: z.string().min(1).nullable(), note: z.string().max(5_000).default('') }),
   z.object({ do: z.literal('mergePr'), title: z.string().trim().max(200).default('') }),
   z.object({ do: z.literal('notify'), title: z.string().trim().max(200).default(''), text: z.string().trim().min(1).max(5_000) }),
+  /**
+   * Run a command (#273, design §10b): `bash -c command` in a clean checkout of the project repo's default branch, with
+   * only the listed secrets and every run field as an env var (PAYLOAD_*, TASK_*, PR_*, STEPS_*…), never in the text.
+   * Needs Master's approval of exactly this command, secrets and limit. Exits exit 0 / other exit.
+   */
+  z.object({
+    do: z.literal('command'),
+    title: z.string().trim().max(200).default(''),
+    command: z.string().trim().min(1).max(10_000),
+    secrets: z.array(z.string().regex(/^[A-Z][A-Z0-9_]{1,63}$/, 'a secret name (A-Z, 0-9, _)')).max(20).default([]),
+    limitMin: z.number().int().min(1).max(120),
+  }),
 ]);
 export type ActionConfig = z.infer<typeof ActionConfig>;
 /**
@@ -886,7 +912,14 @@ export type WorkflowNode = z.infer<typeof WorkflowNode>;
 export type WorkflowNodeInput = z.input<typeof WorkflowNode>;
 /** The exits of this node (an action's depend on what it does). */
 export function workflowExits(n: WorkflowNode | { kind: WorkflowNodeKind; config: unknown }): readonly string[] {
-  if (n.kind === 'action') return (n.config as { do?: string }).do === 'mergePr' ? ['merged', 'refused'] : ['done'];
+  if (n.kind === 'action') {
+    const d = (n.config as { do?: string }).do;
+    return d === 'mergePr' ? ['merged', 'refused'] : d === 'command' ? ['exit 0', 'other exit'] : ['done'];
+  }
+  if (n.kind === 'agent') {
+    const c = n.config as { inThread?: boolean; reviewAgent?: boolean };
+    return c.inThread ? (c.reviewAgent ? ['approved', 'changes asked'] : ['done', 'not done']) : ['done', 'failed'];
+  }
   return WORKFLOW_EXITS[n.kind];
 }
 export const WorkflowEdge = z.object({ from: z.string().min(1), exit: z.string().min(1), to: z.string().min(1) });
@@ -918,7 +951,8 @@ export interface WorkflowRunStep {
    * The step couldn't run (#261): no answer (gh logged out, agent missing…), not an outcome. The run waits on it;
    * Atlas retries every minute and tells Master after 15 min. In the run: Retry now, or Follow `negativeExit`.
    */
-  couldntRun: { reason: string; since: string; nextTryAt: string; tries: number; notified: boolean; negativeExit: string | null } | null;
+  /** autoRetry false (#273): a command cut off by a stop, or a review without verdict: only Retry now or Follow move it on. */
+  couldntRun: { reason: string; since: string; nextTryAt: string; tries: number; notified: boolean; negativeExit: string | null; autoRetry: boolean } | null;
 }
 export interface WorkflowRun {
   id: string;
@@ -1008,7 +1042,28 @@ export interface Workflow extends WorkflowGraph {
   updatedAt: string;
   /** Its project (#213); null = global. */
   projectId: string | null;
+  /** Its « Run a command » steps (#273), each with what Master approves: exactly this command, secrets and limit. */
+  commandSteps: WorkflowCommandStep[];
+  /** A command step is not approved since its last edit by an agent: no run starts until Master approves. */
+  needsApproval: boolean;
 }
+
+/** A command step as the approval banner shows it (#273). checkout: always the repo's default branch. */
+export interface WorkflowCommandStep {
+  nodeId: string;
+  title: string;
+  command: string;
+  /** owner/name, cloned clean and checked out on its default branch for each run. */
+  checkout: { repo: string | null; ref: 'default branch' };
+  secrets: string[];
+  limitMin: number;
+  approved: boolean;
+  approvedAt: string | null;
+  approvedBy: string | null;
+}
+/** POST /api/workflows/:id/approve: approves every command step of that revision (a stale one: 409). */
+export const ApproveWorkflow = z.object({ revision: z.number().int().min(1) });
+export type ApproveWorkflow = z.input<typeof ApproveWorkflow>;
 
 /** POST /api/workflows/preview: the next firings of a draft time trigger (time zone: the engine's if not given). */
 export const TriggerPreview = z.object({
@@ -1217,7 +1272,7 @@ export type UpdatePlanAccount = z.infer<typeof UpdatePlanAccount>;
  * Kinds of notification the engine writes. card.blocked / card.review rows are for the system notification and history;
  * the Inbox shows those cards from their live state (InboxNeed). plan.* rows are « system ».
  */
-export const NOTIFICATION_KINDS = ['card.blocked', 'card.review', 'card.done', 'run.failed', 'schedule.ran', 'memory.cleanup', 'plan.switched', 'plan.exhausted', 'github.unreadable', 'review.stalled', 'card.stalled', 'workflow.stopped', 'workflow.couldnt_run', 'workflow.notify'] as const;
+export const NOTIFICATION_KINDS = ['card.blocked', 'card.review', 'card.done', 'run.failed', 'schedule.ran', 'memory.cleanup', 'plan.switched', 'plan.exhausted', 'github.unreadable', 'review.stalled', 'card.stalled', 'workflow.stopped', 'workflow.couldnt_run', 'workflow.notify', 'workflow.approval'] as const;
 export type NotificationKind = (typeof NOTIFICATION_KINDS)[number];
 
 /** Something the user is told about (also shown as a system notification by the app). */

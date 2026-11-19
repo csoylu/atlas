@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import { spawn, execSync } from 'node:child_process';
-import { mkdtempSync } from 'node:fs';
+import { existsSync, mkdtempSync, readdirSync, readFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { randomUUID } from 'node:crypto';
@@ -10,9 +10,9 @@ import { LEASE_MS, SlowProvider, STEPS } from './crash-fixture.ts';
 const KILLS = Number(process.env.CRASH_KILLS ?? 50);
 const child = join(import.meta.dirname, 'crash-child.ts');
 
-function runChild(dbFile: string, dataDir: string, marker: string): Promise<void> {
+function runChild(dbFile: string, dataDir: string, marker: string, origin: string): Promise<void> {
   return new Promise((resolve, reject) => {
-    const p = spawn(process.execPath, ['--import', 'tsx', child, dbFile, dataDir, marker], { stdio: ['ignore', 'pipe', 'inherit'] });
+    const p = spawn(process.execPath, ['--import', 'tsx', child, dbFile, dataDir, marker, origin], { stdio: ['ignore', 'pipe', 'inherit'] });
     p.stdout.on('data', (d: Buffer) => {
       if (!d.toString().includes('ready')) return;
       // Kill at a random instant: mid model call, mid tool, mid write.
@@ -28,10 +28,14 @@ describe('durability (design §6)', () => {
     const dataDir = mkdtempSync(join(tmpdir(), 'atlas-crash-'));
     const dbFile = join(dataDir, 'atlas.db');
     const marker = 'atlas-crash-' + randomUUID().slice(0, 8);
-    for (let i = 0; i < KILLS; i++) await runChild(dbFile, dataDir, marker);
+    // The repo a command step checks out (#273): a local bare one with one commit on main.
+    const work = join(dataDir, 'origin-work');
+    execSync(`git init -q -b main "${work}" && cd "${work}" && echo x > README && git add README && git -c user.name=t -c user.email=t@t commit -qm x && git clone -q --bare "${work}" "${dataDir}/origin.git"`);
+    const origin = join(dataDir, 'origin.git');
+    for (let i = 0; i < KILLS; i++) await runChild(dbFile, dataDir, marker, origin);
 
     // Final engine: resumes everything once the dead owners' leases expire.
-    const engine = await startEngine({ dbFile, dataDir, port: 0, dispatch: false, leaseMs: LEASE_MS, providers: () => new SlowProvider(marker), env: {} });
+    const engine = await startEngine({ dbFile, dataDir, port: 0, dispatch: false, leaseMs: LEASE_MS, providers: () => new SlowProvider(marker), env: {}, workflowCommand: { clone: async (_r, dir) => void execSync(`git clone -q "${origin}" "${dir}"`) } });
     try {
       const cards = engine.kanban.list().filter((c) => c.title.startsWith('crash '));
       expect(cards).toHaveLength(3);
@@ -88,6 +92,23 @@ describe('durability (design §6)', () => {
       expect(after).toMatchObject({ state: 'done' });
       expect(after.steps!.map((s) => s.exit)).toEqual(['start', 'event', 'done']);
       expect(after.steps![1]!.deadlineAt).toBe(before.steps![1]!.deadlineAt);
+      // The command step (#273): ran to its end once, or was cut off and never run again by itself.
+      engine.workflows.start(3_600_000);
+      const cw = engine.workflows.list().find((x) => x.name === 'Command')!;
+      const [cr] = engine.workflows.runs(cw.id);
+      await engine.workflows.commandsIdle();
+      const cmdRun = engine.workflows.run(cr!.id);
+      const cmdStep = cmdRun.steps!.find((s) => s.nodeId === 'c')!;
+      const ran = existsSync(join(dataDir, 'command-runs')) ? readFileSync(join(dataDir, 'command-runs'), 'utf8').split('\n').filter(Boolean).length : 0;
+      if (cmdRun.state === 'done') {
+        expect(cmdStep.exit).toBe('exit 0');
+        expect(ran).toBe(1);
+      } else {
+        // Still queued (killed before it started each time), or cut off: never retried by itself.
+        expect(ran).toBeLessThanOrEqual(1);
+        if (cmdStep.couldntRun) expect(cmdStep.couldntRun).toMatchObject({ autoRetry: false });
+      }
+      expect(readdirSync(join(dataDir, 'checkouts')).flatMap((p) => (existsSync(join(dataDir, 'checkouts', p, 'runs')) ? readdirSync(join(dataDir, 'checkouts', p, 'runs')) : []))).toEqual([]);
     } finally {
       await engine.stop();
     }
