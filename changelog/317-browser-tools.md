@@ -1,0 +1,4 @@
+## Added · #317 · Agents can use the browser: they open a page, read it and click, type or press keys in it, in the chat's own browser tab (desktop app)
+- Three tools: `browser_open`, `browser_snapshot` (the page's accessibility tree with element refs, optionally a screenshot) and `browser_act` (click, type, press, select, scroll, back). Each returns the page as it is afterwards; secret values in it are hidden like in any tool output.
+- While you have control, the agent's browser calls are refused at once (« Master is using the browser »). When you hand it back, its next call starts with « Master handed back the browser » and the page as you left it.
+- Offered only in the desktop app; elsewhere agents don't get these tools. The `screenshot` tool is unchanged. The pane that shows the tab on screen comes with #306.

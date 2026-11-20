@@ -45,6 +45,8 @@ import type { ShellEnv } from './shellEnv.ts';
 import { REDACT_OVERLAP, type Secrets } from './secrets.ts';
 import { isSecretTool, redactSecretCalls, runSecretTool, secretToolSpecs } from './secretTools.ts';
 import { isPrTool, prToolSpecs, runPrTool, type PrToolContext } from './prTools.ts';
+import type { Browser } from './browser.ts';
+import { browserToolSpecs, isBrowserTool, runBrowserTool } from './browserTools.ts';
 import { filesRoot, isMember, projectRow, workspaceOf } from './projects.ts';
 import type { Sandbox, SandboxScope } from './sandbox.ts';
 import { afterTools, ceilingReason, freshGuard, MAX_TURNS, stopNote, type GuardCall, type GuardState } from './loopGuard.ts';
@@ -112,6 +114,8 @@ export interface RunnerOptions {
   effects?: SideEffects;
   /** pr_validate (#216) in tests: a fake GitHub. */
   prTool?: Pick<PrToolContext, 'gh'>;
+  /** The shared browser (#298 S7): its tools are offered only when it has a host (the desktop app). */
+  browser?: Browser;
 }
 
 export interface WakeOptions {
@@ -182,6 +186,11 @@ export class Runner {
   /** Secret values in a text replaced by [secret NAME] (#206). Throws when the store can't be read. */
   private redact(text: string): { text: string; hidden: number } {
     return this.opts.secrets ? this.opts.secrets.redact(text) : { text, hidden: 0 };
+  }
+
+  /** The browser tools exist only where the engine has a browser (the desktop app, #298 S7). */
+  private browserOn(): boolean {
+    return !!this.opts.browser?.status().available;
   }
 
   /**
@@ -572,6 +581,7 @@ export class Runner {
         ...(cleanup ? cleanupToolSpecs() : []),
         ...(this.opts.secrets ? secretToolSpecs() : []),
         ...prToolSpecs(first, agent.id),
+        ...(this.browserOn() ? browserToolSpecs() : []),
       ];
       // Documents: a direct chat's panel is its own; a card's is the chat it was created from. Work is attached to its card.
       const panelChat = first.board === 'direct' ? first.id : first.originCard;
@@ -710,6 +720,8 @@ export class Runner {
               });
             else if (isPrTool(u.name))
               r = await runPrTool(u.name, u.input, { db: this.db, kanban: this.kanban, agentId: agent.id, cardId, env: () => this.shellEnvFor(agent.id, card.projectId, ''), ...this.opts.prTool });
+            else if (isBrowserTool(u.name) && this.browserOn())
+              r = await runBrowserTool(u.name, u.input, { browser: this.opts.browser!, chatId: cardId, workdir, signal, ...(redactor ? { redact: (t: string) => redactor.redact(t).text } : {}) });
             else if (cleanup && isCleanupTool(u.name)) r = runCleanupTool(u.name, u.input, { cleanup, kanban: this.kanban, agents: this.agents, agentId: agent.id, cardId });
             else if (isTeamTool(u.name)) {
               const changeBefore = this.memories.lastChange();

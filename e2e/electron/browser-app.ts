@@ -6,6 +6,7 @@ import { app, BrowserWindow } from 'electron';
 import { join } from 'node:path';
 import { startEngine } from '../../packages/engine/src/index.ts';
 import { ElectronBrowser } from '../../apps/desktop/src/browser.ts';
+import { runBrowserTool } from '../../packages/engine/src/browserTools.ts';
 
 const dataDir = process.env.ATLAS_E2E_DIR!;
 let win: BrowserWindow | null = null;
@@ -31,6 +32,9 @@ app.whenReady().then(async () => {
   engine.bus.on((e) => events.push(e));
   win = new BrowserWindow({ width: 1200, height: 800, show: process.env.E2E_SHOW === '1', webPreferences: { contextIsolation: true, sandbox: true } });
   await win.loadURL('data:text/html,<title>Atlas (e2e)</title><body>Atlas window</body>');
-  (globalThis as Record<string, unknown>).__atlas = { url: engine.url, host, engine, events, win, opened };
+  // The agent's browser tools (S7) on a chat's tab, as a run calls them.
+  const tool = (name: string, input: unknown, chatId: string) =>
+    runBrowserTool(name, input, { browser: engine.browser, chatId, workdir: join(dataDir, 'workspaces', 'atlas'), signal: new AbortController().signal });
+  (globalThis as Record<string, unknown>).__atlas = { url: engine.url, host, engine, events, win, opened, tool };
   app.on('before-quit', () => void engine.stop());
 });

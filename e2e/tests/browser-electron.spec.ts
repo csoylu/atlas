@@ -277,3 +277,44 @@ test('WebRTC sends no UDP past the proxy: no host or srflx UDP candidate on Allo
     expect(candidates.filter((c) => / udp /i.test(c))).toEqual([]);
   }
 });
+
+test('agent tools (S7): snapshot → click → type → Master takes control → hand back → fresh snapshot with Master’s edit', async () => {
+  const chat = (await atlas.call<{ id: string }>('POST', '/agents/atlas/chats')).body;
+  const tool = (name: string, input: unknown) =>
+    app.evaluate((_e, [n, i, id]) => (globalThis as any).__atlas.tool(n, i, id), [name, input, chat.id] as const) as Promise<{ output: string; isError: boolean }>;
+  const ref = (snap: string, role: string) => Number(snap.match(new RegExp(`- ${role}[^\\n]*\\[ref=(\\d+)\\]`))?.[1]);
+
+  const opened = await tool('browser_open', { url: web.url + '/tools' });
+  expect(opened.isError).toBe(false);
+  await atlas.call('PUT', '/browser/view', { chatId: chat.id, bounds: { x: 600, y: 80, width: 600, height: 700 } });
+  const snap = await tool('browser_snapshot', {});
+  expect(snap.output).toContain(`Page: Site /tools\nURL: ${web.url}/tools`);
+  const button = ref(snap.output, 'button');
+  const box = ref(snap.output, 'textbox');
+  expect(button).toBeGreaterThan(0);
+  expect(box).toBeGreaterThan(0);
+
+  const clicked = await tool('browser_act', { action: 'click', ref: button });
+  expect(clicked.isError).toBe(false);
+  expect(clicked.output).toMatch(/- button "1" \[ref=\d+\]/);
+  const typed = await tool('browser_act', { action: 'type', ref: box, text: 'munih' });
+  expect(typed.output).toMatch(/- textbox \[ref=\d+\] value="munih" focused/);
+
+  // Master takes control: the agent's calls are refused at once; Master types in the box (real key events).
+  await atlas.call('POST', `/browser/tabs/${chat.id}/owner`, { owner: 'master' });
+  expect(await tool('browser_act', { action: 'click', ref: button })).toEqual({ output: expect.stringMatching(/^Master is using the browser/), isError: true });
+  await app.evaluate(async (_e, id) => {
+    const wc = (globalThis as any).__atlas.host.tabs.get(id).view.webContents;
+    for (const c of ' and Master') wc.sendInputEvent({ type: 'char', keyCode: c });
+    await new Promise((ok) => setTimeout(ok, 300));
+  }, chat.id);
+  await expect.poll(async () => app.evaluate((_e, id) => (globalThis as any).__atlas.host.tabs.get(id).view.webContents.executeJavaScript('document.getElementById("i").value'), chat.id)).toBe('munih and Master');
+
+  // Hand back: the next call starts with it and the page as Master left it.
+  await atlas.call('POST', `/browser/tabs/${chat.id}/owner`, { owner: 'agent' });
+  const back = await tool('browser_snapshot', {});
+  expect(back.isError).toBe(false);
+  expect(back.output.startsWith('Master handed back the browser; the page is now:\nPage: Site /tools')).toBe(true);
+  expect(back.output).toContain('value="munih and Master"');
+  expect((await tool('browser_snapshot', {})).output.startsWith('Page: ')).toBe(true);
+});

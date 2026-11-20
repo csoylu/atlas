@@ -241,7 +241,7 @@ export async function startEngine(opts: EngineOptions): Promise<Engine> {
   const review = new MemoryReview(db, kanban, memories, models, agents, settings, usage);
   if (opts.memoryReview === false) review.after = () => {};
   const effects = new SideEffects(db, kanban, memories, workflows);
-  const runner = new Runner(db, bus, kanban, agents, models, memories, workflows, { fileLog, effects, sandbox, dataDir: opts.dataDir, leaseMs: opts.leaseMs, maxTurns: opts.maxTurns, usage, user: () => settings.user(), documents, cleanup, review, isVoiceChat: voiceChat ? (id) => voiceChat.isVoiceChat(id) : undefined, engine: () => ({ url, cookie: () => (auth.enabled ? auth.issue().token : null), answer: (method, path) => screenshotAnswer(kanban, method, path) }), shellEnv, secrets, prTool: opts.prs?.validate });
+  const runner = new Runner(db, bus, kanban, agents, models, memories, workflows, { fileLog, effects, sandbox, dataDir: opts.dataDir, leaseMs: opts.leaseMs, maxTurns: opts.maxTurns, usage, user: () => settings.user(), documents, cleanup, review, isVoiceChat: voiceChat ? (id) => voiceChat.isVoiceChat(id) : undefined, engine: () => ({ url, cookie: () => (auth.enabled ? auth.issue().token : null), answer: (method, path) => screenshotAnswer(kanban, method, path) }), shellEnv, secrets, prTool: opts.prs?.validate, browser });
   // Agent steps in the task thread (#273): the agent starts on the run's task, the prompt posted as its kick (#221).
   workflows.threads = { wake: (cardId, agentId, prompt) => runner.wake(cardId, { agentId, kind: 'work', kick: prompt, kickAlways: true }) };
   const rewinds = new Rewinds(db, bus, kanban, agents, runner, opts.dataDir, fileLog, effects);
