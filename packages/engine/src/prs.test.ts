@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import { mkdtempSync } from 'node:fs';
 import { tmpdir } from 'node:os';
+import Database from 'better-sqlite3';
 import { join } from 'node:path';
 import type { ModelRequest } from './providers/types.ts';
 import { eventually, setReviewAgent } from '../test/kit/index.ts';
@@ -389,6 +390,138 @@ describe('a restart in every state of a review (#263, rule 2)', () => {
     t = await setup({ dbFile, dataDir, gh, script: byAgent([]) });
     await t.e.prs.poll();
     await eventually(() => t.e.kanban.get(c.id).status === 'done', { what: 'Done from the merge' });
+  });
+});
+
+describe('a review step always ends (#325)', () => {
+  const reviewStep = (e: E, cardId: string) => lastRun(e, cardId)!.steps!.find((s) => s.nodeId === 'review')!;
+
+  it("the #314 sequence: the reviewer's run is cut by a restart, resumed as a new run, its fail verdict sends the task back", { timeout: 30_000 }, async () => {
+    const dataDir = mkdtempSync(join(tmpdir(), 'atlas-325-'));
+    const dbFile = join(dataDir, 'atlas.db');
+    const gh = fakeGitHub();
+    // The reviewer is in the middle of a long command when Atlas quits (an update).
+    let t = await setup({ dbFile, dataDir, gh, script: byAgent([use('shell', { command: 'sleep 30' })]) });
+    const c = card(t.e);
+    t.e.kanban.requestReview(c.id, [URL], 'atlas', 'engine + tests');
+    await atStep(t.e, c.id, 'ci');
+    gh.pr.ci = 'success';
+    await t.e.prs.poll();
+    await atStep(t.e, c.id, 'review');
+    await eventually(() => t.e.db.prepare("SELECT 1 FROM tool_calls WHERE status = 'running'").get(), { what: "the reviewer's command running" });
+    await t.e.stop();
+
+    // Next start: the runner resumes the review as a new run, which gives the verdict with pr_validate.
+    t = await setup({ dbFile, dataDir, gh, script: byAgent([verdict('fail', 'four points to fix'), text('changes asked')]) });
+    const run = await ended(t.e, c.id);
+    expect(path(run).slice(-2)).toEqual([['review', 'changes asked'], ['back', 'done']]);
+    expect(reviewStep(t.e, c.id).summary).toBe('@zurich on PR #41: four points to fix');
+    expect(t.e.kanban.get(c.id).status).not.toBe('review');
+    expect(lastNote(t.e, c.id)).toContain('four points to fix');
+    // One resumed run, no extra review run.
+    expect(t.e.runner.runs(c.id).filter((r) => r.agentId === 'zurich').map((r) => r.status).sort()).toEqual(['done', 'interrupted']);
+  });
+
+  it('an interrupted review run that never resumes reaches Master once; Retry on the task wakes the reviewer again', { timeout: 30_000 }, async () => {
+    const dataDir = mkdtempSync(join(tmpdir(), 'atlas-325-'));
+    const dbFile = join(dataDir, 'atlas.db');
+    const gh = fakeGitHub();
+    let t = await setup({ dbFile, dataDir, gh, script: byAgent([use('shell', { command: 'sleep 30' })]) });
+    const c = card(t.e);
+    t.e.kanban.requestReview(c.id, [URL], 'atlas', 'engine + tests');
+    await atStep(t.e, c.id, 'ci');
+    gh.pr.ci = 'success';
+    await t.e.prs.poll();
+    await atStep(t.e, c.id, 'review');
+    await eventually(() => t.e.db.prepare("SELECT 1 FROM tool_calls WHERE status = 'running'").get(), { what: "the reviewer's command running" });
+    await t.e.stop();
+    // The run stays interrupted (no resume: as if the runner could not wake it), the step can't follow it.
+    const db = new Database(dbFile);
+    db.prepare("UPDATE runs SET status = 'stopped' WHERE status = 'interrupted'").run();
+    db.close();
+    const at = { now: Date.now() };
+    t = await setup({ dbFile, dataDir, gh, script: byAgent([verdict('ok', 'all checked'), text('approved')]), review: false });
+    t.e.db.prepare("UPDATE runs SET status = 'interrupted' WHERE agent_id = 'zurich'").run();
+    (t.e.workflows as unknown as { now: () => Date }).now = () => new Date(at.now);
+    t.e.workflows.start(3_600_000);
+    t.e.workflows.tick();
+    expect(reviewStep(t.e, c.id).couldntRun).toBe(null);
+    at.now += 16 * 60_000;
+    t.e.workflows.tick();
+    expect(reviewStep(t.e, c.id).couldntRun).toMatchObject({ reason: expect.stringContaining('interrupted by a restart and has not resumed for 16 min'), autoRetry: false, notified: true });
+    expect(inbox(t.e, 'workflow.couldnt_run')).toEqual([expect.objectContaining({ title: 'Workflow « Review » is stuck on « Review the PR »', card_id: c.id })]);
+    t.e.workflows.tick();
+    expect(inbox(t.e, 'workflow.couldnt_run')).toHaveLength(1);
+    // Retry on the task (Master's click): the reviewer is woken again in the thread and its verdict moves the run.
+    await t.call('POST', `/cards/${c.id}/retry`);
+    const run = await ended(t.e, c.id);
+    expect(path(run).slice(-3)).toEqual([['review', 'approved'], ['merge', 'merged'], ['done', 'done']]);
+  });
+
+  it('the builder pushes a fix during the review and asks again: the open run stops, a new one reviews the new head', { timeout: 30_000 }, async () => {
+    const gh = fakeGitHub();
+    let e!: E;
+    let cardId = '';
+    const NEW = 'bbbbbbb2222';
+    const { e: engine, idle } = await setup({
+      gh,
+      script: byAgent([
+        () => {
+          // Mid-review, the builder pushes and asks again (its own run in the thread would do the same).
+          gh.pr.headSha = NEW;
+          expect(() => e.kanban.requestReview(cardId, [URL], 'zurich', 'me again')).toThrow(/only its builder @atlas asks again: you are its reviewer, give your verdict with pr_validate/);
+          e.kanban.requestReview(cardId, [URL], 'atlas', 'fixed the four points');
+          return text('still reading');
+        },
+        verdict('ok', 'new head checked', { sha: NEW }),
+        text('approved'),
+      ]),
+    });
+    e = engine;
+    const c = card(e);
+    cardId = c.id;
+    e.kanban.requestReview(c.id, [URL], 'atlas', 'engine + tests');
+    await atStep(e, c.id, 'ci');
+    gh.pr.ci = 'success';
+    await e.prs.poll();
+    const runs = () => e.db.prepare('SELECT id, state, reason FROM workflow_runs WHERE subject_card = ? ORDER BY number').all(c.id) as { id: string; state: string; reason: string | null }[];
+    await eventually(() => runs().length === 2, { what: 'a second Review run' });
+    expect(runs()[0]).toMatchObject({ state: 'stopped', reason: 'stopped by a new review request from @atlas (a new head needs a new review)' });
+    await idle(c.id);
+    await e.prs.poll();
+    const run = await ended(e, c.id);
+    expect(run.id).toBe(runs()[1]!.id);
+    expect(path(run)).toEqual(FULL);
+    expect(gh.merges()).toEqual([expect.stringContaining(`sha=${NEW}`)]);
+    expect(e.kanban.get(c.id).status).toBe('done');
+  });
+
+  it('a commit pushed after an ok verdict is not merged: the merge pins the reviewed head, refused, back to the builder', { timeout: 20_000 }, async () => {
+    const gh = fakeGitHub();
+    let e!: E;
+    const { e: engine } = await setup({
+      gh,
+      script: byAgent([
+        verdict('ok', 'tests and build checked'),
+        () => {
+          // A push lands between the verdict and the merge step: Atlas has already read the new head.
+          gh.pr.headSha = gh.restHead = 'ccccccc3333';
+          e.db.prepare('UPDATE card_prs SET head_sha = ?').run('ccccccc3333');
+          return text('validated');
+        },
+      ]),
+    });
+    e = engine;
+    const c = card(e);
+    e.kanban.requestReview(c.id, [URL], 'atlas', 'engine + tests');
+    await atStep(e, c.id, 'ci');
+    gh.pr.ci = 'success';
+    await e.prs.poll();
+    const run = await ended(e, c.id);
+    expect(path(run).slice(-3)).toEqual([['review', 'approved'], ['merge', 'refused'], ['back', 'done']]);
+    expect(run.steps!.find((s) => s.nodeId === 'merge')!.summary).toContain('a commit was pushed after your review');
+    expect(gh.merges()).toEqual([]);
+    expect(e.kanban.get(c.id).status).not.toBe('review');
   });
 });
 
