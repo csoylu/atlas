@@ -38,6 +38,11 @@ export const HostRule = z
   .refine((s) => /^(\*\.)?[a-z0-9]([a-z0-9-]*[a-z0-9])?(\.[a-z0-9]([a-z0-9-]*[a-z0-9])?)*$/.test(s) && s.length <= 253, {
     message: 'an allowed host is a name like github.com or *.npmjs.org (no scheme, port or path)',
   });
+/** `host` matches a rule `host` exactly, or `*.suffix` for the suffix itself and every subdomain of it. */
+export function hostAllowed(host: string, rules: readonly string[]): boolean {
+  const h = host.toLowerCase().replace(/\.$/, '').replace(/^\[(.*)\]$/, '$1');
+  return rules.some((r) => (r.startsWith('*.') ? h === r.slice(2) || h.endsWith(r.slice(1)) : h === r));
+}
 export const HostRules = z.array(HostRule).max(500).transform((l) => [...new Set(l)]);
 
 /** PATCH /api/projects/:id/members/:agent: the workspace's own internet setting. null = the project's. */
@@ -56,6 +61,16 @@ export interface NetworkRefusal {
   host: string;
   count: number;
   lastAt: string;
+}
+
+/**
+ * GET /api/projects/:id/pending (#308): background commands of a workspace still running on an older level (they keep
+ * their sandbox until they end). `level` = the one they started with.
+ */
+export interface NetworkPending {
+  agentId: string;
+  level: NetworkLevel;
+  count: number;
 }
 
 export interface ProjectMember {

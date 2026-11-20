@@ -158,6 +158,12 @@ describe('internet levels (#298 S3)', () => {
     // An empty list is the project's list again; null level is the project's level.
     await l.call('PATCH', `/projects/${pid}/members/atlas`, { network: null, allowedHosts: [] });
     expect(l.engine.network.setting(pid, 'atlas')).toEqual({ level: 'hosts', hosts: ['github.com', '*.npmjs.org'] });
+    // « Project default » in Settings → Workspaces (#308): level and own hosts back to null in one PATCH.
+    await l.call('PATCH', `/projects/${pid}/members/atlas`, { network: 'hosts', allowedHosts: ['own.example'] });
+    expect(l.engine.network.setting(pid, 'atlas')).toEqual({ level: 'hosts', hosts: ['own.example'] });
+    const back = await l.call<Project>('PATCH', `/projects/${pid}/members/atlas`, { network: null, allowedHosts: null });
+    expect(back.body.members.find((x) => x.agentId === 'atlas')).toMatchObject({ network: null, allowedHosts: null });
+    expect(l.engine.network.setting(pid, 'atlas')).toEqual({ level: 'hosts', hosts: ['github.com', '*.npmjs.org'] });
     expect((await l.call('PATCH', `/projects/${pid}/members/nobody`, { network: 'off' })).status).toBe(404);
     expect((await l.call('PATCH', `/projects/${pid}/members/atlas`, { network: 'sometimes' })).status).toBe(400);
 
@@ -185,5 +191,54 @@ describe('internet levels (#298 S3)', () => {
       if (sandbox) expect(out).toContain('This workspace is offline (Settings → Workspaces)');
       else expect(out).not.toContain('offline');
     }
+  });
+
+  it('change pending (#308): a background command running on a level that is no longer its workspace\'s; Allowed hosts follows every change (proxy), never pending', () => {
+    const db = dbWithProject();
+    const bg = (id: string, agent: string, level: string | null, status = 'running') =>
+      db
+        .prepare(
+          `INSERT INTO background_processes (id, agent_id, card_id, command, log_path, status, owner, started_at, project_id, network) VALUES (?, ?, 'c', 'sleep 9', '/x', ?, 'me', 'now', ?, ?)`,
+        )
+        .run(id, agent, status, level ? 'p' : null, level);
+    bg('1', 'a', 'on');
+    bg('2', 'a', 'on');
+    bg('3', 'b', 'hosts');
+    bg('4', 'b', 'off', 'exited');
+    bg('5', 'b', null); // unsandboxed: no project, no level
+    const net = new Network(db);
+    expect(net.pending('p')).toEqual([]); // every one still on its level
+    db.prepare("UPDATE projects SET network = 'off' WHERE id = 'p'").run();
+    expect(net.pending('p')).toEqual([{ agentId: 'a', level: 'on', count: 2 }]);
+    db.prepare("UPDATE project_members SET network = 'on' WHERE agent_id = 'a'").run();
+    expect(net.pending('p')).toEqual([]);
+    db.prepare("UPDATE background_processes SET status = 'exited'").run();
+    db.prepare("UPDATE project_members SET network = 'off' WHERE agent_id = 'a'").run();
+    expect(net.pending('p')).toEqual([]);
+  });
+
+  it('API (#308): GET pending, clear a workspace\'s browser data (404 for a non-member, 400 without the desktop browser)', async () => {
+    const cleared: string[] = [];
+    const host = {
+      open() {},
+      history() {},
+      close() {},
+      show() {},
+      setOwner() {},
+      send: async () => null,
+      capture: async () => ({ image: '', width: 0, height: 0 }),
+      signal() {},
+      clearData: async (partition: string) => void cleared.push(partition),
+      on: () => () => {},
+    };
+    const l = await launch({ dispatch: false, browser: host });
+    const pid = l.engine.projects.list()[0]!.id;
+    expect((await l.call('GET', `/projects/${pid}/pending`)).body).toEqual([]);
+    expect((await l.call('POST', `/projects/${pid}/members/atlas/browser-data/clear`)).status).toBe(204);
+    expect(cleared).toEqual([`persist:ws-${pid}-atlas`]);
+    expect((await l.call('POST', `/projects/${pid}/members/nobody/browser-data/clear`)).status).toBe(404);
+    const plain = await launch({ dispatch: false });
+    const pid2 = plain.engine.projects.list()[0]!.id;
+    expect((await plain.call('POST', `/projects/${pid2}/members/atlas/browser-data/clear`)).status).toBe(400);
   });
 });

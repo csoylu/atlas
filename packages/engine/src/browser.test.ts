@@ -9,6 +9,10 @@ import type { BrowserHost, HostEvent, HostTab } from './browser.ts';
 /** #298 S6: the browser engine against a fake BrowserHost (the Electron views are covered by e2e/tests/browser.spec.ts). */
 
 class FakeHost implements BrowserHost {
+  cleared: string[] = [];
+  async clearData(partition: string): Promise<void> {
+    this.cleared.push(partition);
+  }
   calls: [string, ...unknown[]][] = [];
   tabs = new Map<string, HostTab>();
   owners = new Map<string, string>();

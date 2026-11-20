@@ -3,7 +3,7 @@ import { execFileSync, spawn } from 'node:child_process';
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, symlinkSync, writeFileSync } from 'node:fs';
 import { homedir } from 'node:os';
 import { join } from 'node:path';
-import type { ContentBlock, NetworkRefusal, SandboxStatus } from '@atlas/shared';
+import type { ContentBlock, NetworkPending, NetworkRefusal, SandboxStatus } from '@atlas/shared';
 import { eventually, launch } from './kit/index.ts';
 import type { ModelRequest } from '../src/providers/types.ts';
 import { Sandbox, spawnAgentCommand } from '../src/sandbox.ts';
@@ -376,5 +376,75 @@ describe.skipIf(!mac && !linux)(`sandbox with the real ${mac ? 'sandbox-exec' : 
     expect(back('allowed')).toContain('code=200');
     expect(back('other')).toMatch(/code=000\/403/);
   }, 600_000);
-});
 
+  /**
+   * #308, Settings → Workspaces: what the page's controls send (PATCH of one member) changes what that agent's shell
+   * reaches from its next command, while a background command started before keeps its level and shows as pending
+   * until it ends. Reaches example.com and www.wikipedia.org.
+   */
+  it('Settings → Workspaces: one workspace set to Off, then Allowed hosts, from its next command; a running background command is « change pending » until it ends', async () => {
+    const dataDir = dataDirUnderHome();
+    const probe = [
+      `echo "== allowed"; curl -s -o /dev/null -m 20 -w "code=%{http_code}/%{http_connect}" https://example.com/; echo " exit=$?"`,
+      `echo "== other"; curl -s -o /dev/null -m 20 -w "code=%{http_code}/%{http_connect}" https://www.wikipedia.org/; echo " exit=$?"`,
+      'echo "== end"',
+    ].join('\n');
+    const marker = join(dataDir, 'workspaces', 'atlas', 'bg-started');
+    const l = await launch({
+      dataDir,
+      dispatch: false,
+      env: {},
+      password: LOGIN,
+      sandbox: { enabled: true },
+      script: [
+        () => tool('bg', { command: `touch bg-started; sleep 120`, background: true }),
+        text('started'),
+        () => tool('off', { command: probe, timeout_s: 120 }),
+        text('done'),
+        () => tool('hosts', { command: probe, timeout_s: 120 }),
+        text('done'),
+      ],
+    });
+    const pid = l.engine.projects.list()[0]!.id;
+    const run = async (title: string) => {
+      const card = l.engine.kanban.create({ title, assignee: 'atlas' }, 'user');
+      l.engine.kanban.appendMessage(card.id, 'user', 'user', text('go'));
+      l.engine.runner.wake(card.id);
+      await l.engine.runner.settled(card.id);
+      const out = results(l.fake.calls.at(-1)!)[0]!;
+      return (name: string) => out.split(`== ${name}\n`)[1]!.split('\n== ')[0]!;
+    };
+    const pending = async () => (await l.call<NetworkPending[]>('GET', `/projects/${pid}/pending`)).body;
+
+    // A background command at the project default (On).
+    await run('background at On');
+    await eventually(() => expect(existsSync(marker)).toBe(true), { timeout: 30_000, what: 'the background command started' });
+    expect(await pending()).toEqual([]);
+
+    // The workspace alone set to Off: its next command reaches nothing; the running one keeps On and is pending.
+    expect((await l.call('PATCH', `/projects/${pid}/members/atlas`, { network: 'off' })).status).toBe(200);
+    expect(await pending()).toEqual([{ agentId: 'atlas', level: 'on', count: 1 }]);
+    const off = await run('off');
+    expect(off('allowed')).not.toMatch(/code=(200|301|302)/);
+    expect(off('other')).not.toMatch(/code=(200|301|302)/);
+
+    // Its own Allowed hosts (the project stays On): the listed host only; the refusal is offered in Settings.
+    expect((await l.call('PATCH', `/projects/${pid}/members/atlas`, { network: 'hosts', allowedHosts: ['example.com'] })).status).toBe(200);
+    expect(l.engine.network.setting(pid, 'atlas')).toEqual({ level: 'hosts', hosts: ['example.com'] });
+    const hosts = await run('hosts');
+    expect(hosts('allowed')).toContain('code=200');
+    expect(hosts('other')).toMatch(/code=000\/403/);
+    const refusals = (await l.call<NetworkRefusal[]>('GET', `/projects/${pid}/refusals`)).body;
+    expect(refusals).toEqual([expect.objectContaining({ agentId: 'atlas', host: 'www.wikipedia.org' })]);
+
+    // Back to the project default (On): the background command's level again, nothing pending.
+    await l.call('PATCH', `/projects/${pid}/members/atlas`, { network: null });
+    expect(await pending()).toEqual([]);
+    await l.call('PATCH', `/projects/${pid}`, { network: 'off' });
+    expect(await pending()).toEqual([{ agentId: 'atlas', level: 'on', count: 1 }]);
+    // It ends: nothing pending any more.
+    const bgId = (l.engine.db.prepare("SELECT id FROM background_processes WHERE status = 'running'").get() as { id: string }).id;
+    l.engine.runner.background.kill(bgId, 'atlas');
+    await eventually(async () => expect(await pending()).toEqual([]), { timeout: 20_000, what: 'the background command ended' });
+  }, 300_000);
+});

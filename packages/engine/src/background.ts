@@ -4,6 +4,7 @@ import { join } from 'node:path';
 import type { Db } from './store/db.ts';
 import { REDACT_OVERLAP, type Secrets } from './secrets.ts';
 import { spawnAgentCommand, type SandboxScope } from './sandbox.ts';
+import { effectiveNetwork } from './network.ts';
 
 /** Hides secret values in a cut part of a log (#227): Secrets.redactWindow. */
 type Redactor = Pick<Secrets, 'redactWindow'>;
@@ -92,12 +93,15 @@ export class Background {
       closeSync(fd);
     }
     const pid = child.pid ?? null;
+    // The level its sandbox was made with (same tick as the spawn: nothing changed it in between), for « Change pending ».
+    const s = o.sandbox?.sandbox.enabled ? o.sandbox : null;
+    const level = s ? effectiveNetwork(this.db, s.projectId, s.agentId).level : null;
     this.db
       .prepare(
-        `INSERT INTO background_processes (id, agent_id, card_id, command, pid, log_path, status, owner, lease_until, started_at)
-         VALUES (?, ?, ?, ?, ?, ?, 'running', ?, ?, ?)`,
+        `INSERT INTO background_processes (id, agent_id, card_id, command, pid, log_path, status, owner, lease_until, started_at, project_id, network)
+         VALUES (?, ?, ?, ?, ?, ?, 'running', ?, ?, ?, ?, ?)`,
       )
-      .run(id, o.agentId, o.cardId, o.command, pid, logPath, this.instance, isoIn(this.leaseMs), new Date().toISOString());
+      .run(id, o.agentId, o.cardId, o.command, pid, logPath, this.instance, isoIn(this.leaseMs), new Date().toISOString(), s?.projectId ?? null, level);
     this.live.set(id, { pid, killed: false });
     child.on('error', (e) => this.ended(id, null, null, `could not start: ${e.message}`));
     child.on('exit', (code, sig) => this.ended(id, code, sig));

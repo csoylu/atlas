@@ -1,0 +1,6 @@
+## Added · #308 · Settings → Workspaces: choose, per project and per agent, whether its commands reach the internet (On, Allowed hosts, Off), the hosts allowed, and see who has git access
+
+- Team → Workspaces, between Agents and Memory: the sandbox's state (active, or unavailable with its reason: agent commands are stopped), then per project its default internet level, its allowed hosts (`github.com`, `*.npmjs.org`) and its git access (« GH_TOKEN granted to N of M members », a warning and a link to Secrets when there is none, « No repo »).
+- Per agent workspace: the project default or its own level, its own hosts (they replace the project's list), the hosts it was recently refused with « Allow for @agent » / « Allow for the project », and « Clear browser data » (desktop app).
+- A change applies from the agent's next command. A background command already running keeps its old setting until it ends: the page shows « Change pending » on that agent, and on the project when its default changed (new `GET /api/projects/:id/pending`; background commands now record their project and level, migration 0068).
+- ui-check: `settings-workspaces` screens (ok, unavailable, refused, pending), and a second OCR pass on a label the whole-page read missed.
