@@ -19,7 +19,7 @@ const json = { 'content-type': 'application/json' };
 async function setup(script: ConstructorParameters<typeof FakeProvider>[0], o: { dataDir?: string; dbFile?: string } = {}) {
   const fake = new FakeProvider(script);
   const dataDir = o.dataDir ?? mkdtempSync(join(tmpdir(), 'atlas-rw-'));
-  engine = await startEngine({ dbFile: o.dbFile ?? ':memory:', dataDir, port: 0, providers: () => fake, manageLocal: false });
+  engine = await startEngine({ dbFile: o.dbFile ?? ':memory:', dataDir, port: 0, providers: () => fake, manageLocal: false, sandbox: { enabled: false } });
   const u = engine.url + '/api';
   const work = join(dataDir, 'workspaces', 'atlas');
   mkdirSync(work, { recursive: true });

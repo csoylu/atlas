@@ -29,6 +29,8 @@ const noClone = async () => {
  * (`updates.fetch`, `dispatch`, `leaseMs`, a `dbFile` to restart on…). Defaults make a test fast and isolated: in-memory
  * SQLite, a temp data dir, port 0, no local model manager, no memory review. It stops itself when the test ends
  * (onTestFinished), so there is no afterEach to forget.
+ * The agent command sandbox is off unless the test asks for it (`sandbox: { enabled: true }`): tests run inside an
+ * agent's own sandbox, where a nested one cannot start (#316). The sandbox has its own tests.
  */
 export async function launch(o: LaunchOptions = {}) {
   const { script, provider, ...rest } = o;
@@ -36,7 +38,7 @@ export async function launch(o: LaunchOptions = {}) {
   const ownDir = !rest.dataDir;
   const dataDir = rest.dataDir ?? mkdtempSync(join(tmpdir(), 'atlas-t-'));
   mkdirSync(join(dataDir, 'workspaces', 'atlas'), { recursive: true });
-  const engine: Engine = await startEngine({ dbFile: ':memory:', port: 0, manageLocal: false, memoryReview: false, providers: () => fake, ...rest, projects: { clone: noClone, ...rest.projects }, dataDir } as EngineOptions);
+  const engine: Engine = await startEngine({ dbFile: ':memory:', port: 0, manageLocal: false, memoryReview: false, providers: () => fake, ...rest, sandbox: { enabled: false, ...rest.sandbox }, projects: { clone: noClone, ...rest.projects }, dataDir } as EngineOptions);
   onTestFinished(async () => {
     await engine.stop().catch(() => {});
     if (ownDir) rmSync(dataDir, { recursive: true, force: true });

@@ -307,8 +307,10 @@ for (const [from, to] of [['A', 'B'], ['B', 'A']] as const) {
     }
   });
 
-  // ACCEPTED LIMIT (Master, 19 Nov 2026, #248): the shell is not a sandbox; it runs with the project's folder as cwd, nothing more. A canary is reachable by an absolute path, both ways. Pinned as it is; if a sandbox ever comes, this test flips.
-  test(`${to} → ${from}: the shell in ${from} (${from === 'A' ? 'home workdir' : 'clone'}) against ${to}'s workspace — current behaviour`, async () => {
+  // The harness runs without the agent command sandbox (#316: e2e itself runs inside an agent's sandbox, where a nested one
+  // cannot start), so here the shell is unconfined: a canary is reachable by an absolute path, both ways. The app always
+  // sandboxes agent commands; that isolation is tested by packages/engine/test/sandbox.isolation.test.ts (real sandbox-exec, bwrap).
+  test(`${to} → ${from}: the shell in ${from} (${from === 'A' ? 'home workdir' : 'clone'}) against ${to}'s workspace — unconfined harness (sandbox off)`, async () => {
     const [here, other] = from === 'A' ? [w.A, w.B] : [w.B, w.A];
     const p = await probe(w, here, other, 'shell');
     const out = (p.results.shell ?? []).join('\n');
@@ -316,7 +318,7 @@ for (const [from, to] of [['A', 'B'], ['B', 'A']] as const) {
     const wrote = existsSync(join(other.workspace, 'planted-by-shell.txt'));
     rmSync(join(other.workspace, 'planted-by-shell.txt'), { force: true });
     console.log(`shell in ${here.side}: reads ${other.side}'s CLAUDE.md = ${read}, writes in ${other.side}'s workspace = ${wrote}`);
-    // Pinned so a change (a sandbox, or a regression) is noticed.
+    // Pinned so a change of the harness is noticed.
     expect({ read, wrote }).toEqual({ read: true, wrote: true });
   });
 }

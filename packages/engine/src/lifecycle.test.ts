@@ -39,7 +39,7 @@ afterEach(async () => {
 });
 
 async function setup(fake: Provider, o: { dbFile?: string; dataDir?: string; dispatch?: boolean } = {}) {
-  const e = await startEngine({
+  const e = await startEngine({ sandbox: { enabled: false },
     dbFile: o.dbFile ?? ':memory:',
     dataDir: o.dataDir ?? mkdtempSync(join(tmpdir(), 'atlas-')),
     port: 0,

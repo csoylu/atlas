@@ -511,7 +511,7 @@ export interface ShellPathInfo {
   error: string | null;
 }
 /**
- * The agent command sandbox (#298, GET /api/sandbox). `enabled`: ATLAS_SANDBOX=1 (temporary, until it is always on).
+ * The agent command sandbox (#298, GET /api/sandbox). `enabled`: always true in the app (#316); false only in test harnesses.
  * `ok` false with `enabled`: the startup probe failed and every agent command stops with « Sandbox unavailable: reason ».
  */
 export interface SandboxStatus {

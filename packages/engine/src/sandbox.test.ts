@@ -193,7 +193,25 @@ describe('sandbox (#298 S1, S2)', () => {
     expect(execFileSync('git', ['config', 'user.email'], { env, encoding: 'utf8', cwd: tmpdir() }).trim()).toBe('m@example.com');
   });
 
-  it('off (no ATLAS_SANDBOX): GET /api/sandbox says so and commands run on the host as before', async () => {
+  it('always on (#316): startEngine without the option sandboxes, ATLAS_SANDBOX means nothing, and the app never turns it off', async () => {
+    const fake = fakeSandboxExec();
+    const dataDir = mkdtempSync(join(tmpdir(), 'atlas-sbx-on-'));
+    mkdirSync(join(dataDir, 'workspaces', 'atlas'), { recursive: true });
+    const { startEngine } = await import('./index.ts');
+    const engine = await startEngine({ dbFile: ':memory:', dataDir, port: 0, dispatch: false, manageLocal: false, memoryReview: false, env: { ATLAS_SANDBOX: '0' }, sandbox: { platform: 'darwin', sandboxExec: fake.bin } });
+    onTestFinished(() => engine.stop());
+    expect(engine.sandbox.status()).toMatchObject({ enabled: true, kind: 'seatbelt', ok: true });
+    // The engine's real entry points (server, desktop) pass no sandbox option: nothing can turn it off.
+    for (const f of [join(here, 'main.ts'), join(here, '..', '..', '..', 'apps', 'desktop', 'src', 'main.ts')]) {
+      const call = readFileSync(f, 'utf8').match(/startEngine\(\{[^]*?\}\);/)?.[0];
+      expect(call, f).toBeTruthy();
+      expect(call, f).not.toMatch(/sandbox\s*:/);
+    }
+    const src = readdirSync(here).filter((n) => n.endsWith('.ts') && !n.endsWith('.test.ts'));
+    for (const n of src) expect(readFileSync(join(here, n), 'utf8'), n).not.toContain('ATLAS_SANDBOX');
+  });
+
+  it('off (test harnesses only): GET /api/sandbox says so and commands run on the host', async () => {
     const l = await launch({ dispatch: false, env: {}, script: [tool('u1', 'shell', { command: 'echo "home=$HOME"' }), text('done')] });
     expect((await l.call<SandboxStatus>('GET', '/sandbox')).body).toMatchObject({ enabled: false, ok: false });
     const card = l.engine.kanban.create({ title: 'off', assignee: 'atlas' }, 'user');

@@ -40,6 +40,8 @@ export class TestAtlas {
       ...(o.projects ? { projects: o.projects } : {}),
       // « Run a command » steps (#273): their clean checkout cloned from a local bare repo, never GitHub.
       ...(o.workflowCommand ? { workflowCommand: o.workflowCommand } : {}),
+      // No agent command sandbox (#316): e2e runs inside an agent's sandbox, where a nested one cannot start.
+      sandbox: { enabled: false },
       // Never the real GitHub: a test that links PRs passes its own reader (#189).
       prs: o.prs ?? { read: async () => { throw new Error('no GitHub in e2e'); }, intervalMs: false },
     });

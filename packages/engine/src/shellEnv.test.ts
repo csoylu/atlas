@@ -98,7 +98,7 @@ describe('agent shells in the engine', () => {
       },
       text('noted'),
     ]);
-    engine = await startEngine({ dbFile: ':memory:', dataDir, port: 0, dispatch: false, providers: () => fake, env: {}, shellPath: { mode: 'login', shell, platform: 'darwin' } });
+    engine = await startEngine({ dbFile: ':memory:', dataDir, port: 0, dispatch: false, providers: () => fake, env: {}, shellPath: { mode: 'login', shell, platform: 'darwin' }, sandbox: { enabled: false } });
     const card = engine.kanban.create({ title: 'env', assignee: 'atlas' }, 'user');
     engine.kanban.appendMessage(card.id, 'user', 'user', text('go'));
     engine.runner.wake(card.id);

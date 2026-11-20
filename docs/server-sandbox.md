@@ -5,8 +5,8 @@ sandbox for its workspace (#298). On a Mac it is Seatbelt (`sandbox-exec`); on a
 [bubblewrap](https://github.com/containers/bubblewrap) (`bwrap`). Windows has no sandbox: agent commands stop there
 with « Sandbox unavailable: no sandbox on Windows » (file tools, engine tools and chat still work).
 
-> **Status (#298 S2):** the sandbox is on only when the engine starts with `ATLAS_SANDBOX=1`. It becomes always on,
-> with no way to turn it off, in S5. Set the server up now so that switch changes nothing.
+> **Always on (#316):** there is no way to turn it off. Without a working bubblewrap every agent command stops with
+> « Sandbox unavailable: … » (fail closed), so set the server up as below before updating.
 
 ## What an agent command sees
 
