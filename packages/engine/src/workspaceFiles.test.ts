@@ -243,7 +243,7 @@ describe('workspace files (#303)', () => {
 });
 
 describe('file tabs in the pane (#303)', () => {
-  const files = (ts: PanelTab[]) => ts.map((t) => (t.kind === 'file' ? ['file', t.path, t.line, t.active] : ['artifact', t.doc.path, null, t.active]));
+  const files = (ts: PanelTab[]) => ts.map((t) => (t.kind === 'file' ? ['file', t.path, t.line, t.active] : t.kind === 'artifact' ? ['artifact', t.doc.path, null, t.active] : ['browser', t.tab.url, null, t.active]));
 
   it('opens, focuses (line), closes beside artifacts; the active one and the order survive a restart', async () => {
     const dataDir = mkdtempSync(join(tmpdir(), 'atlas-303-'));

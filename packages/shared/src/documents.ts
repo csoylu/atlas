@@ -1,4 +1,5 @@
 import { z } from 'zod';
+import type { BrowserTab } from './browser.ts';
 
 /**
  * Artifacts (design §16 « Artifacts », #120; called documents in the code): files in an agent's workspace that Atlas
@@ -101,7 +102,7 @@ export interface DocContent {
 export type PaneKind = 'artifact' | 'file' | 'browser';
 
 /** A tab in a chat's side panel (the workbench, #302), stored per chat in SQLite with the active one. */
-export type PanelTab = ArtifactTab | FileTab;
+export type PanelTab = ArtifactTab | FileTab | BrowserPaneTab;
 
 /** An artifact open in the pane. */
 export interface ArtifactTab {
@@ -134,8 +135,17 @@ export interface FileTab {
   active: boolean;
 }
 
+/** The chat's browser (#306): one per chat, its page and who drives it (browser.ts, #298 S6). */
+export interface BrowserPaneTab {
+  kind: 'browser';
+  tab: BrowserTab;
+  openedAt: string;
+  focusedAt: string;
+  active: boolean;
+}
+
 /** The key of a tab, unique in a chat's pane. */
-export const tabKey = (t: PanelTab): string => (t.kind === 'artifact' ? 'artifact:' + t.doc.id : 'file:' + t.path);
+export const tabKey = (t: PanelTab): string => (t.kind === 'artifact' ? 'artifact:' + t.doc.id : t.kind === 'file' ? 'file:' + t.path : 'browser');
 
 /* ── Files of an agent's workspace (#303) ─────────────────────────────── */
 

@@ -43,7 +43,7 @@ import type { ShellEnv } from './shellEnv.ts';
 import type { Sandbox } from './sandbox.ts';
 import type { Network } from './network.ts';
 import { BrowserBusyError, type Browser } from './browser.ts';
-import { BrowserNav, BrowserOpen, BrowserSetOwner, BrowserView } from '@atlas/shared';
+import { BrowserInspect, BrowserNav, BrowserOpen, BrowserSetOwner, BrowserView } from '@atlas/shared';
 import { DEFAULT_CONTEXT_WINDOW, MEMORY_BUDGET, MEMORY_BUDGET_GLOBAL, type About, type MemoryBudget, type Timeline } from '@atlas/shared';
 
 /** Who the UI acts as. One user (design §1). */
@@ -198,7 +198,24 @@ export function createApi(deps: {
   });
   /** A link Master clicked (or an address typed in the pane): Master gets the input. */
   app.post('/api/browser/tabs/:chatId/open', (req, res) => {
-    res.json(deps.browser.open(req.params.chatId, BrowserOpen.parse(req.body).url, 'master'));
+    const b = BrowserOpen.parse(req.body);
+    res.json(deps.browser.open(req.params.chatId, b.url, 'master', b.via));
+  });
+  // The pane's « + › Open a page » (#306): the tab with an empty address bar; an existing one is shown.
+  app.post('/api/browser/tabs/:chatId/create', (req, res) => {
+    res.json(deps.browser.create(req.params.chatId));
+  });
+  app.post('/api/browser/tabs/:chatId/focus', (req, res) => {
+    deps.browser.focus(req.params.chatId);
+    res.json(deps.browser.get(req.params.chatId));
+  });
+  // Comment mode on the page (#306): a picture of it as shown, and what is at a point or in an area.
+  app.get('/api/browser/tabs/:chatId/shot', async (req, res) => {
+    res.setHeader('Cache-Control', 'no-store');
+    res.json(await deps.browser.shot(req.params.chatId));
+  });
+  app.post('/api/browser/tabs/:chatId/inspect', async (req, res) => {
+    res.json(await deps.browser.inspect(req.params.chatId, BrowserInspect.parse(req.body)));
   });
   app.post('/api/browser/tabs/:chatId/nav', (req, res) => {
     res.json(deps.browser.nav(req.params.chatId, BrowserNav.parse(req.body).action));
