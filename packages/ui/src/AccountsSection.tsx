@@ -40,7 +40,7 @@ export function AccountsSection(props: { keyStore: string | null; onChanged(): v
   const next = accounts?.find((a) => a.enabled && a.keyPresent && !a.cooldownUntil)?.id;
 
   return (
-    <section>
+    <section className="set-sec first">
       <header className="section-head">
         <h2>Anthropic accounts</h2>
         <p>

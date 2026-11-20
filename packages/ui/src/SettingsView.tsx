@@ -12,8 +12,9 @@ import { UsageSection } from './Usage.tsx';
 import { ProfileSettings } from './Profile.tsx';
 import { SecretsPage } from './SecretsPage.tsx';
 import { VoiceSettings } from './VoiceSettings.tsx';
-import { findSettings, MODEL_SECTIONS, modelSectionOf, modelsHref, SETTINGS_GROUPS, SETTINGS_PAGES, type ModelSection, type SettingsPage } from './settingsPages.ts';
-import { HeaderActions, Icon } from './ScreenHeader.tsx';
+import { findSettings, SETTINGS_GROUPS, SETTINGS_PAGES, type SettingsPage } from './settingsPages.ts';
+import { Icon } from './ScreenHeader.tsx';
+import { SetRow, SetRows, SetSec } from './SettingsKit.tsx';
 import { ProjectsPage } from './ProjectsPage.tsx';
 import { useProjects } from './projects.tsx';
 import { THEMES, type ThemeChoice } from './theme.ts';
@@ -22,15 +23,15 @@ import { UpdateAbout } from './UpdateDialog.tsx';
 import { Skeleton } from './Kit.tsx';
 
 /**
- * Settings (design §12, redesign #272 « Agents » / « Memory »): one header (« Settings » and « Find a setting »), a
- * grouped navigation (Team, Models, App) and the page. On a narrow window #/settings is the list of pages and each page
- * has the shell's back button and its name as the title.
+ * Settings (design §12, redesign #272, remake #307): one header row naming the page, a grouped navigation (Team,
+ * Models, App) with « Find a setting » at its top, and the page, which never repeats its title. On a narrow window
+ * #/settings is the list of pages and each page has the shell's back button and its name as the title.
  */
 export function SettingsView(props: {
   /** null: #/settings alone, the list of pages (a wide window opens the last page instead). */
   page: SettingsPage | null;
   narrow: boolean;
-  /** What follows the page: a memory scope or m12, a project, an agent, a models section. */
+  /** What follows the page: a memory scope or m12, a project, an agent. */
   memoryRest: string;
   cards: Card[];
   chats: Card[];
@@ -102,15 +103,44 @@ export function SettingsView(props: {
 
   const projects = useProjects();
   const subscriptions = claudeAccounts === null || !props.chatgpt ? null : claudeAccounts + props.chatgpt.accounts.length;
+  // Counts appear only in the navigation (#307), never again on the page.
   const counts: Partial<Record<SettingsPage, number | null>> = {
     projects: projects.active.length,
     agents: props.agents.length,
     secrets: secretCount,
-    models: props.models.length,
+    'model-list': props.models.length,
+    subscriptions,
+    'api-keys': apiKeys,
   };
+
+  const findBox = (
+    <label className="mem-search settings-find">
+      <Icon.search />
+      <input
+        type="search"
+        value={find}
+        placeholder="Find a setting"
+        aria-label="Find a setting"
+        onChange={(e) => setFind(e.target.value)}
+        onKeyDown={(e) => {
+          if (e.key === 'Escape') {
+            setFind('');
+            e.currentTarget.blur();
+          } else if (e.key === 'Enter' && find.trim()) {
+            const first = groups[0]?.pages[0];
+            if (first) {
+              location.hash = '#/settings/' + first.id;
+              setFind('');
+            }
+          }
+        }}
+      />
+    </label>
+  );
 
   const nav = (cls: string) => (
     <nav className={cls} aria-label="Settings">
+      {cls === 'settings-nav' && findBox}
       {groups.map((g) => (
         <div key={g.title} className="settings-group" role="group" aria-label={g.title}>
           <div className="settings-group-title">{g.title}</div>
@@ -133,33 +163,6 @@ export function SettingsView(props: {
 
   return (
     <div className="settings">
-      {!props.narrow && (
-        <HeaderActions>
-          <span className="head-sp" />
-          <label className="mem-search settings-find">
-            <Icon.search />
-            <input
-              type="search"
-              value={find}
-              placeholder="Find a setting"
-              aria-label="Find a setting"
-              onChange={(e) => setFind(e.target.value)}
-              onKeyDown={(e) => {
-                if (e.key === 'Escape') {
-                  setFind('');
-                  e.currentTarget.blur();
-                } else if (e.key === 'Enter' && find.trim()) {
-                  const first = groups[0]?.pages[0];
-                  if (first) {
-                    location.hash = '#/settings/' + first.id;
-                    setFind('');
-                  }
-                }
-              }}
-            />
-          </label>
-        </HeaderActions>
-      )}
       {!props.narrow && nav('settings-nav')}
       {page === null ? (
         props.narrow && <div className="settings-main settings-list">{nav('settings-index')}</div>
@@ -176,17 +179,21 @@ export function SettingsView(props: {
               <BoardSettings settings={props.settings} agents={props.agents} onSettings={props.onSettings} onError={onError} />
             ) : page === 'secrets' ? (
               <SecretsPage agents={props.agents} cards={props.cards} models={props.models} status={props.secretStatus} userName={props.settings?.userName ?? null} stream={stream} onError={onError} />
-            ) : page === 'models' ? (
-              <ModelsPage
-                section={modelSectionOf(props.memoryRest)}
-                counts={{ subscriptions, 'api-keys': apiKeys, local: null, 'model-list': props.models.length }}
-                stream={stream}
-                keyStore={keyStore}
-                agents={props.agents}
-                chatgpt={props.chatgpt}
-                onChanged={modelsChanged}
-                onError={onError}
-              />
+            ) : page === 'subscriptions' ? (
+              <>
+                <p className="set-lead">Claude and ChatGPT subscriptions your agents can run on.</p>
+                <ClaudePlanSection stream={stream} keyStore={keyStore} onChanged={modelsChanged} onError={onError} />
+                <ChatGptSection status={props.chatgpt} onChanged={modelsChanged} onError={onError} />
+              </>
+            ) : page === 'api-keys' ? (
+              <>
+                <p className="set-lead">Pay-as-you-go API keys. Claude models use them from top to bottom.</p>
+                <AccountsSection keyStore={keyStore} onChanged={modelsChanged} onError={onError} />
+              </>
+            ) : page === 'local' ? (
+              <LocalModels stream={stream} agents={props.agents} onModelsChanged={modelsChanged} onError={onError} />
+            ) : page === 'model-list' ? (
+              <ModelListSection stream={stream} chatgpt={props.chatgpt} onChanged={modelsChanged} onError={onError} />
             ) : page === 'usage' ? (
               <UsageSection stream={stream} onError={onError} />
             ) : page === 'profile' ? (
@@ -197,12 +204,7 @@ export function SettingsView(props: {
               voice ? (
                 <VoiceSettings stream={stream} onError={onError} />
               ) : (
-                <section>
-                  <header className="section-head">
-                    <h2>Voice</h2>
-                    <p>Voice mode runs on the Mac with the Atlas desktop app: open Settings → Voice there.</p>
-                  </header>
-                </section>
+                <p className="set-lead">Voice mode runs on the Mac with the Atlas desktop app: open Settings → Voice there.</p>
               )
             ) : (
               <AboutData update={props.update} onOpenUpdate={props.onOpenUpdate} onError={onError} />
@@ -214,159 +216,109 @@ export function SettingsView(props: {
   );
 }
 
-/**
- * Models & accounts (#272): the four former model pages as four sections of one page, one link each at the top, so
- * API keys or the model list stay one click away (#/settings/models/<section>; the old hashes land here).
- */
-function ModelsPage(props: {
-  section: ModelSection;
-  counts: Record<ModelSection, number | null>;
-  stream: MessageStream;
-  keyStore: string | null;
-  agents: Agent[];
-  chatgpt: ChatGptStatus | null;
-  onChanged(): void;
-  onError(e: unknown): void;
-}) {
-  const { section: s, stream, onChanged, onError } = props;
-  return (
-    <>
-      <div className="set-head">
-        <h2>Models &amp; accounts</h2>
-      </div>
-      <p className="set-lead">Which models your agents can use, and the plans, keys and local server they run on.</p>
-      <nav className="view-tabs set-tabs" aria-label="Models & accounts">
-        {MODEL_SECTIONS.map((x) => (
-          <a key={x.id} href={modelsHref(x.id)} className={'tabbtn' + (s === x.id ? ' on' : '')} aria-current={s === x.id ? 'page' : undefined}>
-            {x.label}
-            {props.counts[x.id] != null && <span className="tab-n">{props.counts[x.id]}</span>}
-          </a>
-        ))}
-      </nav>
-      {s === 'subscriptions' ? (
-        <>
-          <ClaudePlanSection stream={stream} keyStore={props.keyStore} onChanged={onChanged} onError={onError} />
-          <ChatGptSection status={props.chatgpt} onChanged={onChanged} onError={onError} />
-        </>
-      ) : s === 'api-keys' ? (
-        <AccountsSection keyStore={props.keyStore} onChanged={onChanged} onError={onError} />
-      ) : s === 'local' ? (
-        <div className="models-view">
-          <LocalModels stream={stream} agents={props.agents} onModelsChanged={onChanged} onError={onError} />
-        </div>
-      ) : (
-        <ModelListSection stream={stream} chatgpt={props.chatgpt} onChanged={onChanged} onError={onError} />
-      )}
-    </>
-  );
-}
-
 function BoardSettings(props: { settings: Settings | null; agents: Agent[]; onSettings(s: Settings): void; onError(e: unknown): void }) {
   return (
-    <section className="set-page">
-      <header className="section-head">
-        <h2>Board &amp; triage</h2>
-        <p>Choose who turns ideas in Triage into actionable tasks, and who checks pull requests.</p>
-      </header>
-      {props.settings ? (
-        <label className="field settings-field">
-          Triage agent
-          <select
-            value={props.settings.triageAgent ?? ''}
-            onChange={(e) => {
-              api.updateSettings({ triageAgent: e.target.value || null }).then(props.onSettings, props.onError);
-            }}
-          >
-            <option value="">Nobody</option>
-            {props.agents.map((a) => (
-              <option key={a.id} value={a.id}>
-                @{a.id}
-              </option>
-            ))}
-          </select>
-        </label>
-      ) : (
-        <p className="hint">Waiting for engine settings…</p>
-      )}
-      <p className="hint">Nobody leaves triage tasks for you to organize manually.</p>
-      <p className="hint">Each project's review agent (it checks and merges the pull requests of tasks In review) is set in <a href="#/settings/projects">Projects</a>.</p>
-    </section>
+    <>
+      <p className="set-lead">
+        Choose who turns ideas in Triage into actionable tasks. Each project's review agent is set in <a href="#/settings/projects">Projects</a>.
+      </p>
+      <SetSec first>
+        <SetRows>
+          <SetRow label="Triage agent" help="Nobody: triage tasks wait for you to organize them.">
+            {props.settings ? (
+              <select
+                aria-label="Triage agent"
+                value={props.settings.triageAgent ?? ''}
+                onChange={(e) => {
+                  api.updateSettings({ triageAgent: e.target.value || null }).then(props.onSettings, props.onError);
+                }}
+              >
+                <option value="">Nobody</option>
+                {props.agents.map((a) => (
+                  <option key={a.id} value={a.id}>
+                    @{a.id}
+                  </option>
+                ))}
+              </select>
+            ) : (
+              <span className="hint">Waiting for engine settings…</span>
+            )}
+          </SetRow>
+        </SetRows>
+      </SetSec>
+    </>
   );
 }
 
 function Appearance(props: { theme: ThemeChoice; onTheme(t: ThemeChoice): void }) {
   return (
-    <section>
-      <header className="section-head">
-        <h2>Appearance</h2>
-        <p>Theme for this device, across Atlas. Auto follows your system.</p>
-      </header>
-      <label className="field settings-field">
-        Theme
-        <select value={props.theme} onChange={(e) => props.onTheme(e.target.value as ThemeChoice)}>
-          {THEMES.map((t) => (
-            <option key={t} value={t}>
-              {t === 'system' ? 'Auto' : t.charAt(0).toUpperCase() + t.slice(1)}
-            </option>
-          ))}
-        </select>
-      </label>
-    </section>
+    <SetSec first>
+      <SetRows>
+        <SetRow label="Theme" help="For this device, across Atlas. Auto follows your system." auto>
+          <span className="segmented" role="radiogroup" aria-label="Theme">
+            {THEMES.map((t) => (
+              <button key={t} type="button" role="radio" aria-checked={props.theme === t} className={props.theme === t ? 'on' : ''} onClick={() => props.onTheme(t)}>
+                {t === 'system' ? 'Auto' : t.charAt(0).toUpperCase() + t.slice(1)}
+              </button>
+            ))}
+          </span>
+        </SetRow>
+      </SetRows>
+    </SetSec>
   );
 }
 
 /** Where agent commands get their PATH (#136). A failure to read the login shell is shown, never hidden. */
-function ShellPath({ info }: { info: ShellPathInfo | null }) {
-  if (!info) return <>Reading your login shell's PATH…</>;
-  const what = info.error
-    ? `Could not read the PATH of your login shell${info.shell ? ` (${info.shell})` : ''}: ${info.error}. Commands use the engine's PATH:`
+function shellPathText(info: ShellPathInfo | null) {
+  if (!info) return "Reading your login shell's PATH…";
+  const n = info.path.split(':').filter(Boolean).length;
+  return info.error
+    ? `Could not read the PATH of your login shell${info.shell ? ` (${info.shell})` : ''}: ${info.error}. Commands use the engine's PATH (${n} folders).`
     : info.source === 'login'
-      ? `PATH of your login shell (${info.shell}). Commits are made under the agent's name.`
-      : "The engine's own PATH. Commits are made under the agent's name.";
-  return (
-    <>
-      <p className={info.error ? 'state-err inline' : 'about-note'}>{what}</p>
-      <details className="about-path">
-        <summary>{info.path.split(':').filter(Boolean).length} folders</summary>
-        <code>{info.path.split(':').filter(Boolean).join('\n')}</code>
-      </details>
-    </>
-  );
+      ? `PATH of your login shell (${info.shell}), ${n} folders. Commits are made under the agent's name.`
+      : `The engine's own PATH, ${n} folders. Commits are made under the agent's name.`;
 }
 
 function AboutData({ update, onOpenUpdate, onError }: { update: UpdateStatus | null; onOpenUpdate(): void; onError(e: unknown): void }) {
   const [about, setAbout] = useState<About | null>(null);
+  const [folders, setFolders] = useState(false);
   useEffect(() => {
     api.about().then(setAbout, onError);
   }, [onError]);
+  const sp = about?.shellPath ?? null;
   return (
-    <section>
-      <header className="section-head">
-        <h2>About &amp; data</h2>
-        <p>Everything Atlas keeps (database, agent workspaces, canvases) is in its data folder on the engine's machine.</p>
-      </header>
+    <>
+      <p className="set-lead">Everything Atlas keeps (database, agent workspaces, artifacts) is in its data folder on the engine's machine.</p>
       {about ? (
-        <dl className="about-list">
-          <dt>Version</dt>
-          <dd className="num">{about.version}</dd>
-          <dt>Updates</dt>
-          <dd>
-            <UpdateAbout status={update} onOpen={onOpenUpdate} onError={onError} />
-          </dd>
-          <dt>Runs as</dt>
-          <dd>{about.server ? 'Server (login required)' : 'Desktop app on this machine'}</dd>
-          <dt>Data folder</dt>
-          <dd>
-            <code>{about.dataDir}</code>
-          </dd>
-          <dt>Agent shells</dt>
-          <dd>
-            <ShellPath info={about.shellPath} />
-          </dd>
-        </dl>
+        <SetSec first>
+          <SetRows>
+            <SetRow label="Version">
+              <span className="set-val num">{about.version}</span>
+            </SetRow>
+            <SetRow label="Updates" stack>
+              <UpdateAbout status={update} onOpen={onOpenUpdate} onError={onError} />
+            </SetRow>
+            <SetRow label="Runs as">
+              <span className="set-val">{about.server ? 'Server (login required)' : 'Desktop app on this machine'}</span>
+            </SetRow>
+            <SetRow label="Data folder" help={<code>{about.dataDir}</code>} />
+            <SetRow label="Agent shells" help={<span className={sp?.error ? 'set-help-err' : undefined}>{shellPathText(sp)}</span>} auto>
+              {sp && (
+                <button type="button" className="btn ghost small" aria-expanded={folders} onClick={() => setFolders(!folders)}>
+                  {folders ? 'Hide folders' : 'Show folders'}
+                </button>
+              )}
+            </SetRow>
+            {folders && sp && (
+              <div className="set-row">
+                <code className="about-folders">{sp.path.split(':').filter(Boolean).join('\n')}</code>
+              </div>
+            )}
+          </SetRows>
+        </SetSec>
       ) : (
         <Skeleton />
       )}
-    </section>
+    </>
   );
 }

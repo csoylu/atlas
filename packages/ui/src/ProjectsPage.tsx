@@ -2,7 +2,8 @@ import { useEffect, useRef, useState, type FormEvent, type ReactNode } from 'rea
 import type { Agent, Card, Project, ProjectMember, RepoCheck, Workflow } from '@atlas/shared';
 import { api, ApiError } from './api.ts';
 import { AgentFace } from './AgentFace.tsx';
-import { Icon } from './ScreenHeader.tsx';
+import { HeaderActions, Icon } from './ScreenHeader.tsx';
+import { SetRow, SetRows, SetSec } from './SettingsKit.tsx';
 import { ProjDot, useProjectFilter, useProjects } from './projects.tsx';
 
 /**
@@ -23,22 +24,20 @@ export function ProjectsPage(props: { rest: string; agents: Agent[]; cards: Card
   const archived = all.filter((p) => p.status === 'archived');
   return (
     <section>
-      <header className="section-head">
-        <div className="set-head">
-          <h2>Projects</h2>
-          <span className="head-sp" />
-          {!creating && (
-            <button type="button" className="btn primary" onClick={() => setCreating(true)}>
-              <Icon.plus />
-              <span className="btn-text">New project</span>
-            </button>
-          )}
-        </div>
-        <p>
-          A project is a repo your agents work on, with its own tasks, chats, artifacts, memory, secrets and workflows. Each member works in its own clone of
-          the repo; the lead gets the project's new tasks.
-        </p>
-      </header>
+      {/* The header names the page (#307): « New project » sits in its row. */}
+      <HeaderActions>
+        <span className="head-sp" />
+        {!creating && (
+          <button type="button" className="btn primary small" onClick={() => setCreating(true)}>
+            <Icon.plus />
+            <span className="btn-text">New project</span>
+          </button>
+        )}
+      </HeaderActions>
+      <p className="set-lead">
+        A project is a repo your agents work on, with its own tasks, chats, artifacts, memory, secrets and workflows. Each member works in its own clone of the
+        repo; the lead gets the project's new tasks.
+      </p>
       {all.length === 1 && (
         <div className="pj-note">
           Atlas made this project at the update from what you already had: your {props.agents.length} agents, their chats and workspaces, the board, the
@@ -60,12 +59,13 @@ export function ProjectsPage(props: { rest: string; agents: Agent[]; cards: Card
       </div>
       {archived.length > 0 && (
         <>
-          <h3 className="pj-sub">Archived</h3>
-          <div className="model-list">
-            {archived.map((p) => (
-              <ProjectRow key={p.id} project={p} {...props} />
-            ))}
-          </div>
+          <SetSec title="Archived">
+            <div className="model-list">
+              {archived.map((p) => (
+                <ProjectRow key={p.id} project={p} {...props} />
+              ))}
+            </div>
+          </SetSec>
         </>
       )}
     </section>
@@ -500,17 +500,11 @@ function ProjectDetail({ project: p, agents, cards, workflows, focusRepo, onErro
   const nonMembers = agents.filter((a) => !p.members.some((m) => m.agentId === a.id));
   return (
     <section>
-      <header className="section-head">
-        <h2>
-          <ProjDot hue={p.colour} className="pj-h2dot" />
-          {p.name}
-        </h2>
-        <p>
-          {archived ? `Archived${p.archivedAt ? ' on ' + new Date(p.archivedAt).toLocaleDateString() : ''} · ` : `Created ${new Date(p.createdAt).toLocaleDateString()} · `}
-          {plural(open.length, 'open task')}
-          {running.length > 0 && ` · ${running.length} running`}
-        </p>
-      </header>
+      <p className="set-lead">
+        {archived ? `Archived${p.archivedAt ? ' on ' + new Date(p.archivedAt).toLocaleDateString() : ''} · ` : `Created ${new Date(p.createdAt).toLocaleDateString()} · `}
+        {plural(open.length, 'open task')}
+        {running.length > 0 && ` · ${running.length} running`}
+      </p>
       {archived && (
         <div className="pj-note">
           <b>{p.name} is archived.</b> Its tasks, chats and artifacts are read-only; « Archived » in the project filter shows them.{' '}
@@ -519,26 +513,39 @@ function ProjectDetail({ project: p, agents, cards, workflows, focusRepo, onErro
           </button>
         </div>
       )}
+      <SetSec first>
       <form
-        className="model-row new pj-form"
+        className="pj-form pj-edit"
+        aria-label={`${p.name} settings`}
         onSubmit={(e) => {
           e.preventDefault();
           if (!dirty || !repoOk || !name.trim()) return;
           void save({ ...(name.trim() !== p.name ? { name: name.trim() } : {}), ...(repoChanged ? { repo: repo.trim() || null } : {}) });
         }}
       >
-        <div className="field-row">
-          <label className="field">
-            Name
-            <input value={name} onChange={(e) => setName(e.target.value)} autoComplete="off" maxLength={60} disabled={archived} />
-          </label>
-          <label className="field">
-            GitHub repo
-            <input ref={repoInput} className="mono" value={repo} onChange={(e) => setRepo(e.target.value)} autoComplete="off" spellCheck={false} placeholder="owner/name" disabled={repoFixed || archived} />
-          </label>
-          <label className="field">
-            Lead
-            <select value={p.lead ?? ''} disabled={archived || saving} onChange={(e) => void save({ lead: e.target.value || null })}>
+        <SetRows>
+          <SetRow label="Name">
+            <input aria-label="Name" value={name} onChange={(e) => setName(e.target.value)} autoComplete="off" maxLength={60} disabled={archived} />
+          </SetRow>
+          <SetRow
+            label="GitHub repo"
+            help={
+              repoChanged ? undefined : repoFixed
+                ? "Can't change once cloned: another repo is another project."
+                : p.repo
+                  ? 'No member has a clone yet: you can still fix the repo name. The failed clones try the new name.'
+                  : 'No repo yet: you can set one, once. Members then get a clone of it.'
+            }
+          >
+            <input aria-label="GitHub repo" ref={repoInput} className="mono" value={repo} onChange={(e) => setRepo(e.target.value)} autoComplete="off" spellCheck={false} placeholder="owner/name" disabled={repoFixed || archived} />
+          </SetRow>
+          {repoChanged && (
+            <div className="set-row">
+              <RepoCheckLine repo={repo} check={check} />
+            </div>
+          )}
+          <SetRow label="Lead" help="Gets the project's new tasks.">
+            <select aria-label="Lead" value={p.lead ?? ''} disabled={archived || saving} onChange={(e) => void save({ lead: e.target.value || null })}>
               {!p.lead && <option value="">Nobody (new tasks wait)</option>}
               {agents.map((a) => (
                 <option key={a.id} value={a.id}>
@@ -546,11 +553,10 @@ function ProjectDetail({ project: p, agents, cards, workflows, focusRepo, onErro
                 </option>
               ))}
             </select>
-          </label>
+          </SetRow>
           {p.repo && (
-            <label className="field">
-              Review agent
-              <select value={p.reviewAgent ?? ''} disabled={archived || saving} onChange={(e) => void save({ reviewAgent: e.target.value || null })}>
+            <SetRow label="Review agent" help="Checks and merges the pull requests of tasks In review.">
+              <select aria-label="Review agent" value={p.reviewAgent ?? ''} disabled={archived || saving} onChange={(e) => void save({ reviewAgent: e.target.value || null })}>
                 {!p.reviewAgent && <option value="">Nobody (nothing is reviewed)</option>}
                 {p.members.map((m) => (
                   <option key={m.agentId} value={m.agentId}>
@@ -561,20 +567,9 @@ function ProjectDetail({ project: p, agents, cards, workflows, focusRepo, onErro
                   </option>
                 ))}
               </select>
-            </label>
+            </SetRow>
           )}
-        </div>
-        {repoChanged ? (
-          <RepoCheckLine repo={repo} check={check} />
-        ) : (
-          <p className="muted form-note">
-            {repoFixed
-              ? "The repo can't change once cloned: another repo is another project."
-              : p.repo
-                ? 'No member has a clone yet: you can still fix the repo name. The failed clones try the new name.'
-                : 'No repo yet: you can set one, once. Members then get a clone of it.'}
-          </p>
-        )}
+        </SetRows>
         {formError && (
           <p className="state-err pj-err" role="alert">
             <span>
@@ -593,8 +588,9 @@ function ProjectDetail({ project: p, agents, cards, workflows, focusRepo, onErro
           </div>
         )}
       </form>
+      </SetSec>
 
-      <h3 className="pj-sub">Members</h3>
+      <SetSec title="Members">
       <div className="model-list">
         {p.members.map((m) => {
           const isLead = m.agentId === p.lead;
@@ -707,10 +703,11 @@ function ProjectDetail({ project: p, agents, cards, workflows, focusRepo, onErro
             </button>
           ))}
       </div>
+      </SetSec>
 
       {p.kept.length > 0 && (
         <>
-          <h3 className="pj-sub">Workspaces of removed members</h3>
+          <SetSec title="Workspaces of removed members">
           <div className="model-list">
             {p.kept.map((k) => (
               <div key={k.agentId} className={'model-row pj-row pj-mem' + (deletingKept === k.agentId ? ' pj-wrap' : '')}>
@@ -750,10 +747,11 @@ function ProjectDetail({ project: p, agents, cards, workflows, focusRepo, onErro
               </div>
             ))}
           </div>
+          </SetSec>
         </>
       )}
 
-      <h3 className="pj-sub">What {p.name}'s agents read</h3>
+      <SetSec title={`What ${p.name}'s agents read`}>
       <div className="pj-links">
         {p.repo ? (
           <a className="pj-link" href={`https://github.com/${p.repo}/blob/${instr?.defaultBranch ?? 'HEAD'}/${instr?.instructions[0] ?? 'CLAUDE.md'}`} target="_blank" rel="noreferrer">
@@ -781,10 +779,11 @@ function ProjectDetail({ project: p, agents, cards, workflows, focusRepo, onErro
           <span>{p.name}'s scheduled and triggered work. Opens Workflows on {p.name}.</span>
         </button>
       </div>
+      </SetSec>
 
       {!archived && (
         <>
-          <h3 className="pj-sub">Archive</h3>
+          <SetSec title="Archive">
           <div className="model-list">
             <div className={'model-row pj-row' + (confirmArchive ? ' pj-wrap' : '')}>
               <div className="model-main">
@@ -805,6 +804,7 @@ function ProjectDetail({ project: p, agents, cards, workflows, focusRepo, onErro
               )}
             </div>
           </div>
+          </SetSec>
         </>
       )}
     </section>

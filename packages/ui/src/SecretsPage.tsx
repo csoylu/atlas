@@ -61,17 +61,16 @@ export function SecretsPage(props: { agents: Agent[]; cards: Card[]; models: Mod
 
   return (
     <>
-      <section>
-        <header className="section-head">
-          <div className="set-head">
-            <h2>Agent secrets</h2>
-            {pinfo.multi && <ProjectFilterButton value={pf} onChange={setPf} globalOnly count={(f) => allMine.filter((s) => inFilter(f, s.project, pinfo, true)).length} />}
+      <section className="set-sec first">
+        {pinfo.multi && (
+          <div className="set-tools">
+            <ProjectFilterButton value={pf} onChange={setPf} globalOnly count={(f) => allMine.filter((s) => inFilter(f, s.project, pinfo, true)).length} />
           </div>
-          <p>
-            API keys, tokens and RPC URLs your agents use in shell commands as <code>$NAME</code>. An agent sees only the names it's granted, never a value. Values can be
-            replaced or deleted, never shown again.
-          </p>
-        </header>
+        )}
+        <p className="set-lead">
+          API keys, tokens and RPC URLs your agents use in shell commands as <code>$NAME</code>. An agent sees only the names it's granted, never a value. Values can be
+          replaced or deleted, never shown again.
+        </p>
         <StoreLine store={list.store} status={status} onError={onError} />
         {locked && <LockedPanel status={status} keys={keys.filter((k) => k.hasValue).map((k) => modelKeyRow(k, accounts, props.models).title)} onError={onError} />}
         <div className="model-list">
@@ -164,7 +163,7 @@ export function SecretsPage(props: { agents: Agent[]; cards: Card[]; models: Mod
           )}
         </div>
       </section>
-      <section>
+      <section className="set-sec">
         <header className="section-head">
           <h2>Model keys</h2>
           <p>

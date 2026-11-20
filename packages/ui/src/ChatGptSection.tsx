@@ -49,7 +49,7 @@ export function ChatGptSection(props: { status: ChatGptStatus | null; onChanged(
   );
 
   return (
-    <section>
+    <section className="set-sec">
       <header className="section-head">
         <h2>ChatGPT plan</h2>
         <p>

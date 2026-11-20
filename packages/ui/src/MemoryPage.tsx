@@ -130,8 +130,7 @@ export function MemoryPage(props: {
 
   return (
     <section className="set-page memory-page">
-      <div className="set-head">
-        <h2>Memory</h2>
+      <div className="set-head set-tools">
         <ProjectFilterButton value={pf} onChange={setPf} globalOnly count={(f) => (list ?? []).filter((m) => m.status !== 'archived' && inFilter(f, m.projectId, pinfo, true)).length} />
         <Menu
           open={menu}

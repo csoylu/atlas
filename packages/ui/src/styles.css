@@ -2880,15 +2880,12 @@ button.wfl-ghead:hover { color: var(--text); background: var(--hover); }
 .set-link > .icon:last-child { color: var(--muted); }
 .set-link:hover { background: var(--hover); }
 .set-danger { display: flex; align-items: center; justify-content: flex-end; gap: 8px; flex-wrap: wrap; }
-.set-tabs { margin-left: 0; flex-wrap: wrap; }
-.set-tabs .tabbtn { text-decoration: none; }
 .set-fold { border: 1px solid var(--line); border-radius: var(--radius-card); padding: 0 14px; }
 .set-fold > summary { cursor: pointer; padding: 10px 0; color: var(--muted); font-size: var(--fs-small); }
 .set-fold[open] > summary { color: var(--text); }
 .set-fold > .field, .set-fold > .hint { margin: 0 0 12px; }
 .set-list { border: 1px solid var(--line); border-radius: var(--radius-card); overflow: hidden; }
 .setb .state-empty.set-list { padding: 24px 16px; }
-.settings-find { width: 220px; }
 .settings-none { margin: 8px 10px; color: var(--muted); font-size: var(--fs-small); line-height: var(--lh-normal); }
 /* Phone: #/settings is the list of pages, each row a link with its chevron. */
 .settings-list .settings-index { padding: 8px 12px 24px; display: flex; flex-direction: column; gap: 2px; }
@@ -2947,9 +2944,6 @@ button.wfl-ghead:hover { color: var(--text); background: var(--hover); }
 .setb > .memory-page { flex: none; min-height: auto; }
 .settings-view .agr .agr-open, .settings-view .set-link { color: var(--text); }
 .settings-view .set-link .set-link-go { color: var(--accent); }
-.settings-view .set-tabs a.tabbtn { color: var(--muted); }
-.settings-view .set-tabs a.tabbtn.on, .settings-view .set-tabs a.tabbtn:hover { color: var(--text); }
-.set-tabs { margin-bottom: 8px; padding-bottom: 12px; border-bottom: 1px solid var(--line); }
 .setb .section-head h2 { font-size: var(--fs-large); line-height: var(--lh-tight); }
 
 /* ── Secret box (#297): « needs secret X » answered in place: the chat row, the task's Now box, the Inbox ── */
@@ -2990,4 +2984,81 @@ button.wfl-ghead:hover { color: var(--text); background: var(--hover); }
   .secbox-field input { height: 36px; font-size: 16px; /* type-exception: inputs at 16 px on phone (iOS zooms below) */ }
   .secbox-row .btn { height: 36px; }
   .chat-secbox { margin-left: 0; }
+}
+/* ── Settings remake (#307, mockup #299): three text styles that never look alike ──
+   nav item 14/440 with a hover · section title 16/670 with a rule above · field label 14/530 + a 13 px help line,
+   in a row with its control on the right and no hover. The header names the page: no second page title. */
+.settings-nav { width: 220px; padding: 12px 10px 16px; gap: 1px; }
+.settings-nav .settings-find { width: 100%; margin: 0 0 4px; height: 30px; flex: none; }
+.settings-group-title { font-weight: var(--fw-medium); line-height: var(--lh-tight); padding: 18px 10px 6px; cursor: default; user-select: none; }
+.settings-nav .settings-group:first-of-type .settings-group-title { padding-top: 10px; }
+.settings-nav a.nav-item { color: var(--text); height: 30px; font-weight: var(--fw-regular); }
+.settings-nav a.nav-item.active { font-weight: var(--fw-medium); }
+.settings-index .nav-item { color: var(--text); }
+
+.setb { gap: 0; max-width: 900px; padding: 22px 32px 64px; }
+.setb > section, .setb > .set-page, .setb > .models-view { gap: 12px; }
+.setb > section + .set-sec:not(.first), .setb > .set-sec + section { margin-top: 28px; }
+.setb > .set-lead, .setb > section > .set-lead { margin: 0 0 4px; }
+.set-tools { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; margin: 0 0 4px; }
+.set-tools + .set-lead { margin-top: 8px; }
+.setb > .set-lead + section:not(.set-sec), .setb > .set-lead + .set-page { margin-top: 12px; }
+
+.set-sec { display: flex; flex-direction: column; gap: 12px; margin-top: 28px; padding-top: 24px; border-top: 1px solid var(--rule); }
+.set-sec.first { margin-top: 16px; padding-top: 0; border-top: 0; }
+.setb > .set-sec.first:first-child { margin-top: 0; }
+.set-sec-title { margin: 0; font-size: var(--fs-large); font-weight: var(--fw-bold); line-height: var(--lh-tight); color: var(--text); display: flex; align-items: center; gap: 8px; }
+.set-sec-title.set-sec-rule { margin-top: 16px; padding-top: 24px; border-top: 1px solid var(--rule); }
+.set-sec-help { margin: -6px 0 0; color: var(--muted); font-size: var(--fs-base); line-height: var(--lh-normal); max-width: 720px; }
+.set-sec .section-head { margin: 0; }
+.set-sec .section-head h2 { font-size: var(--fs-large); font-weight: var(--fw-bold); line-height: var(--lh-tight); }
+.set-sec .section-head p { margin: 6px 0 0; color: var(--muted); }
+
+.set-rows { border: 1px solid var(--line); border-radius: var(--radius-card); background: var(--sheet); display: flex; flex-direction: column; }
+.set-row { display: flex; align-items: center; gap: 24px; padding: 14px 16px; min-height: 56px; }
+.set-row + .set-row { border-top: 1px solid var(--line); }
+.set-row-text { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 3px; }
+.set-label { font-size: var(--fs-base); font-weight: var(--fw-medium); line-height: var(--lh-tight); color: var(--text); display: flex; align-items: baseline; gap: 8px; }
+.set-label .count { margin-left: auto; font-weight: var(--fw-regular); font-size: var(--fs-small); color: var(--faint); font-variant-numeric: tabular-nums; }
+.set-help { font-size: var(--fs-small); font-weight: var(--fw-regular); line-height: var(--lh-normal); color: var(--muted); }
+.set-help .set-help-err { color: var(--neg-ink); }
+.set-help code, .set-row code { font-size: var(--fs-small); background: var(--code); padding: 1px 6px; border-radius: 4px; overflow-wrap: anywhere; }
+.set-ctl { flex: 0 0 280px; min-width: 0; display: flex; justify-content: flex-end; align-items: center; gap: 8px; }
+.set-ctl > select, .set-ctl > input:not([type=checkbox]) { width: 100%; }
+.set-ctl > input.set-num { width: 88px; }
+.set-ctl.auto { flex: 0 1 auto; }
+.set-row.stack { flex-direction: column; align-items: stretch; gap: 10px; }
+.set-row.stack .set-ctl { flex: none; justify-content: stretch; }
+.set-row.stack .set-ctl > * { flex: 1; }
+.set-row .set-val { font-size: var(--fs-base); color: var(--text); text-align: right; overflow-wrap: anywhere; }
+.set-ctl textarea { width: 100%; resize: vertical; }
+.set-row.danger .set-label { color: var(--neg-ink); }
+.set-row > .repo-check, .set-row > p { margin: 0; }
+.set-ctl input:not([type=checkbox]), .set-ctl textarea {
+  background: var(--sheet); border: 1px solid var(--control); border-radius: var(--radius-control);
+  padding: 6px 9px; color: var(--text); font-size: var(--fs-base); font-family: inherit; outline: none;
+}
+.set-ctl input.mono { font-family: var(--mono); }
+.set-ctl input:focus, .set-ctl textarea:focus { border-color: var(--accent); box-shadow: 0 0 0 3px var(--accent-soft); }
+.set-ctl input:disabled { opacity: 0.7; }
+.about-folders { display: block; width: 100%; white-space: pre-wrap; padding: 6px 8px; }
+.setb .profile-form { max-width: none; }
+.setb .profile-actions { margin-top: 0; }
+.pj-edit { display: flex; flex-direction: column; gap: 12px; }
+.pj-edit .actions { display: flex; gap: 6px; justify-content: flex-end; }
+.agent-page .set-sec > .actions { display: flex; gap: 6px; justify-content: flex-end; }
+.agent-page.off .set-rows { border-style: dashed; }
+.voice-settings .set-sec-title { margin-bottom: -4px; }
+/* Stacked fields kept as they are (forms that add something): the label in the same style. */
+.setb .field { color: var(--text); font-size: var(--fs-base); }
+.setb .field > .help { color: var(--muted); }
+
+@media (width <= 640px) {
+  .setb { padding: 16px 16px 48px; }
+  .set-row { flex-direction: column; align-items: stretch; gap: 10px; padding: 12px 14px; }
+  .set-ctl, .set-ctl.auto { flex: none; justify-content: flex-start; }
+  .set-row .set-val { text-align: left; }
+  .set-ctl .segmented { width: 100%; }
+  .set-ctl .segmented button { flex: 1; height: 32px; white-space: nowrap; padding: 0 6px; }
+  .set-ctl input:not([type=checkbox]), .set-ctl textarea, .set-ctl select { font-size: var(--fs-large); } /* iOS zooms in below 16 px */
 }
