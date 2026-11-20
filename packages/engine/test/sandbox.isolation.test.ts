@@ -1,5 +1,5 @@
 import { describe, expect, it, onTestFinished } from 'vitest';
-import { execFileSync } from 'node:child_process';
+import { execFileSync, spawn } from 'node:child_process';
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, symlinkSync, writeFileSync } from 'node:fs';
 import { homedir } from 'node:os';
 import { join } from 'node:path';
@@ -194,6 +194,93 @@ describe.skipIf(!mac && !linux)(`sandbox with the real ${mac ? 'sandbox-exec' : 
     await eventually(() => expect(count()).toBeGreaterThanOrEqual(3), { timeout: 20_000, what: 'three sleeps running' }); // + the shell's (and bwrap's) own command line
     process.kill(-child.pid!, 'SIGTERM');
     await eventually(() => expect(count()).toBe(0), { timeout: 20_000, what: 'every sleep gone after the kill' });
+  }, 60_000);
+
+  /**
+   * #322: another command's env (granted secrets, the proxy token) and argv. A reads B's node and an unsandboxed node
+   * through the raw sysctl kern.procargs2 (what `ps` would show), lists them with pgrep and signals them: all refused.
+   * Its own child stays readable and killable.
+   */
+  it.skipIf(!mac)('A cannot read the env or argv of B or of the host through kern.procargs2, nor list them (pgrep) or signal them; its own child it can (#322)', async () => {
+    const dataDir = dataDirUnderHome();
+    const wsA = join(dataDir, 'workspaces', 'a');
+    const wsB = join(dataDir, 'workspaces', 'b');
+    mkdirSync(wsA, { recursive: true });
+    mkdirSync(wsB, { recursive: true });
+    const sandbox = new Sandbox({ enabled: true, dataDir, enginePort: () => null });
+    expect(await sandbox.probe()).toMatchObject({ ok: true });
+    const tag = `m322x${process.pid}x${Date.now() % 100000}`;
+    const SECRET = 'ghp_FAKE_322_secret_value';
+    const scope = (agentId: string, workspace: string) => ({ sandbox, projectId: 'p', projectName: 'P', agentId, workspace });
+    const wait = `node -e "setTimeout(() => {}, 60000)" ${tag}`;
+    const b = spawnAgentCommand({ cwd: wsB, env: { PATH: process.env.PATH, GH_TOKEN: SECRET }, sandbox: scope('b', wsB) }, `${wait}-b`);
+    const host = spawn(process.execPath, ['-e', 'setTimeout(() => {}, 60000)', `${tag}-host`], { env: { PATH: process.env.PATH, GH_TOKEN: SECRET }, stdio: 'ignore' });
+    onTestFinished(() => {
+      for (const [pid, group] of [[b.pid, true], [host.pid, false]] as const) {
+        try {
+          process.kill(group ? -pid! : pid!, 'SIGKILL');
+        } catch {
+          /* already gone */
+        }
+      }
+    });
+    const pidOf = (pattern: string) => {
+      try {
+        return execFileSync('pgrep', ['-f', pattern], { encoding: 'utf8' }).trim().split('\n').map(Number);
+      } catch {
+        return [];
+      }
+    };
+    // B's node itself (not its bash or sandbox-exec, whose command lines also hold the tag): the line starts with node.
+    const nodeOf = (suffix: string) => pidOf(`^[^ ]*node -e setTimeout.* ${tag}-${suffix}$`);
+    await eventually(() => expect(nodeOf('b')).toHaveLength(1), { timeout: 20_000, what: "B's node running" });
+    await eventually(() => expect(nodeOf('host')).toHaveLength(1), { timeout: 20_000, what: 'the host node running' });
+    const [bPid] = nodeOf('b');
+    const [hostPid] = nodeOf('host');
+    // The reader: raw sysctl {CTL_KERN, KERN_PROCARGS2, pid}; prints "read" + whether the secret is there, or the errno.
+    writeFileSync(
+      join(wsA, 'procargs.py'),
+      [
+        'import ctypes, sys',
+        'libc = ctypes.CDLL(None, use_errno=True)',
+        'pid = int(sys.argv[1])',
+        'mib = (ctypes.c_int * 3)(1, 49, pid)',
+        'size = ctypes.c_size_t(1 << 20)',
+        'buf = ctypes.create_string_buffer(1 << 20)',
+        'if libc.sysctl(mib, 3, buf, ctypes.byref(size), None, 0) == 0:',
+        `    print("read", ${JSON.stringify(SECRET)}.encode() in buf.raw[: size.value], ${JSON.stringify(tag)}.encode() in buf.raw[: size.value])`,
+        'else:',
+        '    print("errno", ctypes.get_errno())',
+      ].join('\n') + '\n',
+    );
+    const steps = [
+      `echo "== b"; python3 procargs.py ${bPid}`,
+      `echo "== host"; python3 procargs.py ${hostPid}`,
+      `echo "== pgrep"; pgrep -lf ${tag} 2>&1; echo "exit=$?"`,
+      `echo "== kill-b"; kill -0 ${bPid} 2>&1; echo "exit=$?"`,
+      `echo "== kill-host"; kill -0 ${hostPid} 2>&1; echo "exit=$?"`,
+      `echo "== own"; ${wait}-own & sleep 1; python3 procargs.py $!; kill $! && echo killed`,
+      `echo "== nohup"; nohup sh -c 'echo nohup-ok' > nohup.txt 2>&1 & wait $!; echo "exit=$?"; cat nohup.txt`,
+      'echo "== end"',
+    ].join('\n');
+    const a = spawnAgentCommand({ cwd: wsA, env: { PATH: process.env.PATH, GH_TOKEN: 'ghp_FAKE_322_own_value' }, sandbox: scope('a', wsA) }, steps);
+    let out = '';
+    a.stdout!.on('data', (d: Buffer) => (out += d));
+    a.stderr!.on('data', (d: Buffer) => (out += d));
+    await new Promise((r) => a.on('close', r));
+    if (process.env.SBX_DEBUG) console.log(out);
+    const section = (name: string) => out.split(`== ${name}\n`)[1]!.split('\n== ')[0]!;
+    expect(out).not.toContain(SECRET);
+    expect(section('b')).toBe('errno 1');
+    expect(section('host')).toBe('errno 1');
+    expect(section('pgrep')).not.toContain(String(bPid));
+    expect(section('pgrep')).toContain('exit=3'); // « Cannot get process list »: sysmond is denied
+    expect(section('kill-b')).toMatch(/Operation not permitted[\s\S]*exit=1/);
+    expect(section('kill-host')).toMatch(/Operation not permitted[\s\S]*exit=1/);
+    expect(section('own')).toMatch(/^read False True\n[\s\S]*killed/); // its own child: readable (its own env, not B's secret), killable
+    expect(section('nohup')).toMatch(/exit=0\nnohup-ok$/); // the sandbox's nohup (macOS's asks launchd, refused)
+    expect(nodeOf('b')).toEqual([bPid]); // B and the host are still running
+    expect(nodeOf('host')).toEqual([hostPid]);
   }, 60_000);
 
   /**

@@ -172,7 +172,9 @@ export async function startEngine(opts: EngineOptions): Promise<Engine> {
   const bus = new Bus();
   const kanban = new Kanban(db, bus);
   const agents = new Agents(db);
-  const env = envWithSecrets(opts.env ?? process.env, opts.secrets);
+  // The environment the engine started with, kept apart: process.env is scrubbed below (#322).
+  const startEnv = { ...(opts.env ?? process.env) };
+  const env = envWithSecrets(startEnv, opts.secrets);
   const models = new Models(db, opts.providers ?? realProviders, env);
   const local = new Local(db, bus, { dataDir: opts.dataDir, url: opts.local?.url ?? env.ATLAS_OLLAMA_URL, binary: opts.local?.binary, fetch: opts.local?.fetch });
   models.setLocal(local);
@@ -209,7 +211,10 @@ export async function startEngine(opts: EngineOptions): Promise<Engine> {
   });
   const cleanup = new MemoryCleanup(db, bus, memories);
   const settings = new Settings(db);
-  const secrets = new Secrets(db, bus, opts.secrets, env, opts.env ?? process.env, kanban);
+  const secrets = new Secrets(db, bus, opts.secrets, env, startEnv, kanban);
+  // Every process the engine starts inherits process.env, readable by other processes of the user while it runs
+  // (#322): no model key, plan token or engine password in it. The engine reads them from `env` and `startEnv`.
+  if (!opts.env) secrets.scrubEngineEnv(process.env);
   secrets.sync();
   models.setLockedNames(() => secrets.lockedNames());
   secrets.resume(); // a value added just before a crash: its waiting task goes back to work (#207)

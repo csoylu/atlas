@@ -85,6 +85,18 @@ describe('sandbox (#298 S1, S2)', () => {
     expect(seatbeltProfile({ home: '/h', dataDir: '/d', workspace: '/w"x', private: '/p', enginePort: null, path: '' })).toContain('(subpath "/w\\"x")');
   });
 
+  it('other processes (#322): no procargs sysctl, process info and signals only inside the same sandbox, no sysmond (pgrep)', () => {
+    const p = seatbeltProfile({ home: '/h', dataDir: '/d', workspace: '/w', private: '/p', enginePort: null, path: '' });
+    const at = (rule: string) => {
+      expect(p).toContain(rule);
+      return p.indexOf(rule);
+    };
+    at('(deny sysctl-read (sysctl-name-prefix "kern.procargs"))');
+    expect(at('(allow process-info* (target same-sandbox))')).toBeGreaterThan(at('(deny process-info*)'));
+    at('(deny mach-lookup (global-name "com.apple.sysmond"))');
+    expect(at('(allow signal (target same-sandbox))')).toBeGreaterThan(at('(deny signal)'));
+  });
+
   it('internet levels in the profile (#298 §2.1): On adds nothing; Allowed hosts and Off deny every remote but localhost and DNS; Off also the proxy; the engine port last', () => {
     const base = { home: '/h', dataDir: '/d', workspace: '/d/w', private: '/d/p', enginePort: 4317, path: '' };
     const on = seatbeltProfile({ ...base, network: { level: 'on', proxyPort: 5000 } });
@@ -223,7 +235,7 @@ describe('sandbox (#298 S1, S2)', () => {
       env: {},
       shellPath: 'engine',
       sandbox: { enabled: true, platform: 'darwin', sandboxExec: fake.bin },
-      script: [tool('u1', 'shell', { command: 'echo "home=$HOME tmp=$TMPDIR ssh=${SSH_AUTH_SOCK:-none} askpass=${GIT_ASKPASS:-none} git=$GIT_CONFIG_COUNT prompt=$GIT_TERMINAL_PROMPT shell=$BASH_VERSION"' }), text('done')],
+      script: [tool('u1', 'shell', { command: 'echo "home=$HOME tmp=$TMPDIR ssh=${SSH_AUTH_SOCK:-none} askpass=${GIT_ASKPASS:-none} git=$GIT_CONFIG_COUNT prompt=$GIT_TERMINAL_PROMPT shell=$BASH_VERSION nohup=$(command -v nohup)"' }), text('done')],
     });
     expect((await l.call<SandboxStatus>('GET', '/sandbox')).body).toEqual({ enabled: true, kind: 'seatbelt', ok: true, reason: null });
     const card = l.engine.kanban.create({ title: 'on', assignee: 'atlas' }, 'user');
@@ -236,6 +248,7 @@ describe('sandbox (#298 S1, S2)', () => {
     expect(out).toContain('prompt=0');
     expect(out).toMatch(/shell=\d/); // bash
     expect(existsSync(join(priv, 'tmp'))).toBe(true);
+    expect(out).toContain(`nohup=${join(priv, 'bin', 'nohup')}`); // #322: macOS's nohup needs launchd, which the profile refuses
     const profile = readFileSync(fake.profile, 'utf8');
     expect(profile).toContain(`(deny network-outbound (remote ip "*:${new URL(l.engine.url).port}"))`); // the engine port
   });
