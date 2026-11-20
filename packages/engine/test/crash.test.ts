@@ -108,7 +108,7 @@ describe('durability (design §6)', () => {
       } else {
         // Still queued (killed before it started each time), or cut off: never retried by itself.
         expect(ran).toBeLessThanOrEqual(1);
-        if (cmdStep.couldntRun) expect(cmdStep.couldntRun).toMatchObject({ autoRetry: false });
+        if (cmdStep.couldntRun) expect(cmdStep.couldntRun, `the step couldn't run: ${cmdStep.couldntRun.reason}`).toMatchObject({ autoRetry: false });
       }
       // The Review run (#263): one run, killed anywhere on its way, sends the task back to its builder exactly once.
       engine.workflows.start(3_600_000);

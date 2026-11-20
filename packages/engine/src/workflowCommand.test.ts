@@ -55,7 +55,7 @@ function remote(): string {
   return join(dir, 'origin.git');
 }
 
-async function setup(o: { dbFile?: string; dataDir?: string; minuteMs?: number; script?: LaunchOptions['script']; store?: MemoryStore; origin?: string } = {}) {
+async function setup(o: { dbFile?: string; dataDir?: string; minuteMs?: number; script?: LaunchOptions['script']; store?: MemoryStore; origin?: string; afterClone?: (dir: string) => void } = {}) {
   const store = o.store ?? new MemoryStore();
   const origin = o.origin ?? remote();
   const clones: string[] = [];
@@ -69,6 +69,7 @@ async function setup(o: { dbFile?: string; dataDir?: string; minuteMs?: number; 
       clone: async (repo, dir) => {
         clones.push(repo);
         execFileSync('git', ['clone', '-q', origin, dir]);
+        o.afterClone?.(dir);
       },
       minuteMs: o.minuteMs,
     },
@@ -300,6 +301,34 @@ describe('Run a command (#273, design §10b)', { timeout: 30_000 }, () => {
     await eventually(() => readFileSync(join(dir, 'runs'), 'utf8') === 'start\nstart\n', { what: 'the retried command' });
     t2.wf.stopRun(r.id);
     await t2.wf.commandsIdle();
+  }, 30_000);
+
+  it('start() called while a step is being checked out leaves it alone: not cut off, its worktree kept, run once (#321)', async () => {
+    const dataDir = mkdtempSync(join(tmpdir(), 'atlas-start-twice-'));
+    const sig = mkdtempSync(join(tmpdir(), 'atlas-start-twice-sig-'));
+    // git runs this hook right after `git worktree add` made the step's worktree: the step is stopped there, mid-checkout,
+    // until the test lets it go (marker files, no sleep in the test).
+    const t = await setup({
+      dataDir,
+      dbFile: join(dataDir, 'atlas.db'),
+      afterClone: (dir) => {
+        const hook = join(dir, '.git', 'hooks', 'post-checkout');
+        writeFileSync(hook, `#!/bin/sh\ntouch ${sig}/reached\nwhile [ ! -e ${sig}/go ]; do sleep 0.02; done\n`, { mode: 0o755 });
+      },
+    });
+    const w = t.make(`echo ran >> ${sig}/runs`);
+    const r = t.wf.runNow(w.id);
+    await eventually(() => existsSync(join(sig, 'reached')), { what: 'the checkout to reach its worktree' });
+    expect(readdirSync(join(dataDir, 'checkouts', t.project.id, 'runs'))).toHaveLength(1);
+    // The window: the step is driven by this engine (checkout done, not yet spawned) when start() runs again.
+    t.wf.start(3_600_000);
+    expect(readdirSync(join(dataDir, 'checkouts', t.project.id, 'runs'))).toHaveLength(1); // its worktree was not swept as a stopped engine's
+    writeFileSync(join(sig, 'go'), '');
+    await eventually(() => t.wf.run(r.id).state === 'done', { timeout: 15_000, what: 'the command step to end' });
+    await t.wf.commandsIdle();
+    expect(t.step(t.wf.run(r.id))).toMatchObject({ exit: 'exit 0', couldntRun: null });
+    expect(readFileSync(join(sig, 'runs'), 'utf8')).toBe('ran\n');
+    expect(t.inbox('workflow.couldnt_run')).toEqual([]);
   }, 30_000);
 });
 
