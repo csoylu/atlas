@@ -10,6 +10,7 @@ import { tailOf } from './runner.ts';
 import { findRg, globToRegex, grep } from './search.ts';
 import { lineTrimmedSpans, whitespaceNormalizedSpans } from './fuzzy.ts';
 import { htmlToMarkdown } from './web.ts';
+import { sharedTmpBlocked } from '../test/kit/index.ts';
 
 const ctx = (): ToolContext => ({
   workdir: mkdtempSync(join(tmpdir(), 'atlas-tools-')),
@@ -49,7 +50,7 @@ describe('tools', () => {
     expect(await out('grep', { pattern: 'from', path: tmp }, c)).toBe(`${realpathSync(join(tmp, 'note.txt'))}:1:from tmp`);
     expect((await out('glob', { pattern: '*.png', path: tmp }, c)).split('\n')).toEqual([realpathSync(join(tmp, 'shot.png'))]);
     expect(await out('list_files', { path: tmp }, c)).toContain('note.txt');
-    if (existsSync('/tmp')) {
+    if (existsSync('/tmp') && !sharedTmpBlocked) {
       const d = mkdtempSync('/tmp/atlas-tmp-read-');
       writeFileSync(join(d, 'a.txt'), 'via /tmp\n');
       expect(await out('read_file', { path: join(d, 'a.txt') }, c)).toBe('1|via /tmp');
@@ -296,7 +297,7 @@ describe('shell output', () => {
   it('saves a long output to a file read_file can read, and shows the tail', async () => {
     const c = ctx();
     const r = await out('shell', { command: 'seq 1 20000' }, c);
-    const path = /full output is in (\S+) \(read_file/.exec(r)![1]!;
+    const path = /full output is in (.+?) \(read_file/.exec(r)![1]!;
     expect(r).toMatch(/^exit 0\n\[output is 108894 chars: showing the last 30000;/);
     expect(r.endsWith('19999\n20000\n')).toBe(true);
     expect(path.startsWith(c.outputsDir)).toBe(true);
@@ -342,7 +343,7 @@ describe('web_fetch', () => {
     const r = await out('web_fetch', { url: `${base}/long`, max_chars: 2000 }, c);
     expect(r.startsWith(`URL: ${base}/long\n\nSTART xxx`)).toBe(true);
     expect(r.endsWith('xxx END')).toBe(true);
-    const path = /in (\S+): read_file it/.exec(r)![1]!;
+    const path = /in (.+?): read_file it/.exec(r)![1]!;
     expect(readFileSync(path, 'utf8')).toContain(' END');
     expect(r.length).toBeLessThan(2400);
   });

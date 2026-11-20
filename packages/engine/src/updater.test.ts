@@ -8,7 +8,7 @@ import { openDb, type Db } from './store/db.ts';
 import { compareSemver, parseSums, QUIT_DONE, Updater, zipName, type UpdaterOptions } from './updater.ts';
 import { startEngine } from './index.ts';
 import { FakeGitHub, fakeApp, sha } from '../test/updaterKit.ts';
-import { until } from '../test/kit/index.ts';
+import { pgrepWorks, psBlocked, until } from '../test/kit/index.ts';
 
 const mac = process.platform === 'darwin';
 const wait = (ok: () => boolean, ms = 10_000) => until(ok, 'the condition', ms);
@@ -290,7 +290,8 @@ describe.skipIf(!mac)('updater (fake release server)', () => {
     expect(installedVersion(installed)).toBe('0.5.0');
   }, 30_000);
 
-  it('the engine never finishes stopping: nothing is killed, the helper names the step and the child processes, the next start shows it', async () => {
+  // the helper lists the child processes with pgrep and ps, which the agent sandbox refuses (#314, #322)
+  it.skipIf(psBlocked || !pgrepWorks())('the engine never finishes stopping: nothing is killed, the helper names the step and the child processes, the next start shows it', async () => {
     await start();
     gh.publish('0.5.0');
     // Atlas with a child process that keeps running (an agent's command, a test engine…)

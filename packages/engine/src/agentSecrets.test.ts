@@ -181,7 +181,7 @@ describe('agent secrets', () => {
     expect(read).toContain('plan [secret CLAUDE_TOKENS]');
     // A long output is saved to a file: that file is redacted too.
     const long = results(l.fake.calls[3]!)[0]!;
-    const saved = long.match(/the full output is in (\S+)/)![1]!;
+    const saved = long.match(/the full output is in (.+?) \(/)![1]!;
     expect(readFileSync(saved, 'utf8')).toContain('long [secret S_C]');
 
     const stored = JSON.stringify(l.engine.db.prepare('SELECT content FROM messages').all()) + JSON.stringify(l.engine.db.prepare('SELECT output FROM tool_calls').all());

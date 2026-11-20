@@ -4,7 +4,7 @@ import { existsSync, mkdtempSync, readdirSync, readFileSync, writeFileSync } fro
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import type { ContentBlock, SecretStoreStatus, Workflow, WorkflowNodeInput, WorkflowRun } from '@atlas/shared';
-import { eventually, launch, setReviewAgent, type LaunchOptions } from '../test/kit/index.ts';
+import { eventually, launch, psBlocked, setReviewAgent, type LaunchOptions } from '../test/kit/index.ts';
 import type { SecretStore } from './secrets.ts';
 import { fieldsEnv, FIELD_VALUE_MAX, processStart } from './workflowCommand.ts';
 import { otherLead } from './context.ts';
@@ -124,7 +124,7 @@ describe('Run a command (#273, design §10b)', { timeout: 30_000 }, () => {
     expect(s.summary).toContain('other=none');
     expect(s.summary).toContain('key=none');
     expect(s.summary).not.toContain(CANARY);
-    const log = s.summary!.match(/Log: (\S+\.log)/)![1]!;
+    const log = s.summary!.match(/Log: (.+?\.log)/)![1]!;
     expect(log.startsWith(join(t.dataDir, 'outputs', 'workflows'))).toBe(true);
     expect(readFileSync(log, 'utf8')).toContain('token=[secret DEPLOY_TOKEN]');
     // The worktree is gone after the step; the next run starts clean (no « dirt »).
@@ -208,7 +208,7 @@ describe('Run a command (#273, design §10b)', { timeout: 30_000 }, () => {
   it('time limit: SIGTERM to the whole process group; the exit is « other exit » and says so', async () => {
     const t = await setup({ minuteMs: 300 });
     const marker = join(mkdtempSync(join(tmpdir(), 'atlas-lim-')), 'child.pid');
-    const w = t.make(`sleep 30 & echo $! > ${marker}; wait`, { limitMin: 1 });
+    const w = t.make(`sleep 30 & echo $! > "${marker}"; wait`, { limitMin: 1 });
     const started = Date.now();
     const r = await t.runIt(w);
     expect(Date.now() - started).toBeLessThan(8_000);
@@ -221,7 +221,7 @@ describe('Run a command (#273, design §10b)', { timeout: 30_000 }, () => {
   it("couldn't run: a locked store, an unreadable one, a missing value, a failed checkout; the command never starts", async () => {
     const t = await setup();
     const mark = join(mkdtempSync(join(tmpdir(), 'atlas-cr-')), 'ran');
-    const w = t.make(`echo ran >> ${mark}`, { secrets: ['DEPLOY_TOKEN'] });
+    const w = t.make(`echo ran >> "${mark}"`, { secrets: ['DEPLOY_TOKEN'] });
     t.store.locked = true;
     let r = await t.runIt(w);
     expect(r.state).toBe('waiting');
@@ -251,13 +251,14 @@ describe('Run a command (#273, design §10b)', { timeout: 30_000 }, () => {
     expect(t.step(r).couldntRun?.reason).toMatch(/^can't check out datinel\/datinel: gh: not logged in/);
   });
 
-  it('a kill mid-command: at the next start the group is killed (pid + start time), the worktree removed, no retry, Master told', async () => {
+  // needs `ps` (the step's start time), which the agent sandbox refuses (#314)
+  it.skipIf(psBlocked)('a kill mid-command: at the next start the group is killed (pid + start time), the worktree removed, no retry, Master told', async () => {
     const dataDir = mkdtempSync(join(tmpdir(), 'atlas-kill-'));
     const dbFile = join(dataDir, 'atlas.db');
     const origin = remote();
     const t = await setup({ dbFile, dataDir, origin });
     const dir = mkdtempSync(join(tmpdir(), 'atlas-kill-m-'));
-    const w = t.make(`echo $$ > ${dir}/pid; echo start >> ${dir}/runs; sleep 30`);
+    const w = t.make(`echo $$ > "${dir}/pid"; echo start >> "${dir}/runs"; sleep 30`);
     const r = t.wf.runNow(w.id);
     await eventually(() => existsSync(join(dir, 'pid')) && t.e.db.prepare("SELECT 1 FROM workflow_run_steps WHERE json_extract(data, '$.pid') IS NOT NULL").get(), { what: 'the command to start' });
     const pid = Number(readFileSync(join(dir, 'pid'), 'utf8'));
@@ -304,7 +305,7 @@ describe('Run a command (#273, design §10b)', { timeout: 30_000 }, () => {
   }, 30_000);
 
   // The marker loops of the two tests below end by themselves (bounded), and the tests release them on every path.
-  const WAIT_GO = (go: string) => `n=0; while [ ! -e ${go} ] && [ $n -lt 1000 ]; do sleep 0.02; n=$((n+1)); done`;
+  const WAIT_GO = (go: string) => `n=0; while [ ! -e "${go}" ] && [ $n -lt 1000 ]; do sleep 0.02; n=$((n+1)); done`;
 
   it('start() called while a step is being checked out leaves it alone: not cut off, its worktree kept, run once (#321)', async () => {
     const dataDir = mkdtempSync(join(tmpdir(), 'atlas-start-twice-'));
@@ -316,10 +317,10 @@ describe('Run a command (#273, design §10b)', { timeout: 30_000 }, () => {
       dbFile: join(dataDir, 'atlas.db'),
       afterClone: (dir) => {
         const hook = join(dir, '.git', 'hooks', 'post-checkout');
-        writeFileSync(hook, `#!/bin/sh\ntouch ${sig}/reached\n${WAIT_GO(`${sig}/go`)}\n`, { mode: 0o755 });
+        writeFileSync(hook, `#!/bin/sh\ntouch "${sig}/reached"\n${WAIT_GO(`${sig}/go`)}\n`, { mode: 0o755 });
       },
     });
-    const w = t.make(`echo ran >> ${sig}/runs`);
+    const w = t.make(`echo ran >> "${sig}/runs"`);
     const r = t.wf.runNow(w.id);
     try {
       await eventually(() => existsSync(join(sig, 'reached')), { what: 'the checkout to reach its worktree' });
@@ -340,7 +341,7 @@ describe('Run a command (#273, design §10b)', { timeout: 30_000 }, () => {
   it('start() called while the command itself runs leaves it running: not killed, not cut off, it ends by itself, run once (#321)', async () => {
     const sig = mkdtempSync(join(tmpdir(), 'atlas-start-twice-run-'));
     const t = await setup();
-    const w = t.make(`touch ${sig}/started; ${WAIT_GO(`${sig}/go`)}; echo ran >> ${sig}/runs`);
+    const w = t.make(`touch "${sig}/started"; ${WAIT_GO(`${sig}/go`)}; echo ran >> "${sig}/runs"`);
     const r = t.wf.runNow(w.id);
     try {
       await eventually(() => existsSync(join(sig, 'started')) && t.e.db.prepare("SELECT 1 FROM workflow_run_steps WHERE json_extract(data, '$.pid') IS NOT NULL").get(), { what: 'the command to run, its pid stored' });
@@ -412,7 +413,7 @@ describe('command step approval (#273, design §5)', { timeout: 30_000 }, () => 
       {
         name: 'Deploy',
         projectId: t.project.id,
-        nodes: [trigger, node('a', 'approval', { question: 'Deploy?' }), t.cmd(`echo ran > ${mark}`)],
+        nodes: [trigger, node('a', 'approval', { question: 'Deploy?' }), t.cmd(`echo ran > "${mark}"`)],
         edges: [edge('trigger', 'start', 'a'), edge('a', 'approved', 'c')],
       },
       'user',
@@ -421,7 +422,7 @@ describe('command step approval (#273, design §5)', { timeout: 30_000 }, () => 
     const ask = t.wf.run(r.id).steps!.find((s) => s.nodeId === 'a')!.cardId!;
     // Meanwhile an agent changes the command.
     const g = t.wf.get(w.id);
-    t.wf.saveGraph(w.id, { revision: g.revision, nodes: g.nodes.map((n) => (n.id === 'c' ? t.cmd(`echo changed > ${mark}`) : n)), edges: g.edges }, 'munih');
+    t.wf.saveGraph(w.id, { revision: g.revision, nodes: g.nodes.map((n) => (n.id === 'c' ? t.cmd(`echo changed > "${mark}"`) : n)), edges: g.edges }, 'munih');
     t.e.kanban.update(ask, { status: 'done' }, 'user');
     t.wf.tick();
     await eventually(() => t.step(t.wf.run(r.id))?.couldntRun, { what: 'the step to refuse the unapproved command' });

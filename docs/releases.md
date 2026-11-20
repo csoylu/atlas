@@ -46,8 +46,7 @@ Also see `docs/updater.md`.
   item. **ui-check in a review (#240):** none for an engine-only or docs-only PR; for a UI PR,
   `--only` on the screens the diff can affect at all four widths (the builder names them in the `task_request_review`
   summary, otherwise the reviewer derives them from the diff); a full run only for a change to something shared by every
-  screen (list in the ui-check section), with the reason said in the verdict. Never two runs at once (`pgrep -fl
-  check.mjs`). The verdict says which screens were checked and which were not: a narrowed run is never reported as a full
+  screen (list in the ui-check section), with the reason said in the verdict. Never two runs of yours at once (the sandbox hides other agents' runs: a false failure on a screen the diff cannot affect is rerun alone, `docs/ui.md`). The verdict says which screens were checked and which were not: a narrowed run is never reported as a full
   one. Builders: name the affected screens in the summary. **Merged → Done**; **CI red, a conflict, a timeout, changes
   asked or a refused merge → Ready** for the builder, with the reason as a note in the thread; the builder fixes, pushes and calls
   `task_request_review` again. A fix pushed during the review: the builder calls `task_request_review` while still In

@@ -1,26 +1,26 @@
 // The .landed animation (#104/#112): a finished-task report plays it only when it arrives live (WebSocket
 // message.appended), never when the history loads or the page is reloaded, and never with prefers-reduced-motion.
 //
-//   node scripts/ui-check/landed.mjs --ui packages/ui/dist [--port N]
+//   node scripts/ui-check/landed.mjs [--ui packages/ui/dist] [--port N]
+//
+// Runs in an agent's sandbox like ui-check (#314): headless Chromium and a throwaway seeded engine (--port N: yours).
 //
 // Read-only: the "live" message is a synthetic WebSocket event dispatched inside the page; nothing is written to the
 // engine (writes are refused). Exit code 1 on any failure.
-import { spawn, execFileSync } from 'node:child_process';
+import { spawn } from 'node:child_process';
 import { mkdtempSync, rmSync, existsSync, statSync, readFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { createServer, request as httpRequest } from 'node:http';
 import { connect as netConnect } from 'node:net';
 import { join, extname, resolve } from 'node:path';
+import { findBrowser, browserArgs, startThrowawayEngine } from './tooling.mjs';
 
-const CHROME = '/Applications/Google Chrome.app/Contents/MacOS/Google Chrome';
 const arg = (n, d) => { const i = process.argv.indexOf('--' + n); return i > 0 ? process.argv[i + 1] : d; };
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 const UI = resolve(arg('ui', 'packages/ui/dist'));
 
-const ports = arg('port') ? [arg('port')] : execFileSync('lsof', ['-nP', '-iTCP', '-sTCP:LISTEN', '-a', '-c', 'Atlas'], { encoding: 'utf8' }).split('\n').map((l) => /127\.0\.0\.1:(\d+) \(LISTEN\)/.exec(l)?.[1]).filter(Boolean);
-let BASE;
-for (const p of ports) if (await fetch(`http://127.0.0.1:${p}/api/health`).then((r) => r.ok, () => false)) { BASE = `http://127.0.0.1:${p}`; break; }
-if (!BASE) throw new Error('No running Atlas engine (pass --port N)');
+const BASE = arg('port') ? `http://127.0.0.1:${arg('port')}` : (await startThrowawayEngine({ ui: UI })).base;
+if (!(await fetch(BASE + '/api/health').then((r) => r.ok, () => false))) throw new Error(`No Atlas engine answers on ${BASE}`);
 const target = new URL(BASE);
 const TYPES = { '.html': 'text/html', '.js': 'text/javascript', '.css': 'text/css', '.svg': 'image/svg+xml', '.woff2': 'font/woff2', '.json': 'application/json' };
 const server = createServer((req, res) => {
@@ -54,7 +54,8 @@ if (!chat) throw new Error('no chat to test');
 
 const CDP = 9400 + Math.floor(Math.random() * 50);
 const profile = mkdtempSync(join(tmpdir(), 'atlas-landed-'));
-const chrome = spawn(CHROME, ['--headless=new', `--remote-debugging-port=${CDP}`, `--user-data-dir=${profile}`, 'about:blank'], { stdio: 'ignore' });
+const BROWSER = findBrowser();
+const chrome = spawn(BROWSER, browserArgs(BROWSER, { port: CDP, profile }), { stdio: 'ignore' });
 const done = (code) => { chrome.kill(); rmSync(profile, { recursive: true, force: true, maxRetries: 10, retryDelay: 100 }); process.exit(code); };
 let targets = [];
 for (let i = 0; i < 50 && !targets.some((t) => t.type === 'page'); i++) { await sleep(200); targets = await fetch(`http://127.0.0.1:${CDP}/json`).then((r) => r.json(), () => []); }

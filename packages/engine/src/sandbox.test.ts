@@ -5,7 +5,7 @@ import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import type { ContentBlock, SandboxStatus } from '@atlas/shared';
-import { launch } from '../test/kit/index.ts';
+import { launch, socketPathTooLong } from '../test/kit/index.ts';
 import type { ModelRequest } from './providers/types.ts';
 import { bwrapArgs, bwrapFailure, gitEnv, PROXY_PORT_INSIDE, PROXY_SOCKET, Sandbox, SandboxUnavailable, seatbeltProfile, spawnAgentCommand } from './sandbox.ts';
 import { Network } from './network.ts';
@@ -125,7 +125,8 @@ describe('sandbox (#298 S1, S2)', () => {
     expect(hosts).toContain(`--bind /d/net/proxy.sock ${PROXY_SOCKET}`);
   });
 
-  it('a command at Allowed hosts gets the proxy env with its workspace token; a level change applies from the next command; Linux On needs the engine login', async () => {
+  // binds a unix socket under tmpdir(): too long a path inside the agent sandbox (#314); CI runs it
+  it.skipIf(socketPathTooLong)('a command at Allowed hosts gets the proxy env with its workspace token; a level change applies from the next command; Linux On needs the engine login', async () => {
     const dataDir = mkdtempSync(join(tmpdir(), 'atlas-sbx-net-'));
     const ws = join(dataDir, 'workspaces', 'a');
     mkdirSync(ws, { recursive: true });
@@ -172,7 +173,7 @@ describe('sandbox (#298 S1, S2)', () => {
     delete env.GH_TOKEN;
     const fill = (host: string, extra: NodeJS.ProcessEnv = {}) => {
       try {
-        return { out: execFileSync('git', ['credential', 'fill'], { input: `protocol=https\nhost=${host}\n\n`, env: { ...env, ...extra }, encoding: 'utf8', stdio: ['pipe', 'pipe', 'pipe'] }), err: '' };
+        return { out: execFileSync('git', ['credential', 'fill'], { input: `protocol=https\nhost=${host}\n\n`, env: { ...env, ...extra }, cwd: tmpdir(), encoding: 'utf8', stdio: ['pipe', 'pipe', 'pipe'] }), err: '' };
       } catch (e) {
         const x = e as { stdout: string; stderr: string };
         return { out: x.stdout, err: x.stderr };
@@ -187,7 +188,7 @@ describe('sandbox (#298 S1, S2)', () => {
     expect(without.err).toContain('terminal prompts disabled');
     // Another host never gets the token.
     expect(fill('example.com', { GH_TOKEN: 'ghp_test_token_123' }).out).not.toContain('ghp_test_token_123');
-    const url = (u: string) => execFileSync('git', ['ls-remote', '--get-url', u], { env, encoding: 'utf8' }).trim();
+    const url = (u: string) => execFileSync('git', ['ls-remote', '--get-url', u], { env, cwd: tmpdir(), encoding: 'utf8' }).trim();
     expect(url('git@github.com:csoylu/atlas.git')).toBe('https://github.com/csoylu/atlas.git');
     expect(execFileSync('git', ['config', 'user.email'], { env, encoding: 'utf8', cwd: tmpdir() }).trim()).toBe('m@example.com');
   });

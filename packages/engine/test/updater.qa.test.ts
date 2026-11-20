@@ -7,7 +7,7 @@ import { Bus } from '../src/events.ts';
 import { openDb, type Db } from '../src/store/db.ts';
 import { HELPER, Updater, zipName, type UpdaterOptions } from '../src/updater.ts';
 import { FakeGitHub, fakeApp, sha, zipOf } from './updaterKit.ts';
-import { until } from './kit/index.ts';
+import { osascriptBlocked, until } from './kit/index.ts';
 
 /**
  * QA of the app updater (#124): the cases the build task's own tests (src/updater.test.ts) do not cover. Everything runs
@@ -337,11 +337,11 @@ describe.skipIf(!mac)('the swap helper on its own (#124)', () => {
     const log = join(data, 'update', 'install.log');
     const shims = join(root, 'shims');
     mkdirSync(shims);
-    // outside the spaced folders: the helper runs $ATLAS_UPDATE_OPEN unquoted (production value: « open »)
+    // The helper runs $ATLAS_UPDATE_OPEN unquoted (production value: « open »): an `open` shim on PATH stands in for it, so
+    // the test works wherever tmpdir() has a space (the agent sandbox's does: #314). `opened` is quoted in the shim.
     const out = tmp('atlas-qa-open-');
     const opened = join(out, 'opened');
-    const open = join(out, 'open.sh');
-    writeFileSync(open, `#!/bin/sh\necho "$@" >> "${opened}"\n`, { mode: 0o755 });
+    writeFileSync(join(shims, 'open'), `#!/bin/sh\necho "$@" >> "${opened}"\n`, { mode: 0o755 });
     const script = join(root, 'install.sh');
     writeFileSync(script, HELPER, { mode: 0o755 });
     const atlas = spawn('sleep', ['120']);
@@ -350,7 +350,7 @@ describe.skipIf(!mac)('the swap helper on its own (#124)', () => {
       const p = spawn('/bin/sh', [script, String(pid), fresh, app, prev, log], {
         detached: true,
         stdio: 'ignore',
-        env: { ...process.env, ATLAS_UPDATE_OPEN: open, ...env, PATH: `${shims}:${process.env.PATH}` },
+        env: { ...process.env, ATLAS_UPDATE_OPEN: 'open', ...env, PATH: `${shims}:${process.env.PATH}` },
       });
       procs.push(p);
       const exited = new Promise<number | null>((r) => p.once('exit', (c) => r(c)));
@@ -451,7 +451,8 @@ describe.skipIf(!mac)('the swap helper on its own (#124)', () => {
 
   // Was a known bug (#124 → #161): the swap was two renames (old → previous, new → installed) with no Atlas.app in
   // between. It is now one atomic swap (renamex_np RENAME_SWAP); the only mv left moves the old app to Atlas.previous.app.
-  it('helper killed between the two renames: an Atlas.app must still exist at the installed path (old or new, never none)', async () => {
+  // the atomic swap goes through osascript, which the agent sandbox refuses: the fallback has the gap this test forbids (#314)
+  it.skipIf(osascriptBlocked)('helper killed between the two renames: an Atlas.app must still exist at the installed path (old or new, never none)', async () => {
     const r = rig();
     // the shim lets the first mv through, then freezes the helper in the gap
     r.shim('mv', `/bin/mv "$@"; rc=$?\nif [ ! -e "${r.root}/paused" ]; then touch "${r.root}/paused"; sleep 30; fi\nexit $rc`);

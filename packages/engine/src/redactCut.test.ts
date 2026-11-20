@@ -90,7 +90,7 @@ describe('cut output is redacted before it is cut (#227)', () => {
     const [shell] = results(l.fake.calls[1]!);
     expect(shell).toMatch(/showing the last 30000/);
     expect(shell).toContain('secret S_C]'); // the marker itself may be cut: harmless
-    const saved = shell!.match(/the full output is in (\S+)/)![1]!;
+    const saved = shell!.match(/the full output is in (.+?) \(/)![1]!;
     expect(readFileSync(saved, 'utf8')).toContain(`x${MARK}z`);
     expect(results(l.fake.calls[2]!)[0]).toContain(`x${MARK}y`);
     expect(results(l.fake.calls[3]!)[0]).toContain(MARK);
@@ -144,7 +144,7 @@ describe('cut output is redacted before it is cut (#227)', () => {
     expect(p1.endsWith(`x${MARK}\n[output bytes 0–${PAGE_BYTES} of ${PAGE_BYTES - 7 + V.length + 1}; shell_output(id, offset=${PAGE_BYTES}) for more]`)).toBe(true);
     expect(p2).toContain(`]\n${MARK}\n`);
     // Still running, its value half written: that half is not shown (nor skipped: the next read shows the marker).
-    const b = reg.start({ ...base, command: `printf "go "; printf %s "$S_C" | head -c 9; while [ ! -f ${join(l.workdir, 'go')} ]; do sleep 0.05; done; printf %s "$S_C" | tail -c +10` });
+    const b = reg.start({ ...base, command: `printf "go "; printf %s "$S_C" | head -c 9; while [ ! -f "${join(l.workdir, 'go')}" ]; do sleep 0.05; done; printf %s "$S_C" | tail -c +10` });
     await eventually(() => expect(reg.read(b.id, 'atlas', 0)).toContain(HEAD), { timeout: 5000, what: 'the half value in the log' });
     const half = reg.read(b.id, 'atlas', 0, l.engine.secrets);
     expect(half).toContain('\n[output bytes 0–3 of 12]\ngo \n[output bytes 0–3 of 12; shell_output(id, offset=3) for more]');
