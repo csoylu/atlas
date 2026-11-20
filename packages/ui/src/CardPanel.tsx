@@ -3,7 +3,8 @@ import { Fragment, forwardRef, useCallback, useEffect, useMemo, useRef, useState
 import { AgentFace } from './AgentFace.tsx';
 import Markdown from 'react-markdown';
 import remarkGfm from 'remark-gfm';
-import { USER, parseDocRef, stallText, type Agent, type Card, type ImageBlock, type Message, type Model, type Run, type Timeline, type ToolCallTiming } from '@atlas/shared';
+import { USER, isPaneLine, paneLabel, parseDocRef, stallText, type Agent, type Card, type ImageBlock, type Message, type Model, type PaneSees, type Run, type Timeline, type ToolCallTiming } from '@atlas/shared';
+import { EyeIcon, PaneEye } from './PaneEye.tsx';
 import { api } from './api.ts';
 import { useMinute } from './useMinute.ts';
 import { stallAction } from './stallView.ts';
@@ -140,6 +141,8 @@ export function CardPanel(props: {
   /** « Ask about this » from the side panel: shown as a chip in the composer, sent with the message. */
   quote?: Quote | null;
   onQuoteClear?(): void;
+  /** The tab open in the chat's pane (#305): the composer's eye, sent with the message. */
+  sees?: PaneSees | null;
   /** Tabs open in a hidden side panel (overlay mode): a button brings it back. */
   hiddenDocs?: number;
   onShowDocs?(): void;
@@ -158,8 +161,9 @@ export function CardPanel(props: {
       <HeaderActions>
         <ChatPins chatId={card.id} cards={props.cards} stream={stream} onOpen={props.onOpen} onError={onError} />
         {!!props.hiddenDocs && (
-          <button type="button" className="btn doc-reopen" onClick={props.onShowDocs} title="Show the documents panel (⌘\)">
-            <Icon.doc /> Documents · {props.hiddenDocs}
+          <button type="button" className="btn doc-reopen" onClick={props.onShowDocs} title="Show the documents panel (⌘\)" aria-label={`Show the documents panel: ${props.hiddenDocs} open`}>
+            <Icon.doc /> <span className="doc-reopen-l">Documents · </span>
+            {props.hiddenDocs}
           </button>
         )}
         {props.onHideDocs && (
@@ -212,7 +216,7 @@ export function CardPanel(props: {
       </div>
       <RewindNote rw={rw} />
       {!rw.hideRun && <RunLine run={convo.run} onStop={() => void rw.stopTurn()} />}
-      <CardComposer card={card} agents={props.agents} models={props.models} plan={!!props.plan} stream={stream} onError={onError} quote={props.quote} onQuoteClear={props.onQuoteClear} rewind={rw} />
+      <CardComposer card={card} agents={props.agents} models={props.models} plan={!!props.plan} stream={stream} onError={onError} quote={props.quote} onQuoteClear={props.onQuoteClear} sees={props.sees} rewind={rw} />
       <RewindConfirm rw={rw} />
     </aside>
   );
@@ -451,7 +455,13 @@ export function Activity(props: {
               ) : (
                 <>
                   <ImageThumbs cardId={card.id} images={m.content.filter((b): b is ImageBlock => b.type === 'image')} />
-                  {m.content.map((b, k) => (b.type === 'text' && !isAttachedLine(b.text) ? text(b.text, String(k), m.author === USER) : null))}
+                  {m.content.map((b, k) => (b.type === 'text' && !isAttachedLine(b.text) && !(m.author === USER && isPaneLine(b.text)) ? text(b.text, String(k), m.author === USER) : null))}
+                  {m.author === USER && m.pane && (
+                    <div className="pane-was" title="Open in your pane when you sent this: the agent was told where (not the content)">
+                      <EyeIcon />
+                      <span>{paneLabel(m.pane)} was open</span>
+                    </div>
+                  )}
                 </>
               )}
               {draftHere && <DraftView segments={draftSegs} cardLinks={cardLinks} />}
@@ -621,9 +631,11 @@ export function RunLine({ run, onStop, stop = true }: { run: Run | null; onStop(
 /** Message box for the card's agent, with usage and the model/effort chooser. */
 export const CardComposer = forwardRef<
   HTMLTextAreaElement,
-  { card: Card; agents: Agent[]; models: Model[]; plan: boolean; stream: MessageStream; onError(e: unknown): void; quote?: Quote | null; onQuoteClear?(): void; rewind?: Rewind }
+  { card: Card; agents: Agent[]; models: Model[]; plan: boolean; stream: MessageStream; onError(e: unknown): void; quote?: Quote | null; onQuoteClear?(): void; sees?: PaneSees | null; rewind?: Rewind }
 >(
-  function CardComposer({ card, agents, models, plan, stream, onError, quote, onQuoteClear, rewind }, ref) {
+  function CardComposer({ card, agents, models, plan, stream, onError, quote, onQuoteClear, sees, rewind }, ref) {
+    // The eye (#305): off for one message, back on for the next.
+    const [eyeOff, setEyeOff] = useState(false);
     const draftId = draftKey('card', card.id);
     const [text, setText] = useDraft(draftId);
     const box = useRef<HTMLTextAreaElement | null>(null);
@@ -702,9 +714,11 @@ export const CardComposer = forwardRef<
           const sent = att.items;
           const pending = att.take();
           att.clear();
+          const pane = eyeOff ? null : (sees ?? null);
+          setEyeOff(false);
           // A failed send puts the text (and the images) back, unless the user already started a new message.
           void pending
-            .then((ids) => api.postMessage(card.id, t, quote?.ref, ids))
+            .then((ids) => api.postMessage(card.id, t, quote?.ref, ids, pane))
             .catch((err: unknown) => {
               if (!readDraft(draftId).trim()) writeDraft(draftId, text); // the composer may be gone already
               setText((cur) => (cur.trim() ? cur : text));
@@ -789,6 +803,7 @@ export const CardComposer = forwardRef<
           attach={canAttach ? <AttachButton onFiles={addFiles} /> : undefined}
           voice={card.board === 'direct' ? <VoiceToggle chatId={card.id} agents={agents} stream={stream} onError={onError} /> : undefined}
           send={{ disabled: !text.trim() && !att.sendable }}
+          sees={sees ? <PaneEye sees={sees} off={eyeOff} onToggle={() => setEyeOff(!eyeOff)} /> : undefined}
           pick={{
             models,
             agentModelId: agent?.modelId ?? null,

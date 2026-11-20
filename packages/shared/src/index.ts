@@ -4,6 +4,8 @@ import { DocRef, type Doc, type Folder, type PanelTab } from './documents.ts';
 export * from './documents.ts';
 export * from './cardRefs.ts';
 export * from './projects.ts';
+export * from './pane.ts';
+import { PaneSees } from './pane.ts';
 import type { Project } from './projects.ts';
 
 /** Kanban statuses, in board order (design §7, §16). 'closed' = cancelled: nothing (more) is done; unlike 'done' it
@@ -254,6 +256,8 @@ export const Message = z.object({
   at: z.string(),
   /** Hidden by a rewind (only in the agent's history_search; never in the chat or the model's view). */
   rewound: z.boolean().optional(),
+  /** Master's message: the pane tab open when it was sent, the eye on (#305); the agent was told when it changed. */
+  pane: PaneSees.optional(),
 });
 export type Message = z.infer<typeof Message>;
 
@@ -323,6 +327,11 @@ export const PostMessage = z
     text: z.string().trim().max(100_000).default(''),
     ref: DocRef.optional(),
     uploads: z.array(UploadId).max(IMAGE_MAX_PER_MESSAGE).default([]),
+    /**
+     * What is open in the chat's right pane (#305), the eye on; null = closed, or left out of this message. Absent (a
+     * voice message, #305): what the chat's pane last reported (PUT /api/cards/:id/pane).
+     */
+    pane: PaneSees.nullable().optional(),
   })
   .refine((m) => m.text.length > 0 || m.uploads.length > 0, { message: 'a message needs text or an image' });
 /** An image waiting to be sent (POST /api/cards/:id/uploads): the composer shows it, the message names its id. */

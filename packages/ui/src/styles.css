@@ -1068,6 +1068,25 @@ button.artifact:hover .art-open { color: var(--accent); }
 .ctx-ring.full .ring-fill { stroke: var(--negative); }
 .voice-btn.on { color: var(--accent); background: var(--accent-soft); }
 .composer-strip .attach-btn, .composer-strip .voice-btn { width: 30px; height: 30px; }
+/* « What the agent sees » (#305): the open pane tab, sent with the message; a click leaves it out of this one. It
+   gives up its room first (down to the eye alone), before the model pill or the plan gauge. */
+.pane-eye { flex: 0 1000 auto; max-width: 170px; min-width: 30px; display: inline-flex; align-items: center; gap: 6px; height: 28px; padding: 0 8px; border: 0; border-radius: 14px; background: none; color: var(--muted); font: inherit; font-size: var(--fs-small); line-height: var(--lh-tight); cursor: pointer; white-space: nowrap; }
+.pane-eye svg { flex: none; }
+.pane-eye span { min-width: 0; overflow: hidden; text-overflow: ellipsis; }
+.pane-eye:hover { background: var(--hover); color: var(--text); }
+.pane-eye:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; }
+.pane-eye.off { color: var(--faint); }
+.pane-eye.off span { text-decoration: line-through; }
+.pane-was { display: flex; align-items: center; justify-content: flex-end; gap: 6px; margin-top: 6px; min-width: 0; font-size: var(--fs-small); line-height: var(--lh-tight); color: var(--faint); }
+.pane-was svg { flex: none; }
+/* Phone: the strip and the header are short of room once the pane is open behind the chat (#305). The plan gauge stays
+   on one line with its main window (the week is in its title), the hidden pane's button is its icon and count. */
+@media (max-width: 640px) {
+  .strip-plan { flex: none; white-space: nowrap; }
+  .strip-plan .num + .num { display: none; }
+  .doc-reopen-l { display: none; }
+}
+.pane-was span { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .composer-strip .plan-inline { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; min-width: 0; }
 .meta-chev { flex: none; pointer-events: none; }
 .pick-menu { position: relative; flex: 0 1 auto; min-width: 0; display: flex; }

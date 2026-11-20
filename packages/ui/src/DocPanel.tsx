@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState, type ReactNode } from 'react';
+import { useCallback, useEffect, useRef, useState, type ReactNode } from 'react';
 import { KIND_WORD, type Doc, type DocRef, type PaneKind, type PanelTab } from '@atlas/shared';
 import { api } from './api.ts';
 import type { MessageStream } from './useMessages.ts';
@@ -62,6 +62,8 @@ export function DocPanel(props: {
   onAsk(q: Quote): void;
   onOpenCard(id: string): void;
   onHide(): void;
+  /** The open artifact and the version on screen (#305: sent with Master's message). */
+  onShown?(doc: Doc, version: number): void;
   onError(e: unknown): void;
 }) {
   const { chatId, tabs, onError } = props;
@@ -69,6 +71,8 @@ export function DocPanel(props: {
   const tab = activeTab(tabs);
   const doc = tab?.doc;
   const unseen = !!tab && !!doc && tab.seenVersion < doc.version;
+  const report = props.onShown;
+  const shown = useCallback((v: number) => void (doc && report?.(doc, v)), [doc, report]);
   // Pages, diagrams and links have no section marks: showing the new version is seeing it.
   useEffect(() => {
     if (!doc || !unseen || doc.kind === 'markdown') return;
@@ -113,6 +117,7 @@ export function DocPanel(props: {
           )
         }
         want={props.want && props.want.docId === doc.id ? props.want : null}
+        onShown={shown}
         tools={
           !phone && (
             <button
