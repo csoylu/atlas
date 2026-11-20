@@ -23,7 +23,8 @@ import { createApi } from './api.ts';
 import { ghBinary, ghClient } from '../../../scripts/pr/validate.mjs';
 import { Workflows } from './workflows.ts';
 import { Auth, isLoopbackHost } from './auth.ts';
-import { screenshotAnswer } from './screenshot.ts';
+import { screenshotAnswer, takeScreenshot } from './screenshot.ts';
+import type { PageShot } from './comments.ts';
 import { Local } from './local.ts';
 import { Accounts } from './accounts.ts';
 import { ChatGpt, type ChatGptOptions } from './chatgpt.ts';
@@ -111,6 +112,8 @@ export interface EngineOptions {
   sandbox?: Partial<Pick<SandboxOptions, 'enabled' | 'home' | 'platform' | 'sandboxExec' | 'bwrap' | 'procSys' | 'socat'>>;
   /** The allow-list proxy (#298 S3). Tests: a resolver, local upstreams, the Linux unix socket. */
   network?: NetworkOptions;
+  /** Pictures of an area of a page commented on (#304), taken in headless Chrome; false: none (tests), the text says so. */
+  pageShots?: false | PageShot;
   updates?: { host: UpdateHost | null; cannotInstall?: string; api?: string; fetch?: typeof fetch; intervalMs?: number | false; openCommand?: string; pid?: number };
 }
 
@@ -264,7 +267,20 @@ export async function startEngine(opts: EngineOptions): Promise<Engine> {
     openCommand: opts.updates?.openCommand,
     pid: opts.updates?.pid,
   });
+  // A comment on an area of a page (#304): that part of the page, shot like the screenshot tool does (read-only).
+  const pageShot: PageShot | null =
+    opts.pageShots === false
+      ? null
+      : (opts.pageShots ??
+        (async (o) => {
+          const shot = await takeScreenshot(
+            { target: o.page, width: Math.max(320, Math.round(o.width)), height: 900, full_page: false, region: o.region },
+            { engine: { url, agentId: 'atlas', cookie: () => (auth.enabled ? auth.issue().token : null) }, workdir: o.workdir, signal: AbortSignal.timeout(30_000) },
+          );
+          return join(o.workdir, shot.file);
+        }));
   const server = createApi({
+    pageShot,
     kanban,
     agents,
     models,

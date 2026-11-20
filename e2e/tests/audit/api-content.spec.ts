@@ -81,20 +81,20 @@ test.describe('C · artifacts, documents, side panel', () => {
     expect((await call(atlas, 'POST', `/chats/${ch.id}/panel/open`, { docId: 'zzz' })).status).toBe(404);
   });
 
-  test('[C05] "Ask about this": a message with ref stores the ❝ quote first', async ({ atlas }) => {
+  test('[C05] comments (#304): a comment on a markdown paragraph stores the [comment 1] block with its place', async ({ atlas }) => {
     const ch = await atlas.chat();
     atlas.model.next(tu('write_file', { path: 'docs/q.md', content: '# Q\n\n## Sec A\nthe quoted text\n' }), say('ok'));
     await atlas.say(ch.id, 'write');
     await expect.poll(async () => (await call(atlas, 'GET', '/documents')).body.length, { timeout: 15_000 }).toBe(1);
     await atlas.idle(ch.id);
     const d = (await call(atlas, 'GET', '/documents')).body[0];
-    const doc = (await call(atlas, 'GET', `/documents/${d.id}`)).body;
-    const sec = (doc.sections ?? [])[0]?.id ?? 'sec-a';
     atlas.model.next(say('answer'));
-    const r = await call(atlas, 'POST', `/cards/${ch.id}/messages`, { text: 'explain', ref: { docId: d.id, version: 1, section: sec } });
+    const comments = [{ target: { kind: 'doc', docId: d.id, version: 1 }, anchor: { type: 'text', quote: 'the quoted text', section: 'sec-a', lines: [4, 4] }, text: 'explain' }];
+    const r = await call(atlas, 'POST', `/cards/${ch.id}/messages`, { text: '', comments });
     expect(r.status).toBe(201);
-    expect(r.body.content[0].text).toMatch(/^❝/);
-    expect(JSON.stringify(r.body.content)).toContain('the quoted text');
+    expect(r.body.content[0].text).toMatch(/^\[comment 1\]/);
+    expect(r.body.content[0].text).toContain('docs/q.md');
+    expect(r.body.content[0].text).toContain('the quoted text');
   });
 
   test('[C06] Library search (#120): titles and content across folders, a content match has a snippet', async ({ atlas }) => {

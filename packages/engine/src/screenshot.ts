@@ -32,6 +32,8 @@ export interface ShotOptions {
   theme?: 'dark' | 'light';
   full_page: boolean;
   clip?: string;
+  /** A box of the page in CSS px from its top-left (a comment's area, #304); not offered to agents. */
+  region?: { x: number; y: number; w: number; h: number };
   wait_for?: string;
   actions?: Action[];
 }
@@ -416,7 +418,10 @@ export async function takeScreenshot(
       await cdp.evaluate('new Promise((r) => requestAnimationFrame(() => requestAnimationFrame(() => r(true))))');
 
       let clip: { x: number; y: number; width: number; height: number; scale: number } | undefined;
-      if (o.clip) {
+      if (o.region) {
+        const r = o.region;
+        clip = { x: Math.max(0, r.x), y: Math.max(0, r.y), width: Math.max(1, r.w), height: Math.max(1, Math.min(r.h, FULL_PAGE_MAX)), scale: 1 };
+      } else if (o.clip) {
         await cdp.evaluate(`document.querySelector(${JSON.stringify(o.clip)})?.scrollIntoView({ block: 'nearest' })`).catch(() => {});
         const b = await box(o.clip, 'clip:');
         clip = { x: b.x, y: b.y, width: Math.max(1, b.w), height: Math.max(1, Math.min(b.h, FULL_PAGE_MAX)), scale: 1 };

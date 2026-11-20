@@ -117,14 +117,6 @@ export interface PanelTab {
   cardTitle: string | null;
 }
 
-/** « Ask about this »: the part of a document a user message is about. */
-export const DocRef = z.object({
-  docId: z.string().min(1),
-  version: z.number().int().nonnegative(),
-  section: z.string().nullable().default(null),
-});
-export type DocRef = z.infer<typeof DocRef>;
-
 /* ── Markdown sections ─────────────────────────────────────────────────── */
 
 export interface DocSection {
@@ -134,6 +126,8 @@ export interface DocSection {
   level: number;
   /** The section's markdown, its heading line included. */
   text: string;
+  /** Its first line in the document (1-based): the heading's, or 1 for the text before the first heading. */
+  line: number;
 }
 
 export const slug = (s: string) =>
@@ -148,9 +142,11 @@ export const slug = (s: string) =>
 export function splitSections(md: string): DocSection[] {
   const out: DocSection[] = [];
   const seen = new Map<string, number>();
-  let cur: DocSection = { id: '', title: null, level: 0, text: '' };
+  let cur: DocSection = { id: '', title: null, level: 0, text: '', line: 1 };
   let fence: string | null = null;
+  let no = 0;
   for (const line of md.split('\n')) {
+    no++;
     const f = /^\s*(```|~~~)/.exec(line);
     if (f) fence = fence ? (fence === f[1] ? null : fence) : f[1]!;
     const h = fence ? null : /^(#{1,3})\s+(.+?)\s*#*\s*$/.exec(line);
@@ -159,7 +155,7 @@ export function splitSections(md: string): DocSection[] {
       const base = slug(h[2]!);
       const n = (seen.get(base) ?? 0) + 1;
       seen.set(base, n);
-      cur = { id: n === 1 ? base : `${base}-${n}`, title: h[2]!, level: h[1]!.length, text: line + '\n' };
+      cur = { id: n === 1 ? base : `${base}-${n}`, title: h[2]!, level: h[1]!.length, text: line + '\n', line: no };
     } else cur.text += line + '\n';
   }
   if (cur.title !== null || cur.text.trim()) out.push(cur);
@@ -194,28 +190,9 @@ export function docTitle(path: string, content: string, name: string | null = nu
   return t || name || path.split('/').pop()!;
 }
 
-/* ── The reference carried by a message (« Ask about this ») ─────────────── */
+/* ── The reference of an old message (« Ask about this », replaced by comments #304) ── */
 
-const EXCERPT_CAP = 1500;
-
-/**
- * The text block put before the user's message: the label the UI shows as a quote chip, where it is (path, doc id,
- * version, section), and the quoted section so the agent knows exactly what is meant.
- */
-export function formatDocRef(doc: Pick<Doc, 'id' | 'title' | 'path'>, version: number, section: DocSection | null): string {
-  const label = section?.title ? `${doc.title} › ${section.title}` : doc.title;
-  const where = doc.path;
-  const head = `❝ ${label}\n(the user is asking about ${where}, ${doc.id} v${version}${section ? `, section #${section.id}` : ''}; quoted below)`;
-  if (!section) return head;
-  const body = section.text.trim();
-  const quoted = (body.length > EXCERPT_CAP ? body.slice(0, EXCERPT_CAP) + '…' : body)
-    .split('\n')
-    .map((l) => '> ' + l)
-    .join('\n');
-  return head + '\n' + quoted;
-}
-
-/** Parse a block written by formatDocRef (the UI turns it into a quote chip). */
+/** Parse an old « Ask about this » block (❝, before #304): the UI still shows it as a quote chip. */
 export function parseDocRef(text: string): { label: string; docId: string; version: number; section: string | null } | null {
   const m = /^❝ (.+)\n\(the user is asking about .+, (doc_[\w-]+) v(\d+)(?:, section #([^;\s]+))?; quoted below\)/.exec(text);
   return m ? { label: m[1]!, docId: m[2]!, version: Number(m[3]), section: m[4] ?? null } : null;

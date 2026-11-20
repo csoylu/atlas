@@ -3,7 +3,7 @@ import { Fragment, forwardRef, useCallback, useEffect, useMemo, useRef, useState
 import { AgentFace } from './AgentFace.tsx';
 import Markdown from 'react-markdown';
 import remarkGfm from 'remark-gfm';
-import { USER, isPaneLine, paneLabel, parseDocRef, stallText, type Agent, type Card, type ImageBlock, type Message, type Model, type PaneSees, type Run, type Timeline, type ToolCallTiming } from '@atlas/shared';
+import { USER, isPaneLine, paneLabel, parseDocRef, stallText, type Agent, type Card, type Message, type Model, type PaneSees, type Run, type Timeline, type ToolCallTiming } from '@atlas/shared';
 import { EyeIcon, PaneEye } from './PaneEye.tsx';
 import { api } from './api.ts';
 import { useMinute } from './useMinute.ts';
@@ -28,7 +28,8 @@ import { SecretBox, secretBoxOf } from './SecretBox.tsx';
 import { deleteChatQuestion } from './chatHistoryMenu.ts';
 import { HeaderActions, Icon } from './ScreenHeader.tsx';
 import { StatusIcon, STATUS_LABEL } from './StatusIcon.tsx';
-import type { Quote } from './DocPanel.tsx';
+import { chipAnchor, toPost, type Comments } from './comments.ts';
+import { CommentChips, UserContent } from './CommentCards.tsx';
 import { draftKey, readDraft, useDraft, writeDraft } from './drafts.ts';
 import { useAutoGrow } from './useAutoGrow.ts';
 import { RewindConfirm, RewindIcon, RewindNote, useRewind, type Rewind } from './Rewind.tsx';
@@ -50,8 +51,8 @@ function useFocusSeq(cardId: string): number | null {
   return seq;
 }
 
-/** A document reference in a message (« ❝ Doc › Section »). */
-export type MessageRef = NonNullable<ReturnType<typeof parseDocRef>>;
+/** A place in an artifact a message points at (an old « ❝ Doc › Section » quote, or a comment's card, #304). */
+export type MessageRef = { docId: string; version: number; section: string | null; label: string };
 
 /** Live state of a card's conversation: messages, the streaming draft (thinking and text, in order), the latest run, tool results and timings by id. */
 export function useCardConversation(card: Card, stream: MessageStream, onError: (e: unknown) => void) {
@@ -138,11 +139,10 @@ export function CardPanel(props: {
   userName?: string | null;
   /** All board cards: the ones this chat created are pinned at its top-left. */
   cards: Card[];
-  /** « Ask about this » from the side panel: shown as a chip in the composer, sent with the message. */
-  quote?: Quote | null;
-  onQuoteClear?(): void;
   /** The tab open in the chat's pane (#305): the composer's eye, sent with the message. */
   sees?: PaneSees | null;
+  /** The comments made on the side panel (#304): numbered chips in the composer, sent with the message. */
+  comments?: Comments;
   /** Tabs open in a hidden side panel (overlay mode): a button brings it back. */
   hiddenDocs?: number;
   onShowDocs?(): void;
@@ -216,7 +216,7 @@ export function CardPanel(props: {
       </div>
       <RewindNote rw={rw} />
       {!rw.hideRun && <RunLine run={convo.run} onStop={() => void rw.stopTurn()} />}
-      <CardComposer card={card} agents={props.agents} models={props.models} plan={!!props.plan} stream={stream} onError={onError} quote={props.quote} onQuoteClear={props.onQuoteClear} sees={props.sees} rewind={rw} />
+      <CardComposer card={card} agents={props.agents} models={props.models} plan={!!props.plan} stream={stream} onError={onError} comments={props.comments} sees={props.sees} rewind={rw} />
       <RewindConfirm rw={rw} />
     </aside>
   );
@@ -454,8 +454,12 @@ export function Activity(props: {
                 renderTurn(ms, running && last, last)
               ) : (
                 <>
-                  <ImageThumbs cardId={card.id} images={m.content.filter((b): b is ImageBlock => b.type === 'image')} />
-                  {m.content.map((b, k) => (b.type === 'text' && !isAttachedLine(b.text) && !(m.author === USER && isPaneLine(b.text)) ? text(b.text, String(k), m.author === USER) : null))}
+                  <UserContent
+                    message={m}
+                    cardId={card.id}
+                    text={(t, k) => (isAttachedLine(t) || (m.author === USER && isPaneLine(t)) ? null : text(t, k, m.author === USER))}
+                    onOpenRef={m.author === USER ? props.onOpenRef : undefined}
+                  />
                   {m.author === USER && m.pane && (
                     <div className="pane-was" title="Open in your pane when you sent this: the agent was told where (not the content)">
                       <EyeIcon />
@@ -631,9 +635,9 @@ export function RunLine({ run, onStop, stop = true }: { run: Run | null; onStop(
 /** Message box for the card's agent, with usage and the model/effort chooser. */
 export const CardComposer = forwardRef<
   HTMLTextAreaElement,
-  { card: Card; agents: Agent[]; models: Model[]; plan: boolean; stream: MessageStream; onError(e: unknown): void; quote?: Quote | null; onQuoteClear?(): void; sees?: PaneSees | null; rewind?: Rewind }
+  { card: Card; agents: Agent[]; models: Model[]; plan: boolean; stream: MessageStream; onError(e: unknown): void; comments?: Comments; sees?: PaneSees | null; rewind?: Rewind }
 >(
-  function CardComposer({ card, agents, models, plan, stream, onError, quote, onQuoteClear, sees, rewind }, ref) {
+  function CardComposer({ card, agents, models, plan, stream, onError, comments, sees, rewind }, ref) {
     // The eye (#305): off for one message, back on for the next.
     const [eyeOff, setEyeOff] = useState(false);
     const draftId = draftKey('card', card.id);
@@ -703,13 +707,14 @@ export const CardComposer = forwardRef<
           e.preventDefault();
           const t = text.trim();
           const images = att.items.filter((a) => !a.error);
-          if (!t && !images.length) return;
+          const notes = comments?.list ?? [];
+          if (!t && !images.length && !notes.length) return;
           // An exact command (« /clear », « /compact keep X ») runs; it is never sent as a message.
-          const cmd = images.length ? null : parseSlash(t);
+          const cmd = images.length || notes.length ? null : parseSlash(t);
           if (cmd) return runSlash(cmd.name, cmd.arg);
           if (att.items.some((a) => a.error)) return void att.setNotice('Remove the images that failed (marked !) before sending');
           setText('');
-          onQuoteClear?.();
+          comments?.clear();
           rewind?.sent();
           const sent = att.items;
           const pending = att.take();
@@ -718,24 +723,17 @@ export const CardComposer = forwardRef<
           setEyeOff(false);
           // A failed send puts the text (and the images) back, unless the user already started a new message.
           void pending
-            .then((ids) => api.postMessage(card.id, t, quote?.ref, ids, pane))
+            .then((ids) => api.postMessage(card.id, t, ids, notes.map(toPost), pane))
             .catch((err: unknown) => {
               if (!readDraft(draftId).trim()) writeDraft(draftId, text); // the composer may be gone already
               setText((cur) => (cur.trim() ? cur : text));
               att.restore(sent);
+              comments?.restore(notes);
               onError(err);
             });
         }}
       >
-        {quote && (
-          <div className="quote-chip" title="Your message is about this part of the document">
-            <span aria-hidden="true">❝</span>
-            <span className="quote-chip-label">{quote.label}</span>
-            <button type="button" aria-label="Remove the quote" onClick={onQuoteClear}>
-              ×
-            </button>
-          </div>
-        )}
+        {!!comments?.list.length && <CommentChips list={comments.list} label={chipAnchor} onRemove={comments.remove} />}
         {matches.length > 0 && (
           <div className="slash-pop" role="listbox" aria-label="Commands">
             {matches.map((c, i) => (

@@ -5,8 +5,9 @@ import { ThreadPanel } from './ThreadPanel.tsx';
 import { api } from './api.ts';
 import { CardPanel } from './CardPanel.tsx';
 import type { MessageStream } from './useMessages.ts';
-import { DocPanel, usePanelMode, usePanelTabs, type Quote } from './DocPanel.tsx';
+import { DocPanel, usePanelMode, usePanelTabs } from './DocPanel.tsx';
 import { activeTab } from './docPanel.ts';
+import { useComments } from './comments.ts';
 
 export const LAST_AGENT = 'atlas.chat.agent';
 /** Window event: show / hide the documents panel of the chat on screen (⌘\, the palette). */
@@ -57,7 +58,7 @@ function OpenMain({ agentId, onOpenMain }: { agentId: string; onOpenMain(agentId
 
 /**
  * A direct chat and its side panel (documents the agent opened, design §16): side by side above 960px, an overlay
- * below, full screen on phones. « Ask about this » puts a quote chip in the composer; over the chat it hides the panel.
+ * below, full screen on phones. Comment mode on the panel (#304) puts numbered chips in the composer.
  */
 function ChatWithPanel(props: Parameters<typeof ChatView>[0] & { chat: Card }) {
   const { chat, stream, onError } = props;
@@ -65,7 +66,7 @@ function ChatWithPanel(props: Parameters<typeof ChatView>[0] & { chat: Card }) {
   const mode = usePanelMode();
   const viewRef = useRef<HTMLDivElement>(null);
   const resize = usePanelResize(viewRef, mode);
-  const [quote, setQuote] = useState<Quote | null>(null);
+  const comments = useComments(chat.id);
   const [hidden, setHidden] = useState(false);
   const [want, setWant] = useState<{ docId: string; version: number; key: string } | null>(null);
   // An agent opening or focusing a tab shows the panel again.
@@ -110,7 +111,6 @@ function ChatWithPanel(props: Parameters<typeof ChatView>[0] & { chat: Card }) {
     window.addEventListener(TOGGLE_PANEL, toggle);
     return () => window.removeEventListener(TOGGLE_PANEL, toggle);
   }, [hasTabs]);
-  const focusComposer = () => setTimeout(() => document.querySelector<HTMLTextAreaElement>('.chat-pane .composer textarea')?.focus(), 0);
   return (
     <div ref={viewRef} className={'chat-view' + (show || thread ? ' with-doc ' + mode : '')}>
       <CardPanel
@@ -124,9 +124,8 @@ function ChatWithPanel(props: Parameters<typeof ChatView>[0] & { chat: Card }) {
         onError={onError}
         userName={props.userName}
         cards={props.cards}
-        quote={quote}
-        onQuoteClear={() => setQuote(null)}
         sees={sees}
+        comments={comments}
         hiddenDocs={hidden ? tabs.length : 0}
         onShowDocs={() => setHidden(false)}
         onHideDocs={show ? () => setHidden(true) : undefined}
@@ -182,11 +181,7 @@ function ChatWithPanel(props: Parameters<typeof ChatView>[0] & { chat: Card }) {
           onHide={() => setHidden(true)}
           onShown={onShown}
           onError={onError}
-          onAsk={(q) => {
-            setQuote(q);
-            if (mode !== 'side') setHidden(true);
-            focusComposer();
-          }}
+          comments={comments}
         />
       )}
     </div>

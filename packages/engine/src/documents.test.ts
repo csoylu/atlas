@@ -2,7 +2,7 @@ import { afterEach, describe, expect, it } from 'vitest';
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { changedSections, findSection, formatDocRef, parseDocRef, splitSections, type ServerEvent } from '@atlas/shared';
+import { changedSections, findSection, parseDocRef, splitSections, type ServerEvent } from '@atlas/shared';
 import { startEngine, type Engine } from './index.ts';
 import { FakeProvider } from './providers/fake.ts';
 import { MAX_TABS } from './documents.ts';
@@ -46,15 +46,15 @@ describe('markdown sections and references (shared)', () => {
     expect([...changedSections(DESIGN, after)]).toEqual(['overview', 'storage']);
   });
 
-  it('formats a reference the agent can read and the UI can parse back', () => {
-    const sec = findSection(splitSections(DESIGN), 'flow')!;
-    const text = formatDocRef({ id: 'doc_ab12cd34', title: 'Permissions design', path: 'docs/perm.md' }, 2, sec);
-    expect(text).toContain('❝ Permissions design › Flow');
-    expect(text).toContain('docs/perm.md, doc_ab12cd34 v2, section #flow');
-    expect(text).toContain('> Tool call → policy.');
-    expect(parseDocRef(text)).toEqual({ label: 'Permissions design › Flow', docId: 'doc_ab12cd34', version: 2, section: 'flow' });
-    expect(parseDocRef(formatDocRef({ id: 'doc_x', title: 'Board', path: 'links/board.url' }, 4, null))).toEqual({ label: 'Board', docId: 'doc_x', version: 4, section: null });
+  it('still reads the quote of an old « Ask about this » message (before #304)', () => {
+    const old = '❝ Permissions design › Flow\n(the user is asking about docs/perm.md, doc_ab12cd34 v2, section #flow; quoted below)\n> ## Flow';
+    expect(parseDocRef(old)).toEqual({ label: 'Permissions design › Flow', docId: 'doc_ab12cd34', version: 2, section: 'flow' });
+    expect(parseDocRef('❝ Board\n(the user is asking about links/board.url, doc_x v4; quoted below)')).toEqual({ label: 'Board', docId: 'doc_x', version: 4, section: null });
     expect(parseDocRef('just text')).toBeNull();
+  });
+
+  it('knows the first line of each section', () => {
+    expect(splitSections(DESIGN).map((x) => [x.id, x.line])).toEqual([['permissions-design', 1], ['overview', 5], ['flow', 8]]);
   });
 });
 
@@ -412,34 +412,6 @@ describe('artifacts (#120)', () => {
     expect(second.db.prepare("SELECT count(*) AS n FROM documents WHERE from_canvas = 'cv_1'").get()).toEqual({ n: 0 });
     expect(existsSync(join(dataDir, 'workspaces', 'atlas', page.path))).toBe(false);
     expect(second.db.prepare("SELECT converted_at IS NOT NULL AS done FROM canvases WHERE id = 'cv_1'").get()).toEqual({ done: 1 });
-  });
-});
-
-describe('API: a message about a document part', () => {
-  it('puts the quoted section before the message', async () => {
-    const { engine, put, docs } = await setup(new FakeProvider([[{ type: 'text', text: 'ok' }]]));
-    const chat = engine.kanban.newChat('atlas');
-    put('docs/perm.md', DESIGN);
-    const d = docs.indexFile('atlas', 'docs/perm.md', 'atlas');
-    const res = await fetch(`${engine.url}/api/cards/${chat.id}/messages`, {
-      method: 'POST',
-      headers: { 'content-type': 'application/json' },
-      body: JSON.stringify({ text: 'Who decides?', ref: { docId: d.id, version: 1, section: 'flow' } }),
-    });
-    expect(res.status).toBe(201);
-    const msg = (await res.json()) as { content: { type: string; text: string }[] };
-    expect(msg.content).toHaveLength(2);
-    expect(parseDocRef(msg.content[0]!.text)).toMatchObject({ docId: d.id, section: 'flow', label: 'Permissions design › Flow' });
-    expect(msg.content[1]!.text).toBe('Who decides?');
-
-    const panel = await fetch(`${engine.url}/api/chats/${chat.id}/panel/open`, {
-      method: 'POST',
-      headers: { 'content-type': 'application/json' },
-      body: JSON.stringify({ docId: d.id }),
-    });
-    expect(((await panel.json()) as unknown[]).length).toBe(1);
-    const content = (await (await fetch(`${engine.url}/api/documents/${d.id}?version=1`)).json()) as { content: string };
-    expect(content.content).toBe(DESIGN);
   });
 });
 

@@ -1,4 +1,4 @@
-import type { PaneSees, About, Account, Agent, Card, CardStatus, ChatGptModel, ChatGptStatus, ChatUsage, ClaudePlanModel, ClaudePlanStatus, ClearEvent, CompactResult, CreateAccount, CreateAgent, CreateCard, CreateModelRequest, CreatePlanAccount, CreateWorkflow, Doc, DocContent, DocHit, DocRef, DocVersion, FileChange, Folder, Inbox, LocalModel, LocalPull, LocalStatus, Memory, MemoryBudget, MemoryChange, MemoryProposal, MemoryQuery, Message, Model, ModelTest, Notification, PanelTab, PlanProvider, RewindPreview, RewindResult, Run, CreateSecret, SecretInfo, SecretList, SecretStoreStatus, UpdateSecret, SaveWorkflowGraph, ServerEvent, Settings, Timeline, ToolCallTiming, UpdateAccount, UpdateAgent, UpdateChatGpt, UpdateClaudePlan, UpdateLocal, UpdateMemory, UpdateModelRequest, UpdatePlanAccount, UpdateStatus, UpdateVoice, Upload, UsageSummary, VoiceName, VoiceStatus, TriggerPreview, UpdateWorkflow, Workflow, WorkflowRun, WorkflowField, WorkflowRunContext, TaskWorkflow, RunWorkflow, Project, CreateProject, UpdateProject, RepoCheck, WebhookInfo, TryCondition, ConditionTryResult } from '@atlas/shared';
+import type { PaneSees, About, Account, Agent, Card, CardStatus, ChatGptModel, ChatGptStatus, ChatUsage, ClaudePlanModel, ClaudePlanStatus, ClearEvent, CompactResult, CreateAccount, CreateAgent, CreateCard, CreateModelRequest, CreatePlanAccount, CreateWorkflow, Doc, DocContent, DocHit, DocVersion, FileChange, Folder, Inbox, LocalModel, LocalPull, LocalStatus, Memory, MemoryBudget, MemoryChange, MemoryProposal, MemoryQuery, Message, Model, ModelTest, Notification, PanelTab, PlanProvider, PostComment, RewindPreview, RewindResult, Run, CreateSecret, SecretInfo, SecretList, SecretStoreStatus, UpdateSecret, SaveWorkflowGraph, ServerEvent, Settings, Timeline, ToolCallTiming, UpdateAccount, UpdateAgent, UpdateChatGpt, UpdateClaudePlan, UpdateLocal, UpdateMemory, UpdateModelRequest, UpdatePlanAccount, UpdateStatus, UpdateVoice, Upload, UsageSummary, VoiceName, VoiceStatus, TriggerPreview, UpdateWorkflow, Workflow, WorkflowRun, WorkflowField, WorkflowRunContext, TaskWorkflow, RunWorkflow, Project, CreateProject, UpdateProject, RepoCheck, WebhookInfo, TryCondition, ConditionTryResult } from '@atlas/shared';
 
 /** HTTP error with the parsed body (e.g. a 409's details). */
 export class ApiError extends Error {
@@ -43,9 +43,9 @@ export const api = {
   moveCard: (id: string, status: CardStatus) => call<Card>('PATCH', `/cards/${id}`, { status }),
   deleteCard: (id: string) => call<void>('DELETE', `/cards/${id}`),
   messages: (id: string) => call<Message[]>('GET', `/cards/${id}/messages`),
-  /** `pane`: the open pane tab, the eye on (#305); null = the pane closed or the eye off. */
-  postMessage: (id: string, text: string, ref?: DocRef, uploads?: string[], pane: PaneSees | null = null) =>
-    call<Message>('POST', `/cards/${id}/messages`, { text, ...(ref ? { ref } : {}), ...(uploads?.length ? { uploads } : {}), pane }),
+  /** comments: the notes made in comment mode on the pane (#304); `pane`: the open pane tab, the eye on (#305); null = the pane closed or the eye off. */
+  postMessage: (id: string, text: string, uploads?: string[], comments?: PostComment[], pane: PaneSees | null = null) =>
+    call<Message>('POST', `/cards/${id}/messages`, { text, ...(uploads?.length ? { uploads } : {}), ...(comments?.length ? { comments } : {}), pane }),
   /** What the chat's pane shows now (#305): a voice message, which has no composer, is sent with it. */
   reportPane: (id: string, pane: PaneSees | null) => call<void>('PUT', `/cards/${id}/pane`, { pane }),
   /** Stage a pasted/dropped image; its id goes with the next message. */

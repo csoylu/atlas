@@ -21,9 +21,10 @@ import { SecretsPasswordError } from './secretFile.ts';
 import type { Documents } from './documents.ts';
 import type { Projects } from './projects.ts';
 import type { ReviewFlow } from './reviewFlow.ts';
-import { findSection, formatDocRef, PaneSees, splitSections } from '@atlas/shared';
+import { PaneSees, withPaneHelper } from '@atlas/shared';
 import type { SandboxStatus } from '@atlas/shared';
 import { PanePresence, paneNote } from './pane.ts';
+import { commentBlocks, type PageShot } from './comments.ts';
 import { inside } from './tools.ts';
 import { statSync } from 'node:fs';
 import { ConflictError, InvalidError, NotFoundError, type Kanban } from './kanban.ts';
@@ -91,6 +92,8 @@ export function createApi(deps: {
   projects: Projects;
   /** The default Review workflow of each project (#263). */
   reviewFlow: ReviewFlow;
+  /** Pictures of commented page areas (#304); null: none. */
+  pageShot?: PageShot | null;
 }): Server {
   const { kanban, agents, models, runner, rewinds, slash, dispatcher, settings, documents, memories, cleanup, workflows, local, accounts, chatgpt, claude, plans, notifications, usage, bus, auth, projects, reviewFlow } = deps;
   const app = express();
@@ -250,32 +253,39 @@ export function createApi(deps: {
     res.json(kanban.messages(req.params.id));
   });
   app.post('/api/cards/:id/messages', async (req, res) => {
-    const { text, ref, uploads: ids, pane: sent } = PostMessage.parse(req.body);
+    const { text, uploads: ids, comments, pane: sent } = PostMessage.parse(req.body);
     const card = kanban.get(req.params.id);
     projects.assertActive(card.projectId, 'its tasks and chats'); // archived (#213): read-only
     if (ids.length && !card.assignee) throw new InvalidError('assign an agent before sending images: they go into its workspace');
+    if (comments.length && !card.assignee) throw new InvalidError('assign an agent before sending comments: their pictures go into its workspace');
+    // The agent's workspace in the chat's project (#214): pasted images and comment pictures go there.
+    const workdir = card.assignee ? projects.workspace(card.assignee, card.projectId) : '';
+    // Comments on the pane's open tab (#304): one text block each (kind, path, version, anchor, quote) + a picture of an area.
+    const commented = comments.length
+      ? await commentBlocks(comments, {
+          workdir,
+          shoot: deps.pageShot ?? null,
+          filesDir: (root) => projects.filesDir(root).dir,
+          doc: (docId, version) => {
+            const latest = documents.get(docId).version;
+            // The version the user was looking at, or the latest if it is no longer kept.
+            const kept = documents.versions(docId).some((v) => v.version === version);
+            const c = documents.content(docId, kept ? version : undefined);
+            return { doc: c.doc, version: c.version, content: c.content, latest: Math.max(latest, c.doc.version) };
+          },
+        })
+      : [];
     // The card's state before this message: « Rewind to here » / Stop go back to it (rewind.ts).
     const snapshot = rewinds.beforeUserMessage(req.params.id);
-    // « Ask about this »: the quoted document part goes first, so the agent knows exactly what is meant.
-    let quote: string | null = null;
-    if (ref) {
-      const versions = documents.versions(ref.docId);
-      // The version the user was looking at, or the latest if it is no longer kept.
-      const { doc, content } = documents.content(ref.docId, versions.some((v) => v.version === ref.version) ? ref.version : undefined);
-      const section = ref.section !== null && doc.kind === 'markdown' ? (findSection(splitSections(content), ref.section) ?? null) : null;
-      quote = formatDocRef(doc, ref.version, section);
-    }
     // « What the agent sees » (#305): the open pane tab, one line, said when it changed. A voice message sends none:
     // the chat's pane as its UI last reported it.
     const pane = sent === undefined ? panes.get(card.id) : sent;
     const seen = paneNote(kanban.messages(card.id), pane, runner.summaryOf(card.id)?.uptoSeq ?? null);
     // Pasted/dropped images: copied into the agent's workspace, then the message row written with their blocks (uploads.ts).
-    // The agent's workspace in the chat's project (#214).
-    const workdir = ids.length ? projects.workspace(card.assignee!, card.projectId) : '';
     const message = await uploads.send(ids, workdir, (images) =>
       kanban.appendMessage(req.params.id, 'user', USER, [
-        ...(quote ? [{ type: 'text' as const, text: quote }] : []),
         ...(text ? [{ type: 'text' as const, text }] : []),
+        ...commented,
         ...images.flatMap((im) => [im, { type: 'text' as const, text: `[attached: ${relative(workdir, im.path)}]` }]),
         ...(seen ? [{ type: 'text' as const, text: seen }] : []),
       ], null, pane),
@@ -585,6 +595,12 @@ export function createApi(deps: {
     const type = String(res.get('Content-Type') ?? '');
     const media = /^(image|audio|video|font)\//.test(type) && !type.startsWith('image/svg');
     const dotfile = relative(root, file).split(/[\\/]/).some((p) => p.startsWith('.'));
+    // A page in the pane (#304): the comment-mode helper added, so a click or a drag on it can be commented.
+    const pane = req.query.pane === '1' && type.startsWith('text/html') && !dotfile && size <= MAX_SERVED_REDACT;
+    if (pane) {
+      res.setHeader('Cache-Control', 'no-store');
+      return void res.send(withPaneHelper(deps.secrets.redactBytes(readFileSync(file)).buf.toString('utf8')));
+    }
     if (!media && !dotfile && size <= MAX_SERVED_REDACT) {
       const red = deps.secrets.redactBytes(readFileSync(file));
       if (red.hidden) {

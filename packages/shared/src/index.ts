@@ -1,7 +1,10 @@
 import { z } from 'zod';
-import { DocRef, type Doc, type Folder, type PanelTab } from './documents.ts';
+import { type Doc, type Folder, type PanelTab } from './documents.ts';
 
 export * from './documents.ts';
+export * from './comments.ts';
+export * from './paneHelper.ts';
+import { COMMENTS_MAX, PostComment } from './comments.ts';
 export * from './cardRefs.ts';
 export * from './projects.ts';
 export * from './pane.ts';
@@ -320,20 +323,22 @@ export const TodoItem = z.object({
 export type TodoItem = z.infer<typeof TodoItem>;
 export const TODO_LIMIT = 50;
 
-/** A user message; `ref` = the document part it is about (« Ask about this » in the side panel). */
-/** `uploads`: ids from POST /api/cards/:id/uploads; a message may be images only (then `text` is empty). */
+/**
+ * A user message. `uploads`: ids from POST /api/cards/:id/uploads; `comments`: places on the pane's open tab with
+ * Master's words (#304). A message may be images or comments only (then `text` is empty).
+ */
 export const PostMessage = z
   .object({
     text: z.string().trim().max(100_000).default(''),
-    ref: DocRef.optional(),
     uploads: z.array(UploadId).max(IMAGE_MAX_PER_MESSAGE).default([]),
     /**
      * What is open in the chat's right pane (#305), the eye on; null = closed, or left out of this message. Absent (a
      * voice message, #305): what the chat's pane last reported (PUT /api/cards/:id/pane).
      */
     pane: PaneSees.nullable().optional(),
+    comments: z.array(PostComment).max(COMMENTS_MAX).default([]),
   })
-  .refine((m) => m.text.length > 0 || m.uploads.length > 0, { message: 'a message needs text or an image' });
+  .refine((m) => m.text.length > 0 || m.uploads.length > 0 || m.comments.length > 0, { message: 'a message needs text, an image or a comment' });
 /** An image waiting to be sent (POST /api/cards/:id/uploads): the composer shows it, the message names its id. */
 export interface Upload {
   id: string;

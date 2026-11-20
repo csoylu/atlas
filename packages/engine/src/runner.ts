@@ -1259,7 +1259,7 @@ export class Runner {
       ...(this.opts.documents
         ? [
             `Artifacts: what you make for ${name}; artifact_create saves one (versioned, in the Library, shown in the chat).`,
-            `A message starting with ❝ quotes the part of an artifact ${name} asks about (path, version, section): answer that, update it if asked.`,
+            `A [comment N] block is ${name}'s note on a place in an open artifact or file (path, version, anchor, quote, maybe a picture): act on it there.`,
           ]
         : []),
       ...this.secretsBlock(agent.id, project.id),
