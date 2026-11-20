@@ -69,12 +69,12 @@ for (const [id, role] of [
   ['zurich', 'You are zurich, the QA lead. You review pull requests, run the checks and report what you see.'],
 ]) await call('POST', '/agents', { id, rolePrompt: role, modelId: 'sonnet' });
 
-// The one chat the screens test (its title is its first message: kept short, because a long one overlaps the task chip in the
-// 390 px header, a bug reported in #314 and still to fix): a long history of mixed content (prose, a list, a table, code, a long unbroken word).
+// The one chat the screens test: a long history of mixed content (prose, a list, a table, code, a long unbroken word). Its
+// first message is the chat title, long on purpose (#323: it truncates before the « N tasks » chip).
 const chat = await call('POST', '/agents/atlas/chats');
 const LONG_WORD = 'a_very_long_unbroken_identifier_that_must_wrap_or_scroll_instead_of_widening_the_page_'.repeat(2);
 const turns: [string, string][] = [
-  ['Status?', 'Three tasks are in review, two are blocked on a question, and the rest are ready. The blocked ones need a decision from you.'],
+  ['Can you give me the status of the release work?', 'Three tasks are in review, two are blocked on a question, and the rest are ready. The blocked ones need a decision from you.'],
   ['What is blocking the updater?', '## Updater\n\nThe installer needs a signed build. Steps left:\n\n- Sign the dmg\n- Upload it to the release\n- Check the update badge in Settings → About\n\nOnce signed, the badge appears within a minute.'],
   ['Show me the open tasks by owner.', '| Owner | Open | Blocked |\n| --- | --- | --- |\n| atlas | 4 | 1 |\n| munih | 7 | 0 |\n| paris | 3 | 1 |\n| zurich | 2 | 0 |\n\nmunih has the most open work.'],
   ['Which command runs the checks?', 'Run it from the clone:\n\n```sh\nnpm ci\nnpm run typecheck && npm test\nnpm run build && npm run ui:check\n```\n\nThe last step takes about 75 seconds.'],
