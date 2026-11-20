@@ -5,7 +5,7 @@ import { join } from 'node:path';
 import { afterEach, describe, expect, it } from 'vitest';
 import { Bus } from './events.ts';
 import { openDb, type Db } from './store/db.ts';
-import { compareSemver, parseSums, Updater, zipName, type UpdaterOptions } from './updater.ts';
+import { compareSemver, parseSums, QUIT_DONE, Updater, zipName, type UpdaterOptions } from './updater.ts';
 import { startEngine } from './index.ts';
 import { FakeGitHub, fakeApp, sha } from '../test/updaterKit.ts';
 import { until } from '../test/kit/index.ts';
@@ -255,6 +255,66 @@ describe.skipIf(!mac)('updater (fake release server)', () => {
     expect(s.phase).toBe('failed');
     expect(s.error).toMatch(/^The update to 0.5.0 did not install: Atlas 0.4.0 is still the one running\. Details in .+install\.log\.$/);
   });
+
+  // #324: on 20 Nov 2026 0.78.0 stopped its engine and closed the database after Update, then hung in its process exit
+  // for 6 minutes; the helper gave up after 2 minutes with only « did not quit ».
+  it('Atlas stuck in its exit after the engine stopped: the helper samples it, ends it with SIGKILL and installs', async () => {
+    await start();
+    gh.publish('0.5.0');
+    const apps = mkdtempSync(join(tmpdir(), 'atlas-upd-apps-'));
+    const installed = fakeApp(apps, '0.4.0');
+    const dataDir = mkdtempSync(join(tmpdir(), 'atlas-upd-e-'));
+    // the Atlas process: it ignores everything but SIGKILL, like a process stuck in exit()
+    const atlas = spawn('/bin/sh', ['-c', 'trap "" TERM INT HUP; while :; do sleep 0.2; done']);
+    procs.push(atlas);
+    const sampler = join(dataDir, 'fake-sample.sh');
+    writeFileSync(sampler, '#!/bin/sh\necho "stacks of $1" > "$4"\n', { mode: 0o755 });
+    let stopped: Promise<void> | undefined;
+    const e = await startEngine({
+      dbFile: ':memory:', dataDir, port: 0, dispatch: false, version: '0.4.0', memoryReview: false,
+      updates: { host: { appPath: installed, arch: 'arm64', quit: () => void (stopped = e.stop()) }, api: gh.url, intervalMs: false, pid: atlas.pid, openCommand: 'true', sampleCommand: sampler, helperTicks: { quit: 240, exit: 2 } },
+    });
+    await e.updater.check();
+    await e.updater.install();
+    await stopped;
+    // the engine wrote each step of its stop, the last one once the database was closed
+    const steps = readFileSync(join(dataDir, 'update', 'quit.log'), 'utf8').trim().split('\n').map((l) => l.replace(/^\S+ /, ''));
+    expect(steps[0]).toBe('asked the app to quit (the window closes, then the engine stops)');
+    expect(steps).toContain('stopping agent runs and their commands');
+    expect(steps.at(-1)).toBe(QUIT_DONE);
+    const log = join(dataDir, 'update', 'install.log');
+    await wait(() => existsSync(log) && readFileSync(log, 'utf8').includes('installed 0.5.0'), 20_000);
+    expect(readFileSync(log, 'utf8')).toMatch(/Atlas stopped its engine and closed the database \(\S+\), but its process \(pid \d+\) was still alive 10 s later, stuck in its exit: ended it with SIGKILL \(stacks in \S+quit-sample\.txt\)\n/);
+    expect(readFileSync(join(dataDir, 'update', 'quit-sample.txt'), 'utf8')).toBe(`stacks of ${atlas.pid}\n`);
+    await wait(() => atlas.signalCode === 'SIGKILL');
+    expect(installedVersion(installed)).toBe('0.5.0');
+  }, 30_000);
+
+  it('the engine never finishes stopping: nothing is killed, the helper names the step and the child processes, the next start shows it', async () => {
+    await start();
+    gh.publish('0.5.0');
+    // Atlas with a child process that keeps running (an agent's command, a test engine…)
+    const atlas = spawn('/bin/sh', ['-c', 'sleep 61 & wait']);
+    procs.push(atlas);
+    const t = setup('0.4.0', { pid: atlas.pid, helperTicks: { quit: 4, exit: 2 } }, 'atlas.db');
+    t.opts.host!.quit = () => t.u.quitStep('stopping agent runs and their commands');
+    await t.u.check();
+    await t.u.install();
+    const log = join(t.dataDir, 'update', 'install.log');
+    await wait(() => existsSync(log) && readFileSync(log, 'utf8').includes('update not installed'));
+    const last = readFileSync(log, 'utf8').trim().split('\n').at(-1)!;
+    expect(last).toMatch(/^Atlas did not quit within 2 minutes, its engine was still at: stopping agent runs and their commands; child processes: \d+ +[\d:]+ sleep 61; update not installed$/);
+    expect(atlas.exitCode).toBeNull();
+    expect(atlas.signalCode).toBeNull();
+    expect(installedVersion(t.installed)).toBe('0.4.0');
+    // the old version starts again: the reason is on the card, not only « did not quit »
+    t.db.close();
+    const db = openDb(join(t.dataDir, 'atlas.db'));
+    const s = new Updater(db, new Bus(), t.opts).status();
+    expect(s.phase).toBe('failed');
+    expect(s.error).toContain('The update to 0.5.0 did not install: Atlas did not quit within 2 minutes, its engine was still at: stopping agent runs and their commands; child processes: ');
+    execFileSync('pkill', ['-P', String(atlas.pid)]);
+  }, 30_000);
 
   it('API: GET /api/update, « Check now », Update refused in dev; the agents working now are listed', async () => {
     await start();

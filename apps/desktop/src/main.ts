@@ -251,6 +251,8 @@ else {
     app.exit(1);
   });
   app.on('activate', () => {
+    // A click on the Dock icon while quitting must not open a window on an engine that is stopping (#324).
+    if (quitPending || quitting) return;
     if (!mainWindow && (engine || DEV_UI)) createWindow(engine?.url ?? DEV_UI!);
   });
   app.on('window-all-closed', () => {

@@ -35,7 +35,7 @@ import { PlanAccounts } from './plan-accounts.ts';
 import { Notifications } from './notifications.ts';
 import { Voice, type VoiceHost } from './voice.ts';
 import { VoiceChat } from './voiceChat.ts';
-import { Updater, type UpdateHost } from './updater.ts';
+import { QUIT_DONE, Updater, type UpdateHost } from './updater.ts';
 import { ShellEnv, type ShellPathOptions } from './shellEnv.ts';
 import type { CheckoutOptions } from './workflowCommand.ts';
 import { Prs, ghReader, type GhRead } from './prs.ts';
@@ -121,7 +121,7 @@ export interface EngineOptions {
    * (dev, server, tests) the pane is unavailable and the UI opens links in a new tab.
    */
   browser?: BrowserHost;
-  updates?: { host: UpdateHost | null; cannotInstall?: string; api?: string; fetch?: typeof fetch; intervalMs?: number | false; openCommand?: string; pid?: number };
+  updates?: { host: UpdateHost | null; cannotInstall?: string; api?: string; fetch?: typeof fetch; intervalMs?: number | false; openCommand?: string; pid?: number; sampleCommand?: string; helperTicks?: { quit: number; exit: number } };
 }
 
 export interface Engine {
@@ -284,6 +284,8 @@ export async function startEngine(opts: EngineOptions): Promise<Engine> {
     intervalMs: opts.updates ? opts.updates.intervalMs : false,
     openCommand: opts.updates?.openCommand,
     pid: opts.updates?.pid,
+    sampleCommand: opts.updates?.sampleCommand,
+    helperTicks: opts.updates?.helperTicks,
   });
   // A comment on an area of a page (#304): that part of the page, shot like the screenshot tool does (read-only).
   const pageShot: PageShot | null =
@@ -409,6 +411,9 @@ export async function startEngine(opts: EngineOptions): Promise<Engine> {
     stalls,
     url,
     stop: async () => {
+      // After Update, each step goes to update/quit.log: the helper names the one that hangs (#324).
+      const step = (what: string) => updater.quitStep(what);
+      step('stopping the engine: timers, workflows');
       prs.stop();
       reviewFlow.stop();
       updater.stop();
@@ -416,21 +421,31 @@ export async function startEngine(opts: EngineOptions): Promise<Engine> {
       await workflows.commandsIdle();
       voice?.stop();
       dispatcher.stop();
+      step('waiting for the pull request checks');
       await prs.idle();
+      step('stopping project clones');
       await projects.stop();
+      step('stopping agent runs and their commands');
       await runner.shutdown();
       review.after = () => {};
+      step('waiting for the background memory review');
       await review.idle; // a background memory review writes to the db: let it finish before closing
+      step('stopping rewinds');
       await rewinds.shutdown();
+      step('stopping the local model server');
       await local.shutdown();
       chatgpt.stop();
       claude.stop();
+      step('stopping the network proxy');
       await network.stop();
+      step('closing the HTTP server');
       await new Promise<void>((resolve, reject) => {
         server.closeAllConnections();
         server.close((err) => (err ? reject(err) : resolve()));
       });
+      step('closing the database');
       db.close();
+      step(QUIT_DONE);
     },
   };
 }
