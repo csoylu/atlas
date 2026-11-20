@@ -384,11 +384,13 @@ export class Runner {
              VALUES (?, ?, ?, ?, 'running', ?, ?, ?, ?, ?, ?, ?)`,
           )
           .run(runId, card.id, agentId, kind, new Date().toISOString(), this.instance, isoIn(this.leaseMs), g?.turns ?? 0, g?.fail_streak ?? 0, g?.repeat_streak ?? 0, g?.repeat_key ?? null);
+        // The kick is stored with the run row, never after it (#321): a kill between the two left a run with nothing owed
+        // on a thread ending with an earlier answer, which recover() could not tell from a run that had answered.
+        if (o.kick && (!owed || o.kickAlways)) this.kanban.appendMessage(card.id, 'user', 'system', [{ type: 'text', text: o.kick }]);
         return true;
       })
       .immediate();
     if (!claimed) return null;
-    if (o.kick && (!owed || o.kickAlways)) this.kanban.appendMessage(card.id, 'user', 'system', [{ type: 'text', text: o.kick }]);
     this.emitRun(runId);
     const ctrl = new AbortController();
     const done = this.loop(runId, card.id, agentId, kind, ctrl.signal).finally(() => this.active.delete(card.id));
@@ -433,7 +435,8 @@ export class Runner {
       }
       if (this.answered(r.card_id)) {
         // Killed after its final answer was stored and before the run row was closed (#321): the run ended, only the
-        // bookkeeping was lost. Resuming would answer twice, and « interrupted » would say it was cut off.
+        // bookkeeping was lost. Resuming would answer twice, and « interrupted » would say it was cut off. Only this
+        // run can have left that state: wake() stores a run's kick in the transaction that creates its row.
         this.db.prepare("UPDATE runs SET status = 'done', ended_at = ? WHERE id = ? AND status = 'running'").run(now, r.id);
         const run = this.emitRun(r.id);
         try {

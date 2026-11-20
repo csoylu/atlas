@@ -295,6 +295,22 @@ describe('runner', () => {
     expect(fake.calls).toHaveLength(0);
     expect(second.engine.kanban.messages(card.id).map((m) => m.role)).toEqual(['user', 'assistant']);
   });
+
+  it('a kicked run and its kick are stored together: a failure between them leaves neither, so no run is ever answered-looking without having run (#321)', async () => {
+    const { engine } = await setup(new FakeProvider([text('never asked')]));
+    const card = engine.kanban.create({ title: 'x', assignee: 'atlas' }, 'user');
+    engine.kanban.appendMessage(card.id, 'user', 'user', text('go'));
+    engine.kanban.appendMessage(card.id, 'assistant', 'atlas', text('Which option, A or B?'));
+    // The kill window of the old code: the run row stored, the kick not yet.
+    const append = engine.kanban.appendMessage.bind(engine.kanban);
+    engine.kanban.appendMessage = () => {
+      throw new Error('killed here');
+    };
+    expect(() => engine.runner.wake(card.id, { kind: 'work', kick: 'Continue.' })).toThrow('killed here');
+    engine.kanban.appendMessage = append;
+    expect(engine.runner.runs(card.id)).toEqual([]);
+    expect(engine.kanban.messages(card.id).map((m) => m.role)).toEqual(['user', 'assistant']);
+  });
 });
 
 describe('context management (design §8)', () => {
