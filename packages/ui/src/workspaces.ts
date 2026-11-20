@@ -80,3 +80,11 @@ export function projectPending(p: Project, pending: NetworkPending[]): number | 
 
 /** « 2 background commands », « 1 background command ». */
 export const commands = (n: number) => `${n} background command${n === 1 ? '' : 's'}`;
+
+/**
+ * What the member's select sends. « Project default » ('') drops its own hosts too: they are shown only while its own
+ * level is Allowed hosts, so a list kept behind the default would still be in force with no way to see or remove it.
+ */
+export function levelPatch(value: string): { network: NetworkLevel | null; allowedHosts?: null } {
+  return value ? { network: value as NetworkLevel } : { network: null, allowedHosts: null };
+}

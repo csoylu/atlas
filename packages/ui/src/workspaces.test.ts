@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import type { Project, ProjectMember, SecretInfo } from '@atlas/shared';
-import { allowPatch, effective, gitAccess, pendingFor, projectPending, refusedFor, workspacePath } from './workspaces.ts';
+import { allowPatch, effective, levelPatch, gitAccess, pendingFor, projectPending, refusedFor, workspacePath } from './workspaces.ts';
 
 const member = (agentId: string, o: Partial<ProjectMember> = {}): ProjectMember =>
   ({ agentId, network: null, allowedHosts: null, workspace: null, home: false, cloneState: 'ready', cloneError: null, cloneProgress: null, mainChat: null, joinedAt: 'now', branch: null, ...o }) as ProjectMember;
@@ -59,5 +59,14 @@ describe('Settings → Workspaces (#308)', () => {
     expect(workspacePath(member('a', { workspace: '/d/projects/p1/a' }), null, '/d')).toBe('data/projects/p1/a');
     expect(workspacePath(member('a'), '/d/workspaces/a', '/d/')).toBe('data/workspaces/a');
     expect(workspacePath(member('a'), '/elsewhere/a', '/d')).toBe('/elsewhere/a');
+  });
+
+  it('« Project default » drops the agent\'s own hosts with its own level; another level keeps them', () => {
+    expect(levelPatch('')).toEqual({ network: null, allowedHosts: null });
+    expect(levelPatch('hosts')).toEqual({ network: 'hosts' });
+    expect(levelPatch('off')).toEqual({ network: 'off' });
+    // What the engine then applies: the project's level and list.
+    const p = project();
+    expect(effective(p, member('a', { ...levelPatch(''), allowedHosts: null }))).toEqual({ level: 'hosts', hosts: ['github.com'], ownHosts: false });
   });
 });

@@ -158,6 +158,12 @@ describe('internet levels (#298 S3)', () => {
     // An empty list is the project's list again; null level is the project's level.
     await l.call('PATCH', `/projects/${pid}/members/atlas`, { network: null, allowedHosts: [] });
     expect(l.engine.network.setting(pid, 'atlas')).toEqual({ level: 'hosts', hosts: ['github.com', '*.npmjs.org'] });
+    // « Project default » in Settings → Workspaces (#308): level and own hosts back to null in one PATCH.
+    await l.call('PATCH', `/projects/${pid}/members/atlas`, { network: 'hosts', allowedHosts: ['own.example'] });
+    expect(l.engine.network.setting(pid, 'atlas')).toEqual({ level: 'hosts', hosts: ['own.example'] });
+    const back = await l.call<Project>('PATCH', `/projects/${pid}/members/atlas`, { network: null, allowedHosts: null });
+    expect(back.body.members.find((x) => x.agentId === 'atlas')).toMatchObject({ network: null, allowedHosts: null });
+    expect(l.engine.network.setting(pid, 'atlas')).toEqual({ level: 'hosts', hosts: ['github.com', '*.npmjs.org'] });
     expect((await l.call('PATCH', `/projects/${pid}/members/nobody`, { network: 'off' })).status).toBe(404);
     expect((await l.call('PATCH', `/projects/${pid}/members/atlas`, { network: 'sometimes' })).status).toBe(400);
 

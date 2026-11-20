@@ -7,7 +7,7 @@ import { SetRow, SetRows, SetSec } from './SettingsKit.tsx';
 import { ProjDot, useProjects } from './projects.tsx';
 import type { MessageStream } from './useMessages.ts';
 import { Skeleton } from './Kit.tsx';
-import { allowPatch, commands, effective, gitAccess, LEVEL_LABEL, LEVEL_STATE, LEVELS, pendingFor, projectPending, refusedFor, workspacePath } from './workspaces.ts';
+import { allowPatch, commands, effective, gitAccess, LEVEL_LABEL, LEVEL_STATE, LEVELS, levelPatch, pendingFor, projectPending, refusedFor, workspacePath } from './workspaces.ts';
 
 /** How often refusals and pending background commands are read again while the page is open (neither has an event). */
 const POLL_MS = 5000;
@@ -52,8 +52,11 @@ export function WorkspacesPage(props: { agents: Agent[]; stream: MessageStream; 
     return () => clearInterval(t);
   }, [poll]);
 
-  const saveProject = (p: Project, patch: { network?: NetworkLevel; allowedHosts?: string[] }) => api.updateProject(p.id, patch).then(poll, onError);
-  const saveMember = (p: Project, agentId: string, patch: { network?: NetworkLevel | null; allowedHosts?: string[] | null }) => api.updateMember(p.id, agentId, patch).then(poll, onError);
+  // true once saved; false when refused (the error is shown, a typed host stays in its box).
+  const saved = () => (poll(), true);
+  const failed = (e: unknown) => (onError(e), false);
+  const saveProject = (p: Project, patch: { network?: NetworkLevel; allowedHosts?: string[] }) => api.updateProject(p.id, patch).then(saved, failed);
+  const saveMember = (p: Project, agentId: string, patch: { network?: NetworkLevel | null; allowedHosts?: string[] | null }) => api.updateMember(p.id, agentId, patch).then(saved, failed);
 
   if (!sandbox || !secrets) return <Skeleton />;
   return (
@@ -113,8 +116,8 @@ function ProjectSection(props: {
   browser: { available: boolean; reason: string | null } | null;
   refusals: NetworkRefusal[];
   pending: NetworkPending[];
-  onProject(patch: { network?: NetworkLevel; allowedHosts?: string[] }): Promise<void>;
-  onMember(agentId: string, patch: { network?: NetworkLevel | null; allowedHosts?: string[] | null }): Promise<void>;
+  onProject(patch: { network?: NetworkLevel; allowedHosts?: string[] }): Promise<boolean>;
+  onMember(agentId: string, patch: { network?: NetworkLevel | null; allowedHosts?: string[] | null }): Promise<boolean>;
   onClear(agentId: string): Promise<void>;
 }) {
   const p = props.project;
@@ -215,8 +218,8 @@ function MemberRow(props: {
   browser: { available: boolean; reason: string | null } | null;
   refused: NetworkRefusal[];
   pending: { count: number; level: NetworkLevel } | null;
-  onMember(patch: { network?: NetworkLevel | null; allowedHosts?: string[] | null }): Promise<void>;
-  onProject(patch: { allowedHosts?: string[] }): Promise<void>;
+  onMember(patch: { network?: NetworkLevel | null; allowedHosts?: string[] | null }): Promise<boolean>;
+  onProject(patch: { allowedHosts?: string[] }): Promise<boolean>;
   onClear(): Promise<void>;
 }) {
   const { project: p, member: m } = props;
@@ -263,7 +266,7 @@ function MemberRow(props: {
         <select
           aria-label={`Internet for @${a} in ${p.name}`}
           value={m.network ?? ''}
-          onChange={(ev) => void props.onMember({ network: (ev.target.value || null) as NetworkLevel | null })}
+          onChange={(ev) => void props.onMember(levelPatch(ev.target.value))}
         >
           <option value="">Project default ({LEVEL_LABEL[p.network]})</option>
           {LEVELS.map((l) => (
@@ -331,7 +334,7 @@ function MemberRow(props: {
 }
 
 /** A list of `host` / `*.suffix` rules: chips with ×, and a box to add one (checked with the engine's own rule). */
-function HostList(props: { hosts: string[]; label: string; empty: string; onChange(hosts: string[]): Promise<void> }) {
+function HostList(props: { hosts: string[]; label: string; empty: string; onChange(hosts: string[]): Promise<boolean> }) {
   const [draft, setDraft] = useState('');
   const [error, setError] = useState<string | null>(null);
   const add = () => {
@@ -339,7 +342,7 @@ function HostList(props: { hosts: string[]; label: string; empty: string; onChan
     if (!r.success) return setError(r.error.issues[0]?.message ?? 'not a host');
     setError(null);
     if (props.hosts.includes(r.data)) return setDraft('');
-    void props.onChange([...props.hosts, r.data]).then(() => setDraft(''));
+    void props.onChange([...props.hosts, r.data]).then((ok) => ok && setDraft(''));
   };
   return (
     <div className="ws-col">
