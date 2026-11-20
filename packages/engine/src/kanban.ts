@@ -565,7 +565,14 @@ export class Kanban {
   requestReview(id: string, urls: string[], by: string, summary: string): Card {
     const before = this.get(id);
     if (before.board === 'direct') throw new InvalidError('a direct chat has no pull requests: create a task for the work');
-    if (before.status === 'review') throw new InvalidError(`${cardRef(before)} is already in review: its pull request is with @${before.reviewer ?? 'nobody'}`);
+    // Asked again while In review (#325): the builder pushed a fix during the review. Only the builder may: the request
+    // stops the open Review run and starts one on the new head (workflows.ts). Anyone else (the reviewer in this thread)
+    // is told what to do instead.
+    if (before.status === 'review' && by !== before.assignee)
+      throw new InvalidError(
+        `${cardRef(before)} is already in review and only its builder @${before.assignee ?? 'nobody'} asks again` +
+          (by === before.reviewer ? ': you are its reviewer, give your verdict with pr_validate' : ''),
+      );
     const prs = urls.map(parsePrUrl);
     // A task's PRs are its project's (#216): the gate and the reviewer's workspace come from that project.
     const project = projectRow(this.db, before.projectId);
@@ -602,7 +609,7 @@ export class Kanban {
         .run(id);
       this.db.prepare("UPDATE cards SET status = 'review', reviewer = ?, updated_at = ? WHERE id = ?").run(reviewer, now, id);
       this.clearBlock(id);
-      this.event(id, 'status', { from: before.status, to: 'review', by });
+      if (before.status !== 'review') this.event(id, 'status', { from: before.status, to: 'review', by });
       this.event(id, 'review_requested', { by, summary, prs: prs.map((p) => p.url), reviewer });
       // « opened » for workflows (#258): a PR becomes known to Atlas when a task links it.
       for (const pr of linked) recordPrEvent(this.db, id, 'opened', { url: pr.url, repo: pr.repo, number: pr.number, branch: null, base: null, head: null, state: 'open', ci: null }, { by });

@@ -50,7 +50,8 @@ Also see `docs/updater.md`.
   check.mjs`). The verdict says which screens were checked and which were not: a narrowed run is never reported as a full
   one. Builders: name the affected screens in the summary. **Merged → Done**; **CI red, a conflict, a timeout, changes
   asked or a refused merge → Ready** for the builder, with the reason as a note in the thread; the builder fixes, pushes and calls
-  `task_request_review` again. Blocked only ever means "needs Master". When GitHub can't be read (gh logged out,
+  `task_request_review` again. A fix pushed during the review: the builder calls `task_request_review` while still In
+  review, which stops the open Review run and starts one on the new head (#325). Blocked only ever means "needs Master". When GitHub can't be read (gh logged out,
   offline) nothing moves; the card says why. The gate (`pr_validate` and the script, same code) refuses a base other
   than the repo's default branch, a head that moved, a conflict (the builder rebases) and a required CI check that is
   not green, naming the red check and linking it. **A repo's own rules are checks of that repo, run by its CI on the

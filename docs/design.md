@@ -595,7 +595,13 @@ edit, turn off and reset. One per project with a GitHub repo, `workflows.origin 
      run » and says where to fix it, never another agent. Exits from the `pr_validate` verdict: approved / changes
      asked. A run that ends without a verdict is woken once more (`REVIEW_TRIES` = 2, #221), then « couldn't run ».
      A reviewer run from before the update (`review_started` on the current request) is adopted, not started again.
-  5. *Validate + merge the PR*: action `mergePr` with the gate of §7.1 at the head the review saw. merged / refused.
+     A reviewer run cut by a restart is followed into the run that resumes it (#325: the next run of that agent on the
+     task); one that never resumes « couldn't run » after 15 min of engine time, Master told, Retry wakes it again.
+  5. *Validate + merge the PR*: action `mergePr` with the gate of §7.1 at the sha of the ok verdict (#325): a commit
+     pushed after the review is refused (« a commit was pushed after your review ») and goes back to the builder.
+     merged / refused.
+- **Asking again while In review** (#325): only the builder may (a fix pushed during the review). The new
+  `review_requested` stops the open Review run (« stopped by a new review request ») and starts one on the new head.
   6. *Task → Done*. 7. *Back to the builder*: Ready, the note « <step>: <exit> (<why>). Back to Ready for @builder… ».
 - **Seeded** at the engine start (`ReviewFlow.seed`) for every active project with a repo and `review_seeded = 0`, and
   when a project gets a repo; in the same transaction, each task of that project already In review gets a run whose

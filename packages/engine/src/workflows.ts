@@ -64,6 +64,8 @@ const HOUR_MS = 3_600_000;
 /** A step that couldn't run (#261) is tried again this often, and Master hears of it once after COULDNT_NOTIFY_MS. */
 export const COULDNT_RETRY_MS = 60_000;
 export const COULDNT_NOTIFY_MS = 15 * 60_000;
+/** A thread step's run interrupted by a restart and not resumed for this long (engine up) reaches Master (#325, #237). */
+export const THREAD_RESUME_MS = 15 * 60_000;
 
 interface WfRow {
   id: string;
@@ -168,6 +170,8 @@ interface ThreadData {
   seqBefore: number;
   /** A review (#221): agent runs woken for this step; one that ends without a verdict is woken once more by itself. */
   tries?: number;
+  /** A review's verdict sha (#325): the merge step pins the head the reviewer validated, never one pushed since. */
+  verdictSha?: string;
 }
 /** A review run that ended without a verdict is started once more by itself, then waits for Master (#221). */
 export const REVIEW_TRIES = 2;
@@ -1167,6 +1171,12 @@ export class Workflows {
     const id = 'wr_' + randomUUID().slice(0, 8);
     this.touched.runs.add(id);
     // One run at a time per task or PR (#258; several tasks: one each), one at a time for runs about nothing.
+    // The builder asked again while its task was In review (#325): it pushed a new head, which needs a new review. The
+    // open Review run (reviewing, or waiting on the head it was started for) stops, and this one starts on the new head.
+    if (subject && w.origin === 'review' && on.event?.name === 'review_requested') {
+      const old = this.db.prepare(`SELECT id FROM workflow_runs WHERE workflow_id = ? AND ${OPEN_RUN} AND subject_card = ?`).all(w.id, subject.cardId) as { id: string }[];
+      for (const r of old) this.stopIn(r.id, `a new review request${on.data?.by ? ` from @${on.data.by}` : ''} (a new head needs a new review)`);
+    }
     const open = (
       subject
         ? this.db.prepare(`SELECT number FROM workflow_runs WHERE workflow_id = ? AND ${OPEN_RUN} AND subject_card = ? AND COALESCE(subject_pr, '') = ? ORDER BY number LIMIT 1`).get(w.id, subject.cardId, subject.prUrl ?? '')
@@ -1409,7 +1419,10 @@ export class Workflows {
         if (!project.repo) return this.failStep(run.id, step, `${name}: project ${project.name} has no GitHub repo (Settings → Projects)`);
         const pr = this.prOf(run, project.repo);
         if (!pr) return this.failStep(run.id, step, `${name}: ${this.kanban.ref(card.id)} has no pull request of ${project.repo} linked`);
-        const data: MergeData = { repo: pr.repo, number: pr.number, url: pr.url, sha: pr.head_sha };
+        // The head the review validated (#325): a commit pushed since makes the gate refuse (« a commit was pushed after
+        // your review »), the task goes back to its builder, and its next request gets a new review.
+        const reviewed = this.steps(run.id).filter((s) => s.kind === 'agent' && s.ended_at && dataOf(s).verdictSha).at(-1);
+        const data: MergeData = { repo: pr.repo, number: pr.number, url: pr.url, sha: (reviewed && dataOf(reviewed).verdictSha) || pr.head_sha };
         this.db.prepare('UPDATE workflow_run_steps SET data = ? WHERE id = ?').run(JSON.stringify(data), step.id);
         this.touched.runs.add(run.id);
       }
@@ -2066,6 +2079,19 @@ export class Workflows {
     if (runId) this.tx(() => this.storeThreadRun(step.id, { ...next, runId }));
   }
 
+  /** The run that resumed `runId` after a restart: the next run of the same agent on the task (#325). */
+  private resumedRun(cardId: string, runId: string, agentId: string): string | null {
+    const r = this.db
+      .prepare(
+        `SELECT n.id FROM runs n, runs o WHERE o.id = ? AND n.card_id = ? AND n.agent_id = ? AND n.id != o.id
+           AND (n.started_at > o.started_at OR (n.started_at = o.started_at AND n.rowid > o.rowid)) ORDER BY n.started_at, n.rowid LIMIT 1`,
+      )
+      .get(runId, cardId, agentId) as { id: string } | undefined;
+    return r?.id ?? null;
+  }
+  /** When this engine first looked at an interrupted thread run: a long stop is not « not resumed for hours ». */
+  private upSince: number | null = null;
+
   private storeThreadRun(stepId: number, d: ThreadData): void {
     this.db.prepare('UPDATE workflow_run_steps SET data = ? WHERE id = ?').run(JSON.stringify(d), stepId);
     this.touched.runs.add(this.stepRow(stepId).run_id);
@@ -2085,7 +2111,31 @@ export class Workflows {
       this.setStepState(step, 'running');
       return this.setRunState(run.id, 'running');
     }
-    if (r.status === 'interrupted') return; // the runner resumes it
+    if (r.status === 'interrupted') {
+      // A restart resumes an interrupted run as a new run (runner.recover, design §6): the step follows it (#325). Before,
+      // it waited on the old run id for ever, and the verdict the resumed run gave never moved the step.
+      const next = this.resumedRun(step.card_id!, d.runId, d.agent!);
+      if (next) {
+        this.storeThreadRun(step.id, { ...d, runId: next });
+        return this.checkThread(run, this.stepRow(step.id));
+      }
+      const latest = this.db.prepare('SELECT id FROM runs WHERE card_id = ? ORDER BY started_at DESC, rowid DESC LIMIT 1').get(step.card_id) as { id: string };
+      if (latest.id === d.runId) {
+        // The runner resumes it (at start, then every half lease). One that never comes back reaches Master (#237).
+        this.upSince ??= this.now().getTime();
+        const since = Math.max(this.upSince, Date.parse(this.db.prepare('SELECT ended_at FROM runs WHERE id = ?').pluck().get(d.runId) as string));
+        if (this.now().getTime() - since < THREAD_RESUME_MS || step.couldnt) return;
+        const w = this.row(run.workflow_id);
+        const node = this.node(run.workflow_id, step.node_id);
+        const why = `@${d.agent}'s run was interrupted by a restart and has not resumed for ${Math.round((this.now().getTime() - since) / 60_000)} min`;
+        this.db.prepare('UPDATE workflow_run_steps SET manual_retry = 1 WHERE id = ?').run(step.id);
+        this.markCouldnt(run.id, step.id, why);
+        this.notify({ kind: 'workflow.couldnt_run', title: `Workflow « ${w.name} » is stuck on « ${node ? stepTitle(node) : step.node_id} »`, body: `Run ${run.number}: ${why}. In the run: Retry now (or Retry on the task) wakes @${d.agent} again.`, cardId: run.subject_card });
+        this.db.prepare('UPDATE workflow_run_steps SET notified_at = ? WHERE id = ?').run(this.now().toISOString(), step.id);
+        return;
+      }
+      // Another run came after it on the task: the runner resumes only a task's latest run, so it ended here.
+    }
     const node = this.node(run.workflow_id, step.node_id);
     const said = this.lastAgentText(step.card_id!, d.agent!, d.seqBefore);
     if (node?.kind === 'agent' && node.config.reviewAgent) {
@@ -2108,7 +2158,9 @@ export class Workflows {
         this.db.prepare('UPDATE workflow_run_steps SET notified_at = ? WHERE id = ?').run(this.now().toISOString(), step.id);
         return;
       }
-      const p = JSON.parse(v.payload) as { verdict: 'ok' | 'fail'; reason: string; pr: number; by: string };
+      const p = JSON.parse(v.payload) as { verdict: 'ok' | 'fail'; reason: string; pr: number; by: string; sha?: string | null };
+      // The sha the reviewer validated: the merge step pins it (#325), so a commit pushed after the review is refused.
+      if (p.sha) this.db.prepare('UPDATE workflow_run_steps SET data = ? WHERE id = ?').run(JSON.stringify({ ...d, verdictSha: p.sha }), step.id);
       return this.finishStep(run.id, step, p.verdict === 'ok' ? 'approved' : 'changes asked', `@${p.by} on PR #${p.pr}: ${cut(p.reason, 1000)}`);
     }
     if (r.status === 'done') return this.finishStep(run.id, step, 'done', said ?? 'done');
