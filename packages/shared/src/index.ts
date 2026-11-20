@@ -8,6 +8,8 @@ import { COMMENTS_MAX, PostComment } from './comments.ts';
 export * from './cardRefs.ts';
 export * from './projects.ts';
 export * from './pane.ts';
+export * from './browser.ts';
+import type { BrowserTab } from './browser.ts';
 import { PaneSees } from './pane.ts';
 import type { Project } from './projects.ts';
 
@@ -1202,7 +1204,11 @@ export type ServerEvent =
   /** The server's secrets.enc was unlocked, locked or got a new password (#208): the sidebar badge and Settings → Secrets. */
   | { type: 'secrets.status'; status: SecretStoreStatus }
   /** A project was created, edited, archived or restored, or a member joined or left (#213). */
-  | { type: 'project.updated'; project: Project };
+  | { type: 'project.updated'; project: Project }
+  /** A chat's browser tab changed (#298 S6): address, title, loading, error, owner; `blocked`: Master's input was refused (the agent has it). */
+  | { type: 'browser.updated'; tab: BrowserTab; blocked?: boolean }
+  /** A chat's browser tab was closed. */
+  | { type: 'browser.closed'; chatId: string };
 
 /* ── Voice mode (desktop only): « Hi Atlas », all local (docs/voice-research.md) ─────────────────────── */
 
