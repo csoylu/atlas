@@ -13,7 +13,9 @@ let win: BrowserWindow | null = null;
 app.setPath('userData', join(dataDir, 'electron'));
 
 app.whenReady().then(async () => {
-  const host = new ElectronBrowser(() => win);
+  // What the pages handed to the system (mailto:, downloads): recorded, never opened.
+  const opened: string[] = [];
+  const host = new ElectronBrowser(() => win, (url) => opened.push(url));
   const events: unknown[] = [];
   const engine = await startEngine({
     dbFile: join(dataDir, 'atlas.db'),
@@ -29,6 +31,6 @@ app.whenReady().then(async () => {
   engine.bus.on((e) => events.push(e));
   win = new BrowserWindow({ width: 1200, height: 800, show: process.env.E2E_SHOW === '1', webPreferences: { contextIsolation: true, sandbox: true } });
   await win.loadURL('data:text/html,<title>Atlas (e2e)</title><body>Atlas window</body>');
-  (globalThis as Record<string, unknown>).__atlas = { url: engine.url, host, engine, events, win };
+  (globalThis as Record<string, unknown>).__atlas = { url: engine.url, host, engine, events, win, opened };
   app.on('before-quit', () => void engine.stop());
 });

@@ -42,6 +42,8 @@ export type HostEvent =
   /** The main frame failed to load (Chromium's code and description: -111 ERR_TUNNEL_CONNECTION_FAILED…). */
   | { type: 'failed'; id: string; url: string; code: number; description: string }
   | { type: 'crashed'; id: string; reason: string }
+  /** The page tried to open something outside Atlas (another scheme, a download) and the host refused it. */
+  | { type: 'refused'; id: string; url: string; message: string }
   /** Master's mouse or keyboard reached the view while the agent has it: refused. */
   | { type: 'input-blocked'; id: string };
 
@@ -236,6 +238,9 @@ export class Browser {
       case 'failed':
         live.loading = false;
         live.error = this.explain(r, e.url, e.description);
+        break;
+      case 'refused':
+        live.error = e.message;
         break;
       case 'crashed':
         live.loading = false;

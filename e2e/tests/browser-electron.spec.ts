@@ -38,6 +38,7 @@ test.beforeAll(async () => {
 /** A local site: sets a cookie, counts clicks on its button. Loopback goes direct (the agent's dev server). */
 async function site(): Promise<{ url: string; close(): Promise<void> }> {
   const s = http.createServer((req, res) => {
+    if (req.url?.startsWith('/dl')) res.setHeader('content-disposition', 'attachment; filename="atlas.dmg"');
     res.setHeader('set-cookie', `visit=${encodeURIComponent(req.url ?? '/')}; Path=/; Max-Age=3600`);
     res.setHeader('content-type', 'text/html');
     res.end(
@@ -184,4 +185,95 @@ test('Master’s input is blocked while the agent has the tab; the agent’s CDP
     }
   }, chat.id);
   expect(refused).toBe('Master is using the browser');
+});
+
+/** A tab of agent atlas on the local site, on screen, loaded. */
+async function agentTab(path: string): Promise<string> {
+  const chat = (await atlas.call<{ id: string }>('POST', '/agents/atlas/chats')).body;
+  await atlas.call('POST', `/browser/tabs/${chat.id}/open`, { url: web.url + path });
+  await atlas.call('PUT', '/browser/view', { chatId: chat.id, bounds: { x: 600, y: 80, width: 600, height: 700 } });
+  await expect.poll(async () => (await atlas.call<Tab>('GET', `/browser/tabs/${chat.id}`)).body).toMatchObject({ loading: false, error: null });
+  return chat.id;
+}
+/** Runs `code` in the tab's page (no user gesture: what a page does by itself). */
+const inPage = (id: string, code: string) =>
+  app.evaluate((_e, [tid, c]) => (globalThis as any).__atlas.host.tabs.get(tid).view.webContents.executeJavaScript(c), [id, code] as const);
+const opened = () => app.evaluate(() => [...(globalThis as any).__atlas.opened] as string[]);
+const tabError = async (id: string) => (await atlas.call<Tab>('GET', `/browser/tabs/${id}`)).body.error;
+
+test('a page cannot hand smb:, file: or app schemes to the system; mailto: and downloads leave only after Master’s click', async () => {
+  const id = await agentTab('/schemes');
+  // By itself, a page gets nothing out: not smb: (mount a share), not file:, not a custom app scheme, not even mailto:.
+  for (const code of [`location.href = 'smb://attacker.example/share'`, `window.open('file:///tmp/evil.command')`, `location.href = 'zoommtg://x'`]) {
+    await inPage(id, code);
+    await expect.poll(() => tabError(id)).toMatch(/outside Atlas: refused \(only mailto: and tel: links/);
+  }
+  await inPage(id, `location.href = 'mailto:a@b.test'`);
+  await expect.poll(() => tabError(id)).toContain('without your click');
+  await inPage(id, `location.href = '${web.url}/dl'`);
+  await expect.poll(() => tabError(id)).toMatch(/\/dl outside Atlas without your click/);
+  expect(await opened()).toEqual([]);
+
+  // Master's own click: the mailto: link, then the download, go to the system (each click once).
+  await atlas.call('POST', `/browser/tabs/${id}/owner`, { owner: 'master' });
+  const clickTo = async (target: string) => {
+    await inPage(id, `document.getElementById('b').onclick = () => { location.href = ${JSON.stringify(target)} }; 0`);
+    await app.evaluate(async (_e, tid) => {
+      const wc = (globalThis as any).__atlas.host.tabs.get(tid).view.webContents;
+      wc.sendInputEvent({ type: 'mouseDown', x: 100, y: 100, button: 'left', clickCount: 1 });
+      wc.sendInputEvent({ type: 'mouseUp', x: 100, y: 100, button: 'left', clickCount: 1 });
+    }, id);
+  };
+  await clickTo('mailto:a@b.test');
+  await expect.poll(opened).toEqual(['mailto:a@b.test']);
+  await clickTo(web.url + '/dl');
+  await expect.poll(opened).toEqual(['mailto:a@b.test', web.url + '/dl']);
+  // Master's click does not open smb: either.
+  await clickTo('smb://attacker.example/share');
+  await expect.poll(() => tabError(id)).toContain('smb://attacker.example/share outside Atlas: refused');
+  expect(await opened()).toHaveLength(2);
+});
+
+test('every permission is denied: microphone, camera, notifications, location (agent tabs and Master’s pane)', async () => {
+  const id = await agentTab('/perm');
+  await atlas.call('POST', `/browser/tabs/master/open`, { url: web.url + '/perm-master' });
+  await atlas.call('PUT', '/browser/view', { chatId: 'master', bounds: { x: 600, y: 80, width: 600, height: 700 } });
+  await expect.poll(async () => (await atlas.call<Tab>('GET', `/browser/tabs/master`)).body).toMatchObject({ loading: false, error: null });
+  const probe = `(async () => {
+    const t = (p) => Promise.race([p, new Promise((r) => setTimeout(() => r('timeout'), 3000))]);
+    const media = await t(navigator.mediaDevices.getUserMedia({ audio: true }).then(() => 'granted', (e) => 'denied:' + e.name));
+    const camera = await t(navigator.mediaDevices.getUserMedia({ video: true }).then(() => 'granted', (e) => 'denied:' + e.name));
+    const notif = await t(Notification.requestPermission());
+    const geo = await t(new Promise((r) => navigator.geolocation.getCurrentPosition(() => r('granted'), (e) => r('denied:' + e.code))));
+    const mic = (await navigator.permissions.query({ name: 'microphone' })).state;
+    return { media, camera, notif, geo, mic };
+  })()`;
+  for (const tab of [id, 'master']) {
+    const r = await inPage(tab, probe);
+    expect(r.media).toMatch(/^denied/);
+    expect(r.camera).toMatch(/^denied/);
+    expect(r.notif).toBe('denied');
+    expect(r.geo).toMatch(/^denied/);
+    expect(r.mic).toBe('denied');
+  }
+});
+
+test('WebRTC sends no UDP past the proxy: no host or srflx UDP candidate on Allowed hosts or Off', async () => {
+  const pid = (await atlas.call<{ id: string }[]>('GET', '/projects')).body[0]!.id;
+  const gather = `(async () => {
+    const pc = new RTCPeerConnection({ iceServers: [{ urls: 'stun:stun.l.google.com:19302' }] });
+    pc.createDataChannel('x');
+    const seen = [];
+    pc.onicecandidate = (e) => e.candidate && seen.push(e.candidate.candidate);
+    await pc.setLocalDescription(await pc.createOffer());
+    await new Promise((r) => { pc.onicegatheringstatechange = () => pc.iceGatheringState === 'complete' && r(); setTimeout(r, 4000); });
+    pc.close();
+    return seen;
+  })()`;
+  for (const level of ['hosts', 'off'] as const) {
+    await atlas.call('PATCH', `/projects/${pid}`, { network: level, allowedHosts: ['github.com'] });
+    const id = await agentTab('/rtc-' + level);
+    const candidates = (await inPage(id, gather)) as string[];
+    expect(candidates.filter((c) => / udp /i.test(c))).toEqual([]);
+  }
 });

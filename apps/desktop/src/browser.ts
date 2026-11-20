@@ -10,6 +10,11 @@ import type { BrowserHost, BrowserHostEvent, BrowserHostTab } from '@atlas/engin
  *
  * Input owner: while the agent has the tab, Master's mouse and keys in the view are refused (before-input-event,
  * before-mouse-event), except the events the agent's own CDP Input.* commands dispatch.
+ *
+ * Pages are hostile (an agent opens any site): every permission is denied (microphone, camera, notifications,
+ * location, devices…), WebRTC sends no UDP outside the proxy, and a page reaches the system only through
+ * `EXTERNAL_SCHEMES` (mailto:, tel:) or an http(s) download, each right after Master's own click or key in that view.
+ * Everything else (smb:, file:, custom app schemes, a page opening things by itself) is refused, and the tab says so.
  */
 
 interface Tab {
@@ -23,9 +28,15 @@ interface Tab {
   attached: boolean;
   /** Last time Master's blocked input was reported (one event per burst). */
   blockedAt: number;
+  /** Last time Master's own input reached the page (a user gesture, used once to open something outside). */
+  gestureAt: number;
 }
 
 const BLOCK_REPORT_MS = 1500;
+/** How long Master's click or key counts as the gesture that lets the page open a mailto: or start a download. */
+const GESTURE_MS = 1000;
+/** The only schemes a page may hand to the system, after Master's gesture (§3.2: mail and phone links). */
+export const EXTERNAL_SCHEMES = ['mailto:', 'tel:'];
 
 export class ElectronBrowser implements BrowserHost {
   private tabs = new Map<string, Tab>();
@@ -36,8 +47,14 @@ export class ElectronBrowser implements BrowserHost {
   private onScreen: string | null = null;
   private bounds: { x: number; y: number; width: number; height: number } | null = null;
 
-  /** `window()`: the Atlas window now (it can be closed and made again on macOS). */
-  constructor(private window: () => BrowserWindow | null) {}
+  /**
+   * `window()`: the Atlas window now (it can be closed and made again on macOS). `openExternal`: the system's opener
+   * (tests record the calls instead).
+   */
+  constructor(
+    private window: () => BrowserWindow | null,
+    private openExternal: (url: string) => void = (url) => void shell.openExternal(url),
+  ) {}
 
   on(l: (e: BrowserHostEvent) => void): () => void {
     this.listeners.add(l);
@@ -107,8 +124,10 @@ export class ElectronBrowser implements BrowserHost {
   private make(t: BrowserHostTab, proxyKey: string): Tab {
     const ses = this.session(t);
     const view = new WebContentsView({ webPreferences: { session: ses, sandbox: true, contextIsolation: true, nodeIntegration: false } });
+    // WebRTC: no UDP that skips the proxy (STUN would reach the internet directly, past the workspace's level).
+    view.webContents.setWebRTCIPHandlingPolicy('disable_non_proxied_udp');
     view.setVisible(false);
-    const tab: Tab = { id: t.id, view, partition: t.partition, proxyKey, owner: 'master', agentInput: 0, attached: false, blockedAt: 0 };
+    const tab: Tab = { id: t.id, view, partition: t.partition, proxyKey, owner: 'master', agentInput: 0, attached: false, blockedAt: 0, gestureAt: 0 };
     this.tabs.set(t.id, tab);
     this.wire(tab, view.webContents);
     this.window()?.contentView.addChildView(view);
@@ -125,18 +144,56 @@ export class ElectronBrowser implements BrowserHost {
       this.sessions.set(t.partition, key);
       void ses.setProxy(t.proxy ? { proxyRules: `http=${t.proxy.server};https=${t.proxy.server}` } : { mode: 'direct' });
       void ses.closeAllConnections();
-      // Downloads go to the system browser (§3.2): nothing is saved from the pane.
-      if (!ses.listenerCount('will-download'))
-        ses.on('will-download', (e, item) => {
-          e.preventDefault();
-          void shell.openExternal(item.getURL());
-        });
+    }
+    if (!this.guarded.has(ses)) {
+      this.guarded.add(ses);
+      // Every permission denied, asked or checked: a page never gets the microphone (Atlas holds it for voice),
+      // the camera, notifications, location, HID/USB/serial devices.
+      ses.setPermissionRequestHandler((_wc, _permission, cb) => cb(false));
+      ses.setPermissionCheckHandler(() => false);
+      ses.setDevicePermissionHandler(() => false);
+      // Nothing is saved from the pane (§3.2): an http(s) download Master clicked opens in the system browser.
+      ses.on('will-download', (e, item, wc) => {
+        e.preventDefault();
+        const tab = [...this.tabs.values()].find((t) => !t.view.webContents.isDestroyed() && t.view.webContents === wc);
+        if (tab) this.outside(tab, item.getURL(), ['http:', 'https:'], 'download');
+      });
     }
     return ses;
   }
 
+  private guarded = new WeakSet<Session>();
+
+  /**
+   * The page wants the system to open `url` (a mailto: link, a download): only one of `schemes`, only right after
+   * Master's own click or key in this view (the gesture is used up). Anything else is refused, and the tab says so.
+   */
+  private outside(tab: Tab, url: string, schemes: string[], what: 'link' | 'download'): void {
+    let scheme = '';
+    try {
+      scheme = new URL(url).protocol;
+    } catch {
+      /* not a URL: refused below */
+    }
+    const gesture = tab.owner === 'master' && Date.now() - tab.gestureAt < GESTURE_MS;
+    if (schemes.includes(scheme) && gesture) {
+      tab.gestureAt = 0;
+      this.openExternal(url);
+      return;
+    }
+    const shown = url.length > 80 ? url.slice(0, 80) + '…' : url;
+    const message = !schemes.includes(scheme)
+      ? `The page tried to open ${shown} outside Atlas: refused (${what === 'download' ? 'only http and https downloads' : `only ${EXTERNAL_SCHEMES.join(' and ')} links`} leave the pane).`
+      : `The page tried to open ${shown} outside Atlas without your click: refused.`;
+    this.emit({ type: 'refused', id: tab.id, url, message });
+  }
+
+  private emit(e: BrowserHostEvent): void {
+    this.listeners.forEach((l) => l(e));
+  }
+
   private wire(tab: Tab, wc: WebContents): void {
-    const emit = (e: BrowserHostEvent) => this.listeners.forEach((l) => l(e));
+    const emit = (e: BrowserHostEvent) => this.emit(e);
     const id = tab.id;
     wc.on('login', (e, _details, auth, cb) => {
       const c = this.creds.get(tab.partition);
@@ -157,20 +214,29 @@ export class ElectronBrowser implements BrowserHost {
       if (main && code !== -3) emit({ type: 'failed', id, url, code, description });
     });
     wc.on('render-process-gone', (_e, d) => emit({ type: 'crashed', id, reason: d.reason }));
-    // Pop-ups and target=_blank stay in the pane; other schemes (mailto:, zoommtg:…) go to the system.
+    // Pop-ups and target=_blank stay in the pane; mailto: and tel: go to the system after Master's click; the rest
+    // (smb:, file:, app schemes…) is refused.
     wc.setWindowOpenHandler(({ url }) => {
       if (/^https?:/i.test(url)) void this.load(tab, url);
-      else void shell.openExternal(url);
+      else this.outside(tab, url, EXTERNAL_SCHEMES, 'link');
       return { action: 'deny' };
     });
     wc.on('will-navigate', (e) => {
       if (!/^https?:/i.test(e.url)) {
         e.preventDefault();
-        void shell.openExternal(e.url);
+        this.outside(tab, e.url, EXTERNAL_SCHEMES, 'link');
       }
     });
+    wc.on('will-frame-navigate', (e) => {
+      // A sub-frame's navigation to another scheme (an iframe pointed at smb:…): refused the same way.
+      if (!e.isMainFrame && !/^(https?|about|data|blob):/i.test(e.url)) e.preventDefault();
+    });
     const block = (e: Electron.Event) => {
-      if (tab.owner !== 'agent' || tab.agentInput > 0) return;
+      if (tab.agentInput > 0) return; // the agent's own CDP input
+      if (tab.owner !== 'agent') {
+        tab.gestureAt = Date.now();
+        return;
+      }
       e.preventDefault();
       const now = Date.now();
       if (now - tab.blockedAt > BLOCK_REPORT_MS) emit({ type: 'input-blocked', id });

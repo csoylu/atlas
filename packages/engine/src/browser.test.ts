@@ -140,6 +140,11 @@ describe('the shared browser (#298 S6)', () => {
     expect(l.engine.browser.get(chat.id)!.error).toBe('down.test could not be loaded (ERR_NAME_NOT_RESOLVED)');
     l.host.emit({ type: 'loading', id: chat.id, loading: true });
     expect(l.engine.browser.get(chat.id)!.error).toBeNull();
+    // The page tried to open something outside (smb:, a download without Master's click): the host refused, the tab says it.
+    l.host.emit({ type: 'refused', id: chat.id, url: 'smb://evil.test/share', message: 'The page tried to open smb://evil.test/share outside Atlas: refused' });
+    expect(l.engine.browser.get(chat.id)).toMatchObject({ error: expect.stringContaining('smb://evil.test/share') });
+    l.host.emit({ type: 'loading', id: chat.id, loading: true });
+    expect(l.engine.browser.get(chat.id)?.error).toBeNull();
     // A crash: said, and the next show makes a new view.
     l.host.emit({ type: 'crashed', id: chat.id, reason: 'oom' });
     expect(l.engine.browser.get(chat.id)).toMatchObject({ crashed: true, error: expect.stringContaining('oom') });
