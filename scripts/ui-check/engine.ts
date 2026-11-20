@@ -37,6 +37,7 @@ const engine = await startEngine({
   memoryReview: false,
   dispatch: false, // no runs, no schedules
   env: {},
+  sandbox: { enabled: false }, // no agent commands here; inside an agent's sandbox a nested one cannot start (#316)
   prs: { read: noGitHub, intervalMs: false },
   projects: { clone: noGitHub },
 });

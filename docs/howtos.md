@@ -21,14 +21,13 @@ system PATH, 15 s timeout), plus `GIT_AUTHOR_NAME`/`GIT_COMMITTER_NAME` = the ag
 git config). Desktop and `main.ts` without a password use the login shell; server mode, Windows and tests keep the
 engine's PATH. A failure is logged and shown in Settings → About & data, never silent. Never spawn an agent command
 with `process.env` directly: take `ctx.env()`.
-Without the sandbox (`ATLAS_SANDBOX` not 1, until S5) the shell is **not confined to a project** (#248): a command can
-reach any path by absolute path. Stay in your project's clone and `$TMPDIR`; never read or write another project's
-workspace. A lead crosses projects through the tools' `project` parameter, not by path.
+Since #316 every agent command runs in the sandbox below: it writes only in its own workspace and `$TMPDIR`, and
+cannot read another workspace. A lead crosses projects through the tools' `project` parameter, not by path.
 
 ## Sandbox
 Agent commands (shell, background shell, `secret_set` commands, workflow command steps) run in a sandbox (#298: Seatbelt
-on a Mac, bubblewrap on Linux; today with `ATLAS_SANDBOX=1`, always from S5). Everything in this file works inside it;
-what it takes away is listed here.
+on a Mac, bubblewrap on Linux; always on since #316, fail closed, no setting to turn it off). Everything in this file
+works inside it; what it takes away is listed here.
 - **Readable:** your workspace (your clones and worktrees), the toolchains (`~/.nvm`, `~/.cargo`, `~/.rustup`,
   `~/Library/Caches/ms-playwright`, Homebrew), `~/.gitconfig` (name and email). **Writable:** your workspace and your
   private `$TMPDIR`. `HOME` is your workspace: npm, git and gh keep their caches and config there.
@@ -81,8 +80,8 @@ what it takes away is listed here.
 - Agents do not read the live database or call the live engine: the sandbox denies both (Sandbox, above). Test against a
   throwaway engine on a seeded database in `$TMPDIR`: `scripts/ui-check/engine.ts` for the UI, the kit's `launch()` or
   `e2e/harness` for the engine (`docs/testing.md`). A change that needs real data: ask Master to run it on the live app.
-- Checks on the live app (its database, its port) are Master's, from his own shell: `ui-check --port N` checks any engine he
-  started. Ask him for one when a change depends on real volume.
+- Checks on the live app (its database, its port) are Master's, from Master's own shell: `ui-check --port N` checks any
+  engine Master started. Ask Master for one when a change depends on real volume.
 - An engine started from a clone cannot decrypt the plan tokens (Electron safeStorage): checks against the real Claude
   or ChatGPT models need the installed app's engine.
 - `POST /api/cards` in status `triage` wakes atlas. Throwaway test cards: status `todo`, no assignee.

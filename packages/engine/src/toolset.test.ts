@@ -16,7 +16,7 @@ afterEach(async () => {
 });
 
 async function setup(fake: FakeProvider, dbFile = ':memory:', dataDir = mkdtempSync(join(tmpdir(), 'atlas-'))) {
-  const engine = await startEngine({ dbFile, dataDir, port: 0, dispatch: false, providers: () => fake, env: {} });
+  const engine = await startEngine({ dbFile, dataDir, port: 0, dispatch: false, providers: () => fake, env: {}, sandbox: { enabled: false } });
   engines.push(engine);
   return { engine, dataDir };
 }

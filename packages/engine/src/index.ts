@@ -108,8 +108,9 @@ export interface EngineOptions {
    * engine can't install and doesn't check by itself (dev, server). Tests point api/fetch at a fake release server.
    */
   /**
-   * The agent command sandbox (#298): on with ATLAS_SANDBOX=1 in `env` (temporary, until S5). Tests can force it and
-   * point it at another home, sandbox-exec, bwrap or /proc/sys.
+   * The agent command sandbox (#298): always on (S5, fail closed); main.ts and the desktop app never pass this. Tests
+   * only: `enabled: false` (the test kit, e2e and ui-check harnesses, which run inside an agent's sandbox where a nested
+   * one cannot start), another home, platform, sandbox-exec, bwrap or /proc/sys.
    */
   sandbox?: Partial<Pick<SandboxOptions, 'enabled' | 'home' | 'platform' | 'sandboxExec' | 'bwrap' | 'procSys' | 'socat'>>;
   /** The allow-list proxy (#298 S3). Tests: a resolver, local upstreams, the Linux unix socket. */
@@ -196,7 +197,7 @@ export async function startEngine(opts: EngineOptions): Promise<Engine> {
   // Agent commands' sandbox (#298): probed once the engine listens (its port is denied to them), before any run starts.
   // Internet levels (#298 S3): the allow-list proxy starts with the sandbox (it is what applies the levels).
   const network = new Network(db, opts.network);
-  const sandbox = new Sandbox({ enabled: (opts.env ?? process.env).ATLAS_SANDBOX === '1', network, engineLogin: () => auth.enabled, ...opts.sandbox, dataDir: opts.dataDir, enginePort: () => listening });
+  const sandbox = new Sandbox({ enabled: true, network, engineLogin: () => auth.enabled, ...opts.sandbox, dataDir: opts.dataDir, enginePort: () => listening });
   const browser = new Browser(db, bus, kanban, network, opts.browser ?? null);
   const hookTokens = new HookTokens(db, opts.secrets);
   hookTokens.sweep();

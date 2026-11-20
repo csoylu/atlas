@@ -258,7 +258,8 @@ describe.skipIf(!mac)('updater (fake release server)', () => {
 
   // #324: on 20 Nov 2026 0.78.0 stopped its engine and closed the database after Update, then hung in its process exit
   // for 6 minutes; the helper gave up after 2 minutes with only « did not quit ».
-  it('Atlas stuck in its exit after the engine stopped: the helper samples it, ends it with SIGKILL and installs', async () => {
+  // the helper watches and kills the Atlas pid (kill -0, SIGKILL): the agent sandbox refuses signals outside its own tree (#322)
+  it.skipIf(psBlocked || !pgrepWorks())('Atlas stuck in its exit after the engine stopped: the helper samples it, ends it with SIGKILL and installs', async () => {
     await start();
     gh.publish('0.5.0');
     const apps = mkdtempSync(join(tmpdir(), 'atlas-upd-apps-'));

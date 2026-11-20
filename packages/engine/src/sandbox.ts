@@ -13,7 +13,8 @@ import type { Network } from './network.ts';
  * credentials from $GH_TOKEN only. Fail closed: if the startup probe failed (Windows always: no sandbox there), every
  * agent command throws SandboxUnavailable and the run stops; there is never a host fallback. Server setup: docs/server-sandbox.md.
  *
- * Temporary (S1–S4): the sandbox is on only with ATLAS_SANDBOX=1. Off, commands spawn on the host exactly as before.
+ * Always on since S5 (no env var, no setting). `enabled: false` exists for test harnesses only (startEngine's
+ * `sandbox` option; a test checks that main.ts and the desktop app never pass it): off, commands spawn on the host.
  */
 
 /** Thrown instead of running a command when the sandbox is on but can't be used: the run stops with this message. */
@@ -36,7 +37,7 @@ export interface SandboxScope {
 }
 
 export interface SandboxOptions {
-  /** ATLAS_SANDBOX=1 (temporary, until S5). */
+  /** Always true in the app (S5); false only in test harnesses. */
   enabled: boolean;
   /** The Atlas data dir: denied (database, other workspaces, outputs), except the command's own workspace and private dir. */
   dataDir: string;
@@ -319,7 +320,7 @@ export class Sandbox {
       enabled: o.enabled,
       kind: this.platform === 'darwin' ? 'seatbelt' : this.platform === 'linux' ? 'bwrap' : null,
       ok: false,
-      reason: o.enabled ? 'not checked yet' : 'off (ATLAS_SANDBOX is not 1): agent commands run unconfined',
+      reason: o.enabled ? 'not checked yet' : 'off (test harness only): agent commands run unconfined',
     };
   }
 

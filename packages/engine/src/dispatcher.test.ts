@@ -19,7 +19,7 @@ afterEach(async () => {
 });
 
 async function setup(fake: FakeProvider | null, maxTurns?: number) {
-  engine = await startEngine({ memoryReview: false, 
+  engine = await startEngine({ memoryReview: false, sandbox: { enabled: false }, 
     maxTurns,
     dbFile: ':memory:',
     dataDir: mkdtempSync(join(tmpdir(), 'atlas-')),
