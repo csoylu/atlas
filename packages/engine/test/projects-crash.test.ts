@@ -1,12 +1,12 @@
 import { describe, expect, it } from 'vitest';
-import { execFileSync, execSync, spawn } from 'node:child_process';
+import { execFileSync, spawn } from 'node:child_process';
 import { existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { randomUUID } from 'node:crypto';
 import { startEngine } from '../src/index.ts';
 import { spawnClone } from '../src/projects.ts';
-import { eventually } from './kit/index.ts';
+import { eventually, expectNoProcessLeft } from './kit/index.ts';
 import { LEASE_MS, SlowProvider } from './crash-fixture.ts';
 
 /**
@@ -47,7 +47,7 @@ function runChild(mode: string, dbFile: string, dataDir: string, marker: string,
 }
 
 describe('projects survive a kill (#218)', () => {
-  it(`a kill in the middle of a clone, ${KILLS} times: the last engine clones each member once, whole, with no half folder`, async () => {
+  it(`a kill in the middle of a clone, ${KILLS} times: the last engine clones each member once, whole, with no half folder`, async (ctx) => {
     const remotes = remote();
     const dataDir = mkdtempSync(join(tmpdir(), 'atlas-pcrash-'));
     const dbFile = join(dataDir, 'atlas.db');
@@ -86,10 +86,10 @@ describe('projects survive a kill (#218)', () => {
     } finally {
       await engine.stop();
     }
-    expect(() => execSync(`pgrep -f ${marker}`)).toThrow();
+    expectNoProcessLeft(marker, ctx);
   }, 180_000);
 
-  it(`a kill around a member's removal, ${KILLS} times: either still a member with its work, or gone with its tasks back to the lead; never in between`, async () => {
+  it(`a kill around a member's removal, ${KILLS} times: either still a member with its work, or gone with its tasks back to the lead; never in between`, async (ctx) => {
     const remotes = remote();
     const dataDir = mkdtempSync(join(tmpdir(), 'atlas-pcrash-'));
     const dbFile = join(dataDir, 'atlas.db');
@@ -137,6 +137,6 @@ describe('projects survive a kill (#218)', () => {
     } finally {
       await engine.stop();
     }
-    expect(() => execSync(`pgrep -f ${marker}`)).toThrow();
+    expectNoProcessLeft(marker, ctx);
   }, 180_000);
 });

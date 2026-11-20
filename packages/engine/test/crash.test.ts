@@ -5,7 +5,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { randomUUID } from 'node:crypto';
 import { startEngine } from '../src/index.ts';
-import { eventually } from './kit/index.ts';
+import { eventually, expectNoProcessLeft } from './kit/index.ts';
 import { LEASE_MS, SlowProvider, STEPS, redPr } from './crash-fixture.ts';
 
 const KILLS = Number(process.env.CRASH_KILLS ?? 50);
@@ -25,7 +25,7 @@ function runChild(dbFile: string, dataDir: string, marker: string, origin: strin
 }
 
 describe('durability (design §6)', () => {
-  it(`completes every run consistently after ${KILLS} random SIGKILLs`, async () => {
+  it(`completes every run consistently after ${KILLS} random SIGKILLs`, async (ctx) => {
     const dataDir = mkdtempSync(join(tmpdir(), 'atlas-crash-'));
     const dbFile = join(dataDir, 'atlas.db');
     const marker = 'atlas-crash-' + randomUUID().slice(0, 8);
@@ -139,6 +139,6 @@ describe('durability (design §6)', () => {
       await engine.stop();
     }
     // No orphan shell left behind by the killed engines.
-    expect(() => execSync(`pgrep -f ${marker}`)).toThrow();
+    expectNoProcessLeft(marker, ctx);
   }, 180_000);
 });
