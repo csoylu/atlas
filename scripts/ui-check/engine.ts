@@ -74,7 +74,7 @@ for (const [id, role] of [
 const chat = await call('POST', '/agents/atlas/chats');
 const LONG_WORD = 'a_very_long_unbroken_identifier_that_must_wrap_or_scroll_instead_of_widening_the_page_'.repeat(2);
 const turns: [string, string][] = [
-  ['Release status?', 'Three tasks are in review, two are blocked on a question, and the rest are ready. The blocked ones need a decision from you.'],
+  ['Status?', 'Three tasks are in review, two are blocked on a question, and the rest are ready. The blocked ones need a decision from you.'],
   ['What is blocking the updater?', '## Updater\n\nThe installer needs a signed build. Steps left:\n\n- Sign the dmg\n- Upload it to the release\n- Check the update badge in Settings → About\n\nOnce signed, the badge appears within a minute.'],
   ['Show me the open tasks by owner.', '| Owner | Open | Blocked |\n| --- | --- | --- |\n| atlas | 4 | 1 |\n| munih | 7 | 0 |\n| paris | 3 | 1 |\n| zurich | 2 | 0 |\n\nmunih has the most open work.'],
   ['Which command runs the checks?', 'Run it from the clone:\n\n```sh\nnpm ci\nnpm run typecheck && npm test\nnpm run build && npm run ui:check\n```\n\nThe last step takes about 75 seconds.'],

@@ -40,10 +40,14 @@ messages or the composer, the modal or panel off-screen, uncaught page errors, a
   workflows' history. So a screen's overflow with a very long real title, or a list that scrolls only at 300 rows, can
   pass here and fail live. The seed's own fixtures and every check are the same in both; ask Master for a run with
   `--port` on live data when the change depends on volume.
+- **OCR inside the sandbox.** Apple Vision needs `~/Library/Caches`, which the sandbox denies, so there the key-label check is
+  skipped and the run says so (« OCR skipped … labels NOT checked », `ocrSkipped` in `report.json`); every other check runs
+  and gives the same issues as outside (same build, compared on 20 Nov 2026). A change to text size or wording: also run
+  ui-check in your own shell (no sandbox) or ask Master.
 - Read-only: the harness refuses every API write from the page. Pins and the panel come from fixtures added to the
   responses the page sees (4 cards in every pin state, a real document in a panel tab); nothing is stored.
 - `--ui DIR` serves another build than `packages/ui/dist` (with `--port`: a proxy in front of that engine).
-- `--widths 390`, `--only chat,modal` (screen-name prefixes) to narrow a run; a full run takes ~75 s.
+- `--widths 390`, `--only chat,modal` (screen-name prefixes) to narrow a run; a full run takes ~75 s on a quiet Mac (several minutes while other agents run checks).
 - Run it after any UI layout change; the acceptance bar is « no issues » at all widths. **Run only what the change can
   affect** (#240, Master: « tasks in side panel doesn't need 260 screens »):
   - Engine-only or docs-only change: no ui-check.
