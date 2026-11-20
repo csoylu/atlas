@@ -337,11 +337,11 @@ describe.skipIf(!mac)('the swap helper on its own (#124)', () => {
     const log = join(data, 'update', 'install.log');
     const shims = join(root, 'shims');
     mkdirSync(shims);
-    // outside the spaced folders: the helper runs $ATLAS_UPDATE_OPEN unquoted (production value: « open »)
+    // The helper runs $ATLAS_UPDATE_OPEN unquoted (production value: « open »): an `open` shim on PATH stands in for it, so
+    // the test works wherever tmpdir() has a space (the agent sandbox's does: #314). `opened` is quoted in the shim.
     const out = tmp('atlas-qa-open-');
     const opened = join(out, 'opened');
-    const open = join(out, 'open.sh');
-    writeFileSync(open, `#!/bin/sh\necho "$@" >> "${opened}"\n`, { mode: 0o755 });
+    writeFileSync(join(shims, 'open'), `#!/bin/sh\necho "$@" >> "${opened}"\n`, { mode: 0o755 });
     const script = join(root, 'install.sh');
     writeFileSync(script, HELPER, { mode: 0o755 });
     const atlas = spawn('sleep', ['120']);
@@ -350,7 +350,7 @@ describe.skipIf(!mac)('the swap helper on its own (#124)', () => {
       const p = spawn('/bin/sh', [script, String(pid), fresh, app, prev, log], {
         detached: true,
         stdio: 'ignore',
-        env: { ...process.env, ATLAS_UPDATE_OPEN: open, ...env, PATH: `${shims}:${process.env.PATH}` },
+        env: { ...process.env, ATLAS_UPDATE_OPEN: 'open', ...env, PATH: `${shims}:${process.env.PATH}` },
       });
       procs.push(p);
       const exited = new Promise<number | null>((r) => p.once('exit', (c) => r(c)));

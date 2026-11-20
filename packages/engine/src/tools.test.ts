@@ -10,6 +10,7 @@ import { tailOf } from './runner.ts';
 import { findRg, globToRegex, grep } from './search.ts';
 import { lineTrimmedSpans, whitespaceNormalizedSpans } from './fuzzy.ts';
 import { htmlToMarkdown } from './web.ts';
+import { sharedTmpBlocked } from '../test/kit/index.ts';
 
 const ctx = (): ToolContext => ({
   workdir: mkdtempSync(join(tmpdir(), 'atlas-tools-')),
