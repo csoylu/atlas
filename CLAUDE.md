@@ -42,6 +42,8 @@ apps/desktop      Electron main process. Dev: loads Vite (:5173), engine under s
    only secrets granted to them, as env vars of their shell commands, never a model key; every tool output passes the
    redactor (`Secrets.redact`) before it is stored or sent to a model. Never spawn an agent command or store a tool
    output around those two (design §10b). Never spawn with `process.env`: take `ctx.env()`.
+   Agent commands are spawned only by `spawnAgentCommand` (`sandbox.ts`, #298; Seatbelt with `ATLAS_SANDBOX=1`, fail
+   closed); a test refuses any other `shell: true` spawn.
 6. **Tests:** `vitest`. Every engine module has tests; the restart test and the agent-loop test with a fake provider
    stay green. `npm run typecheck && npm test` before every commit; `npm run test:full` when you touch voice, the
    store, runs or leases (voice suites run only locally: state the result in the review summary). No sleep loops:

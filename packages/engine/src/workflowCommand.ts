@@ -1,7 +1,8 @@
-import { execFile, execFileSync, spawn, type ChildProcess } from 'node:child_process';
+import { execFile, execFileSync, type ChildProcess } from 'node:child_process';
 import { createHash } from 'node:crypto';
 import { existsSync, mkdirSync, readdirSync, rmSync, writeFileSync } from 'node:fs';
 import { join, resolve } from 'node:path';
+import { spawnAgentCommand, type SandboxScope } from './sandbox.ts';
 
 /**
  * « Run a command » steps (#273, design §10b): the pieces outside the store. Run fields as env vars with size caps, a
@@ -184,9 +185,10 @@ export interface CommandResult {
  * `bash -c command` in `cwd`, its own process group. `onSpawn` gets the pid synchronously, before any other event
  * (the caller stores it in one transaction). The limit sends SIGTERM to the group, then SIGKILL after KILL_GRACE_MS.
  */
-export function spawnCommand(command: string, o: { cwd: string; env: NodeJS.ProcessEnv; limitMs: number; onSpawn: (pid: number, child: ChildProcess) => void }): Promise<CommandResult> {
+export function spawnCommand(command: string, o: { cwd: string; env: NodeJS.ProcessEnv; limitMs: number; onSpawn: (pid: number, child: ChildProcess) => void; sandbox?: SandboxScope | null }): Promise<CommandResult> {
+  // Throws SandboxUnavailable (#298 §1.6) before the promise: nothing ran.
+  const child = spawnAgentCommand({ cwd: o.cwd, env: o.env, sandbox: o.sandbox }, command, { bash: true });
   return new Promise((done) => {
-    const child = spawn('bash', ['-c', command], { cwd: o.cwd, env: o.env, detached: process.platform !== 'win32', stdio: ['ignore', 'pipe', 'pipe'] });
     const chunks: Buffer[] = [];
     let size = 0;
     let truncated = false;

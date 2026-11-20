@@ -16,6 +16,7 @@ const slow = [
   'packages/engine/test/crash.test.ts',
   'packages/engine/test/projects-crash.test.ts',
   'packages/engine/test/screenshot.chrome.test.ts',
+  'packages/engine/test/sandbox.seatbelt.test.ts',
   'packages/voice/**/*.test.ts',
   'apps/desktop/src/voice.test.ts',
   'packages/engine/src/voiceLoop.test.ts',

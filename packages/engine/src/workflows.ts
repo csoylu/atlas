@@ -46,6 +46,7 @@ import { REVIEW_NAME, reviewGraph } from './reviewFlow.ts';
 import { payloadFields, type HookBody, type HookTokens } from './webhooks.ts';
 import { validate, type Gh } from '../../../scripts/pr/validate.mjs';
 import { SecretsUnavailable, type Secrets } from './secrets.ts';
+import { SandboxUnavailable, type Sandbox } from './sandbox.ts';
 import { commandDigest, fieldsEnv, killIfSame, prepareCheckout, processStart, removeStaleWorktrees, removeWorktree, signalGroup, spawnCommand, SUMMARY_TAIL, checkoutRoot, writeLog, type CheckoutOptions } from './workflowCommand.ts';
 import { join } from 'node:path';
 import { APPROVE, REJECT, cut, describeTrigger, firstLine, localTimeZone, stamp, stepTitle, triggerWhen, upcoming } from './workflowTime.ts';
@@ -204,7 +205,7 @@ export interface WorkflowOptions {
    * base of the command's env, #136), and how the repo is first cloned (default: gh repo clone). None: a command step
    * couldn't run.
    */
-  command?: { dataDir: string; secrets: () => Secrets; env: () => Promise<NodeJS.ProcessEnv>; clone?: CheckoutOptions['clone']; minuteMs?: number };
+  command?: { dataDir: string; secrets: () => Secrets; env: () => Promise<NodeJS.ProcessEnv>; clone?: CheckoutOptions['clone']; minuteMs?: number; sandbox?: Sandbox };
   /** Webhook tokens (#260), in the secret store; absent: a webhook trigger is refused at save. */
   hooks?: HookTokens;
   /** The engine's port now (desktop webhook URLs), once it listens. */
@@ -1883,6 +1884,9 @@ export class Workflows {
     if (!isCommand(node)) return this.tx(() => this.failStep(run.id, this.stepRow(first.id), `step ${first.node_id} is no longer a command step`));
     const o = this.opts.command;
     if (!o) return couldnt('this engine runs no command steps');
+    // Fail closed (#298 §1.6): no checkout, nothing runs; Atlas retries the step like any other « couldn't run ».
+    const sb = o.sandbox?.status();
+    if (sb?.enabled && !sb.ok) return couldnt(new SandboxUnavailable(sb.reason ?? 'unknown').message);
     const c = node.config;
     const name = `« ${stepTitle(node)} »`;
     // Checked at the step itself: a run started before an edit runs only what Master approved.
@@ -1926,19 +1930,31 @@ export class Workflows {
         this.setRunState(run.id, 'running');
         this.touched.runs.add(run.id);
       });
-      const result = await spawnCommand(c.command, {
-        cwd: co.dir,
-        env: { ...env, ...passed.env, ATLAS_CHECKOUT_SHA: co.sha, ATLAS_CHECKOUT_BRANCH: co.branch },
-        limitMs,
-        onSpawn: (pid) => {
-          this.children.set(first.id, pid);
-          const data: CommandData = { cmd: true, phase: 'running', pid, started: processStart(pid), dir: co.dir };
-          this.tx(() => {
-            this.db.prepare('UPDATE workflow_run_steps SET data = ? WHERE id = ?').run(JSON.stringify(data), first.id);
-            this.touched.runs.add(run.id);
-          });
-        },
-      });
+      let result: Awaited<ReturnType<typeof spawnCommand>>;
+      try {
+        result = await spawnCommand(c.command, {
+          cwd: co.dir,
+          // The step's sandbox (#298): the project's checkout folder is its workspace.
+          sandbox: o.sandbox ? { sandbox: o.sandbox, projectId: project.id, projectName: project.name, agentId: 'workflow', workspace: checkoutRoot(o.dataDir, project.id) } : null,
+          env: { ...env, ...passed.env, ATLAS_CHECKOUT_SHA: co.sha, ATLAS_CHECKOUT_BRANCH: co.branch },
+          limitMs,
+          onSpawn: (pid) => {
+            this.children.set(first.id, pid);
+            const data: CommandData = { cmd: true, phase: 'running', pid, started: processStart(pid), dir: co.dir };
+            this.tx(() => {
+              this.db.prepare('UPDATE workflow_run_steps SET data = ? WHERE id = ?').run(JSON.stringify(data), first.id);
+              this.touched.runs.add(run.id);
+            });
+          },
+        });
+      } catch (e) {
+        if (!(e instanceof SandboxUnavailable)) throw e;
+        this.tx(() => {
+          if (this.stepRow(first.id).ended_at) return;
+          this.db.prepare('UPDATE workflow_run_steps SET data = ? WHERE id = ?').run(JSON.stringify({ cmd: true, phase: 'queued' } satisfies CommandData), first.id);
+        });
+        return couldnt(e.message);
+      }
       this.children.delete(first.id);
       if (this.stopping) return; // the engine stops: the next start says it was cut off
       // Redacted whole, before any cut (#227); a store that can't be read withholds the output.

@@ -22,6 +22,7 @@ import type { Documents } from './documents.ts';
 import type { Projects } from './projects.ts';
 import type { ReviewFlow } from './reviewFlow.ts';
 import { findSection, formatDocRef, splitSections } from '@atlas/shared';
+import type { SandboxStatus } from '@atlas/shared';
 import { inside } from './tools.ts';
 import { statSync } from 'node:fs';
 import { ConflictError, InvalidError, NotFoundError, type Kanban } from './kanban.ts';
@@ -36,6 +37,7 @@ import type { Usage } from './usage.ts';
 import type { Voice } from './voice.ts';
 import type { Updater } from './updater.ts';
 import type { ShellEnv } from './shellEnv.ts';
+import type { Sandbox } from './sandbox.ts';
 import { DEFAULT_CONTEXT_WINDOW, MEMORY_BUDGET, MEMORY_BUDGET_GLOBAL, type About, type MemoryBudget, type Timeline } from '@atlas/shared';
 
 /** Who the UI acts as. One user (design §1). */
@@ -72,6 +74,8 @@ export function createApi(deps: {
   updater: Updater;
   /** Agent shells' PATH (#136), shown in Settings → About; omitted = not reported. */
   shellEnv?: ShellEnv;
+  /** The agent command sandbox (#298): GET /api/sandbox. */
+  sandbox?: Sandbox;
   bus: Bus;
   dataDir: string;
   version: string;
@@ -160,6 +164,12 @@ export function createApi(deps: {
   app.get('/api/about', (_req, res) => {
     const about: About = { version: deps.version, dataDir: deps.dataDir, server: auth.enabled, voice: !!deps.voice, shellPath: deps.shellEnv?.status() ?? null };
     res.json(about);
+  });
+
+  // ── Agent command sandbox (#298 §1.6): kind, on, probe verdict ──
+  app.get('/api/sandbox', (_req, res) => {
+    const off: SandboxStatus = { enabled: false, kind: null, ok: false, reason: 'off' };
+    res.json(deps.sandbox?.status() ?? off);
   });
 
   // ── App updates (#123): status, « Check now », Update (Master's click) ──
