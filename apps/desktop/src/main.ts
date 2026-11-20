@@ -6,6 +6,7 @@ import { OrbOverlay } from './orb/overlay.ts';
 import { DesktopVoice, voiceLog } from './voice.ts';
 import { nativeHoldKey } from './optionkey.ts';
 import { AtlasTray } from './tray/tray.ts';
+import { ElectronBrowser } from './browser.ts';
 import { dockBadge, type TrayAction, type TrayInput } from './tray/model.ts';
 
 /**
@@ -79,6 +80,8 @@ let orb: OrbOverlay | undefined;
 let talk: DesktopVoice | undefined;
 /** The menu bar / tray orb (card #54): with the in-process engine only (not in dev, where the engine runs apart). */
 let tray: AtlasTray | undefined;
+/** The shared browser's views (#298 S6), laid over the Atlas window: with the in-process engine only. */
+let browser: ElectronBrowser | undefined;
 
 function createWindow(url: string) {
   const win = (mainWindow = new BrowserWindow({
@@ -103,6 +106,7 @@ function createWindow(url: string) {
     return { action: 'deny' };
   });
   void win.loadURL(url);
+  browser?.reattach();
 }
 
 async function start() {
@@ -111,7 +115,7 @@ async function start() {
   mkdirSync(dataDir, { recursive: true });
   // The built UI ships as an extra resource in the packaged app; in a local build it sits in packages/ui/dist.
   const uiDir = app.isPackaged ? join(process.resourcesPath, 'ui') : join(app.getAppPath(), '../../packages/ui/dist');
-  engine = await startEngine({ dbFile: join(dataDir, 'atlas.db'), dataDir, port: 0, uiDir, secrets: new KeychainStore(), version: app.getVersion(), voice: voiceHost(), updates: updateHost(), shellPath: 'login' });
+  engine = await startEngine({ dbFile: join(dataDir, 'atlas.db'), dataDir, port: 0, uiDir, secrets: new KeychainStore(), version: app.getVersion(), voice: voiceHost(), updates: updateHost(), shellPath: 'login', browser: (browser = new ElectronBrowser(() => mainWindow)) });
   createWindow(engine.url);
   if (engine.voice) followVoice(engine, engine.voice);
   startTray(engine);

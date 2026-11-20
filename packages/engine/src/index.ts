@@ -43,6 +43,7 @@ import { Stalls } from './stalls.ts';
 import { Sandbox, type SandboxOptions } from './sandbox.ts';
 import { Network, type NetworkOptions } from './network.ts';
 import { ReviewFlow, openReviewRun } from './reviewFlow.ts';
+import { Browser, type BrowserHost } from './browser.ts';
 
 export interface EngineOptions {
   /** SQLite file, or ':memory:'. */
@@ -114,6 +115,11 @@ export interface EngineOptions {
   network?: NetworkOptions;
   /** Pictures of an area of a page commented on (#304), taken in headless Chrome; false: none (tests), the text says so. */
   pageShots?: false | PageShot;
+  /**
+   * The shared browser (#298 §3): the desktop app passes its Electron views (apps/desktop/src/browser.ts). Without it
+   * (dev, server, tests) the pane is unavailable and the UI opens links in a new tab.
+   */
+  browser?: BrowserHost;
   updates?: { host: UpdateHost | null; cannotInstall?: string; api?: string; fetch?: typeof fetch; intervalMs?: number | false; openCommand?: string; pid?: number };
 }
 
@@ -151,6 +157,7 @@ export interface Engine {
   projects: Projects;
   sandbox: Sandbox;
   network: Network;
+  browser: Browser;
   url: string;
   stop(): Promise<void>;
 }
@@ -187,6 +194,7 @@ export async function startEngine(opts: EngineOptions): Promise<Engine> {
   // Internet levels (#298 S3): the allow-list proxy starts with the sandbox (it is what applies the levels).
   const network = new Network(db, opts.network);
   const sandbox = new Sandbox({ enabled: (opts.env ?? process.env).ATLAS_SANDBOX === '1', network, engineLogin: () => auth.enabled, ...opts.sandbox, dataDir: opts.dataDir, enginePort: () => listening });
+  const browser = new Browser(db, bus, kanban, network, opts.browser ?? null);
   const hookTokens = new HookTokens(db, opts.secrets);
   hookTokens.sweep();
   // The GitHub client of merge steps and « Validate by hand » (#263): the user's gh login, the login shell's PATH.
@@ -314,13 +322,15 @@ export async function startEngine(opts: EngineOptions): Promise<Engine> {
     reviewFlow,
     sandbox,
     network,
+    browser,
   });
   await new Promise<void>((resolve, reject) => {
     server.once('error', reject);
     server.listen(opts.port, host, () => resolve());
   });
   listening = (server.address() as AddressInfo).port;
-  if (sandbox.enabled) await network.start();
+  // The proxy applies the internet levels to sandboxed commands and to the browser's agent tabs.
+  if (sandbox.enabled || opts.browser) await network.start();
   await sandbox.probe();
   // Finish a rewind a stopped engine left half done, before any run resumes and touches the files (rule 2).
   // Canvases were replaced by artifacts (#120): each one left in the archive becomes an html page, once.
@@ -358,6 +368,7 @@ export async function startEngine(opts: EngineOptions): Promise<Engine> {
     projects,
     sandbox,
     network,
+    browser,
     bus,
     kanban,
     agents,
@@ -418,5 +429,6 @@ export { openDb } from './store/db.ts';
 export type { SecretStore } from './secrets.ts';
 export type { VoiceHost } from './voice.ts';
 export type { UpdateHost } from './updater.ts';
+export type { BrowserHost, HostEvent as BrowserHostEvent, HostTab as BrowserHostTab } from './browser.ts';
 export type { VoiceChat } from './voiceChat.ts';
 export type { OrbPosition } from './settings.ts';

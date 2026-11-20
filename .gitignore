@@ -9,3 +9,4 @@ release/
 !scripts/release/
 e2e/shots
 e2e/.data
+e2e/electron/.out/

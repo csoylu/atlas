@@ -41,6 +41,8 @@ import type { Updater } from './updater.ts';
 import type { ShellEnv } from './shellEnv.ts';
 import type { Sandbox } from './sandbox.ts';
 import type { Network } from './network.ts';
+import { BrowserBusyError, type Browser } from './browser.ts';
+import { BrowserNav, BrowserOpen, BrowserSetOwner, BrowserView } from '@atlas/shared';
 import { DEFAULT_CONTEXT_WINDOW, MEMORY_BUDGET, MEMORY_BUDGET_GLOBAL, type About, type MemoryBudget, type Timeline } from '@atlas/shared';
 
 /** Who the UI acts as. One user (design §1). */
@@ -81,6 +83,8 @@ export function createApi(deps: {
   sandbox?: Sandbox;
   /** Internet levels and refusals (#298 S3). */
   network: Network;
+  /** The shared browser (#298 §3, S6): tabs per chat, the pane's view, input owner. */
+  browser: Browser;
   bus: Bus;
   dataDir: string;
   version: string;
@@ -178,6 +182,38 @@ export function createApi(deps: {
   app.get('/api/sandbox', (_req, res) => {
     const off: SandboxStatus = { enabled: false, kind: null, ok: false, reason: 'off' };
     res.json(deps.sandbox?.status() ?? off);
+  });
+
+  // ── The shared browser (#298 §3, S6): one tab per chat or task ('master': Master's own pane) ──
+  app.get('/api/browser', (_req, res) => {
+    res.json(deps.browser.status());
+  });
+  app.get('/api/browser/tabs', (_req, res) => {
+    res.json(deps.browser.list());
+  });
+  app.get('/api/browser/tabs/:chatId', (req, res) => {
+    res.json(deps.browser.get(req.params.chatId));
+  });
+  /** A link Master clicked (or an address typed in the pane): Master gets the input. */
+  app.post('/api/browser/tabs/:chatId/open', (req, res) => {
+    res.json(deps.browser.open(req.params.chatId, BrowserOpen.parse(req.body).url, 'master'));
+  });
+  app.post('/api/browser/tabs/:chatId/nav', (req, res) => {
+    res.json(deps.browser.nav(req.params.chatId, BrowserNav.parse(req.body).action));
+  });
+  /** Take control ('master') or hand back ('agent'). */
+  app.post('/api/browser/tabs/:chatId/owner', (req, res) => {
+    res.json(deps.browser.setOwner(req.params.chatId, BrowserSetOwner.parse(req.body).owner));
+  });
+  app.delete('/api/browser/tabs/:chatId', (req, res) => {
+    deps.browser.close(req.params.chatId);
+    res.status(204).end();
+  });
+  /** The tab on screen and where its view goes (the pane's page area), or none. */
+  app.put('/api/browser/view', (req, res) => {
+    const v = BrowserView.parse(req.body);
+    deps.browser.show(v.chatId, v.bounds);
+    res.status(204).end();
   });
 
   // ── App updates (#123): status, « Check now », Update (Master's click) ──
@@ -1043,7 +1079,7 @@ export function createApi(deps: {
     if (err instanceof ZodError) res.status(400).json({ error: 'invalid request', issues: err.issues });
     else if (err instanceof NotFoundError) res.status(404).json({ error: err.message });
     else if (err instanceof SecretsPasswordError) res.status(403).json({ error: err.message });
-    else if (err instanceof ConflictError) res.status(409).json({ error: err.message });
+    else if (err instanceof ConflictError || err instanceof BrowserBusyError) res.status(409).json({ error: err.message });
     else if (err instanceof InvalidError) res.status(400).json({ error: err.message });
     else if ((err as { type?: string }).type === 'entity.too.large')
       res.status(413).json({ error: `the request is over ${((err as { limit: number }).limit / 1024 / 1024).toFixed(1)} MB: images over 10.0 MB are refused` });

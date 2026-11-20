@@ -59,8 +59,8 @@ function localAddress(ip: string): boolean {
   return a === '::1' || a === '::' || /^fe[89ab]/.test(a);
 }
 
-const OFFLINE = 'This workspace is offline (Settings → Workspaces)';
-const notAllowed = (host: string) => `${host} is not in this workspace's allowed hosts (Settings → Workspaces)`;
+export const OFFLINE = 'This workspace is offline (Settings → Workspaces)';
+export const notAllowed = (host: string) => `${host} is not in this workspace's allowed hosts (Settings → Workspaces)`;
 
 export interface NetworkOptions {
   /** Also listen on a unix socket (Linux: bound into bwrap's network namespace, relayed by socat). Default: on Linux. */
