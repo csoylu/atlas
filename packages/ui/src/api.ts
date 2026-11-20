@@ -97,6 +97,8 @@ export const api = {
   undoClear: (clearId: string) => call<{ cardId: string }>('POST', `/clears/${clearId}/undo`),
   undoRewind: (rewindId: string) => call<{ files: FileChange[]; filesError: string | null }>('POST', `/rewinds/${rewindId}/undo`),
   retry: (id: string) => call<Card>('POST', `/cards/${id}/retry`),
+  /** The value of the secret a blocked task waits for (#297): stored, granted to its agent, the task restarts. 204. */
+  saveCardSecret: (id: string, value: string) => call<void>('POST', `/cards/${id}/secret`, { value }),
   agents: () => call<Agent[]>('GET', '/agents'),
   chats: () => call<Card[]>('GET', '/chats'),
   newChat: (agentId: string) => call<Card>('POST', `/agents/${agentId}/chats`),

@@ -450,6 +450,43 @@ export class Secrets {
   }
 
   /**
+   * The box in the chat (#297): Master types the value of the secret a blocked task waits for. Stored like Settings →
+   * Secrets (the store only: never SQLite, an event or an answer), granted to the task's agent, then the task resumes
+   * (resume()). The grant goes before the value and is put back if the value can't be written: nothing stored on a
+   * failure. A secret that already has a value is never overwritten from here (Settings → Secrets rotates it).
+   */
+  fillFor(cardId: string, value: string): { name: string } {
+    const store = this.needStore();
+    const r = this.db.prepare('SELECT * FROM secrets WHERE waiting_card = ? ORDER BY name LIMIT 1').get(cardId) as SecretRow | undefined;
+    if (!r) throw new NotFoundError('this task waits for no secret (it was added or dismissed already)');
+    const card = this.kanban?.get(cardId);
+    if (!card?.assignee) throw new ConflictError('this task has no agent to give the secret to');
+    if (card.status !== 'blocked') throw new ConflictError('this task is no longer blocked');
+    const v = value.trim();
+    if (!v) throw new ConflictError('the value is empty: nothing stored');
+    if (/[\r\n]/.test(v)) throw new ConflictError('the value has a line break: paste it on one line (nothing stored)');
+    if (r.kind !== 'agent') throw new ConflictError(`${r.name} is a model key: agents can't use it`);
+    if (this.stored().has(r.name))
+      throw new ConflictError(`${r.name} already has a value: grant it to @${card.assignee} or replace it in Settings → Secrets (nothing stored)`);
+    const info = toInfo(r, false);
+    const before = { grant: r.grant_to, agents: r.agents };
+    const grant: SecretGrant = info.grant === 'all' ? 'all' : 'agents';
+    const agents = grant === 'all' ? [] : [...new Set([...info.agents, card.assignee])];
+    const now = new Date().toISOString();
+    this.db.prepare('UPDATE secrets SET grant_to = ?, agents = ?, updated_at = ?, updated_by = ? WHERE name = ?').run(grant, JSON.stringify(agents), now, 'user', r.name);
+    try {
+      store.set(r.name, v);
+    } catch (e) {
+      this.db.prepare('UPDATE secrets SET grant_to = ?, agents = ? WHERE name = ?').run(before.grant, before.agents, r.name);
+      throw e;
+    }
+    this.bus.emit({ type: 'secrets.updated' });
+    this.resume();
+    this.valuesChanged();
+    return { name: r.name };
+  }
+
+  /**
    * Tasks waiting on a secret that is now there (value stored, granted to the task's agent) go back to work: a note in
    * the thread, status ready, the wait cleared, in one transaction. Also run at engine start: a crash between the
    * value's write and this leaves the task blocked until then, never lost. A task no longer blocked just drops the wait.

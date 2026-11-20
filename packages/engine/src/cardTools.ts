@@ -116,7 +116,7 @@ export const CARD_TOOLS = {
   task_block: tool({
     description:
       'Stop and wait. kind: needs_input (question for the user; options, recommended first), capability (missing access ' +
-      'or tool; a secret only the user can give: set secret, they add it in Settings → Secrets and the task restarts), ' +
+      'or tool; a secret only the user can give: set secret, they type it in the box shown in the chat and the task restarts), ' +
       'dependency (in todo until the waits_on tasks are done; create missing ones first), transient (retries after ' +
       'retry_in_minutes). Only needs_input and capability reach the user.',
     input: z.object({
@@ -136,7 +136,7 @@ export const CARD_TOOLS = {
         if (kanban.get(cardId).board === 'direct') throw new Error('a direct chat does not block: ask the user for the secret in the chat (Settings → Secrets)');
         // The row first (idempotent): a crash before the block re-runs the task, which blocks again on the same row.
         secrets.need(agentId, kanban.get(cardId).projectId, cardId, secret, secret_description);
-        const reason = `${question}\n\nNeeds secret ${secret}: add its value in Settings → Secrets; the task restarts by itself.`;
+        const reason = `${question}\n\nNeeds secret ${secret}: type its value in the box below (or in Settings → Secrets); the task restarts by itself.`;
         kanban.block(cardId, { kind, reason, options, until: null }, agentId);
         return `task blocked (${kind}) until the user adds the value of ${secret} in Settings → Secrets; it restarts by itself then`;
       }
