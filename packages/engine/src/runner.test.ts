@@ -272,6 +272,29 @@ describe('runner', () => {
     expect(runs.map((r) => r.status).sort()).toEqual(['done', 'interrupted']);
     expect(fake.calls[0]!.messages.at(-1)!.content[0]).toMatchObject({ type: 'tool_result', tool_use_id: 't9', content: INTERRUPTED });
   });
+
+  it('a run killed after its final answer was stored, before its row was closed, ends done: no resume, no second answer (#321)', async () => {
+    const dataDir = mkdtempSync(join(tmpdir(), 'atlas-'));
+    const dbFile = join(dataDir, 'h.db');
+    // The stored state of that kill: the answer is the card's last message, the run row is still « running », its lease gone.
+    const first = await setup(new FakeProvider([]), dbFile, dataDir);
+    const card = first.engine.kanban.create({ title: 'x', assignee: 'atlas' }, 'user');
+    first.engine.kanban.appendMessage(card.id, 'user', 'user', text('go'));
+    first.engine.kanban.appendMessage(card.id, 'assistant', 'atlas', text('finished'));
+    first.engine.db
+      .prepare("INSERT INTO runs (id, card_id, agent_id, status, started_at) VALUES ('r_dead', ?, 'atlas', 'running', ?)")
+      .run(card.id, new Date().toISOString());
+    first.engine.db.close();
+    engines = [];
+
+    const fake = new FakeProvider([text('a second answer')]);
+    const second = await setup(fake, dbFile, dataDir);
+    await second.engine.runner.settled(card.id);
+    expect(second.engine.runner.runs(card.id).map((r) => [r.id, r.status])).toEqual([['r_dead', 'done']]);
+    expect(second.engine.runner.runs(card.id)[0]!.endedAt).not.toBe(null);
+    expect(fake.calls).toHaveLength(0);
+    expect(second.engine.kanban.messages(card.id).map((m) => m.role)).toEqual(['user', 'assistant']);
+  });
 });
 
 describe('context management (design §8)', () => {

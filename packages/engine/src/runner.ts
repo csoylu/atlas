@@ -431,6 +431,18 @@ export class Runner {
         }
         continue;
       }
+      if (this.answered(r.card_id)) {
+        // Killed after its final answer was stored and before the run row was closed (#321): the run ended, only the
+        // bookkeeping was lost. Resuming would answer twice, and « interrupted » would say it was cut off.
+        this.db.prepare("UPDATE runs SET status = 'done', ended_at = ? WHERE id = ? AND status = 'running'").run(now, r.id);
+        const run = this.emitRun(r.id);
+        try {
+          this.onRunEnd({ run, terminal: null, transient: false });
+        } catch (e) {
+          console.error(`after run ${r.id}`, e);
+        }
+        continue;
+      }
       const orphans = this.db
         .prepare("SELECT id, pid FROM tool_calls WHERE run_id = ? AND status = 'running'")
         .all(r.id) as { id: number; pid: number | null }[];
@@ -486,6 +498,15 @@ export class Runner {
         ? [card_id]
         : [],
     );
+  }
+
+  /** The card's last message is an assistant's plain answer (no tool call, no paused server tool) and nothing more is owed. */
+  private answered(cardId: string): boolean {
+    const card = this.kanban.get(cardId);
+    const messages = this.kanban.messages(cardId);
+    const last = messages.at(-1);
+    if (last?.role !== 'assistant' || !last.content.every((b) => b.type === 'text' || b.type === 'thinking' || b.type === 'redacted_thinking')) return false;
+    return !owesTurn(this.transcript(card), this.kanban.taskNotes(card.conversationId));
   }
 
   /**
