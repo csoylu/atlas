@@ -1,6 +1,6 @@
 import { spawn, execFile as execFileCb } from 'node:child_process';
 import { createHash } from 'node:crypto';
-import { createWriteStream, existsSync, mkdirSync, readdirSync, renameSync, rmSync, statSync, writeFileSync } from 'node:fs';
+import { appendFileSync, createWriteStream, existsSync, mkdirSync, readFileSync, readdirSync, renameSync, rmSync, statSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { Readable } from 'node:stream';
 import { pipeline } from 'node:stream/promises';
@@ -54,6 +54,10 @@ export interface UpdaterOptions {
   openCommand?: string;
   /** How long Atlas may take to quit after Update before the install counts as failed (default 150 s). */
   quitTimeoutMs?: number;
+  /** Tests: what the helper runs instead of /usr/bin/sample to record the stacks of an Atlas stuck in its exit. */
+  sampleCommand?: string;
+  /** Tests: the helper's waits, in half-seconds: for the quit (default 240 = 2 min), after QUIT_DONE (default 20 = 10 s). */
+  helperTicks?: { quit: number; exit: number };
   now?: () => number;
 }
 
@@ -96,10 +100,18 @@ export function compareSemver(a: string, b: string): number {
 /** The zip CI publishes for a chip (apps/desktop/package.json → build.mac.artifactName). */
 export const zipName = (version: string, arch: string) => `Atlas-${version}-${arch}.zip`;
 
+/**
+ * The last line the engine writes to update/quit.log once its stop is complete (#324). The helper reads it: Atlas still
+ * alive 10 s after this line is stuck in its process exit (native teardown), with nothing left to lose, so it is ended.
+ */
+export const QUIT_DONE = 'engine stopped, database closed';
+
 export class Updater {
   private checking = false;
   private timer: NodeJS.Timeout | undefined;
   private installing = false;
+  /** Update clicked and the app asked to quit: the engine's stop steps go to update/quit.log for the helper (#324). */
+  private handedOver = false;
   private readonly dir: string;
   private readonly api: string;
   private readonly repo: string;
@@ -125,6 +137,19 @@ export class Updater {
   }
   stop(): void {
     clearInterval(this.timer);
+  }
+
+  /**
+   * One step of the quit after Update (#324), appended to update/quit.log with its time: what the engine is stopping
+   * now, then QUIT_DONE. The helper names the last step when Atlas does not quit, and ends a process still alive after
+   * QUIT_DONE. Nothing is written for an ordinary quit.
+   */
+  quitStep(step: string): void {
+    if (this.handedOver) appendFileSync(join(this.dir, 'quit.log'), `${this.iso()} ${step}\n`);
+  }
+  private lastQuitStep(): string | null {
+    const lines = readLines(join(this.dir, 'quit.log'));
+    return lines.at(-1)?.replace(/^\S+ /, '') ?? null;
   }
 
   private row(): Row {
@@ -191,9 +216,12 @@ export class Updater {
           phase_at: this.iso(),
         });
       } else {
+        // The helper's last line says why (« Atlas did not quit within 2 minutes: … the engine was at … »).
+        const last = readLines(join(this.dir, 'install.log')).at(-1);
+        const why = last && !last.startsWith('installed ') && !/ update: waiting for Atlas/.test(last) ? last.replace(/\.$/, '') : `Atlas ${this.opts.version} is still the one running`;
         this.set({
           phase: 'failed',
-          error: `The update to ${r.target} did not install: Atlas ${this.opts.version} is still the one running. Details in ${join(this.dir, 'install.log')}.`,
+          error: `The update to ${r.target} did not install: ${why}. Details in ${join(this.dir, 'install.log')}.`,
           phase_at: this.iso(),
         });
       }
@@ -202,7 +230,7 @@ export class Updater {
 
   private cleanFiles(): void {
     if (!existsSync(this.dir)) return;
-    for (const f of readdirSync(this.dir)) if (f !== 'install.log') rmSync(join(this.dir, f), { recursive: true, force: true });
+    for (const f of readdirSync(this.dir)) if (f !== 'install.log' && f !== 'quit-sample.txt') rmSync(join(this.dir, f), { recursive: true, force: true });
   }
 
   /** Ask GitHub for the published releases (not drafts, not pre-releases) and keep those newer than this version. */
@@ -332,18 +360,30 @@ export class Updater {
       this.set({ phase: 'installing', phase_at: this.iso() });
       const helper = join(this.dir, 'install.sh');
       writeFileSync(helper, HELPER, { mode: 0o755 });
+      const quitLog = join(this.dir, 'quit.log');
+      rmSync(quitLog, { force: true });
+      rmSync(join(this.dir, 'quit-sample.txt'), { force: true });
       const previous = join(this.opts.dataDir, 'Atlas.previous.app');
-      const child = spawn('/bin/sh', [helper, String(this.opts.pid ?? process.pid), app, host.appPath, previous, join(this.dir, 'install.log')], {
+      const child = spawn('/bin/sh', [helper, String(this.opts.pid ?? process.pid), app, host.appPath, previous, join(this.dir, 'install.log'), quitLog], {
         detached: true,
         stdio: 'ignore',
-        env: { ...process.env, ATLAS_UPDATE_OPEN: this.opts.openCommand ?? 'open' },
+        env: { ...process.env, ATLAS_UPDATE_OPEN: this.opts.openCommand ?? 'open', ATLAS_UPDATE_SAMPLE: this.opts.sampleCommand ?? '/usr/bin/sample',
+          ATLAS_UPDATE_QUIT_TICKS: String(this.opts.helperTicks?.quit ?? 240),
+          ATLAS_UPDATE_EXIT_TICKS: String(this.opts.helperTicks?.exit ?? 20),
+        },
       });
       child.unref();
-      // If Atlas is still running long after (the quit was cancelled), the helper has given up: say so.
+      // If Atlas is still running long after, its engine never stopped (or the quit was cancelled): say where it was.
       setTimeout(() => {
         if (this.db.open && this.row().phase === 'installing')
-          this.set({ phase: 'failed', error: 'Atlas did not quit, so the update was not installed: click Update to try again.', phase_at: this.iso() });
+          this.set({
+            phase: 'failed',
+            error: `Atlas did not quit, so the update was not installed. Its quit got as far as: ${this.lastQuitStep() ?? 'nothing (the quit never started)'}. Click Update to try again.`,
+            phase_at: this.iso(),
+          });
       }, this.opts.quitTimeoutMs ?? 150_000).unref();
+      this.handedOver = true;
+      this.quitStep('asked the app to quit (the window closes, then the engine stops)');
       host.quit();
       return this.status();
     } catch (e) {
@@ -395,20 +435,47 @@ function pruneBackups(dir: string, keep: number): void {
   for (const { f } of files.slice(keep)) rmSync(join(dir, f), { force: true });
 }
 
+/** A text file's non-empty lines; none when it does not exist. */
+function readLines(file: string): string[] {
+  if (!existsSync(file)) return [];
+  return readFileSync(file, 'utf8').split('\n').map((l) => l.trim()).filter(Boolean);
+}
+
 const errText = (e: unknown) => (e instanceof Error ? (('stderr' in e && String(e.stderr).trim()) || e.message) : String(e));
 
 /**
  * The detached helper: $1 pid to wait for, $2 the new Atlas.app, $3 the installed one, $4 where the previous one is
- * kept (once), $5 its log. It reopens Atlas in every case, so a failed swap still leaves Master with a running app.
+ * kept (once), $5 its log, $6 the engine's quit log (Updater.quitStep). It reopens Atlas in every case, so a failed
+ * swap still leaves Master with a running app.
+ *
+ * Waiting for the quit (#324): once the quit log ends with QUIT_DONE the engine has stopped and closed the database;
+ * a process still alive 10 s later is stuck in its exit (on 20 Nov 2026 0.78.0 hung there for 6 minutes), so the
+ * helper records its stacks (sample) and ends it with SIGKILL, which loses nothing. Without QUIT_DONE after 2 minutes
+ * the engine itself did not stop: nothing is killed, and the log names the step it was at and its child processes.
  */
 export const HELPER = `#!/bin/sh
-pid="$1"; new="$2"; app="$3"; prev="$4"; log="$5"
+pid="$1"; new="$2"; app="$3"; prev="$4"; log="$5"; quit="$6"
 exec >>"$log" 2>&1
 echo "$(date '+%Y-%m-%d %H:%M:%S') update: waiting for Atlas (pid $pid) to quit"
-i=0
+i=0; done_at=""
 while kill -0 "$pid" 2>/dev/null; do
   i=$((i + 1))
-  if [ "$i" -gt 240 ]; then echo "Atlas did not quit within 2 minutes: update not installed"; exit 1; fi
+  if [ -z "$done_at" ] && [ -n "$quit" ] && tail -n 1 "$quit" 2>/dev/null | grep -q "${QUIT_DONE}"; then done_at=$i; fi
+  if [ -n "$done_at" ] && [ $((i - done_at)) -ge "\${ATLAS_UPDATE_EXIT_TICKS:-20}" ]; then
+    sample_file="$(dirname "$log")/quit-sample.txt"
+    \${ATLAS_UPDATE_SAMPLE:-/usr/bin/sample} "$pid" 1 -file "$sample_file" >/dev/null 2>&1 || sample_file="no stack sample: sample failed"
+    echo "Atlas stopped its engine and closed the database ($(tail -n 1 "$quit" | cut -d' ' -f1)), but its process (pid $pid) was still alive 10 s later, stuck in its exit: ended it with SIGKILL (stacks in $sample_file)"
+    kill -9 "$pid" 2>/dev/null
+    j=0; while kill -0 "$pid" 2>/dev/null && [ "$j" -lt 20 ]; do j=$((j + 1)); sleep 0.5; done
+    if kill -0 "$pid" 2>/dev/null; then echo "Atlas (pid $pid) survived SIGKILL: update not installed"; exit 1; fi
+    break
+  fi
+  if [ "$i" -gt "\${ATLAS_UPDATE_QUIT_TICKS:-240}" ]; then
+    step="$(tail -n 1 "$quit" 2>/dev/null | cut -d' ' -f2-)"
+    kids="$(pgrep -P "$pid" | while read -r c; do ps -o pid=,etime=,command= -p "$c" | cut -c1-120; done | sed 's/^ *//' | paste -sd';' -)"
+    echo "Atlas did not quit within 2 minutes, its engine was still at: \${step:-the window did not close (no engine step started)}; child processes: \${kids:-none}; update not installed"
+    exit 1
+  fi
   sleep 0.5
 done
 rm -rf "$prev"

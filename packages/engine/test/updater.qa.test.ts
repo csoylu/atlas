@@ -317,7 +317,8 @@ describe.skipIf(!mac)('Atlas killed around the swap (#124)', () => {
     await t.u.check();
     await t.u.install();
     await wait(() => t.u.status().phase === 'failed', 5000);
-    expect(t.u.status().error).toBe('Atlas did not quit, so the update was not installed: click Update to try again.');
+    // #324: the error says how far the quit got (here the app never even began to quit)
+    expect(t.u.status().error).toBe('Atlas did not quit, so the update was not installed. Its quit got as far as: asked the app to quit (the window closes, then the engine stops). Click Update to try again.');
     expect(versionOf(t.installed)).toBe('0.4.0');
   });
 });
@@ -395,7 +396,8 @@ describe.skipIf(!mac)('the swap helper on its own (#124)', () => {
     r.shim('sleep', 'exec /bin/sleep 0.001'); // 240 polls of 0.5 s → 240 polls of 1 ms
     const h = r.run();
     expect(await h.exited).toBe(1);
-    expect(r.readLog()).toContain('did not quit within 2 minutes: update not installed');
+    // #324: no quit log (the engine never began to stop): the line says so, and lists Atlas's child processes
+    expect(r.readLog()).toContain('Atlas did not quit within 2 minutes, its engine was still at: the window did not close (no engine step started); child processes: none; update not installed');
     expect(versionOf(r.app)).toBe('0.4.0');
     expect(existsSync(r.prev)).toBe(false);
   }, 30_000);

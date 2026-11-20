@@ -45,6 +45,12 @@ the app restarts once, when Master clicks.
    and reopens it. The replacement is one atomic swap (`renamex_np` with `RENAME_SWAP`, #161), so the helper can be
    killed at any point and an app still opens (old or new); on another volume it falls back to two renames, with a
    short window where no Atlas.app exists. The previous app is kept once (`Atlas.previous.app` in the data folder).
+   **Waiting for the quit (#324).** After Update the engine writes each step of its stop to `update/quit.log`, the last
+   one « engine stopped, database closed ». A process still alive 10 s after that line is stuck in its exit (0.78.0
+   hung there for 6 minutes on 20 Nov 2026): the helper records its stacks (`sample` → `update/quit-sample.txt`), ends
+   it with SIGKILL (nothing left to lose) and installs. Without that line after 2 minutes the engine itself did not
+   stop: nothing is killed, and `install.log` names the step it was at and Atlas's child processes; the next start
+   shows that line as the update's error. Tests: `updater.test.ts`.
 
 ## Decisions
 
