@@ -13,26 +13,46 @@ export interface Page {
   image?: Buffer;
 }
 
-export async function fetchPage(url: string, signal: AbortSignal, fetchFn: typeof fetch = fetch): Promise<Page> {
+const MAX_HOPS = 10;
+
+/**
+ * Fetch `url` and follow its redirects by hand (at most MAX_HOPS), so `allow` sees every hop (#298 §2.3: the workspace's
+ * internet level): it returns why a URL may not be fetched, or null. A refused hop stops the fetch with that reason.
+ */
+export async function fetchPage(url: string, signal: AbortSignal, fetchFn: typeof fetch = fetch, allow?: (u: URL) => string | null): Promise<Page> {
   let u: URL;
   try {
     u = new URL(url);
   } catch {
     throw new Error(`not a URL: ${url}`);
   }
-  if (u.protocol !== 'http:' && u.protocol !== 'https:') throw new Error(`only http(s) URLs can be fetched, not ${u.protocol}`);
   let res: Response;
-  try {
-    res = await fetchFn(u, {
-      signal: AbortSignal.any([signal, AbortSignal.timeout(TIMEOUT_MS)]),
-      redirect: 'follow',
-      headers: { 'user-agent': 'Mozilla/5.0 (compatible; Atlas agent)', accept: 'text/html,application/xhtml+xml,text/plain,application/json;q=0.9,*/*;q=0.5' },
-    });
-  } catch (e) {
-    signal.throwIfAborted();
-    const cause = e instanceof Error && e.cause instanceof Error ? e.cause.message : e instanceof Error ? e.message : String(e);
-    throw new Error(`fetch ${url} failed: ${cause}`);
+  for (let hop = 0; ; hop++) {
+    if (u.protocol !== 'http:' && u.protocol !== 'https:') throw new Error(`only http(s) URLs can be fetched, not ${u.protocol}`);
+    const why = allow?.(u);
+    if (why) throw new Error(hop ? `${url} redirects to ${u.href}: ${why}` : why);
+    try {
+      res = await fetchFn(u, {
+        signal: AbortSignal.any([signal, AbortSignal.timeout(TIMEOUT_MS)]),
+        redirect: 'manual',
+        headers: { 'user-agent': 'Mozilla/5.0 (compatible; Atlas agent)', accept: 'text/html,application/xhtml+xml,text/plain,application/json;q=0.9,*/*;q=0.5' },
+      });
+    } catch (e) {
+      signal.throwIfAborted();
+      const cause = e instanceof Error && e.cause instanceof Error ? e.cause.message : e instanceof Error ? e.message : String(e);
+      throw new Error(`fetch ${url} failed: ${cause}`);
+    }
+    const location = res.status >= 300 && res.status < 400 ? res.headers.get('location') : null;
+    if (!location) break;
+    await res.body?.cancel();
+    if (hop + 1 >= MAX_HOPS) throw new Error(`fetch ${url} failed: more than ${MAX_HOPS} redirects`);
+    try {
+      u = new URL(location, u);
+    } catch {
+      throw new Error(`fetch ${url} failed: bad redirect to ${location}`);
+    }
   }
+  url = res.url || u.href;
   const contentType = res.headers.get('content-type') ?? '';
   const buf = await readCapped(res);
   if (/^image\/(png|jpeg|gif|webp)\b/i.test(contentType)) {

@@ -1,7 +1,7 @@
 import { execFile, execFileSync, spawn } from 'node:child_process';
 import { existsSync, mkdirSync, readdirSync, readFileSync, renameSync, rmdirSync, rmSync } from 'node:fs';
 import { dirname, isAbsolute, join, relative, resolve, sep } from 'node:path';
-import { CreateProject, PROJECT_HUES, UpdateProject, type CloneState, type KeptWorkspace, type Project, type ProjectMember, type RepoCheck } from '@atlas/shared';
+import { CreateProject, PROJECT_HUES, UpdateMember, UpdateProject, type CloneState, type NetworkLevel, type KeptWorkspace, type Project, type ProjectMember, type RepoCheck } from '@atlas/shared';
 import type { Db } from './store/db.ts';
 import type { Bus } from './events.ts';
 import { ConflictError, InvalidError, NotFoundError, type Kanban } from './kanban.ts';
@@ -21,6 +21,8 @@ interface ProjectRow {
   review_agent: string | null;
   review_seeded: number;
   colour: number;
+  network: NetworkLevel;
+  allowed_hosts: string;
   status: 'active' | 'archived';
   created_at: string;
   archived_at: string | null;
@@ -34,6 +36,8 @@ interface MemberRow {
   home: number;
   main_chat: string | null;
   joined_at: string;
+  network: NetworkLevel | null;
+  allowed_hosts: string | null;
 }
 interface KeptRow {
   project_id: string;
@@ -400,6 +404,9 @@ export class Projects {
         }
         if (p.ciJob !== undefined) this.db.prepare('UPDATE projects SET ci_job = ? WHERE id = ?').run(p.ciJob, before.id);
         if (p.colour !== undefined) this.db.prepare('UPDATE projects SET colour = ? WHERE id = ?').run(p.colour, before.id);
+        // Internet (#298 §2.4): read at each command and each proxied request, so it applies from the next one on.
+        if (p.network !== undefined) this.db.prepare('UPDATE projects SET network = ? WHERE id = ?').run(p.network, before.id);
+        if (p.allowedHosts !== undefined) this.db.prepare('UPDATE projects SET allowed_hosts = ? WHERE id = ?').run(JSON.stringify(p.allowedHosts), before.id);
         const lead = p.lead !== undefined ? p.lead : before.lead;
         if (p.lead !== undefined) {
           this.checkAgent(p.lead);
@@ -419,6 +426,27 @@ export class Projects {
     this.afterRelease();
     this.resume();
     return this.emit(before.id);
+  }
+
+  /**
+   * A workspace's own internet setting (#298 §2.4): its level and its allowed hosts, each null = the project's. An empty
+   * list is stored as null (the project's list). Applies from the workspace's next command on.
+   */
+  updateMember(id: string, agentId: string, patch: UpdateMember): Project {
+    const m = UpdateMember.parse(patch);
+    const p = this.get(id);
+    if (p.status === 'archived') throw new ConflictError(`project ${p.name} is archived: restore it to edit it`);
+    if (!p.members.some((x) => x.agentId === agentId)) throw new NotFoundError(`@${agentId} is not a member of project ${p.name}`);
+    this.db
+      .transaction(() => {
+        if (m.network !== undefined) this.db.prepare('UPDATE project_members SET network = ? WHERE project_id = ? AND agent_id = ?').run(m.network, p.id, agentId);
+        if (m.allowedHosts !== undefined)
+          this.db
+            .prepare('UPDATE project_members SET allowed_hosts = ? WHERE project_id = ? AND agent_id = ?')
+            .run(m.allowedHosts && m.allowedHosts.length ? JSON.stringify(m.allowedHosts) : null, p.id, agentId);
+      })
+      .immediate();
+    return this.emit(p.id);
   }
 
   /**
@@ -747,13 +775,15 @@ export class Projects {
         cloneProgress: m.clone_state === 'cloning' ? (this.progress.get(`${r.id}/${m.agent_id}`) ?? null) : null,
         mainChat: m.main_chat,
         joinedAt: m.joined_at,
+        network: m.network,
+        allowedHosts: m.allowed_hosts === null ? null : (JSON.parse(m.allowed_hosts) as string[]),
         branch: m.home || m.clone_state === 'ready' ? branchOf(m.home ? homeDir(this.db, this.o.dataDir, m.agent_id) : m.workspace) : null,
       }),
     );
     const kept = (this.db.prepare('SELECT * FROM kept_workspaces WHERE project_id = ? ORDER BY kept_at').all(r.id) as KeptRow[]).map(
       (k): KeptWorkspace => ({ agentId: k.agent_id, path: k.path, home: k.home === 1, keptAt: k.kept_at }),
     );
-    return { id: r.id, name: r.name, repo: r.repo, ciJob: r.ci_job, lead: r.lead, reviewAgent: r.review_agent, colour: r.colour, status: r.status, createdAt: r.created_at, archivedAt: r.archived_at, members, kept, isDefault: r.id === def };
+    return { id: r.id, name: r.name, repo: r.repo, ciJob: r.ci_job, network: r.network, allowedHosts: JSON.parse(r.allowed_hosts) as string[], lead: r.lead, reviewAgent: r.review_agent, colour: r.colour, status: r.status, createdAt: r.created_at, archivedAt: r.archived_at, members, kept, isDefault: r.id === def };
   }
 
   private emit(id: string): Project {

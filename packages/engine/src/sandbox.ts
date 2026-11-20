@@ -1,8 +1,9 @@
 import { spawn, execFile, type ChildProcess } from 'node:child_process';
-import { lstatSync, mkdirSync, readFileSync, readlinkSync, realpathSync } from 'node:fs';
+import { existsSync, lstatSync, mkdirSync, readFileSync, readlinkSync, realpathSync } from 'node:fs';
 import { homedir } from 'node:os';
 import { delimiter, dirname, isAbsolute, join, resolve, sep } from 'node:path';
-import type { SandboxStatus } from '@atlas/shared';
+import type { NetworkLevel, SandboxStatus } from '@atlas/shared';
+import type { Network } from './network.ts';
 
 /**
  * Agent command sandbox (#298 §1.2, §1.4, §1.5, §1.6). Every agent command (shell, background shell, secret_set's
@@ -47,6 +48,15 @@ export interface SandboxOptions {
   sandboxExec?: string;
   bwrap?: string;
   procSys?: string;
+  /** Tests: where socat is (Linux, Allowed hosts); default: the first of SOCAT that exists. */
+  socat?: string;
+  /** Internet levels and the allow-list proxy (#298 S3); omitted = every workspace On (tests). */
+  network?: Network;
+  /**
+   * The engine requires its login (ATLAS_PASSWORD) on every API call but the public ones. Linux at level On shares the
+   * host network, so the engine port is reachable: without the login there a command is refused (#298 §2.1).
+   */
+  engineLogin?: () => boolean;
 }
 
 /** Toolchains under $HOME that stay readable (besides the PATH's own folders under $HOME). */
@@ -85,7 +95,15 @@ export interface ProfileInput {
   enginePort: number | null;
   /** The command's PATH: its folders under $HOME (toolchains) stay readable. */
   path: string;
+  /** Internet level (#298 §2.1), default on; `proxyPort` = the engine's allow-list proxy, denied at Off. */
+  network?: { level: NetworkLevel; proxyPort: number | null };
 }
+
+/** DNS on macOS: the mDNSResponder socket and the dnssd service. */
+const DNS_DENY = [
+  '(deny network-outbound (remote unix-socket (path-literal "/private/var/run/mDNSResponder")))',
+  '(deny mach-lookup (global-name "com.apple.dnssd.service") (global-name "com.apple.dnssd.service.v2"))',
+];
 
 /** The Seatbelt profile of one (project, agent) workspace (#298 §1.2). Allow by default, then deny; the last matching rule wins. */
 export function seatbeltProfile(i: ProfileInput): string {
@@ -100,6 +118,7 @@ export function seatbeltProfile(i: ProfileInput): string {
     // A PATH folder under $HOME is a toolchain, unless it would open $HOME itself or the data dir.
     .filter((d) => within(d, home) && d !== home && !within(data, d) && !within(d, data));
   const readable = [...new Set([...HOME_READABLE.map((d) => join(home, d)), ...pathDirs])];
+  const level = i.network?.level ?? 'on';
   const L: string[] = [
     '(version 1)',
     '(allow default)',
@@ -127,6 +146,10 @@ export function seatbeltProfile(i: ProfileInput): string {
     '(deny process-exec (literal "/bin/launchctl") (literal "/usr/bin/open") (literal "/usr/bin/osascript"))',
     // No docker, no engine API.
     '(deny network-outbound (remote unix-socket (path-literal "/private/var/run/docker.sock")))',
+    // Internet (#298 §2.1). Allowed hosts: nothing out but localhost (the proxy, the agent's own servers), no DNS (the
+    // proxy resolves names). Off: the same without the proxy. The engine port is denied last, at every level.
+    ...(level === 'on' ? [] : ['(deny network-outbound (remote ip "*:*"))', '(allow network-outbound (remote ip "localhost:*"))', ...DNS_DENY]),
+    ...(level === 'off' && i.network?.proxyPort ? [`(deny network-outbound (remote ip ${q(`*:${i.network.proxyPort}`)}))`] : []),
     ...(i.enginePort ? [`(deny network-outbound (remote ip ${q(`*:${i.enginePort}`)}))`] : []),
   ];
   return L.join('\n') + '\n';
@@ -150,7 +173,16 @@ export interface BwrapInput {
   path: string;
   /** Tests: what a path is on this machine. */
   kind?: (p: string) => { link: string } | 'dir' | 'file' | null;
+  /**
+   * Internet level (#298 §2.1), default on (the host network). Allowed hosts and Off get their own network namespace
+   * (nothing out, a loopback of their own); Allowed hosts gets the engine proxy's unix socket at PROXY_SOCKET.
+   */
+  network?: { level: NetworkLevel; proxySocket: string | null };
 }
+
+/** Linux, Allowed hosts: where the proxy's unix socket appears inside the sandbox, and the port socat relays it on. */
+export const PROXY_SOCKET = '/run/atlas/proxy.sock';
+export const PROXY_PORT_INSIDE = 3128;
 
 const fsKind = (p: string): { link: string } | 'dir' | 'file' | null => {
   try {
@@ -168,7 +200,8 @@ const fsKind = (p: string): { link: string } | 'dir' | 'file' | null => {
  * namespace), /dev, a tmpfs /tmp, then the workspace and the private folder read-write, last. $HOME and the data dir
  * (database, other workspaces, outputs) are never mounted: inside, they do not exist. When one of them lies under a
  * mounted system folder (a data dir in /opt), an empty tmpfs hides it. Children inherit it all; --die-with-parent and
- * the pid namespace end every process of the command with it. Network: the host's (level On; levels come with S3).
+ * the pid namespace end every process of the command with it. Network: the host's at level On; its own namespace at
+ * Allowed hosts (the proxy's socket only) and Off (nothing).
  */
 export function bwrapArgs(i: BwrapInput): string[] {
   const kind = i.kind ?? fsKind;
@@ -177,6 +210,8 @@ export function bwrapArgs(i: BwrapInput): string[] {
   const ws = real(i.workspace);
   const priv = real(i.private);
   const a = ['--unshare-pid', '--unshare-ipc', '--die-with-parent', '--new-session'];
+  const level = i.network?.level ?? 'on';
+  if (level !== 'on') a.push('--unshare-net');
   const mounted: string[] = [];
   for (const d of SYSTEM_LINKS) {
     const k = kind(d);
@@ -196,6 +231,10 @@ export function bwrapArgs(i: BwrapInput): string[] {
   a.push('--proc', '/proc', '--dev', '/dev', '--tmpfs', '/tmp');
   // The command's own workspace and private folder, after everything else: they win over any mask above.
   a.push('--bind', ws, ws, '--bind', priv, priv);
+  if (level === 'hosts') {
+    if (!i.network?.proxySocket) throw new Error('the network proxy has no unix socket: Allowed hosts cannot run');
+    a.push('--bind', i.network.proxySocket, PROXY_SOCKET);
+  }
   a.push('--chdir', within(real(i.cwd), ws) || within(real(i.cwd), priv) ? real(i.cwd) : ws);
   return a;
 }
@@ -278,6 +317,11 @@ export class Sandbox {
     return this.o.enabled;
   }
 
+  /** The internet levels, when they apply (the sandbox on, #298 S3); null = every workspace On. */
+  get network(): Network | null {
+    return this.o.enabled ? (this.o.network ?? null) : null;
+  }
+
   status(): SandboxStatus {
     return { ...this.state };
   }
@@ -349,14 +393,40 @@ export class Sandbox {
     // No password prompt of any kind (§1.5).
     delete full.GIT_ASKPASS;
     delete full.SSH_ASKPASS;
-    if (this.platform === 'linux') {
-      const args = bwrapArgs({ home: this.home, dataDir: this.o.dataDir, workspace: scope.workspace, private: priv, cwd, path: full.PATH ?? '' });
-      return { file: this.bwrap, args: [...args, '--', '/bin/bash', '-c', command], env: full };
+    // Internet level (#298 §2): read now, so a change applies from the next command on.
+    const net = this.o.network ? this.o.network.forCommand(scope.projectId, scope.agentId) : { level: 'on' as const, token: null, proxyUrl: null };
+    const linux = this.platform === 'linux';
+    if (linux && net.level === 'on' && this.o.engineLogin && !this.o.engineLogin())
+      throw new Error(
+        'internet level On shares the host network on Linux, where the engine port is reachable: start Atlas with ATLAS_PASSWORD (every API call then needs the login), or set this workspace to Allowed hosts or Off',
+      );
+    if (net.level === 'hosts') {
+      const url = linux ? `http://ws:${net.token}@127.0.0.1:${PROXY_PORT_INSIDE}` : net.proxyUrl!;
+      for (const k of ['HTTPS_PROXY', 'HTTP_PROXY', 'https_proxy', 'http_proxy', 'ALL_PROXY', 'all_proxy']) full[k] = url;
+      full.NO_PROXY = full.no_proxy = 'localhost,127.0.0.1,::1';
+      // Node's fetch follows the proxy env only when asked (Node 24).
+      full.NODE_USE_ENV_PROXY = '1';
     }
-    const profile = seatbeltProfile({ home: this.home, dataDir: this.o.dataDir, workspace: scope.workspace, private: priv, enginePort: this.o.enginePort(), path: full.PATH ?? '' });
+    if (linux) {
+      const network = { level: net.level, proxySocket: this.o.network?.socketPath ?? null };
+      const args = bwrapArgs({ home: this.home, dataDir: this.o.dataDir, workspace: scope.workspace, private: priv, cwd, path: full.PATH ?? '', network });
+      if (net.level !== 'hosts') return { file: this.bwrap, args: [...args, '--', '/bin/bash', '-c', command], env: full };
+      // Allowed hosts: socat relays 127.0.0.1:3128 in the sandbox's own network to the proxy's socket, then the command.
+      const socat = this.o.socat ?? SOCAT.find((p) => existsSync(p));
+      if (!socat || !existsSync(socat)) throw new Error('internet level Allowed hosts needs socat on Linux: install it (sudo apt-get install socat, docs/server-sandbox.md), or set this workspace to On or Off');
+      const launcher =
+        `${socat} TCP-LISTEN:${PROXY_PORT_INSIDE},bind=127.0.0.1,fork,reuseaddr UNIX-CONNECT:${PROXY_SOCKET} 2>/dev/null & ` +
+        `for i in $(seq 200); do (: </dev/tcp/127.0.0.1/${PROXY_PORT_INSIDE}) 2>/dev/null && break; sleep 0.01; done; exec /bin/bash -c "$1"`;
+      return { file: this.bwrap, args: [...args, '--', '/bin/bash', '-c', launcher, 'atlas-net', command], env: full };
+    }
+    const network = { level: net.level, proxyPort: this.o.network?.port ?? null };
+    const profile = seatbeltProfile({ home: this.home, dataDir: this.o.dataDir, workspace: scope.workspace, private: priv, enginePort: this.o.enginePort(), path: full.PATH ?? '', network });
     return { file: this.exec, args: ['-p', profile, '/bin/bash', '-c', command], env: full };
   }
 }
+
+/** Where socat may be (Linux, Allowed hosts): the system folders mounted in the sandbox. */
+const SOCAT = ['/usr/bin/socat', '/usr/local/bin/socat', '/bin/socat'];
 
 /** Runs a probe command; a failure becomes an Error with `why(stderr, error)` as its message. */
 function run(file: string, args: string[], why: (stderr: string, e: Error) => string): Promise<void> {

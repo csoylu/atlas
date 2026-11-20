@@ -194,6 +194,12 @@ export class Runner {
     return sandbox ? { sandbox, projectId, projectName: projectRow(this.db, projectId).name, agentId, workspace } : null;
   }
 
+  /** web_fetch's check of each URL hop, from the workspace's internet level (#298 §2.3); undefined = no limit. */
+  private webAllow(agentId: string, projectId: string): ((u: URL) => string | null) | undefined {
+    const net = this.opts.sandbox?.network;
+    return net ? (u) => net.check(projectId, agentId, u) : undefined;
+  }
+
   private async shellEnvFor(agentId: string, projectId: string, command: string): Promise<NodeJS.ProcessEnv> {
     const base = this.opts.shellEnv ? await this.opts.shellEnv.for(agentId) : process.env;
     return this.opts.secrets ? this.opts.secrets.envFor(agentId, projectId, base, command) : base;
@@ -621,7 +627,8 @@ export class Runner {
             system: system.text,
             messages: wire,
             tools,
-            webSearch: true,
+            // Off: no web search either (#298 §2.3); it runs at the provider, so it is simply not offered.
+            webSearch: this.opts.sandbox?.network?.setting(card.projectId, agent.id).level !== 'off',
             cache: { systemStable: system.stable },
             ...(card.effort ? { effort: card.effort } : {}),
           },
@@ -736,6 +743,7 @@ export class Runner {
                   ...(this.opts.shellEnv || this.opts.secrets ? { env: (command: string) => this.shellEnvFor(agent.id, card.projectId, command) } : {}),
                   ...(redactor ? { redact: redactor } : {}),
                   sandbox: this.sandboxFor(agent.id, card.projectId, workdir),
+                  ...(this.webAllow(agent.id, card.projectId) ? { webAllow: this.webAllow(agent.id, card.projectId) } : {}),
                 });
               const log = this.opts.fileLog;
               r = await (log ? log.track(cardId, workdir, u.name, u.input, exec) : exec()).finally(live.stop);

@@ -46,6 +46,8 @@ export interface ToolContext {
   redact?: Redactor;
   /** The sandbox of this (project, agent) workspace (#298); omitted = commands run unconfined (tests, sandbox off). */
   sandbox?: SandboxScope | null;
+  /** The workspace's internet level for web_fetch (#298 §2.3): why a URL (each redirect hop) may not be fetched, or null. */
+  webAllow?: (u: URL) => string | null;
 }
 
 interface Tool<S extends z.ZodType> {
@@ -394,7 +396,7 @@ export const TOOLS = {
       max_chars: z.number().int().min(1000).max(100_000).default(15_000),
     }),
     run: async ({ url, max_chars }, ctx) => {
-      const page = await fetchPage(url, ctx.signal, ctx.fetch);
+      const page = await fetchPage(url, ctx.signal, ctx.fetch, ctx.webAllow);
       if (page.image) {
         const type = sniff(page.image);
         if (!type) throw new Error(`${page.url} says it is an image (${page.contentType}) but is not a png, jpeg, gif or webp`);

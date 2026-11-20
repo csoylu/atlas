@@ -21,8 +21,49 @@ export const RepoName = z
 export const CloneState = z.enum(['pending', 'cloning', 'ready', 'failed']);
 export type CloneState = z.infer<typeof CloneState>;
 
+/**
+ * Internet access of a workspace (#298 §2): `on` = everything, `hosts` = only the allowed hosts (through the engine's
+ * proxy), `off` = nothing but the workspace's own localhost. Applies to agent commands in the sandbox and to web_fetch;
+ * `web_search` is not offered when off. Model calls, PR polling, clones and updates are the engine's: never limited.
+ */
+export const NetworkLevel = z.enum(['on', 'hosts', 'off']);
+export type NetworkLevel = z.infer<typeof NetworkLevel>;
+
+/** An allowed host: `github.com`, or `*.npmjs.org` (the domain and every subdomain). Lower case, no scheme, port or path. */
+export const HostRule = z
+  .string()
+  .trim()
+  .toLowerCase()
+  .transform((s) => s.replace(/\.$/, ''))
+  .refine((s) => /^(\*\.)?[a-z0-9]([a-z0-9-]*[a-z0-9])?(\.[a-z0-9]([a-z0-9-]*[a-z0-9])?)*$/.test(s) && s.length <= 253, {
+    message: 'an allowed host is a name like github.com or *.npmjs.org (no scheme, port or path)',
+  });
+export const HostRules = z.array(HostRule).max(500).transform((l) => [...new Set(l)]);
+
+/** PATCH /api/projects/:id/members/:agent: the workspace's own internet setting. null = the project's. */
+export const UpdateMember = z
+  .object({
+    network: NetworkLevel.nullable(),
+    /** Replaces the project's list for this workspace (no merge); null or [] = the project's list. */
+    allowedHosts: HostRules.nullable(),
+  })
+  .partial();
+export type UpdateMember = z.input<typeof UpdateMember>;
+
+/** GET /api/projects/:id/refusals: hosts the allow-list refused, per workspace (what « Allow » offers). Newest first. */
+export interface NetworkRefusal {
+  agentId: string;
+  host: string;
+  count: number;
+  lastAt: string;
+}
+
 export interface ProjectMember {
   agentId: string;
+  /** Its own internet level (#298 §2); null = the project's. */
+  network: NetworkLevel | null;
+  /** Its own allowed hosts, replacing the project's; null = the project's list. */
+  allowedHosts: string[] | null;
   /** Absolute path of its workspace for this project; null = the agent's own workspace (the first project). */
   workspace: string | null;
   cloneState: CloneState;
@@ -57,6 +98,10 @@ export interface Project {
    * check run on the head green. Atlas: « test ». A repo's own rules (Atlas's changelog entry) run in its CI (#238).
    */
   ciJob: string | null;
+  /** Internet level of its workspaces (#298 §2), default `on`; a member can override it. */
+  network: NetworkLevel;
+  /** Allowed hosts when the level is `hosts` (a member's own list replaces it). */
+  allowedHosts: string[];
   /** Gets the project's new tasks (triage); always a member. null = nobody triages. */
   lead: string | null;
   /**
@@ -108,6 +153,9 @@ export const UpdateProject = z
     /** The whole member list (the lead is added if missing). */
     members: z.array(z.string().min(1)),
     colour: z.number().int().min(0).max(359),
+    /** Internet level of its workspaces (#298 §2); applies from each workspace's next command. */
+    network: NetworkLevel,
+    allowedHosts: HostRules,
   })
   .partial();
 export type UpdateProject = z.input<typeof UpdateProject>;

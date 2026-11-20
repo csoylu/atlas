@@ -3,7 +3,7 @@ import { execFileSync } from 'node:child_process';
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, symlinkSync, writeFileSync } from 'node:fs';
 import { homedir } from 'node:os';
 import { join } from 'node:path';
-import type { ContentBlock, SandboxStatus } from '@atlas/shared';
+import type { ContentBlock, NetworkRefusal, SandboxStatus } from '@atlas/shared';
 import { eventually, launch } from './kit/index.ts';
 import type { ModelRequest } from '../src/providers/types.ts';
 import { Sandbox, spawnAgentCommand } from '../src/sandbox.ts';
@@ -12,15 +12,16 @@ import { Sandbox, spawnAgentCommand } from '../src/sandbox.ts';
  * #298 S1 + S2, the real sandbox (slow project): sandbox-exec on macOS, bubblewrap on Linux (CI job `sandbox-linux`,
  * ubuntu-24.04). Agent A's commands, whatever path they take, cannot read or change agent B's workspace, the home
  * folder, the database or the shared /tmp; on macOS also the keychain, LaunchServices and the engine API (on Linux the
- * engine port is reachable at network level On: S3). Judged by B's marker content and A's captured output, never by
- * exit codes.
+ * engine port is reachable at network level On, so the engine runs with its login there: S3). Judged by B's marker
+ * content and A's captured output, never by exit codes.
  */
+const LOGIN = 'sandbox-test-login';
 
 const mac = process.platform === 'darwin';
 const linux = process.platform === 'linux';
 /** How a denial reads: Seatbelt refuses (EPERM); under bwrap the path does not exist (ENOENT) or is read-only. */
 const DENIED = mac ? /Operation not permitted/ : /No such file or directory|Read-only file system|Permission denied/;
-const tool = (id: string, input: Record<string, unknown>): ContentBlock[] => [{ type: 'tool_use', id, name: 'shell', input }];
+const tool = (id: string, input: Record<string, unknown>, name = 'shell'): ContentBlock[] => [{ type: 'tool_use', id, name, input }];
 const text = (t: string): ContentBlock[] => [{ type: 'text', text: t }];
 const results = (req: ModelRequest) => req.messages.at(-1)!.content.flatMap((b) => (b.type === 'tool_result' ? [b.content] : []));
 
@@ -106,6 +107,7 @@ describe.skipIf(!mac && !linux)(`sandbox with the real ${mac ? 'sandbox-exec' : 
       dispatch: false,
       env: {},
       sandbox: { enabled: true },
+      password: LOGIN, // Linux, level On: the engine port is reachable, so the engine needs its login (#298 S3)
       script: [() => tool('u1', { command: `export ENGINE=${engineUrl}\n${steps.join('\n')}`, timeout_s: 600 }), text('done')],
     });
     engineUrl = l.engine.url;
@@ -152,6 +154,7 @@ describe.skipIf(!mac && !linux)(`sandbox with the real ${mac ? 'sandbox-exec' : 
       dispatch: false,
       env: {},
       sandbox: { enabled: true },
+      password: LOGIN,
       script: [
         tool('u1', { command: `unset GH_TOKEN; ${push}`, timeout_s: 120 }),
         tool('u2', { command: `rm -rf r; export GH_TOKEN=ghp_atlasSandboxTestFakeToken000000000000; ${push}`, timeout_s: 120 }),
@@ -192,5 +195,99 @@ describe.skipIf(!mac && !linux)(`sandbox with the real ${mac ? 'sandbox-exec' : 
     process.kill(-child.pid!, 'SIGTERM');
     await eventually(() => expect(count()).toBe(0), { timeout: 20_000, what: 'every sleep gone after the kill' });
   }, 60_000);
+
+  /**
+   * #298 S3: the matrix of §4. Each level × {curl allowed host, curl other host, direct --noproxy, DNS, UDP, the agent's
+   * own localhost server, the engine port, node fetch, git ls-remote}; a refusal in the API; after a restart the levels
+   * and the proxy come back. Reaches example.com, www.wikipedia.org and github.com.
+   */
+  it('internet levels On / Allowed hosts / Off, the whole matrix; refusals in the API; levels and proxy back after a restart', async () => {
+    const dataDir = dataDirUnderHome();
+    const dbFile = join(dataDir, 'atlas.db');
+    const port = 40000 + (process.pid % 20000);
+    let engine = '';
+    const steps = () =>
+      [
+        `export ENGINE=${engine}`,
+        `echo "== allowed"; curl -s -o /dev/null -m 20 -w "code=%{http_code}/%{http_connect}" https://example.com/; echo " exit=$?"`,
+        `echo "== other"; curl -s -o /dev/null -m 20 -w "code=%{http_code}/%{http_connect}" https://www.wikipedia.org/; echo " exit=$?"`,
+        `echo "== direct"; curl -s -o /dev/null -m 20 --noproxy '*' -w "code=%{http_code}" https://example.com/; echo " exit=$?"`,
+        `echo "== dns"; python3 -c "import socket; print('dns', socket.gethostbyname('example.com'))" 2>&1 | tail -1`,
+        `echo "== udp"; python3 -c "import socket; s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM); s.sendto(b'x', ('1.1.1.1', 53)); print('udp-sent')" 2>&1 | tail -1`,
+        `echo "== own"; python3 -m http.server ${port} --bind 127.0.0.1 >/dev/null 2>&1 & S=$!; for i in $(seq 50); do curl -s --noproxy '*' -o /dev/null http://127.0.0.1:${port}/ && break; sleep 0.1; done; curl -s --noproxy '*' -o /dev/null -w "code=%{http_code}" http://127.0.0.1:${port}/; echo; { kill $S; wait $S; } 2>/dev/null`,
+        `echo "== engine"; curl -s -o /dev/null -m 10 --noproxy '*' -w "code=%{http_code}" "$ENGINE/api/agents"; echo " exit=$?"`,
+        `echo "== engine-proxy"; curl -s -o /dev/null -m 10 -w "code=%{http_code}" "$ENGINE/api/agents"; echo " exit=$?"`,
+        `echo "== node"; node -e "fetch('https://example.com/').then((r) => console.log('node', r.status), (e) => console.log('node-err', e.cause?.code ?? e.message))"`,
+        `echo "== git"; git ls-remote https://github.com/git/git HEAD 2>&1 | tail -1; echo "exit=$?"`,
+        `echo "== ps"; ps eww -p $$ 2>&1 | tail -1`,
+        'echo "== end"',
+      ].join('\n');
+    const run = async (l: Awaited<ReturnType<typeof launch>>, title: string) => {
+      const card = l.engine.kanban.create({ title, assignee: 'atlas' }, 'user');
+      l.engine.kanban.appendMessage(card.id, 'user', 'user', text('go'));
+      l.engine.runner.wake(card.id);
+      await l.engine.runner.settled(card.id);
+      const out = results(l.fake.calls.at(-1)!)[0]!;
+      if (process.env.SBX_DEBUG) console.log(title, out);
+      return (name: string) => out.split(`== ${name}\n`)[1]!.split('\n== ')[0]!;
+    };
+    const turn = () => [() => tool('u', { command: steps(), timeout_s: 300 }), text('done')];
+    const l = await launch({ dataDir, dbFile, dispatch: false, env: {}, password: LOGIN, sandbox: { enabled: true }, script: [...turn(), ...turn(), ...turn()] });
+    engine = l.engine.url;
+    const pid = l.engine.projects.list()[0]!.id;
+    expect((await l.call('PATCH', `/projects/${pid}`, { allowedHosts: ['example.com', 'github.com'] })).status).toBe(200);
+
+    // On: everything goes out; the engine port is still denied on macOS, needs the login on Linux.
+    const on = await run(l, 'on');
+    expect(on('allowed')).toContain('code=200');
+    expect(on('other')).toMatch(/code=(200|301|302)/);
+    expect(on('direct')).toContain('code=200');
+    expect(on('dns')).toMatch(/^dns \d+\.\d+/);
+    expect(on('udp')).toContain('udp-sent');
+    expect(on('own')).toContain('code=200');
+    expect(on('engine')).toMatch(mac ? /code=000 exit=(7|28)/ : /code=401/);
+    expect(on('node')).toContain('node 200');
+    expect(on('git')).toMatch(/\tHEAD/);
+
+    // Allowed hosts: through the proxy only, the listed hosts only.
+    await l.call('PATCH', `/projects/${pid}`, { network: 'hosts' });
+    const hosts = await run(l, 'hosts');
+    expect(hosts('allowed')).toContain('code=200');
+    expect(hosts('other')).toMatch(/code=000\/403/);
+    expect(hosts('direct')).not.toContain('code=200');
+    expect(hosts('dns')).not.toMatch(/^dns \d/);
+    expect(hosts('udp')).not.toContain('udp-sent');
+    expect(hosts('own')).toContain('code=200');
+    expect(hosts('engine')).toMatch(/code=000 exit=(7|28)/);
+    expect(hosts('engine-proxy')).not.toMatch(/code=(200|401)/); // the proxy never reaches a local address
+    expect(hosts('node')).toContain('node 200');
+    expect(hosts('git')).toMatch(/\tHEAD/);
+    const refusals = (await l.call<NetworkRefusal[]>('GET', `/projects/${pid}/refusals`)).body;
+    expect(refusals).toEqual(expect.arrayContaining([expect.objectContaining({ agentId: 'atlas', host: 'www.wikipedia.org' })]));
+
+    // Off, set on the workspace over the project's Allowed hosts: nothing out, its own localhost server still works.
+    await l.call('PATCH', `/projects/${pid}/members/atlas`, { network: 'off' });
+    const off = await run(l, 'off');
+    for (const k of ['allowed', 'other', 'direct']) expect(off(k)).not.toMatch(/code=(200|301|302)/);
+    expect(off('dns')).not.toMatch(/^dns \d/);
+    expect(off('udp')).not.toContain('udp-sent');
+    expect(off('own')).toContain('code=200');
+    expect(off('engine')).toMatch(/code=000 exit=(7|28)/);
+    expect(off('node')).toContain('node-err');
+    expect(off('git')).not.toMatch(/\tHEAD/);
+    // `ps` cannot read another process's environment from the sandbox: it does not run at all on macOS (setuid,
+    // refused by Seatbelt); on Linux the pid namespace shows only the sandbox's own processes.
+    if (mac) expect(off('ps')).toContain('Operation not permitted');
+    await l.engine.stop();
+
+    // Restart on the same database: the levels are kept and the proxy is back.
+    const l2 = await launch({ dataDir, dbFile, dispatch: false, env: {}, password: LOGIN, sandbox: { enabled: true }, script: turn() });
+    engine = l2.engine.url;
+    expect(l2.engine.network.setting(pid, 'atlas')).toEqual({ level: 'off', hosts: ['example.com', 'github.com'] });
+    await l2.call('PATCH', `/projects/${pid}/members/atlas`, { network: null });
+    const back = await run(l2, 'after restart');
+    expect(back('allowed')).toContain('code=200');
+    expect(back('other')).toMatch(/code=000\/403/);
+  }, 600_000);
 });
 
