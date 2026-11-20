@@ -1,13 +1,16 @@
-// Responsive check of the real Atlas UI: headless Chrome (CDP) at several widths, every main screen, layout checks
-// in the page and OCR (Apple Vision) of the screenshots. macOS only (Chrome + Vision).
+// Responsive check of the real Atlas UI: headless Chromium (CDP) at several widths, every main screen, layout checks
+// in the page and OCR (Apple Vision) of the screenshots. macOS only (Vision).
 //
-//   node scripts/ui-check/check.mjs [--port N] [--out DIR] [--widths 1440,1100,900,390] [--only chat,board] [--theme dark|light]
+//   node scripts/ui-check/check.mjs [--port N] [--ui DIR] [--out DIR] [--widths 1440,1100,900,390] [--only chat,board] [--theme dark|light]
 //
-// The engine port is read from the running Atlas app (lsof; it changes on every start) unless --port is given.
+// It runs in an agent's sandbox (#314): the browser is Playwright's chrome-headless-shell (--no-sandbox; installed when
+// missing; ATLAS_CHROME overrides), and the page talks to its own throwaway engine on a seeded database in $TMPDIR
+// (scripts/ui-check/engine.ts) serving the built UI (`npm run build` first; --ui DIR = another build). --port N
+// checks an engine you started instead (a copy of the live data on Master's Mac, outside the sandbox).
 // Read-only: every API write from the page is refused by the harness (and reported), so it never touches your data.
 // Pins and the side panel need live state the data may not have, so the harness adds fixture cards (origin = the
 // tested chat) and a panel tab (a real document) to the API responses the page sees, nothing is written.
-// Exit code 1 when any issue is found. Screenshots + report.json land in --out (default /tmp/atlas-ui-check).
+// Exit code 1 when any issue is found. Screenshots + report.json land in --out (default $TMPDIR/atlas-ui-check).
 import { spawn, execFileSync } from 'node:child_process';
 import { writeFileSync, readFileSync, mkdtempSync, mkdirSync, existsSync, statSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
@@ -16,9 +19,9 @@ import { connect as netConnect } from 'node:net';
 import { join, dirname, extname } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { SPEC_AUDIT, FONT_SCALE, FONT_EXCEPTIONS, MIN_CONTRAST } from './spec-audit.mjs';
+import { findBrowser, browserArgs, startThrowawayEngine } from './tooling.mjs';
 
 const HERE = dirname(fileURLToPath(import.meta.url));
-const CHROME = '/Applications/Google Chrome.app/Contents/MacOS/Google Chrome';
 const arg = (name, def) => {
   const i = process.argv.indexOf('--' + name);
   return i > 0 ? process.argv[i + 1] : def;
@@ -27,8 +30,8 @@ const OUT = arg('out', join(tmpdir(), 'atlas-ui-check'));
 const WIDTHS = arg('widths', '1440,1100,900,390').split(',').map(Number);
 const HEIGHT = { 1440: 900, 1100: 800, 900: 760, 390: 844 };
 const ONLY = arg('only', '')?.split(',').filter(Boolean);
-// --ui DIR: serve the UI from a local build (packages/ui/dist) instead of the installed app's, against the same engine,
-// to check a fix before reinstalling.
+// --ui DIR: the UI build to serve (default packages/ui/dist). With --port it is served by a small proxy in front of
+// that engine, which keeps serving its own UI otherwise.
 const UI_DIR = arg('ui');
 // --theme dark|light: open every screen with ?theme= (a preview, nothing saved); default = the page's own choice.
 const THEME = arg('theme');
@@ -38,23 +41,13 @@ const MIN_FONT = 13; // CLAUDE.md « UI type rules »: no text under 13 px (#112
 const MIN_CONF = 0.5;
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 
-// ── Engine: the running app's port ──
-async function findBase() {
-  const given = arg('port');
-  const ports = given
-    ? [given]
-    : execFileSync('lsof', ['-nP', '-iTCP', '-sTCP:LISTEN', '-a', '-c', 'Atlas'], { encoding: 'utf8' })
-        .split('\n')
-        .map((l) => /127\.0\.0\.1:(\d+) \(LISTEN\)/.exec(l)?.[1])
-        .filter(Boolean);
-  for (const p of ports) {
-    const base = `http://127.0.0.1:${p}`;
-    const ok = await fetch(base + '/api/health').then((r) => r.ok, () => false);
-    if (ok) return base;
-  }
-  throw new Error('No running Atlas engine found (is Atlas.app open?). Pass --port N to point at another one.');
+// ── Engine: a throwaway one (default), or the one on --port ──
+const BASE = arg('port') ? await findBase(arg('port')) : (await startThrowawayEngine({ ui: UI_DIR })).base;
+async function findBase(port) {
+  const base = `http://127.0.0.1:${port}`;
+  if (!(await fetch(base + '/api/health').then((r) => r.ok, () => false))) throw new Error(`No Atlas engine answers on ${base}.`);
+  return base;
 }
-const BASE = await findBase();
 /**
  * --ui: a local server that serves the build and passes /api (HTTP and the WebSocket) to the engine. (Serving the
  * files through CDP Fetch.fulfillRequest instead leaves the page's WebSocket refused.)
@@ -90,7 +83,7 @@ async function uiProxy(dir, engine) {
   server.unref();
   return `http://127.0.0.1:${server.address().port}`;
 }
-const PAGE_BASE = UI_DIR ? await uiProxy(UI_DIR, BASE) : BASE;
+const PAGE_BASE = UI_DIR && arg('port') ? await uiProxy(UI_DIR, BASE) : BASE;
 const get = async (path) => {
   const r = await fetch(BASE + '/api' + path);
   if (!r.ok) throw new Error(`GET ${path}: ${r.status}`);
@@ -703,7 +696,8 @@ if (!doc) console.warn('No document in the workspace: the panel screen is skippe
 // ── Chrome ──
 const CDP_PORT = 9340 + Math.floor(Math.random() * 50);
 const profile = mkdtempSync(join(tmpdir(), 'atlas-ui-check-'));
-const chrome = spawn(CHROME, ['--headless=new', `--remote-debugging-port=${CDP_PORT}`, `--user-data-dir=${profile}`, '--hide-scrollbars', 'about:blank'], { stdio: 'ignore' });
+const BROWSER = findBrowser();
+const chrome = spawn(BROWSER, browserArgs(BROWSER, { port: CDP_PORT, profile }), { stdio: 'ignore' });
 let cleaned = false;
 const cleanup = () => {
   if (cleaned) return;
