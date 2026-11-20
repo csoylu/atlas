@@ -265,6 +265,7 @@ export function createApi(deps: {
       ? await commentBlocks(comments, {
           workdir,
           shoot: deps.pageShot ?? null,
+          redact: (t) => deps.secrets.redact(t).text,
           filesDir: (root) => projects.filesDir(root).dir,
           doc: (docId, version) => {
             const latest = documents.get(docId).version;

@@ -21,6 +21,8 @@ export interface CommentDeps {
   workdir: string;
   /** null: pages are never shot (tests); the text says so. */
   shoot: PageShot | null;
+  /** Secrets.redact (rule 5): every comment's text, the quoted file lines included, passes it before it is stored or sent. */
+  redact(text: string): string;
   now?: Date;
 }
 
@@ -33,7 +35,7 @@ export async function commentBlocks(comments: PostComment[], d: CommentDeps): Pr
   const out: ({ type: 'text'; text: string } | ImageBlock)[] = [];
   for (const [i, c] of comments.entries()) {
     const { where, extra, picture } = await describe(c, d, i + 1);
-    out.push({ type: 'text', text: formatComment(i + 1, where, c.anchor, c.text, extra) });
+    out.push({ type: 'text', text: d.redact(formatComment(i + 1, where, c.anchor, c.text, extra)) });
     if (picture) out.push(picture);
   }
   return out;
@@ -56,12 +58,14 @@ async function describe(c: PostComment, d: CommentDeps, n: number): Promise<{ wh
 
   if (c.target.kind === 'file') {
     const full = inside(d.workdir, c.target.path);
+    // Like /api/files: a dotfile or a file in a dot folder (.env, .git/…) is never read for the agent.
+    if (relative(d.workdir, full).split(/[\\/]/).some((p) => p.startsWith('.'))) throw new InvalidError(`comment ${n}: ${c.target.path} is a hidden file: it can't be quoted`);
     if (!existsSync(full)) throw new InvalidError(`comment ${n}: ${c.target.path} does not exist in the agent's workspace`);
     const where = { title: c.target.path.split('/').pop()!, what: `file ${c.target.path}` };
     if (a.type === 'lines') {
       const lines = (await readFile(full, 'utf8')).split('\n');
       if (a.from > a.to || a.from > lines.length) throw new InvalidError(`comment ${n}: ${c.target.path} has ${lines.length} lines, not ${a.from}–${a.to}`);
-      extra.source = { from: a.from, lines: lines.slice(a.from - 1, a.to) };
+      extra.source = { from: a.from, lines: lines.slice(a.from - 1, a.to).map((l) => d.redact(l)) };
     } else if (a.type === 'area' && a.box.w >= MIN_SIDE && a.box.h >= MIN_SIDE) {
       const buf = await readFile(full);
       if (sniff(buf) || /\.svg$/i.test(full)) await crop(async () => ({ buf: await cropImage(buf, a) }));

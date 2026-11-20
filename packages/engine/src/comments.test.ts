@@ -8,6 +8,7 @@ import type { PageShot } from './comments.ts';
 import { startEngine, type Engine } from './index.ts';
 import { FakeProvider } from './providers/fake.ts';
 import { userText } from './rewind.ts';
+import type { SecretStore } from './secrets.ts';
 
 let engines: Engine[] = [];
 afterEach(async () => {
@@ -22,10 +23,19 @@ const SVG =
 const PAGE = '<!doctype html><title>Settings mockup</title><body><div class="setting-row">Network</div></body>';
 const CODE = Array.from({ length: 12 }, (_, i) => `const line${i + 1} = ${i + 1};`).join('\n');
 
-async function setup(o: { fake?: FakeProvider; pageShots?: false | PageShot; dbFile?: string; dataDir?: string } = {}) {
+class MemoryStore implements SecretStore {
+  label = 'test store';
+  map = new Map<string, string>();
+  names = () => [...this.map.keys()];
+  get = (n: string) => this.map.get(n);
+  set = (n: string, v: string) => void this.map.set(n, v);
+  delete = (n: string) => void this.map.delete(n);
+}
+
+async function setup(o: { fake?: FakeProvider; pageShots?: false | PageShot; dbFile?: string; dataDir?: string; secrets?: SecretStore } = {}) {
   const dataDir = o.dataDir ?? mkdtempSync(join(tmpdir(), 'atlas-comments-'));
   const fake = o.fake ?? new FakeProvider([]);
-  const engine = await startEngine({ dbFile: o.dbFile ?? ':memory:', dataDir, port: 0, dispatch: false, memoryReview: false, providers: () => fake, env: {}, pageShots: o.pageShots ?? false });
+  const engine = await startEngine({ dbFile: o.dbFile ?? ':memory:', dataDir, port: 0, dispatch: false, memoryReview: false, providers: () => fake, env: {}, pageShots: o.pageShots ?? false, ...(o.secrets ? { secrets: o.secrets } : {}) });
   engines.push(engine);
   const ws = join(dataDir, 'workspaces', 'atlas');
   const put = (rel: string, content: string | Buffer) => {
@@ -186,6 +196,33 @@ describe('comments: what reaches the agent (#304)', () => {
     const past = await send(engine, chat.id, { comments: [{ target: { kind: 'file', path: 'a.ts' }, anchor: { type: 'lines', from: 9, to: 10 }, text: 'x' }] });
     expect(past.status).toBe(400);
     expect(engine.kanban.messages(chat.id).filter((m) => m.role === 'user')).toEqual([]);
+  });
+
+  it('never quotes a secret (rule 5): file lines are redacted before they are stored or sent; a dotfile is refused', async () => {
+    const CANARY = 'canary-304-ZXCVBN-97531';
+    const fake = new FakeProvider([[{ type: 'text', text: 'ok' }]]);
+    const { engine, put } = await setup({ fake, secrets: new MemoryStore() });
+    engine.secrets.create({ name: 'CANARY_KEY', value: CANARY, description: '', grant: 'all', agents: [], project: null }, { by: 'user' });
+    put('src/config.ts', `const a = 1;\nconst key = '${CANARY}';\nconst b = 2;\n`);
+    put('.env', `CANARY_KEY=${CANARY}\n`);
+    put('.git/config', '[core]\n');
+    const chat = engine.kanban.newChat('atlas');
+    for (const path of ['.env', '.git/config']) {
+      const hidden = await send(engine, chat.id, { comments: [{ target: { kind: 'file', path }, anchor: { type: 'lines', from: 1, to: 1 }, text: 'x' }] });
+      expect(hidden.status).toBe(400);
+      expect(((await hidden.json()) as { error: string }).error).toMatch(/hidden file/);
+    }
+    const res = await send(engine, chat.id, { text: 'Look', comments: [{ target: { kind: 'file', path: 'src/config.ts' }, anchor: { type: 'lines', from: 1, to: 3 }, text: `Move ${CANARY} out` }] });
+    expect(res.status).toBe(201);
+    const stored = JSON.stringify(engine.kanban.messages(chat.id));
+    expect(stored).not.toContain(CANARY);
+    expect(stored).toContain("> const key = '[secret CANARY_KEY]';");
+    expect(stored).toContain('Comment: Move [secret CANARY_KEY] out');
+    engine.runner.wake(chat.id);
+    await engine.runner.settled(chat.id);
+    expect(fake.calls.length).toBe(1);
+    expect(JSON.stringify(fake.calls[0]!.messages)).toContain('[secret CANARY_KEY]');
+    expect(JSON.stringify(fake.calls[0])).not.toContain(CANARY);
   });
 });
 
