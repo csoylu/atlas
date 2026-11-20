@@ -46,6 +46,7 @@ import { REDACT_OVERLAP, type Secrets } from './secrets.ts';
 import { isSecretTool, redactSecretCalls, runSecretTool, secretToolSpecs } from './secretTools.ts';
 import { isPrTool, prToolSpecs, runPrTool, type PrToolContext } from './prTools.ts';
 import { filesRoot, isMember, projectRow, workspaceOf } from './projects.ts';
+import type { Sandbox, SandboxScope } from './sandbox.ts';
 import { afterTools, ceilingReason, freshGuard, MAX_TURNS, stopNote, type GuardCall, type GuardState } from './loopGuard.ts';
 
 interface RunRow {
@@ -82,6 +83,8 @@ const MAX_BAD_JSON_TURNS = 3;
 
 export interface RunnerOptions {
   dataDir: string;
+  /** The agent command sandbox (#298); omitted = commands run unconfined (runner-only tests). */
+  sandbox?: Sandbox;
   maxTurns?: number;
   /** Lease length; renewed every third of it (design §6: 60 s / 20 s). */
   leaseMs?: number;
@@ -185,6 +188,12 @@ export class Runner {
    * The environment of one shell command: login PATH and git author (#136), the agent's granted secrets (#206): the
    * global ones and those of the run's project (#215).
    */
+  /** The sandbox of an agent's workspace in a project (#298): every command of its run goes through it. */
+  private sandboxFor(agentId: string, projectId: string, workspace: string): SandboxScope | null {
+    const sandbox = this.opts.sandbox;
+    return sandbox ? { sandbox, projectId, projectName: projectRow(this.db, projectId).name, agentId, workspace } : null;
+  }
+
   private async shellEnvFor(agentId: string, projectId: string, command: string): Promise<NodeJS.ProcessEnv> {
     const base = this.opts.shellEnv ? await this.opts.shellEnv.for(agentId) : process.env;
     return this.opts.secrets ? this.opts.secrets.envFor(agentId, projectId, base, command) : base;
@@ -690,6 +699,7 @@ export class Runner {
                 workdir,
                 signal,
                 env: (command) => this.shellEnvFor(agent.id, card.projectId, command),
+                sandbox: this.sandboxFor(agent.id, card.projectId, workdir),
               });
             else if (isPrTool(u.name))
               r = await runPrTool(u.name, u.input, { db: this.db, kanban: this.kanban, agentId: agent.id, cardId, env: () => this.shellEnvFor(agent.id, card.projectId, ''), ...this.opts.prTool });
@@ -725,6 +735,7 @@ export class Runner {
                   ...(this.opts.engine ? { engine: { ...this.opts.engine(), agentId: agent.id, filesRoot: filesRoot(this.db, agent.id, first.projectId) } } : {}),
                   ...(this.opts.shellEnv || this.opts.secrets ? { env: (command: string) => this.shellEnvFor(agent.id, card.projectId, command) } : {}),
                   ...(redactor ? { redact: redactor } : {}),
+                  sandbox: this.sandboxFor(agent.id, card.projectId, workdir),
                 });
               const log = this.opts.fileLog;
               r = await (log ? log.track(cardId, workdir, u.name, u.input, exec) : exec()).finally(live.stop);

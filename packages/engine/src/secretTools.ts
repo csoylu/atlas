@@ -1,9 +1,9 @@
-import { spawn } from 'node:child_process';
 import { z } from 'zod';
 import type { ContentBlock } from '@atlas/shared';
 import type { ToolSpec } from './providers/types.ts';
 import { REDACT_OVERLAP, type Secrets } from './secrets.ts';
 import { specsOf } from './toolSpec.ts';
+import { SandboxUnavailable, spawnAgentCommand, type SandboxScope } from './sandbox.ts';
 
 /**
  * secret_set and secret_delete (#207). No tool ever reads a value: an agent stores one (from a command's output it
@@ -20,6 +20,8 @@ export interface SecretToolContext {
   signal: AbortSignal;
   /** The agent's shell environment for this command (login PATH, its granted secrets). */
   env: (command: string) => Promise<NodeJS.ProcessEnv>;
+  /** The sandbox of this workspace (#298): the command runs in it like any shell command. */
+  sandbox?: SandboxScope | null;
 }
 
 const Name = z.string().describe('env var name: A-Z, 0-9, _, starting with a letter');
@@ -89,6 +91,7 @@ export async function runSecretTool(name: string, input: unknown, ctx: SecretToo
     const short = v.length < 8 ? ' (under 8 chars: too short to be hidden from outputs)' : '';
     return { output: `stored ${i.name}, ${v.length} chars${created ? ', granted to you only' : ' (replaced its value)'}${short}. Use it as $${i.name} in shell commands.`, isError: false };
   } catch (e) {
+    if (e instanceof SandboxUnavailable) throw e; // fail closed: the run stops with it (#298 §1.6)
     return { output: e instanceof Error ? e.message : String(e), isError: true };
   }
 }
@@ -98,7 +101,7 @@ function valueOf(command: string, ctx: SecretToolContext): Promise<string> {
   return ctx.env(command).then(
     (env) =>
       new Promise((resolve, reject) => {
-        const child = spawn(command, { cwd: ctx.workdir, shell: true, env, detached: process.platform !== 'win32', stdio: ['ignore', 'pipe', 'pipe'] });
+        const child = spawnAgentCommand({ cwd: ctx.workdir, env, sandbox: ctx.sandbox }, command); // throws SandboxUnavailable
         const kill = () => {
           if (!child.pid) return;
           try {
@@ -117,8 +120,8 @@ function valueOf(command: string, ctx: SecretToolContext): Promise<string> {
         const out: Buffer[] = [];
         let err = '';
         let errCut = false;
-        child.stdout.on('data', (d: Buffer) => out.push(d));
-        child.stderr.on('data', (d: Buffer) => {
+        child.stdout!.on('data', (d: Buffer) => out.push(d));
+        child.stderr!.on('data', (d: Buffer) => {
           err += d.toString();
           if (err.length > STDERR_TAIL + REDACT_OVERLAP) {
             err = err.slice(-(STDERR_TAIL + REDACT_OVERLAP));

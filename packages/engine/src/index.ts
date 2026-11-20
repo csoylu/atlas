@@ -39,6 +39,7 @@ import type { CheckoutOptions } from './workflowCommand.ts';
 import { Prs, ghReader, type GhRead } from './prs.ts';
 import { Projects, ghClone, ghRunner, type CloneRun, type GhRun } from './projects.ts';
 import { Stalls } from './stalls.ts';
+import { Sandbox, type SandboxOptions } from './sandbox.ts';
 import { ReviewFlow, openReviewRun } from './reviewFlow.ts';
 
 export interface EngineOptions {
@@ -102,6 +103,11 @@ export interface EngineOptions {
    * App updates from GitHub releases (#123). The packaged Mac app passes a host (it can install); without it the
    * engine can't install and doesn't check by itself (dev, server). Tests point api/fetch at a fake release server.
    */
+  /**
+   * The agent command sandbox (#298): on with ATLAS_SANDBOX=1 in `env` (temporary, until S5). Tests can force it and
+   * point it at another home or sandbox-exec.
+   */
+  sandbox?: Partial<Pick<SandboxOptions, 'enabled' | 'home' | 'platform' | 'sandboxExec'>>;
   updates?: { host: UpdateHost | null; cannotInstall?: string; api?: string; fetch?: typeof fetch; intervalMs?: number | false; openCommand?: string; pid?: number };
 }
 
@@ -137,6 +143,7 @@ export interface Engine {
   reviewFlow: ReviewFlow;
   secrets: Secrets;
   projects: Projects;
+  sandbox: Sandbox;
   url: string;
   stop(): Promise<void>;
 }
@@ -169,6 +176,8 @@ export async function startEngine(opts: EngineOptions): Promise<Engine> {
   // Merge steps (#261) use the user's own gh login, with the login shell's PATH (shellEnv is made below, read when a step runs).
   // Webhook tokens (#260) live in the secret store; the port, once listening, makes the desktop URL.
   let listening: number | null = null;
+  // Agent commands' sandbox (#298): probed once the engine listens (its port is denied to them), before any run starts.
+  const sandbox = new Sandbox({ enabled: (opts.env ?? process.env).ATLAS_SANDBOX === '1', ...opts.sandbox, dataDir: opts.dataDir, enginePort: () => listening });
   const hookTokens = new HookTokens(db, opts.secrets);
   hookTokens.sweep();
   // The GitHub client of merge steps and « Validate by hand » (#263): the user's gh login, the login shell's PATH.
@@ -178,7 +187,7 @@ export async function startEngine(opts: EngineOptions): Promise<Engine> {
     port: () => listening,
     gh: ghFor,
     // Command steps (#273): the engine's login-shell env is the base, scrubbed by Secrets.envForStep.
-    command: { dataDir: opts.dataDir, secrets: () => secrets, env: () => shellEnv.engineEnv(), clone: opts.workflowCommand?.clone, minuteMs: opts.workflowCommand?.minuteMs },
+    command: { dataDir: opts.dataDir, secrets: () => secrets, env: () => shellEnv.engineEnv(), clone: opts.workflowCommand?.clone, minuteMs: opts.workflowCommand?.minuteMs, sandbox },
   });
   const cleanup = new MemoryCleanup(db, bus, memories);
   const settings = new Settings(db);
@@ -215,7 +224,7 @@ export async function startEngine(opts: EngineOptions): Promise<Engine> {
   const review = new MemoryReview(db, kanban, memories, models, agents, settings, usage);
   if (opts.memoryReview === false) review.after = () => {};
   const effects = new SideEffects(db, kanban, memories, workflows);
-  const runner = new Runner(db, bus, kanban, agents, models, memories, workflows, { fileLog, effects, dataDir: opts.dataDir, leaseMs: opts.leaseMs, maxTurns: opts.maxTurns, usage, user: () => settings.user(), documents, cleanup, review, isVoiceChat: voiceChat ? (id) => voiceChat.isVoiceChat(id) : undefined, engine: () => ({ url, cookie: () => (auth.enabled ? auth.issue().token : null), answer: (method, path) => screenshotAnswer(kanban, method, path) }), shellEnv, secrets, prTool: opts.prs?.validate });
+  const runner = new Runner(db, bus, kanban, agents, models, memories, workflows, { fileLog, effects, sandbox, dataDir: opts.dataDir, leaseMs: opts.leaseMs, maxTurns: opts.maxTurns, usage, user: () => settings.user(), documents, cleanup, review, isVoiceChat: voiceChat ? (id) => voiceChat.isVoiceChat(id) : undefined, engine: () => ({ url, cookie: () => (auth.enabled ? auth.issue().token : null), answer: (method, path) => screenshotAnswer(kanban, method, path) }), shellEnv, secrets, prTool: opts.prs?.validate });
   // Agent steps in the task thread (#273): the agent starts on the run's task, the prompt posted as its kick (#221).
   workflows.threads = { wake: (cardId, agentId, prompt) => runner.wake(cardId, { agentId, kind: 'work', kick: prompt, kickAlways: true }) };
   const rewinds = new Rewinds(db, bus, kanban, agents, runner, opts.dataDir, fileLog, effects);
@@ -281,11 +290,14 @@ export async function startEngine(opts: EngineOptions): Promise<Engine> {
     auth,
     projects,
     reviewFlow,
+    sandbox,
   });
   await new Promise<void>((resolve, reject) => {
     server.once('error', reject);
     server.listen(opts.port, host, () => resolve());
   });
+  listening = (server.address() as AddressInfo).port;
+  await sandbox.probe();
   // Finish a rewind a stopped engine left half done, before any run resumes and touches the files (rule 2).
   // Canvases were replaced by artifacts (#120): each one left in the archive becomes an html page, once.
   try {
@@ -320,6 +332,7 @@ export async function startEngine(opts: EngineOptions): Promise<Engine> {
     db,
     secrets,
     projects,
+    sandbox,
     bus,
     kanban,
     agents,

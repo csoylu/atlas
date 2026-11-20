@@ -1,4 +1,3 @@
-import { spawn } from 'node:child_process';
 import { randomUUID } from 'node:crypto';
 import { realpathSync } from 'node:fs';
 import { mkdir, readFile, readdir, stat, writeFile } from 'node:fs/promises';
@@ -15,6 +14,7 @@ import { globFiles, grep, isBinary, shownPath, SKIP_DIRS } from './search.ts';
 import { fetchPage, headTail } from './web.ts';
 import { FULL_PAGE_MAX, PHONE_BELOW, TIMEOUT_MS, takeScreenshot, type EngineAccess } from './screenshot.ts';
 import { specsOf } from './toolSpec.ts';
+import { SandboxUnavailable, spawnAgentCommand, type SandboxScope } from './sandbox.ts';
 
 export interface ToolContext {
   workdir: string;
@@ -44,6 +44,8 @@ export interface ToolContext {
    * a page of a background log, a long line) redacts first and cuts second (#227), or half a value at the cut would stay.
    */
   redact?: Redactor;
+  /** The sandbox of this (project, agent) workspace (#298); omitted = commands run unconfined (tests, sandbox off). */
+  sandbox?: SandboxScope | null;
 }
 
 interface Tool<S extends z.ZodType> {
@@ -354,7 +356,7 @@ export const TOOLS = {
         if (!ctx.background) throw new Error('background processes are not available here');
         const { registry, agentId, cardId } = ctx.background;
         const env = ctx.env ? await ctx.env(command) : process.env;
-        const p = registry.start({ command, cwd: ctx.workdir, logDir: ctx.outputsDir, agentId, cardId, env });
+        const p = registry.start({ command, cwd: ctx.workdir, logDir: ctx.outputsDir, agentId, cardId, env, sandbox: ctx.sandbox });
         return `started ${p.id} in the background (pid ${p.pid}); its output goes to ${p.logPath}. shell_output("${p.id}") reads new output, shell_kill("${p.id}") stops it; a message comes here when it ends.`;
       }
       const env = ctx.env ? await ctx.env(command) : process.env;
@@ -477,12 +479,17 @@ export function landedLines(text: string, spans: Span[], replacement: string): n
 }
 
 /** A foreground command: its own process group (Unix), killed whole on stop, timeout or restart. */
-function runForeground(command: string, timeout_s: number, env: NodeJS.ProcessEnv, { workdir, signal, onSpawn, onOutput }: ToolContext): Promise<{ code: number | null; sig: NodeJS.Signals | null; out: string }> {
+function runForeground(command: string, timeout_s: number, env: NodeJS.ProcessEnv, { workdir, signal, onSpawn, onOutput, sandbox }: ToolContext): Promise<{ code: number | null; sig: NodeJS.Signals | null; out: string }> {
   return new Promise((resolvePromise, reject) => {
     // Aborted before the spawn: start nothing (a child returned without its 'error' handler crashes the engine on a
     // spawn error, e.g. a workspace removed with the member, #246).
     if (signal.aborted) return reject(signal.reason instanceof Error ? signal.reason : new Error('aborted'));
-    const child = spawn(command, { cwd: workdir, shell: true, env, detached: process.platform !== 'win32' });
+    let child: ReturnType<typeof spawnAgentCommand>;
+    try {
+      child = spawnAgentCommand({ cwd: workdir, env, sandbox }, command);
+    } catch (e) {
+      return reject(e);
+    }
     if (child.pid) onSpawn?.(child.pid);
     const killTree = () => {
       if (!child.pid) return;
@@ -503,8 +510,8 @@ function runForeground(command: string, timeout_s: number, env: NodeJS.ProcessEn
       out += d;
       onOutput?.(d.toString());
     };
-    child.stdout.on('data', take);
-    child.stderr.on('data', take);
+    child.stdout!.on('data', take);
+    child.stderr!.on('data', take);
     const timer = setTimeout(killTree, timeout_s * 1000);
     child.on('error', (e) => {
       clearTimeout(timer);
@@ -534,6 +541,7 @@ export async function runTool(name: string, input: unknown, ctx: ToolContext): P
     return typeof r === 'string' ? { output: r, isError: false } : { ...r, isError: false };
   } catch (e) {
     if (ctx.signal.aborted) throw e;
+    if (e instanceof SandboxUnavailable) throw e; // fail closed: the run stops with it (#298 §1.6)
     return { output: e instanceof Error ? e.message : String(e), isError: true };
   }
 }

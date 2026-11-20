@@ -1,9 +1,9 @@
-import { spawn } from 'node:child_process';
 import { randomUUID } from 'node:crypto';
 import { closeSync, mkdirSync, openSync, readSync, fstatSync } from 'node:fs';
 import { join } from 'node:path';
 import type { Db } from './store/db.ts';
 import { REDACT_OVERLAP, type Secrets } from './secrets.ts';
+import { spawnAgentCommand, type SandboxScope } from './sandbox.ts';
 
 /** Hides secret values in a cut part of a log (#227): Secrets.redactWindow. */
 type Redactor = Pick<Secrets, 'redactWindow'>;
@@ -78,7 +78,7 @@ export class Background {
     private leaseMs = 60_000,
   ) {}
 
-  start(o: { command: string; cwd: string; logDir: string; agentId: string; cardId: string; env?: NodeJS.ProcessEnv }): BgProcess {
+  start(o: { command: string; cwd: string; logDir: string; agentId: string; cardId: string; env?: NodeJS.ProcessEnv; sandbox?: SandboxScope | null }): BgProcess {
     const id = 'bg_' + randomUUID().slice(0, 8);
     mkdirSync(o.logDir, { recursive: true });
     const logPath = join(o.logDir, `${id}.log`);
@@ -86,7 +86,8 @@ export class Background {
     let child;
     try {
       // Own process group (Unix) so the whole tree can be killed; output straight to the file (no pipe to keep open).
-      child = spawn(o.command, { cwd: o.cwd, shell: true, env: o.env ?? process.env, detached: process.platform !== 'win32', stdio: ['ignore', fd, fd] });
+      // Throws SandboxUnavailable before anything is stored (#298 §1.6): no row, the run stops.
+      child = spawnAgentCommand({ cwd: o.cwd, env: o.env ?? process.env, sandbox: o.sandbox }, o.command, { background: { fd } });
     } finally {
       closeSync(fd);
     }

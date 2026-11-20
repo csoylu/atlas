@@ -81,6 +81,10 @@ jobs:
         env:
           CRASH_KILLS: '30'
         run: npx vitest run --project slow packages/engine/test/crash.test.ts
+      # The agent command sandbox with the real sandbox-exec (#298 S1): A cannot read or change B, home, the database,
+      # /tmp, the keychain or the engine port; git push with and without GH_TOKEN (reaches github.com).
+      - name: Sandbox isolation test (real sandbox-exec)
+        run: npx vitest run --project slow packages/engine/test/sandbox.seatbelt.test.ts
       # The screenshot tool against the runner's Google Chrome and the built UI (#133). The test skips itself without
       # Chrome or a UI build, so both are checked first: a skip here would hide a regression.
       - name: Screenshot test (real Chrome)
