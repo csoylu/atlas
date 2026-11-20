@@ -4,7 +4,7 @@ import { existsSync, readFileSync } from 'node:fs';
 import { extname, join, relative } from 'node:path';
 import { WebSocketServer } from 'ws';
 import { ZodError } from 'zod';
-import { AddCardImages, CreateCard, CreateModelRequest, CreateSecret, SecretsPassword, UnlockSecrets, UpdateSecret, IMAGE_MAX_BYTES, IMAGE_MAX_PER_TASK, isTimeZone, PostMessage, RewindRequest, SlashCommand, TriggerPreview, UpdateModelRequest, UpdateVoice } from '@atlas/shared';
+import { AddCardImages, CreateCard, CreateModelRequest, CreateSecret, SaveCardSecret, SecretsPassword, UnlockSecrets, UpdateSecret, IMAGE_MAX_BYTES, IMAGE_MAX_PER_TASK, isTimeZone, PostMessage, RewindRequest, SlashCommand, TriggerPreview, UpdateModelRequest, UpdateVoice } from '@atlas/shared';
 import type { Agents } from './agents.ts';
 import type { Models } from './models.ts';
 import type { Runner } from './runner.ts';
@@ -607,6 +607,13 @@ export function createApi(deps: {
     deps.secrets.setValue(name, value, { by: 'user' });
     deps.env[name] = value;
     if (name.startsWith('ATLAS_CLAUDE_')) claude.notify();
+    res.status(204).end();
+    dispatcher.tick();
+  });
+  // The box in the chat (#297): the value of the secret a blocked task waits for. 204: the value never comes back.
+  app.post('/api/cards/:id/secret', (req, res) => {
+    const { value } = SaveCardSecret.parse(req.body ?? {});
+    deps.secrets.fillFor(req.params.id, value);
     res.status(204).end();
     dispatcher.tick();
   });

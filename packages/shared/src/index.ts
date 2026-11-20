@@ -24,6 +24,11 @@ export const Block = z.object({
   options: z.array(z.string()),
   /** Transient blocks: when the dispatcher retries. */
   until: z.string().nullable(),
+  /**
+   * « Needs secret X » (#207, #297): the secret this blocked task waits for (name and the agent's description, never a
+   * value). The chat, the task and the Inbox show a box to type its value (POST /api/cards/:id/secret).
+   */
+  secret: z.object({ name: z.string(), description: z.string() }).nullable().optional(),
 });
 export type Block = z.infer<typeof Block>;
 
@@ -1643,6 +1648,12 @@ export const CreateSecret = z
   })
   .strict();
 export type CreateSecret = z.infer<typeof CreateSecret>;
+/**
+ * POST /api/cards/:id/secret (#297): the value of the secret a blocked task waits for, typed in its box. Stored like
+ * Settings → Secrets, granted to the task's agent, the task restarts. Answer: 204, never the value.
+ */
+export const SaveCardSecret = z.object({ value: z.string() }).strict();
+export type SaveCardSecret = z.infer<typeof SaveCardSecret>;
 /** POST /api/secrets/unlock (server): the secrets password, kept in memory only. */
 export const UnlockSecrets = z.object({ password: z.string().min(1).max(1024) }).strict();
 export type UnlockSecrets = z.infer<typeof UnlockSecrets>;

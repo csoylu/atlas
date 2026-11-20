@@ -16,6 +16,7 @@ import { DIGEST_ID } from './memoryView.ts';
 import { clearDraft, draftKey, readDraft, useDraft } from './drafts.ts';
 import { ProjTag } from './projects.tsx';
 import { EmptyState, Skeleton } from './Kit.tsx';
+import { SecretBox } from './SecretBox.tsx';
 import {
   inboxKey,
   itemsOf,
@@ -417,6 +418,7 @@ function NeedBody(props: Parameters<typeof Detail>[0] & { need: InboxNeed }) {
         <div className="md ibx-ask">
           <Markdown remarkPlugins={[remarkGfm]}>{b.reason}</Markdown>
         </div>
+        <SecretBox card={card} />
         {b.options.length > 0 && (
           <div className="ibx-opts">
             {b.options.map((o, i) => (

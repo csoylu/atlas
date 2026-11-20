@@ -160,6 +160,11 @@ export function reportText(card: { id: string; number?: number | null; title: st
   }
 }
 
+/** The secret a blocked task waits for (#207): its row's name and description (#297: the box in the chat). */
+function waitingSecret(db: Db, cardId: string): { name: string; description: string } | null {
+  return (db.prepare('SELECT name, description FROM secrets WHERE waiting_card = ? ORDER BY name LIMIT 1').get(cardId) as { name: string; description: string } | undefined) ?? null;
+}
+
 export class Kanban {
   /** Set by the dispatcher: the plain-words reason a card isn't moving. */
   waitingReason: (card: Card) => string | null = () => null;
@@ -182,6 +187,7 @@ export class Kanban {
           reason: r.block_reason ?? '',
           options: r.block_options ? (JSON.parse(r.block_options) as string[]) : [],
           until: r.block_until,
+          secret: waitingSecret(this.db, r.id),
         }
       : null;
     const card: Card = {

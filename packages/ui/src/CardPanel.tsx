@@ -23,6 +23,7 @@ import { PopButton, PopItem } from './HeadMenu.tsx';
 import { useKeepBottom } from './useKeepBottom.ts';
 import { ChatRow } from './ChatRow.tsx';
 import { parseReport, rowTime } from './chatRow.ts';
+import { SecretBox, secretBoxOf } from './SecretBox.tsx';
 import { deleteChatQuestion } from './chatHistoryMenu.ts';
 import { HeaderActions, Icon } from './ScreenHeader.tsx';
 import { StatusIcon, STATUS_LABEL } from './StatusIcon.tsx';
@@ -266,6 +267,7 @@ const AskMessage = forwardRef<HTMLDivElement, { card: Card; children?: ReactNode
       </div>
       <div className="msg-body">
         {children}
+        <SecretBox card={card} />
         <div className="options">
           {b?.options.map((o, i) => (
             <button key={o} className={i === 0 ? 'option recommended' : 'option'} onClick={() => send(o)}>
@@ -532,19 +534,30 @@ function SystemMessage({ message: m, landed, cards, onOpenCard }: { message: Mes
         {line}
       </div>
     );
+  // « Needs secret X » (#297): the box to type it, under the row that reported that block.
+  const task = cards?.card?.(r.card);
+  const secret = task ? secretBoxOf(task) : null;
+  const box = task && secret && r.body.includes(`Needs secret ${secret.name}`) ? (
+    <div className="chat-secbox">
+      <SecretBox card={task} />
+    </div>
+  ) : null;
   return (
-    <a
-      className={cls}
-      href={withCard(typeof location === 'undefined' ? '#/' : location.hash, id)}
-      title={tip + ' · open the task'}
-      onClick={(e) => {
-        if (!onOpenCard) return;
-        e.preventDefault();
-        onOpenCard(id);
-      }}
-    >
-      {line}
-    </a>
+    <>
+      <a
+        className={cls}
+        href={withCard(typeof location === 'undefined' ? '#/' : location.hash, id)}
+        title={tip + ' · open the task'}
+        onClick={(e) => {
+          if (!onOpenCard) return;
+          e.preventDefault();
+          onOpenCard(id);
+        }}
+      >
+        {line}
+      </a>
+      {box}
+    </>
   );
 }
 

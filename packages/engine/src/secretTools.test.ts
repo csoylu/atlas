@@ -1,8 +1,8 @@
 import { describe, expect, it } from 'vitest';
-import { mkdtempSync, writeFileSync } from 'node:fs';
+import { mkdtempSync, readdirSync, readFileSync, statSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
-import type { ContentBlock, SecretInfo, SecretList } from '@atlas/shared';
+import type { Card, ContentBlock, SecretInfo, SecretList } from '@atlas/shared';
 import { eventually, launch } from '../test/kit/index.ts';
 import type { ModelRequest } from './providers/types.ts';
 import type { SecretStore } from './secrets.ts';
@@ -191,5 +191,101 @@ describe('needs secret X (task_block with secret)', () => {
     await eventually(() => b.engine.kanban.get(card.id).status === 'done', { timeout: 8000, what: 'the task to resume after the restart' });
     expect(results(b.fake.calls[1]!)[0]).toBe(`exit 0\n${rev(V)}\n`);
     expect(await info(b, 'DUNE_API_KEY')).toMatchObject({ kind: 'agent', hasValue: true, waitingCard: null, createdBy: 'atlas' });
+  });
+});
+
+/** Every file under a folder (database, its WAL, logs, workspaces), read as bytes. */
+const filesUnder = (dir: string): string[] =>
+  readdirSync(dir).flatMap((n) => {
+    const p = join(dir, n);
+    return statSync(p).isDirectory() ? filesUnder(p) : [p];
+  });
+
+describe('the secret box in the chat (#297)', () => {
+  const V = 'box-typed-value-9f8e7d6c5b4a';
+  const script = () => [
+    use('t1', 'task_block', { kind: 'capability', question: 'I need a Dune API key to run the query.', secret: 'DUNE_API_KEY', secret_description: 'Dune Analytics API key' }),
+    use('t2', 'shell', { command: 'printf "%s" "$DUNE_API_KEY" | rev; echo "$DUNE_API_KEY"' }),
+    use('t3', 'task_complete', { summary: 'ran it' }),
+  ];
+
+  it('the blocked task names its secret; a value typed in the box resumes it with $NAME, and the value is nowhere but the store', async () => {
+    const dataDir = mkdtempSync(join(tmpdir(), 'atlas-box-'));
+    const l = await setup(script(), { dbFile: join(dataDir, 'atlas.db'), dataDir, dispatch: true });
+    const events: string[] = [];
+    l.engine.bus.on((e) => void events.push(JSON.stringify(e)));
+    const logs: string[] = [];
+    const spies = (['log', 'error', 'warn', 'info'] as const).map((k) => {
+      const orig = console[k];
+      console[k] = (...a: unknown[]) => (logs.push(a.map(String).join(' ')), orig(...a));
+      return () => (console[k] = orig);
+    });
+    const answers: string[] = [];
+    const call = async <T,>(method: string, path: string, body?: unknown) => {
+      const r = await l.call<T>(method, path, body);
+      answers.push(JSON.stringify(r.body));
+      return r;
+    };
+    try {
+      const card = l.engine.kanban.create({ title: 'dune query', assignee: 'atlas' }, 'user');
+      await eventually(() => l.engine.kanban.get(card.id).status === 'blocked', { timeout: 8000, what: 'the task to block' });
+      const blocked = (await call<Card>('GET', `/cards/${card.id}`)).body;
+      expect(blocked.block?.secret).toEqual({ name: 'DUNE_API_KEY', description: 'Dune Analytics API key' });
+      expect(blocked.block?.reason).toContain('type its value in the box below');
+
+      // Empty, blank or multi-line: a clear error, nothing stored, still blocked.
+      for (const bad of ['', '   ', 'a\nb']) {
+        const r = await call<{ error: string }>('POST', `/cards/${card.id}/secret`, { value: bad });
+        expect(r.status).toBe(409);
+        expect(r.body.error).toMatch(/nothing stored/);
+      }
+      expect(l.store.get('DUNE_API_KEY')).toBeUndefined();
+      expect(l.engine.kanban.get(card.id).status).toBe('blocked');
+
+      const ok = await call('POST', `/cards/${card.id}/secret`, { value: `  ${V}  ` });
+      expect(ok.status).toBe(204);
+      expect(l.store.get('DUNE_API_KEY')).toBe(V);
+      await eventually(() => l.engine.kanban.get(card.id).status === 'done', { timeout: 8000, what: 'the task to resume and finish' });
+      // The resumed run had $DUNE_API_KEY in its shell; its output reached the model redacted.
+      expect(results(l.fake.calls[2]!)[0]).toBe(`exit 0\n${rev(V)}\n[secret DUNE_API_KEY]\n`);
+      expect(await info(l, 'DUNE_API_KEY')).toMatchObject({ hasValue: true, waitingCard: null, grant: 'agents', agents: ['atlas'] });
+      // Nothing waits any more: the box answers that, and the card no longer names the secret.
+      expect((await call('POST', `/cards/${card.id}/secret`, { value: 'again-value-123' })).status).toBe(404);
+      expect((await call<Card>('GET', `/cards/${card.id}`)).body.block).toBeNull();
+      await call('GET', `/cards/${card.id}/messages`);
+      await call('GET', '/secrets');
+
+      // Rule 5: never in SQLite (database, WAL), a file, the transcript, an event, an answer, a log or a model request.
+      await l.engine.stop();
+      for (const f of filesUnder(dataDir)) expect(readFileSync(f).includes(V), f).toBe(false);
+      expect(events.length).toBeGreaterThan(0);
+      for (const e of events) expect(e).not.toContain(V);
+      for (const a of answers) expect(a).not.toContain(V);
+      for (const line of logs) expect(line).not.toContain(V);
+      for (const req of l.fake.calls) expect(JSON.stringify(req)).not.toContain(V);
+    } finally {
+      spies.forEach((undo) => undo());
+    }
+  });
+
+  it("grants an existing row to the asking agent, and never overwrites a value that is already there", async () => {
+    const l = await setup([text('ok')]);
+    const card = l.engine.kanban.create({ title: 'x', assignee: 'atlas' }, 'user');
+    // A row the user made without granting it (no value yet), then one with a value.
+    expect((await l.call('POST', '/secrets', { name: 'HAS_VALUE', value: 'kept-value-1234567' })).status).toBe(201);
+    l.engine.db.prepare("INSERT INTO secrets (name, kind, created_by, created_at, updated_at, updated_by) VALUES ('NO_VALUE', 'agent', 'user', 'x', 'x', 'user')").run();
+    l.engine.secrets.need('atlas', 'atlas', card.id, 'NO_VALUE');
+    l.engine.kanban.block(card.id, { kind: 'capability', reason: 'Needs secret NO_VALUE' }, 'atlas');
+    expect((await l.call('POST', `/cards/${card.id}/secret`, { value: 'new-value-1234567' })).status).toBe(204);
+    expect(await info(l, 'NO_VALUE')).toMatchObject({ hasValue: true, grant: 'agents', agents: ['atlas'], waitingCard: null });
+
+    const other = l.engine.kanban.create({ title: 'y', assignee: 'atlas' }, 'user');
+    l.engine.secrets.need('atlas', 'atlas', other.id, 'HAS_VALUE');
+    l.engine.kanban.block(other.id, { kind: 'capability', reason: 'Needs secret HAS_VALUE' }, 'atlas');
+    const r = await l.call<{ error: string }>('POST', `/cards/${other.id}/secret`, { value: 'replaced-value-1234567' });
+    expect(r.status).toBe(409);
+    expect(r.body.error).toMatch(/already has a value/);
+    expect(l.store.get('HAS_VALUE')).toBe('kept-value-1234567');
+    expect(await info(l, 'HAS_VALUE')).toMatchObject({ grant: 'none' });
   });
 });

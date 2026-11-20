@@ -9,6 +9,7 @@ import { blockLabel } from './CardPanel.tsx';
 import { stallAction } from './stallView.ts';
 import { useMinute } from './useMinute.ts';
 import { taskNow } from './taskNow.ts';
+import { SecretBox, secretBoxOf } from './SecretBox.tsx';
 
 /**
  * The task sheet's « Now » box (#269, redesign screen « Task »): status and time in it, the PR as one pill with its
@@ -128,6 +129,7 @@ export const TaskNow = forwardRef<HTMLElement, { card: Card; run: Run | null; on
           <div className="md now-q">
             <Markdown remarkPlugins={[remarkGfm]}>{b.reason || 'Blocked, with no reason given.'}</Markdown>
           </div>
+          <SecretBox card={card} />
           {(b.options.length > 0 || b.kind !== 'needs_input') && (
             <div className="now-opts">
               {b.options.map((o, i) => (
@@ -149,6 +151,7 @@ export const TaskNow = forwardRef<HTMLElement, { card: Card; run: Run | null; on
           </p>
         </div>
       )}
+      {!b && secretBoxOf(card)?.kind === 'saved' && <SecretBox card={card} />}
       {children}
     </section>
   );
