@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useRef, useState, type ReactNode } from 'react';
-import { KIND_WORD, type Doc, type PaneKind, type PanelTab } from '@atlas/shared';
+import { KIND_WORD, tabKey, type CommentTarget, type Doc, type FileTab, type PaneKind, type PanelTab } from '@atlas/shared';
 import { api } from './api.ts';
 import type { MessageStream } from './useMessages.ts';
 import { activeTab, artifactChoices, byline, panelMode, type PanelMode } from './docPanel.ts';
@@ -7,6 +7,9 @@ import { ArtifactViewer, KindIcon } from './Viewer.tsx';
 import { Icon } from './ScreenHeader.tsx';
 import { PopButton, PopItem } from './HeadMenu.tsx';
 import { libraryHref } from './library.ts';
+import { closeFileTab, FileIcon, FileKindIcon, FilesPane } from './FilesPane.tsx';
+import { fileDrafts, useDrafts } from './fileDrafts.ts';
+import { fileTitle } from './files.ts';
 import type { PanelResize } from './PanelResizer.tsx';
 import { CommentBox, CommentHint, CommentIcon, type PaneComment } from './CommentLayer.tsx';
 import { boxOf, draftKey, hintFor, isTyping, type Comments, type PanePick } from './comments.ts';
@@ -18,7 +21,8 @@ export function usePanelTabs(chatId: string, stream: MessageStream, onError: (e:
     api.panel(chatId).then(setTabs, onError);
     const offPanel = stream.listen('panel:' + chatId, (e) => e.type === 'panel' && setTabs(e.tabs));
     const offDocs = stream.listen('docs', (e) => {
-      if (e.type === 'doc') setTabs((ts) => (ts.some((t) => t.doc.id === e.doc.id) ? ts.map((t) => (t.doc.id === e.doc.id ? { ...t, doc: e.doc } : t)) : ts));
+      if (e.type === 'doc')
+        setTabs((ts) => (ts.some((t) => t.kind === 'artifact' && t.doc.id === e.doc.id) ? ts.map((t) => (t.kind === 'artifact' && t.doc.id === e.doc.id ? { ...t, doc: e.doc } : t)) : ts));
     });
     return () => {
       offPanel();
@@ -40,14 +44,17 @@ export function usePanelMode(): PanelMode {
 }
 
 /**
- * The panel beside a direct chat (#120, mockup #106 v2): the shared viewer with the chat's artifacts as tabs, in ONE
- * head row: tabs, version, Latest, Full size, ⋯ (opened by, folder, path, source, Open in the Library), ×. On a phone
- * (full) it is the whole screen with « ‹ Back ». A chat card asks for its own version with `want`.
+ * The panel beside a direct chat (#120, mockup #106 v2; the workbench #302, #303): tabs of every kind in ONE head row
+ * (tabs, +, version, Full size, ⋯, ×), then the open tab: an artifact in the shared viewer, or a file of the chat's
+ * agent workspace (FilesPane: tree, editor). On a phone (full) it is the whole screen with « ‹ Back ». A chat card
+ * asks for its own version with `want`.
  */
 export function DocPanel(props: {
   chatId: string;
   /** The chat's project: the + menu lists its artifacts. */
   projectId: string;
+  /** The chat's agent: Files shows its workspace in the chat's project. */
+  agentId: string | null;
   tabs: PanelTab[];
   mode: PanelMode;
   /** Drag handle and width (#211); none on a phone. */
@@ -61,17 +68,22 @@ export function DocPanel(props: {
   onHide(): void;
   /** The open artifact and the version on screen (#305: sent with Master's message). */
   onShown?(doc: Doc, version: number): void;
+  /** The open file's lines on screen (#305, file kind). */
+  onFileLines?(path: string, from: number, to: number): void;
   onError(e: unknown): void;
 }) {
   const { chatId, tabs, onError, comments } = props;
   const [full, setFull] = useState(false);
+  useDrafts();
   const tab = activeTab(tabs);
-  const doc = tab?.doc;
+  const doc = tab?.kind === 'artifact' ? tab.doc : undefined;
   // Comment mode (#304): on for the open tab; a pick opens the box, Add puts the comment in the composer.
   const [commenting, setCommenting] = useState(false);
   const [pending, setPending] = useState<{ pick: PanePick; version: number } | null>(null);
   const aside = useRef<HTMLElement>(null);
-  const docId = doc?.id;
+  // The open file, when it is text (comments are on its lines); images and binaries take none yet.
+  const fileText = tab?.kind === 'file' && !!tab.path && fileDrafts.get(chatId, tab.path)?.file.kind === 'text';
+  const docId = doc?.id ?? (fileText ? tabKey(tab!) : undefined);
   useEffect(() => {
     setCommenting(false);
     setPending(null);
@@ -97,7 +109,7 @@ export function DocPanel(props: {
     window.addEventListener('keydown', key, true);
     return () => window.removeEventListener('keydown', key, true);
   }, [docId, commenting, pending]);
-  const unseen = !!tab && !!doc && tab.seenVersion < doc.version;
+  const unseen = tab?.kind === 'artifact' && !!doc && tab.seenVersion < doc.version;
   const report = props.onShown;
   const shown = useCallback((v: number) => void (doc && report?.(doc, v)), [doc, report]);
   // Pages, diagrams and links have no section marks: showing the new version is seeing it.
@@ -106,10 +118,11 @@ export function DocPanel(props: {
     const t = setTimeout(() => void api.panelSeen(chatId, doc.id).catch(onError), 1500);
     return () => clearTimeout(t);
   }, [chatId, doc, unseen, onError]);
-  if (!tab || !doc) return null;
+  if (!tab) return null;
   const phone = props.mode === 'full';
-  const target = { kind: 'doc' as const, docId: doc.id, version: doc.version };
-  const mine = comments.list.filter((c) => draftKey(c.target) === draftKey(target));
+  // What a comment is on: the artifact at its version, or the file (#303: its lines).
+  const target: CommentTarget | null = doc ? { kind: 'doc', docId: doc.id, version: doc.version } : fileText && tab.kind === 'file' ? { kind: 'file', path: tab.path } : null;
+  const mine = target ? comments.list.filter((c) => draftKey(c.target) === draftKey(target)) : [];
   const comment: PaneComment = {
     on: commenting && !pending,
     marks: [...mine.map((c) => ({ n: c.n, mark: c.mark })), ...(pending ? [{ n: comments.list.length + 1, mark: pending.pick.mark }] : [])],
@@ -117,68 +130,169 @@ export function DocPanel(props: {
     onKey: (k) => (k === 'Escape' ? (pending ? setPending(null) : setCommenting(false)) : setCommenting(true)),
   };
   const mode = phone || full ? 'full' : props.mode;
-  const items: PaneTabItem[] = tabs.map((t) => ({
-    key: t.kind + ':' + t.doc.id,
-    kind: t.kind,
-    icon: <KindIcon kind={t.doc.kind} />,
-    title: t.doc.title,
-    tip: t.doc.path,
-    on: t === tab,
-    dot: t.seenVersion < t.doc.version,
-    onSelect: () => void api.panelFocus(chatId, t.doc.id).catch(onError),
-    onClose: () => void api.panelClose(chatId, t.doc.id).catch(onError),
-  }));
+  const items: PaneTabItem[] = tabs.map((t) =>
+    t.kind === 'artifact'
+      ? {
+          key: tabKey(t),
+          kind: t.kind,
+          icon: <KindIcon kind={t.doc.kind} />,
+          title: t.doc.title,
+          tip: t.doc.path,
+          on: t === tab,
+          dot: t.seenVersion < t.doc.version,
+          unsaved: false,
+          onSelect: () => void api.panelFocus(chatId, t.doc.id).catch(onError),
+          onClose: () => void api.panelClose(chatId, t.doc.id).catch(onError),
+        }
+      : {
+          key: tabKey(t),
+          kind: t.kind,
+          icon: <FileKindIcon path={t.path} />,
+          title: fileTitle(t.path),
+          tip: t.path || `${props.agentId}’s workspace`,
+          on: t === tab,
+          dot: false,
+          unsaved: fileDrafts.dirty(chatId, t.path),
+          onSelect: () => void api.panelFocusFile(chatId, t.path).catch(onError),
+          onClose: () => closeFileTab(chatId, t.path, onError),
+        },
+  );
+  const strip = phone ? (
+    <TabPicker items={items} />
+  ) : (
+    <>
+      <PaneTabs items={items} />
+      <AddMenu chatId={chatId} projectId={props.projectId} agentId={props.agentId} open={tabs} onError={onError} />
+    </>
+  );
+  const lead = (phone || props.mode === 'overlay') && (
+    <button type="button" className="sd-btn sd-back" title="Back to the chat" onClick={props.onHide}>
+      ‹ Back
+    </button>
+  );
+  const tools = (
+    <>
+      {target && (
+        <button
+          type="button"
+          className={'sd-btn icon-only' + (commenting ? ' on' : '')}
+          title={commenting ? 'Leave comment mode (Esc)' : 'Comment (C)'}
+          aria-label="Comment"
+          aria-pressed={commenting}
+          onClick={() => (commenting ? stop() : setCommenting(true))}
+        >
+          <CommentIcon />
+        </button>
+      )}
+      {!phone && (
+        <button
+          type="button"
+          className={'sd-btn icon-only' + (full ? ' on' : '')}
+          title={full ? 'Back to the side panel' : 'Full size'}
+          aria-label={full ? 'Back to the side panel' : 'Full size'}
+          aria-pressed={full}
+          onClick={() => setFull(!full)}
+        >
+          {full ? <Icon.shrink /> : <Icon.expand />}
+        </button>
+      )}
+    </>
+  );
+  const commentUi = target && (
+    <>
+      {commenting && !pending && <CommentHint text={hintFor(doc ? doc.kind : 'file')} waiting={comments.list.length} onDone={stop} />}
+      {pending && (
+        <CommentBox
+          key={JSON.stringify(pending.pick.rect)}
+          n={comments.list.length + 1}
+          anchor={pending.pick.anchor}
+          rect={pending.pick.rect}
+          within={aside.current ? boxOf(aside.current.getBoundingClientRect()) : null}
+          sheet={phone}
+          onCancel={() => setPending(null)}
+          onAdd={(text) => {
+            const on: CommentTarget = target.kind === 'doc' ? { ...target, version: pending.version } : target;
+            const title = doc ? doc.title : fileTitle(tab.kind === 'file' ? tab.path : '');
+            comments.add({ target: on, anchor: pending.pick.anchor, text, title, kind: doc ? doc.kind : 'file', mark: pending.pick.mark, thumb: pending.pick.thumb ?? null });
+            window.getSelection()?.removeAllRanges();
+            setPending(null);
+          }}
+        />
+      )}
+    </>
+  );
+  const end = !phone && (
+    <button type="button" className="sd-btn icon-only" title="Close the panel" aria-label="Close the panel" onClick={() => closePanel(chatId, tabs, onError)}>
+      <Icon.x />
+    </button>
+  );
+  const style = props.resize && mode !== 'full' ? { width: props.resize.width } : undefined;
+  if (tab.kind === 'file')
+    return (
+      <aside ref={aside} className={'side-doc ' + mode} aria-label="Panel" style={style}>
+        {mode !== 'full' && props.resize?.handle}
+        <div className="viewer panel">
+          <div className="sd-head">
+            {lead}
+            {strip}
+            {tools}
+            <PopButton className="sd-btn icon-only" title="More" ariaLabel="More" label={<Icon.dots />}>
+              {(close) => (
+                <>
+                  <div className="pop-info">
+                    <span>{byline({ openedBy: tab.openedBy, cardTitle: null }, props.userName)}</span>
+                    <span className="pop-path">{tab.path || `${props.agentId}’s workspace`}</span>
+                  </div>
+                  {tab.path && (
+                    <>
+                      <div className="pop-sep" />
+                      <PopItem
+                        icon={<Icon.code />}
+                        onClick={() => {
+                          close();
+                          void navigator.clipboard.writeText(tab.path).catch(onError);
+                        }}
+                      >
+                        Copy the path
+                      </PopItem>
+                    </>
+                  )}
+                </>
+              )}
+            </PopButton>
+            {end}
+          </div>
+          {props.agentId ? (
+            <FilesPane
+              chatId={chatId}
+              tab={tab}
+              tabs={tabs.filter((t): t is FileTab => t.kind === 'file')}
+              mode={mode}
+              agentId={props.agentId}
+              comment={fileText ? comment : undefined}
+              commenting={commenting}
+              onLines={props.onFileLines}
+              onError={onError}
+            />
+          ) : (
+            <div className="wb-note">This chat has no agent: no workspace to show.</div>
+          )}
+        </div>
+        {commentUi}
+      </aside>
+    );
+  if (!doc) return null;
   return (
-    <aside ref={aside} className={'side-doc ' + mode} aria-label="Panel" style={props.resize && mode !== 'full' ? { width: props.resize.width } : undefined}>
+    <aside ref={aside} className={'side-doc ' + mode} aria-label="Panel" style={style}>
       {mode !== 'full' && props.resize?.handle}
       <ArtifactViewer
         doc={doc}
         mode="panel"
-        strip={
-          phone ? (
-            <TabPicker items={items} />
-          ) : (
-            <>
-              <PaneTabs items={items} />
-              <AddMenu chatId={chatId} projectId={props.projectId} open={tabs} onError={onError} />
-            </>
-          )
-        }
-        lead={
-          (phone || props.mode === 'overlay') && (
-            <button type="button" className="sd-btn sd-back" title="Back to the chat" onClick={props.onHide}>
-              ‹ Back
-            </button>
-          )
-        }
+        strip={strip}
+        lead={lead}
         want={props.want && props.want.docId === doc.id ? props.want : null}
         onShown={shown}
-        tools={
-          <>
-          <button
-            type="button"
-            className={'sd-btn icon-only' + (commenting ? ' on' : '')}
-            title={commenting ? 'Leave comment mode (Esc)' : 'Comment (C)'}
-            aria-label="Comment"
-            aria-pressed={commenting}
-            onClick={() => (commenting ? stop() : setCommenting(true))}
-          >
-            <CommentIcon />
-          </button>
-          {!phone && (
-            <button
-              type="button"
-              className={'sd-btn icon-only' + (full ? ' on' : '')}
-              title={full ? 'Back to the side panel' : 'Full size'}
-              aria-label={full ? 'Back to the side panel' : 'Full size'}
-              aria-pressed={full}
-              onClick={() => setFull(!full)}
-            >
-              {full ? <Icon.shrink /> : <Icon.expand />}
-            </button>
-          )}
-          </>
-        }
+        tools={tools}
         by={byline({ openedBy: tab.openedBy, cardTitle: null }, props.userName)}
         menu={(close) => (
           <>
@@ -199,13 +313,7 @@ export function DocPanel(props: {
             </a>
           </>
         )}
-        end={
-          !phone && (
-            <button type="button" className="sd-btn icon-only" title="Close the panel" aria-label="Close the panel" onClick={() => api.panelClose(chatId, null).catch(onError)}>
-              <Icon.x />
-            </button>
-          )
-        }
+        end={end}
         section={tab.section}
         scrollKey={tab.focusedAt}
         seenVersion={tab.seenVersion}
@@ -214,25 +322,17 @@ export function DocPanel(props: {
         onSeen={() => void api.panelSeen(chatId, doc.id).catch(onError)}
         onError={onError}
       />
-      {commenting && !pending && <CommentHint text={hintFor(doc.kind)} waiting={comments.list.length} onDone={stop} />}
-      {pending && (
-        <CommentBox
-          key={JSON.stringify(pending.pick.rect)}
-          n={comments.list.length + 1}
-          anchor={pending.pick.anchor}
-          rect={pending.pick.rect}
-          within={aside.current ? boxOf(aside.current.getBoundingClientRect()) : null}
-          sheet={phone}
-          onCancel={() => setPending(null)}
-          onAdd={(text) => {
-            comments.add({ target: { ...target, version: pending.version }, anchor: pending.pick.anchor, text, title: doc.title, kind: doc.kind, mark: pending.pick.mark, thumb: pending.pick.thumb ?? null });
-            window.getSelection()?.removeAllRanges();
-            setPending(null);
-          }}
-        />
-      )}
+      {commentUi}
     </aside>
   );
+}
+
+/** × of the panel: every tab closes; unsaved files ask first. */
+function closePanel(chatId: string, tabs: PanelTab[], onError: (e: unknown) => void) {
+  const dirty = tabs.filter((t): t is FileTab => t.kind === 'file' && fileDrafts.dirty(chatId, t.path));
+  if (dirty.length && !confirm(`${dirty.map((t) => fileTitle(t.path)).join(', ')} ${dirty.length === 1 ? 'has' : 'have'} unsaved changes. Close the panel and lose them?`)) return;
+  for (const t of tabs) if (t.kind === 'file') fileDrafts.drop(chatId, t.path);
+  void api.panelClose(chatId, null).catch(onError);
 }
 
 /** One tab of the workbench (#302), whatever its kind: artifacts today; files and pages come with 2/5 and 5/5. */
@@ -246,6 +346,8 @@ export interface PaneTabItem {
   on: boolean;
   /** « Changed since you looked ». */
   dot: boolean;
+  /** A file with unsaved edits (#303): a dot in place of ×; closing asks first. */
+  unsaved: boolean;
   onSelect(): void;
   onClose(): void;
 }
@@ -267,8 +369,8 @@ function PaneTabs({ items }: { items: PaneTabItem[] }) {
             <span className="sd-tab-t">{t.title}</span>
             {t.dot && <span className="sd-dot" title="Changed since you looked" />}
           </button>
-          <button className="sd-tab-x" aria-label={`Close ${t.title}`} onClick={t.onClose}>
-            ×
+          <button className={'sd-tab-x' + (t.unsaved ? ' unsaved' : '')} aria-label={`Close ${t.title}${t.unsaved ? ' (unsaved changes)' : ''}`} title={t.unsaved ? 'Unsaved changes' : undefined} onClick={t.onClose}>
+            {t.unsaved ? <span className="wb-udot" aria-hidden="true" /> : '×'}
           </button>
         </div>
       ))}
@@ -315,8 +417,8 @@ function TabPicker({ items }: { items: PaneTabItem[] }) {
               <span className="pop-t">{t.title}</span>
               {t.dot && <span className="sd-dot" title="Changed since you looked" />}
             </button>
-            <button type="button" className="sd-tab-x" aria-label={`Close ${t.title}`} onClick={t.onClose}>
-              ×
+            <button type="button" className={'sd-tab-x' + (t.unsaved ? ' unsaved' : '')} aria-label={`Close ${t.title}${t.unsaved ? ' (unsaved changes)' : ''}`} onClick={t.onClose}>
+              {t.unsaved ? <span className="wb-udot" aria-hidden="true" /> : '×'}
             </button>
           </div>
         ))
@@ -326,15 +428,43 @@ function TabPicker({ items }: { items: PaneTabItem[] }) {
 }
 
 /**
- * + in the head row (#302): open something in a new tab. Artifacts only for now (a filter, the project's artifacts
- * latest first); a file (⌘P) and a page join as a first group with the workbench's 2/5 and 5/5.
+ * + in the head row (#302, #303): open something in a new tab. First the agent's files (⌘P), then the project's
+ * artifacts (a filter, latest first); a page joins with the workbench's 5/5.
  */
-function AddMenu(props: { chatId: string; projectId: string; open: PanelTab[]; onError(e: unknown): void }) {
+function AddMenu(props: { chatId: string; projectId: string; agentId: string | null; open: PanelTab[]; onError(e: unknown): void }) {
+  const { chatId, agentId, onError } = props;
   return (
-    <PopButton className="sd-btn icon-only wb-add" title="Open an artifact" ariaLabel="Open an artifact" width={320} label={<Icon.plus />}>
-      {(close) => <ArtifactPick {...props} onDone={close} />}
+    <PopButton className="sd-btn icon-only wb-add" title={agentId ? 'Open a file (⌘P) or an artifact' : 'Open an artifact'} ariaLabel="Open" width={320} label={<Icon.plus />}>
+      {(close) => (
+        <>
+          {agentId && (
+            <>
+              <PopItem
+                icon={<FileIcon.file />}
+                sub="⌘P"
+                onClick={() => {
+                  close();
+                  openFiles(chatId, props.open, onError);
+                }}
+              >
+                A file of {agentId}’s workspace
+              </PopItem>
+              <div className="pop-sep" />
+            </>
+          )}
+          <ArtifactPick {...props} onDone={close} />
+        </>
+      )}
     </PopButton>
   );
+}
+
+/** The workspace tab (the tree, its filter focused): an open file tab shows its tree, else the « Files » tab. */
+export function openFiles(chatId: string, open: PanelTab[], onError: (e: unknown) => void) {
+  const shown = activeTab(open);
+  if (shown?.kind === 'file') return void window.dispatchEvent(new KeyboardEvent('keydown', { key: 'p', metaKey: true }));
+  const ws = open.find((t) => t.kind === 'file' && t.path === '');
+  void (ws ? api.panelFocusFile(chatId, '') : api.panelOpenFile(chatId, '')).catch(onError);
 }
 
 function ArtifactPick(props: { chatId: string; projectId: string; open: PanelTab[]; onDone(): void; onError(e: unknown): void }) {
@@ -354,7 +484,7 @@ function ArtifactPick(props: { chatId: string; projectId: string; open: PanelTab
       live = false;
     };
   }, [onError]);
-  const list = docs ? artifactChoices(docs, props.projectId, new Set(props.open.map((t) => t.doc.id)), q) : [];
+  const list = docs ? artifactChoices(docs, props.projectId, new Set(props.open.flatMap((t) => (t.kind === 'artifact' ? [t.doc.id] : []))), q) : [];
   const pick = (d: Doc) => {
     props.onDone();
     void api.panelOpen(props.chatId, d.id).catch(onError);

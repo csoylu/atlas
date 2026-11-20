@@ -60,9 +60,10 @@ describe('side panel helpers', () => {
   });
 
   it('shows the active tab, else the last', () => {
-    const t = (id: string, active: boolean) => ({ doc: { id }, active }) as unknown as PanelTab;
-    expect(activeTab([t('a', false), t('b', true), t('c', false)])!.doc.id).toBe('b');
-    expect(activeTab([t('a', false), t('c', false)])!.doc.id).toBe('c');
+    const t = (id: string, active: boolean) => ({ kind: 'file', path: id, active }) as unknown as PanelTab;
+    const path = (x: PanelTab | undefined) => (x?.kind === 'file' ? x.path : null);
+    expect(path(activeTab([t('a', false), t('b', true), t('c', false)]))).toBe('b');
+    expect(path(activeTab([t('a', false), t('c', false)]))).toBe('c');
     expect(activeTab([])).toBeUndefined();
   });
 });

@@ -4,7 +4,7 @@ import { existsSync, readFileSync } from 'node:fs';
 import { extname, join, relative } from 'node:path';
 import { WebSocketServer } from 'ws';
 import { ZodError } from 'zod';
-import { AddCardImages, CreateCard, CreateModelRequest, CreateSecret, SaveCardSecret, SecretsPassword, UnlockSecrets, UpdateSecret, IMAGE_MAX_BYTES, IMAGE_MAX_PER_TASK, isTimeZone, PostMessage, RewindRequest, SlashCommand, TriggerPreview, UpdateModelRequest, UpdateVoice } from '@atlas/shared';
+import { AddCardImages, CreateCard, SaveWsFile, CreateModelRequest, CreateSecret, SaveCardSecret, SecretsPassword, UnlockSecrets, UpdateSecret, IMAGE_MAX_BYTES, IMAGE_MAX_PER_TASK, isTimeZone, PostMessage, RewindRequest, SlashCommand, TriggerPreview, UpdateModelRequest, UpdateVoice } from '@atlas/shared';
 import type { Agents } from './agents.ts';
 import type { Models } from './models.ts';
 import type { Runner } from './runner.ts';
@@ -19,6 +19,7 @@ import { readHookBody } from './webhooks.ts';
 import type { Secrets } from './secrets.ts';
 import { SecretsPasswordError } from './secretFile.ts';
 import type { Documents } from './documents.ts';
+import type { WorkspaceFiles } from './workspaceFiles.ts';
 import type { Projects } from './projects.ts';
 import type { ReviewFlow } from './reviewFlow.ts';
 import { PaneSees, withPaneHelper } from '@atlas/shared';
@@ -64,6 +65,7 @@ export function createApi(deps: {
   dispatcher: Dispatcher;
   settings: Settings;
   documents: Documents;
+  files: WorkspaceFiles;
   memories: Memories;
   cleanup: MemoryCleanup;
   workflows: Workflows;
@@ -607,6 +609,53 @@ export function createApi(deps: {
   });
   app.post('/api/chats/:id/panel/seen', (req, res) => {
     res.json(documents.seen(req.params.id, String((req.body as { docId?: unknown }).docId ?? '')));
+  });
+
+  // Files of the chat's agent workspace (#303, the pane's Files tab): same boundary as the agent file tools, text
+  // redacted (#226), a save refused (not written) when the file changed since the editor loaded it.
+  const q = (req: Request, name: string) => (typeof req.query[name] === 'string' ? (req.query[name] as string) : '');
+  app.get('/api/chats/:id/files/list', async (req, res) => {
+    res.json(await deps.files.list(req.params.id, q(req, 'dir')));
+  });
+  app.get('/api/chats/:id/files/read', (req, res) => {
+    res.setHeader('Cache-Control', 'no-store');
+    res.json(deps.files.read(req.params.id, q(req, 'path')));
+  });
+  app.get('/api/chats/:id/files/stat', (req, res) => {
+    res.json(deps.files.stat(req.params.id, q(req, 'path')));
+  });
+  app.get('/api/chats/:id/files/image', (req, res, next) => {
+    const { abs, mime } = deps.files.image(req.params.id, q(req, 'path'));
+    res.setHeader('Content-Security-Policy', 'sandbox');
+    res.setHeader('Cache-Control', 'no-store');
+    res.type(mime);
+    res.sendFile(abs, { dotfiles: 'allow' }, (err) => {
+      if (err && !res.headersSent) next(err);
+    });
+  });
+  app.get('/api/chats/:id/files/find', async (req, res) => {
+    res.json(await deps.files.find(req.params.id, q(req, 'q')));
+  });
+  app.post('/api/chats/:id/files/links', (req, res) => {
+    const paths = (req.body as { paths?: unknown }).paths;
+    if (!Array.isArray(paths) || !paths.every((p) => typeof p === 'string')) throw new InvalidError('paths: a list of strings');
+    res.json(deps.files.links(req.params.id, paths));
+  });
+  app.post('/api/chats/:id/files/save', (req, res) => {
+    res.json(deps.files.write(req.params.id, SaveWsFile.parse(req.body)));
+  });
+  app.post('/api/chats/:id/panel/file/open', (req, res) => {
+    const b = req.body as { path?: unknown; line?: unknown };
+    const { root } = deps.files.where(req.params.id);
+    const { rel } = deps.files.resolve(root, String(b.path ?? ''));
+    const line = typeof b.line === 'number' && Number.isInteger(b.line) && b.line > 0 ? b.line : null;
+    res.json(documents.openFile(req.params.id, rel, USER, line));
+  });
+  app.post('/api/chats/:id/panel/file/close', (req, res) => {
+    res.json(documents.closeFile(req.params.id, String((req.body as { path?: unknown }).path ?? '')));
+  });
+  app.post('/api/chats/:id/panel/file/focus', (req, res) => {
+    res.json(documents.focusFile(req.params.id, String((req.body as { path?: unknown }).path ?? '')));
   });
 
   // Files in an agent's workspace, for url nodes (built apps, pages, images). Served with a CSP sandbox so a page

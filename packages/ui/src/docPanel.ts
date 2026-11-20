@@ -71,7 +71,7 @@ export function diagramWidth(svg: string, box: number): number {
 }
 
 /** « Opened by @atlas · attached to card “X” ». */
-export function byline(tab: Pick<PanelTab, 'openedBy' | 'cardTitle'>, userName: string | null): string {
+export function byline(tab: { openedBy: string; cardTitle: string | null }, userName: string | null): string {
   const who = tab.openedBy === USER ? (userName ?? 'you') : '@' + tab.openedBy;
   return `Opened by ${who}` + (tab.cardTitle ? ` · attached to card “${tab.cardTitle}”` : '');
 }

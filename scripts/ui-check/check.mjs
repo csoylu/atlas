@@ -525,6 +525,24 @@ const PROPOSALS = [
 const panelTabs = () =>
   doc ? [{ kind: 'artifact', doc, openedBy: doc.agentId, openedAt: now, focusedAt: now, section: null, seenVersion: doc.version, active: true, cardTitle: null }] : [];
 
+// Files (#303): a file tab in the pane, a small workspace tree with git letters, a real source file in the editor,
+// and a chat message whose paths become links (one missing: plain code + tooltip). Nothing is read from the workspace.
+const FILE_PATH = 'publish-atlas/packages/ui/src/docPanel.ts';
+const FILE_TEXT = readFileSync(join(HERE, '../../packages/ui/src/docPanel.ts'), 'utf8');
+const fileTabs = () => [{ kind: 'file', path: FILE_PATH, openedBy: 'master', openedAt: now, focusedAt: now, line: 12, active: true }];
+const wsEntry = (path, dir, git = null) => ({ name: path.split('/').pop(), path, dir, git });
+const WS_TREE = {
+  '': [wsEntry('data', true), wsEntry('docs', true, 'A'), wsEntry('publish-atlas', true, 'M'), wsEntry('screenshots', true, 'A'), wsEntry('CLAUDE.md', false)],
+  'publish-atlas': [wsEntry('publish-atlas/packages', true, 'M'), wsEntry('publish-atlas/README.md', false)],
+  'publish-atlas/packages': [wsEntry('publish-atlas/packages/ui', true, 'M')],
+  'publish-atlas/packages/ui': [wsEntry('publish-atlas/packages/ui/src', true, 'M')],
+  'publish-atlas/packages/ui/src': [wsEntry('publish-atlas/packages/ui/src/DocPanel.tsx', false), wsEntry(FILE_PATH, false, 'M'), wsEntry('publish-atlas/packages/ui/src/a-deliberately-long-file-name-for-the-tree.ts', false, 'A')],
+};
+const FILE_LINKS = { 'packages/ui/src/docPanel.ts': FILE_PATH, 'docs/empty-states.md': 'docs/empty-states.md', 'src/pages/Search.tsx': null };
+const FILE_MSGS = [
+  tmsg('assistant', 'atlas', [{ type: 'text', text: 'I fixed the panel width rule in `packages/ui/src/docPanel.ts:12` and the copy in `docs/empty-states.md`. I did not touch `src/pages/Search.tsx`: it does not exist yet.' }]),
+];
+
 // Memory has its own screens below (fixtures, edit, deep links).
 const PJ2 = 'uicheck-datinel'; // the fixture project's id (#217)
 const SETTINGS = ['projects', 'agents', 'agents/atlas', 'board', 'subscriptions', 'api-keys', 'local', 'model-list', 'usage', 'profile', 'appearance', 'voice', 'about'];
@@ -587,6 +605,9 @@ const SCREENS = [
   { name: 'task-images', hash: `#/board?card=${modalCard.id}`, ready: '.thread-panel .task-images .attach-thumb.saved', taskImages: true, then: { js: `const png = await (await fetch(document.querySelector('.task-images img, .msg-image img')?.src ?? '/api/cards/x/image?path=%2FUsers%2Fx%2Ff.png')).blob(); const file = (n) => new File([png], n, { type: 'image/png' }); const paste = (el, dt) => { const ev = new ClipboardEvent('paste', { clipboardData: dt, bubbles: true, cancelable: true }); el.dispatchEvent(ev); return ev.defaultPrevented; }; const dtText = new DataTransfer(); dtText.setData('text/plain', 'plain text'); const textTaken = paste(document.querySelector('.thread-panel .cm-desc'), dtText); const dt1 = new DataTransfer(); dt1.items.add(file('pasted.png')); paste(document.querySelector('.thread-panel .cm-desc'), dt1); const dt2 = new DataTransfer(); dt2.items.add(file('dropped.png')); document.querySelector('.thread-panel .cm-desc-area').dispatchEvent(new DragEvent('dragover', { dataTransfer: dt2, bubbles: true, cancelable: true })); document.querySelector('.thread-panel .cm-desc-area').dispatchEvent(new DragEvent('drop', { dataTransfer: dt2, bubbles: true, cancelable: true })); await new Promise((r) => setTimeout(r, 600)); const bad = []; if (textTaken) bad.push('pasting plain text was taken as an image paste'); const saved = document.querySelectorAll('.thread-panel .task-images .attach-thumb.saved'); if (saved.length !== 4) bad.push(saved.length + ' saved images after a paste and a drop on 2, want 4'); if (document.querySelector('.thread-panel .task-images .attach-thumb:not(.saved)')) bad.push('an image is still uploading or failed: ' + (document.querySelector('.thread-panel .attach-note')?.textContent ?? '')); if (bad.length) throw new Error('task images (#119): ' + bad.join('; ')); { const ti = document.querySelector('.thread-panel .task-images'), body = ti.closest('.cm-body'); body.scrollTop += ti.getBoundingClientRect().top - body.getBoundingClientRect().top - body.clientHeight / 3; }`, ready: '.thread-panel .task-images .attach-thumb.saved' }, keys: ['.cm-title', '.cm-h', '.now-l1 b'] },
   { name: 'thread-images', hash: `#/chat/${chat.id}`, ready: '.chat-pin', pins: true, taskImages: true, then: { js: `${OPEN_PIN} await new Promise((r) => setTimeout(r, 400)); const n = document.querySelectorAll('.thread-panel .task-images .attach-thumb.saved').length; if (n !== 2) throw new Error('task images (#119): ' + n + ' images in the thread panel, want 2'); { const ti = document.querySelector('.thread-panel .task-images'), body = ti.closest('.cm-body'); body.scrollTop += ti.getBoundingClientRect().top - body.getBoundingClientRect().top - body.clientHeight / 3; }`, ready: '.thread-panel .task-images .attach-thumb.saved img' }, keys: ['.thread-panel .cm-title', '.thread-panel .cm-h', '.thread-panel .now-l1 b'] },
   { name: 'task-blocked', hash: `#/board?card=${modalCard.id}`, ready: '.thread-panel', blocked: true, keys: ['.thread-panel .cm-title', '.thread-panel .cm-now .ask-kind', '.thread-panel .now-l1 b'] },
+  // Files (#303): the file tab beside the chat (tree + editor; the phone shows the editor full width), and the chat's
+  // file links (a link, a missing path as plain code).
+  { name: 'panel-files', hash: `#/chat/${chat.id}`, ready: '.side-doc .cm-content', files: true, then: { js: `const n = document.querySelectorAll('.wb-flink').length, miss = document.querySelectorAll('.wb-fmiss').length; if (n < 2 || miss < 1) throw new Error('file links (#303): ' + n + ' links, ' + miss + ' missing, want 2 and 1');`, ready: '.side-doc .cm-content' }, keys: ['.sd-tab', '.wb-path b'] },
   { name: 'panel', hash: `#/chat/${chat.id}`, ready: '.side-doc', pins: true, panel: true, keys: ['.sd-tab', '.sd-ver-btn', '.side-doc h1', '.side-doc h2', '.chat-pin-title'] },
   // #211: the panel dragged to its widest (Home on the separator), so the chat is at its narrowest: pins and buttons
   // still must not cover messages or the composer. Phones have no separator: the panel stays full screen.
@@ -818,7 +839,22 @@ handlers.set('Fetch.requestPaused', async ({ requestId, request }) => {
       const r = await fetch(BASE + url.pathname + url.search);
       return await json(r.ok ? await r.json() : []);
     }
-    if (url.pathname === `/api/chats/${chat.id}/panel` && request.method === 'GET') return await json(screen?.panel ? panelTabs() : []);
+    if (url.pathname === `/api/chats/${chat.id}/panel` && request.method === 'GET') return await json(screen?.files ? fileTabs() : screen?.panel ? panelTabs() : []);
+    if (screen?.files && /^\/api\/chats\/[^/]+\/panel\/(seen|focus)$/.test(url.pathname)) return await json(fileTabs());
+    if (screen?.files && request.method === 'GET' && url.pathname === `/api/cards/${chat.id}/messages`) return await json([...(await get(`/cards/${chat.id}/messages`)), ...FILE_MSGS]);
+    if (screen?.files && /^\/api\/chats\/[^/]+\/files\//.test(url.pathname)) {
+      const what = url.pathname.split('/').pop(), path = url.searchParams.get('path') ?? '';
+      if (what === 'list') { const dir = url.searchParams.get('dir') ?? ''; return await json({ agentId: 'atlas', dir, entries: WS_TREE[dir] ?? [], gitError: null }); }
+      if (what === 'read') return await json({ path, kind: 'text', size: FILE_TEXT.length, stamp: 'uicheck', hash: 'uicheck', content: FILE_TEXT, readOnly: null });
+      if (what === 'stat') return await json({ path, exists: true, stamp: 'uicheck' });
+      if (what === 'find') return await json({ paths: [FILE_PATH], truncated: false });
+    }
+    // The chat's file-link lookup (#303) is a POST that only reads: answered on every screen (the fixture paths, else
+    // « no such file »), so the page raises no « Failed to fetch ».
+    if (request.method === 'POST' && /^\/api\/chats\/[^/]+\/files\/links$/.test(url.pathname)) {
+      const paths = JSON.parse(request.postData ?? '{"paths":[]}').paths ?? [];
+      return await json(Object.fromEntries(paths.map((p) => [p, screen?.files ? (FILE_LINKS[p] ?? null) : null])));
+    }
     if (screen?.panel && /^\/api\/chats\/[^/]+\/panel\/(seen|focus)$/.test(url.pathname)) return await json(panelTabs());
     // Opening an update in the Inbox marks it read: answer « done » without storing anything, so the page raises no
     // « Failed to fetch » banner (#225). The write is still listed as refused.

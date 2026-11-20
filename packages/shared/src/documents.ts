@@ -101,7 +101,10 @@ export interface DocContent {
 export type PaneKind = 'artifact' | 'file' | 'browser';
 
 /** A tab in a chat's side panel (the workbench, #302), stored per chat in SQLite with the active one. */
-export interface PanelTab {
+export type PanelTab = ArtifactTab | FileTab;
+
+/** An artifact open in the pane. */
+export interface ArtifactTab {
   kind: 'artifact';
   doc: Doc;
   openedBy: string;
@@ -115,6 +118,88 @@ export interface PanelTab {
   active: boolean;
   /** Title of the attached card, for « attached to card X ». */
   cardTitle: string | null;
+}
+
+/** A file of the chat's agent workspace open in the pane (#303, Files). */
+export interface FileTab {
+  kind: 'file';
+  /** Relative to the workspace, with `/`. */
+  path: string;
+  openedBy: string;
+  openedAt: string;
+  /** Last time it was opened or focused: a new value jumps to `line` again. */
+  focusedAt: string;
+  /** Line to show (a chat link `path:42`), 1-based. */
+  line: number | null;
+  active: boolean;
+}
+
+/** The key of a tab, unique in a chat's pane. */
+export const tabKey = (t: PanelTab): string => (t.kind === 'artifact' ? 'artifact:' + t.doc.id : 'file:' + t.path);
+
+/* ── Files of an agent's workspace (#303) ─────────────────────────────── */
+
+/** A git letter in the tree: A = added (new or untracked), M = changed. Folders carry their content's. */
+export type GitLetter = 'A' | 'M';
+
+export interface WsEntry {
+  name: string;
+  /** Relative to the workspace, with `/`. */
+  path: string;
+  dir: boolean;
+  git: GitLetter | null;
+}
+
+/** One folder of the tree (lazy: a folder's rows load when it opens). */
+export interface WsListing {
+  /** The agent whose workspace it is. */
+  agentId: string;
+  dir: string;
+  entries: WsEntry[];
+  /** git could not be read (letters missing), with why. */
+  gitError: string | null;
+}
+
+/** Files edits text up to this size; bigger files are read only (#303). */
+export const FILE_EDIT_MAX = 1024 * 1024;
+/** A file over FILE_EDIT_MAX shows this many lines. */
+export const FILE_LARGE_LINES = 2000;
+
+/**
+ * A file read for the editor. `readOnly`: `large` (over 1 MB: the first 2,000 lines), `binary` (not shown), `secret`
+ * (a secret value shows as [secret NAME]: saving would write the mark over the value, #226), `image` (shown, not edited).
+ */
+export interface WsFile {
+  path: string;
+  kind: 'text' | 'image' | 'binary';
+  size: number;
+  /** Modified time + size: what the pane polls to see the agent's writes. */
+  stamp: string;
+  /** Fingerprint of the bytes on disk (an HMAC, nothing of the content): a save names the one it started from. */
+  hash: string;
+  content: string | null;
+  readOnly: 'large' | 'binary' | 'secret' | 'image' | null;
+}
+
+/** Save from the editor: `base` is the hash it was loaded with (null: the file must not exist, « Save it again »). */
+export const SaveWsFile = z.object({
+  path: z.string().min(1),
+  content: z.string(),
+  base: z.string().nullable(),
+});
+export type SaveWsFile = z.infer<typeof SaveWsFile>;
+
+/**
+ * A save never overwrites silently: when the file on disk is not the one the editor started from (the agent wrote or
+ * deleted it), nothing is written and the answer says what is there now; the editor's banner decides.
+ */
+export type WsSaveResult = { ok: true; file: WsFile } | { ok: false; conflict: 'changed' | 'deleted' | 'exists'; file: WsFile | null };
+
+/** What the pane polls for the open file. */
+export interface WsStat {
+  path: string;
+  exists: boolean;
+  stamp: string | null;
 }
 
 /* ── Markdown sections ─────────────────────────────────────────────────── */

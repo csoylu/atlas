@@ -526,24 +526,34 @@ export class Documents {
   /* ── Side panel tabs (one panel per direct chat) ─────────────────────── */
 
   tabs(chatId: string): PanelTab[] {
+    const files = this.db
+      .prepare('SELECT * FROM panel_files WHERE chat_id = ? ORDER BY opened_at, rowid')
+      .all(chatId) as { path: string; opened_by: string; opened_at: string; focused_at: string; line: number | null }[];
     const rows = this.db
       .prepare(
         `SELECT t.*, c.title AS card_title FROM panel_tabs t JOIN documents d ON d.id = t.doc_id
          LEFT JOIN cards c ON c.id = d.card_id WHERE t.chat_id = ? ORDER BY t.opened_at, t.rowid`,
       )
       .all(chatId) as { doc_id: string; opened_by: string; opened_at: string; focused_at: string; section: string | null; seen_version: number; card_title: string | null }[];
-    const active = rows.reduce<(typeof rows)[number] | null>((a, r) => (!a || r.focused_at >= a.focused_at ? r : a), null);
-    return rows.map((r) => ({
-      kind: 'artifact' as const,
-      doc: this.get(r.doc_id),
-      openedBy: r.opened_by,
-      openedAt: r.opened_at,
-      focusedAt: r.focused_at,
-      section: r.section,
-      seenVersion: r.seen_version,
-      active: r === active,
-      cardTitle: r.card_title,
-    }));
+    const tabs: PanelTab[] = [
+      ...rows.map((r) => ({
+        kind: 'artifact' as const,
+        doc: this.get(r.doc_id),
+        openedBy: r.opened_by,
+        openedAt: r.opened_at,
+        focusedAt: r.focused_at,
+        section: r.section,
+        seenVersion: r.seen_version,
+        active: false,
+        cardTitle: r.card_title,
+      })),
+      ...files.map((r) => ({ kind: 'file' as const, path: r.path, openedBy: r.opened_by, openedAt: r.opened_at, focusedAt: r.focused_at, line: r.line, active: false })),
+    ];
+    // Stable: artifacts and files opened in the same millisecond keep their table order.
+    tabs.sort((a, b) => (a.openedAt < b.openedAt ? -1 : a.openedAt > b.openedAt ? 1 : 0));
+    const active = tabs.reduce<PanelTab | null>((a, t) => (!a || t.focusedAt >= a.focusedAt ? t : a), null);
+    if (active) active.active = true;
+    return tabs;
   }
 
   /** Open a document in a chat's panel (or focus it and scroll to `section` if it's open). */
@@ -572,7 +582,45 @@ export class Documents {
     if (docId) {
       const r = this.db.prepare('DELETE FROM panel_tabs WHERE chat_id = ? AND doc_id = ?').run(chatId, docId);
       if (!r.changes) throw new NotFoundError(`document ${docId} is not open in chat ${chatId}`);
-    } else this.db.prepare('DELETE FROM panel_tabs WHERE chat_id = ?').run(chatId);
+    } else {
+      this.db.transaction(() => {
+        this.db.prepare('DELETE FROM panel_tabs WHERE chat_id = ?').run(chatId);
+        this.db.prepare('DELETE FROM panel_files WHERE chat_id = ?').run(chatId);
+      })();
+    }
+    return this.emitPanel(chatId);
+  }
+
+  /**
+   * Open a file of the chat's agent workspace in its pane (#303), or focus it and jump to `line`. `path` is already
+   * checked against the workspace (WorkspaceFiles.resolve). Like artifacts, at most MAX_TABS files: the oldest go.
+   */
+  openFile(chatId: string, path: string, by: string, line: number | null = null): PanelTab[] {
+    this.chat(chatId);
+    const now = this.now(chatId);
+    this.db
+      .transaction(() => {
+        const r = this.db.prepare('UPDATE panel_files SET focused_at = ?, line = ?, opened_by = ? WHERE chat_id = ? AND path = ?').run(now, line, by, chatId, path);
+        if (r.changes) return;
+        this.db.prepare('INSERT INTO panel_files (chat_id, path, opened_by, opened_at, focused_at, line) VALUES (?, ?, ?, ?, ?, ?)').run(chatId, path, by, now, now, line);
+        const extra = this.db.prepare('SELECT path FROM panel_files WHERE chat_id = ? ORDER BY focused_at DESC, rowid DESC LIMIT -1 OFFSET ?').all(chatId, MAX_TABS) as { path: string }[];
+        for (const e of extra) this.db.prepare('DELETE FROM panel_files WHERE chat_id = ? AND path = ?').run(chatId, e.path);
+      })
+      .immediate();
+    return this.emitPanel(chatId);
+  }
+
+  closeFile(chatId: string, path: string): PanelTab[] {
+    this.chat(chatId);
+    const r = this.db.prepare('DELETE FROM panel_files WHERE chat_id = ? AND path = ?').run(chatId, path);
+    if (!r.changes) throw new NotFoundError(`file ${path} is not open in chat ${chatId}`);
+    return this.emitPanel(chatId);
+  }
+
+  /** The user shows a file tab: it becomes the active one (no line to jump to any more). */
+  focusFile(chatId: string, path: string): PanelTab[] {
+    const r = this.db.prepare('UPDATE panel_files SET focused_at = ?, line = NULL WHERE chat_id = ? AND path = ?').run(this.now(chatId), chatId, path);
+    if (!r.changes) throw new NotFoundError(`file ${path} is not open in chat ${chatId}`);
     return this.emitPanel(chatId);
   }
 
@@ -603,7 +651,11 @@ export class Documents {
   /** A timestamp strictly after the chat's latest focus, so the order of tabs is exact even within a millisecond. */
   private now(chatId: string): string {
     const now = new Date().toISOString();
-    const last = (this.db.prepare('SELECT MAX(focused_at) AS m FROM panel_tabs WHERE chat_id = ?').get(chatId) as { m: string | null }).m;
+    const last = (
+      this.db.prepare('SELECT MAX(m) AS m FROM (SELECT MAX(focused_at) AS m FROM panel_tabs WHERE chat_id = ? UNION ALL SELECT MAX(focused_at) FROM panel_files WHERE chat_id = ?)').get(chatId, chatId) as {
+        m: string | null;
+      }
+    ).m;
     return last && last >= now ? new Date(Date.parse(last) + 1).toISOString() : now;
   }
 
