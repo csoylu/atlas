@@ -5,10 +5,12 @@ records every request so tests can assert what the agent was sent). Headless Chr
 Every feature is run on both surfaces: a direct chat and a task chat (ticket modal).
 
     npm ci && npm run build            # repo root: build the UI once (and after UI changes)
-    cd e2e && npm i && npx playwright install chromium
+    cd e2e && npm i && npx playwright install chromium-headless-shell
     npx playwright test                # all;  npx playwright test slash-clear  # one file
 
-If Chromium isn't installed, use Google Chrome: `E2E_CHANNEL=chrome npx playwright test`.
+The browser is Playwright's `chrome-headless-shell` (no window, so it runs inside an agent's sandbox: #314); `playwright.config.ts`
+finds it in `~/Library/Caches/ms-playwright` even when `HOME` is the workspace. `ATLAS_CHROME=<binary>` overrides it. To use
+Google Chrome instead: `E2E_CHANNEL=chrome npx playwright test` (not in the sandbox).
 Use a checkout path without spaces (native modules fail to build in "Application Support").
 
 Specs: `slash-popup` (#99 step 1), `slash-compact` (2), `slash-clear` (3), `slash-running` (4), `slash-rewind` (5), `slash-restart` (6).

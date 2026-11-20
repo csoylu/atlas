@@ -19,12 +19,16 @@ signal the second (a marker file, an event), never `sleep(1500)`. A failed test 
 test that needs it is broken, fix it. Reproduce a timing flake under load: `yes > /dev/null &` ×8 and loop the test.
 
 ## Testing without installing
-  - UI: `npm run build`, then `npm run ui:check -- --ui packages/ui/dist` (the local build against the running engine,
-    read-only), or screenshots of a second engine (below).
-  - Engine: a second engine on a copy of the database, never the live one: `sqlite3 <data>/atlas.db ".backup /tmp/x/atlas.db"`,
-    then `startEngine({ dbFile: '/tmp/x/atlas.db', dataDir: '/tmp/x', port: 4388, dispatch: false, env: {}, uiDir: 'packages/ui/dist' })`
-    (`dispatch: false` so it starts no runs and no schedules).
-  - E2E: `e2e/` (Playwright, scripted model) on a local build.
+  - UI: `npm run build`, then `npm run ui:check` (the local build on a throwaway seeded engine; docs/ui.md), or
+    screenshots of a second engine (below).
+  - Engine: a second engine on a throwaway database, never the live one (agents cannot reach it: sandbox, docs/howtos.md):
+    `startEngine({ dbFile: '<dir>/atlas.db', dataDir: '<dir>', port: 4388, dispatch: false, env: {}, uiDir: 'packages/ui/dist' })`
+    with `<dir>` under `$TMPDIR` (never a literal `/tmp`: the sandbox denies it); the kit's `launch()` does it for tests.
+    `dispatch: false` so it starts no runs and no schedules. A copy of the live database is Master's to make.
+  - E2E: `e2e/` (Playwright, scripted model) on a local build; its browser is the same `chrome-headless-shell`.
+  - **As an agent runs it:** `node --import tsx scripts/test/sandbox-run.ts <clone> -- '<command>'` runs a command in the real
+    sandbox on a copy of a clone (HOME = the workspace, private `$TMPDIR`, `GH_TOKEN` passed through). Use it before you
+    document a command as « works in the sandbox » (#314).
 
 ## Test how-tos
 - Under load (several agents, load average ~30) `npm test` fails at random (changelog, dispatcher, lifecycle, rewind,

@@ -17,8 +17,8 @@
  * check proves it: a live process planted in the copy survives the whole run.
  *
  * Run (macOS, from the repo root, after `npm ci` and `npm run build`):
- *   sqlite3 "<data>/atlas.db" ".backup /tmp/reg/live.db"
- *   npx tsx e2e/tools/single-project-regression.ts /tmp/reg/live.db
+ *   sqlite3 "<data>/atlas.db" ".backup $TMPDIR/reg/live.db"
+ *   npx tsx e2e/tools/single-project-regression.ts $TMPDIR/reg/live.db
  * Exit 1 on any problem; prints one line per check.
  */
 import { spawn } from 'node:child_process';

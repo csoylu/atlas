@@ -1,6 +1,6 @@
 // Card #57: CPU of the desktop voice loop at rest while a « video » talks near the Mac, wake word on vs off.
 // Real models, real engine (fake provider), DesktopVoice fed 100 ms frames of speech in real time (as the orb page does).
-// Run: npx tsx scripts/ptt-bench.ts /tmp/video16k.wav [seconds]
+// Run: npx tsx scripts/ptt-bench.ts $TMPDIR/video16k.wav [seconds]
 import { mkdirSync, mkdtempSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';

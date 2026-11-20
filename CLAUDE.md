@@ -8,7 +8,8 @@ Full design: `docs/design.md`: read it before any structural change.
 - UI work (type rules, ui-check, screenshot tool, UI how-tos): `docs/ui.md`
 - Writing or running tests, testing without installing: `docs/testing.md`
 - Changelog entry, PR, review, merge, CI, releases: `docs/releases.md` (updater: `docs/updater.md`)
-- Shell environment, clones, worktrees, live data, files: `docs/howtos.md`
+- Shell environment, **sandbox** (what agent commands can reach, `GH_TOKEN`, how to tell a denial from a bug), clones,
+  worktrees, files: `docs/howtos.md`
 
 ## Stack (decided)
 - TypeScript everywhere, strict mode, ESM. Node 24+.
@@ -57,7 +58,8 @@ apps/desktop      Electron main process. Dev: loads Vite (:5173), engine under s
 npm ci               # never npm install (it breaks the lockfile's native bindings)
 npm run dev          # engine + UI with hot reload, http://localhost:5173
 npm run typecheck && npm test   # fast suite; test:full adds slow suites, test:changed only what your diff affects
-npm run ui:check     # responsive check of the real UI (docs/ui.md): after any UI layout change, never for engine/docs only
+npm run ui:check     # responsive check of the real UI on a throwaway engine (docs/ui.md): after any UI layout change, never for engine/docs only
+# Master only (a real window or /Applications; not available in the sandbox): npm run desktop, orb-check, install:mac
 ```
 
 ## Releases and review (full flow: `docs/releases.md`)
@@ -68,5 +70,5 @@ npm run ui:check     # responsive check of the real UI (docs/ui.md): after any U
 - **Merge only after QA validation** (commit status `qa/validated`, plus green CI `test`). Push, open the PR, then end
   your run with `task_request_review` (not `task_complete`). Merged → Done; CI red, conflict or failed validation →
   back to you with the reason: fix, push, `task_request_review` again. One PR per task.
-- **Agents never install the app** (no `install:mac`): Master installs updates.
+- **Agents never install the app** (no `install:mac`, it is Master's): Master installs updates.
 - Project how-tos go in `docs/howtos.md` (or the doc of their topic) through a PR, never in agent memory.
