@@ -62,6 +62,8 @@ export function envWithSecrets(base: NodeJS.ProcessEnv, store?: SecretStore): No
 export const REDACT_MIN = 8;
 /** Never in an agent's shell, even when the engine's own environment has them (server mode). */
 const ENGINE_ONLY = ['ATLAS_PASSWORD', 'ATLAS_SECRETS_PASSWORD', 'ATLAS_CLAUDE_CLIENT_SECRET'];
+/** The keys the Claude plan provider reads from the environment (models.ts), whatever the models table says. */
+const MODEL_ENV = ['ANTHROPIC_API_KEY', 'CLAUDE_CODE_OAUTH_TOKEN'];
 
 /** Variables a shell relies on: a secret by that name would replace them. */
 const RESERVED = ['PATH', 'HOME', 'SHELL', 'USER', 'LOGNAME', 'TMPDIR', 'PWD', 'LANG', 'TERM', 'GIT_AUTHOR_NAME', 'GIT_COMMITTER_NAME'];
@@ -531,6 +533,19 @@ export class Secrets {
   /** The agent secrets an agent may use in a project: global + that project's (names and descriptions, for its instructions). */
   granted(agentId: string, projectId: string): SecretInfo[] {
     return this.list().secrets.filter((s) => grantedTo(s, agentId, projectId));
+  }
+
+  /**
+   * #322: the engine's own environment, which every process it starts inherits (gh, git, Chrome, ollama, rg) and
+   * which any process of the user can read while they run (macOS kern.procargs2). Takes out the model keys, plan
+   * tokens and engine passwords, in place; the engine keeps its copies (`env` and the start snapshot). Agent
+   * secrets stay: a server's own gh may need its GH_TOKEN.
+   */
+  scrubEngineEnv(env: NodeJS.ProcessEnv): void {
+    for (const n of [...this.modelKeyNames(), ...ENGINE_ONLY, ...MODEL_ENV]) delete env[n];
+    const rows = this.db.prepare("SELECT name FROM secrets WHERE kind = 'model_key'").all() as { name: string }[];
+    for (const r of rows) delete env[r.name];
+    for (const n of Object.keys(env)) if (isInternalEntry(n)) delete env[n];
   }
 
   /**

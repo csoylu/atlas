@@ -1,5 +1,5 @@
 import { spawn, execFile, type ChildProcess } from 'node:child_process';
-import { existsSync, lstatSync, mkdirSync, readFileSync, readlinkSync, realpathSync } from 'node:fs';
+import { existsSync, lstatSync, mkdirSync, readFileSync, readlinkSync, realpathSync, writeFileSync } from 'node:fs';
 import { homedir } from 'node:os';
 import { delimiter, dirname, isAbsolute, join, resolve, sep } from 'node:path';
 import type { NetworkLevel, SandboxStatus } from '@atlas/shared';
@@ -144,6 +144,16 @@ export function seatbeltProfile(i: ProfileInput): string {
     '(deny mach-lookup (global-name "com.apple.SecurityServer") (global-name "com.apple.securityd.xpc") (global-name "com.apple.security.agent") (global-name "com.apple.coreservices.launchservicesd") (global-name "com.apple.coreservices.quarantine-resolver"))',
     '(deny appleevent-send)',
     '(deny process-exec (literal "/bin/launchctl") (literal "/usr/bin/open") (literal "/usr/bin/osascript"))',
+    // Other processes (#322): their argv and env (granted secrets, the proxy token) are readable through the raw
+    // sysctl kern.procargs2 even when `ps` is denied; only the sysctl deny and process-info together close it. pgrep
+    // asks sysmond instead (no pgrep/pkill at all in the sandbox), and signals stay inside the command's own tree.
+    '(deny sysctl-read (sysctl-name-prefix "kern.procargs"))',
+    '(deny process-info*)',
+    '(allow process-info* (target same-sandbox))',
+    '(allow process-info-listpids)',
+    '(deny mach-lookup (global-name "com.apple.sysmond"))',
+    '(deny signal)',
+    '(allow signal (target same-sandbox))',
     // No docker, no engine API.
     '(deny network-outbound (remote unix-socket (path-literal "/private/var/run/docker.sock")))',
     // Internet (#298 §2.1). Allowed hosts: nothing out but localhost (the proxy, the agent's own servers), no DNS (the
@@ -419,6 +429,12 @@ export class Sandbox {
         `for i in $(seq 200); do (: </dev/tcp/127.0.0.1/${PROXY_PORT_INSIDE}) 2>/dev/null && break; sleep 0.01; done; exec /bin/bash -c "$1"`;
       return { file: this.bwrap, args: [...args, '--', '/bin/bash', '-c', launcher, 'atlas-net', command], env: full };
     }
+    // macOS's nohup asks launchd to adopt it, which the process-info deny of #322 refuses (« can't detach from
+    // console », exit 127): a nohup first on PATH that only ignores SIGHUP, which is all an agent command needs.
+    const bin = join(priv, 'bin');
+    mkdirSync(bin, { recursive: true });
+    writeFileSync(join(bin, 'nohup'), NOHUP, { mode: 0o755 });
+    full.PATH = full.PATH ? `${bin}${delimiter}${full.PATH}` : bin;
     const network = { level: net.level, proxyPort: this.o.network?.port ?? null };
     const profile = seatbeltProfile({ home: this.home, dataDir: this.o.dataDir, workspace: scope.workspace, private: priv, enginePort: this.o.enginePort(), path: full.PATH ?? '', network });
     return { file: this.exec, args: ['-p', profile, '/bin/bash', '-c', command], env: full };
@@ -427,6 +443,15 @@ export class Sandbox {
 
 /** Where socat may be (Linux, Allowed hosts): the system folders mounted in the sandbox. */
 const SOCAT = ['/usr/bin/socat', '/usr/local/bin/socat', '/bin/socat'];
+
+/** The sandbox's nohup on macOS (see wrap): ignore SIGHUP; like nohup, write to nohup.out when stdout is a terminal. */
+const NOHUP = `#!/bin/sh
+[ $# -gt 0 ] || { echo "usage: nohup utility [arguments]" >&2; exit 127; }
+trap '' HUP
+[ -t 1 ] && exec >> nohup.out
+[ -t 2 ] && exec 2>&1
+exec "$@"
+`;
 
 /** Runs a probe command; a failure becomes an Error with `why(stderr, error)` as its message. */
 function run(file: string, args: string[], why: (stderr: string, e: Error) => string): Promise<void> {

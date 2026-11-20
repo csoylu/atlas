@@ -39,6 +39,21 @@ describe('secrets', () => {
     expect(engine.models.get('sonnet').credentialPresent).toBe(false);
   });
 
+  it('#322: takes the model keys, plan tokens and engine passwords out of process.env (inherited by gh, git, Chrome…), keeps using them, keeps other variables', async () => {
+    const set = { ANTHROPIC_API_KEY: 'sk-env-322', CLAUDE_CODE_OAUTH_TOKEN: 'oauth-322', ATLAS_SECRETS_PASSWORD: 'pw-322', ATLAS_PASSWORD: 'login-322', CLAUDE_TOKENS: 'plan-322', GH_TOKEN: 'gh-322' };
+    const before = { ...process.env };
+    Object.assign(process.env, set);
+    try {
+      engine = await startEngine({ dbFile: ':memory:', dataDir: mkdtempSync(join(tmpdir(), 'atlas-')), port: 0, dispatch: false });
+      for (const n of ['ANTHROPIC_API_KEY', 'CLAUDE_CODE_OAUTH_TOKEN', 'ATLAS_SECRETS_PASSWORD', 'ATLAS_PASSWORD', 'CLAUDE_TOKENS']) expect(process.env[n], n).toBeUndefined();
+      expect(process.env.GH_TOKEN).toBe('gh-322'); // a server's own gh may need it
+      expect(engine.models.get('sonnet').credentialPresent).toBe(true); // the engine still has the key
+    } finally {
+      for (const n of Object.keys(set)) delete process.env[n];
+      for (const n of Object.keys(set)) if (before[n] !== undefined) process.env[n] = before[n];
+    }
+  });
+
   it('refuses to store keys on an engine without a store (server mode)', async () => {
     engine = await startEngine({ dbFile: ':memory:', dataDir: mkdtempSync(join(tmpdir(), 'atlas-')), port: 0, dispatch: false, env: {} });
     const r = await put(engine.url + '/api/secrets/ANTHROPIC_API_KEY', 'sk');

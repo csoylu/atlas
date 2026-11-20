@@ -1,5 +1,6 @@
+import { spawn } from 'node:child_process';
 import { describe, expect, it } from 'vitest';
-import { eventually, launch, retry, until } from './index.ts';
+import { eventually, launch, pgrepPids, pgrepWorks, retry, until } from './index.ts';
 
 describe('test kit', () => {
   it('eventually: waits for a condition, returns its value, names what it waited for on timeout', async () => {
@@ -11,6 +12,14 @@ describe('test kit', () => {
     let n = 0;
     await eventually(() => expect(++n).toBeGreaterThan(2));
     await expect(eventually(() => expect(1).toBe(2), { timeout: 40 })).rejects.toThrow(/expected 1 to be 2/);
+  });
+  it('pgrepPids: a live process by its pattern, [] once it is gone; skipped where pgrep cannot list (#322)', async (ctx) => {
+    if (!pgrepWorks()) return ctx.skip('pgrep cannot list processes here (Mac sandbox)');
+    const mark = `kit-pgrep-${process.pid}-${Date.now()}`;
+    const p = spawn(process.execPath, ['-e', 'setTimeout(() => {}, 30_000)', mark], { stdio: 'ignore' });
+    await eventually(() => pgrepPids(mark).includes(p.pid!), { what: 'pgrep to see the sleeper' });
+    p.kill('SIGKILL');
+    await eventually(() => expect(pgrepPids(mark)).toEqual([]), { what: 'the sleeper gone' });
   });
   it('until: the boolean shape', async () => {
     const t = Date.now() + 30;

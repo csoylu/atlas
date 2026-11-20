@@ -102,3 +102,10 @@ apply to them.
 - **Keep the engine's own secrets out of readable files outside the data dir.** `/etc` is visible read-only: an
   `EnvironmentFile` with `ATLAS_SECRETS_PASSWORD` must be root-only (`chmod 600`, systemd reads it as root), or live
   in the data dir.
+- **Other processes (#322).** Under bwrap the pid namespace hides them. On a Mac, Seatbelt shares one process table, so
+  the profile denies the raw `kern.procargs` sysctls with every `process-info` check outside the command's own sandbox
+  (another command's argv and environment: granted secrets, the proxy token), the sysmond service (so `pgrep`/`pkill`
+  don't work in a Mac sandbox) and signals outside the command's own process tree. Stop a background server with
+  `shell_kill`. macOS's `nohup` needs launchd, which that denial refuses: the sandbox puts a `nohup` that only
+  ignores SIGHUP first on `PATH`. The engine also takes model keys, plan tokens and its passwords out of its own
+  environment at start, so the processes it starts (gh, git, Chrome, ollama) don't carry them.
