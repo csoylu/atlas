@@ -39,6 +39,7 @@ import type { Voice } from './voice.ts';
 import type { Updater } from './updater.ts';
 import type { ShellEnv } from './shellEnv.ts';
 import type { Sandbox } from './sandbox.ts';
+import type { Network } from './network.ts';
 import { DEFAULT_CONTEXT_WINDOW, MEMORY_BUDGET, MEMORY_BUDGET_GLOBAL, type About, type MemoryBudget, type Timeline } from '@atlas/shared';
 
 /** Who the UI acts as. One user (design §1). */
@@ -77,6 +78,8 @@ export function createApi(deps: {
   shellEnv?: ShellEnv;
   /** The agent command sandbox (#298): GET /api/sandbox. */
   sandbox?: Sandbox;
+  /** Internet levels and refusals (#298 S3). */
+  network: Network;
   bus: Bus;
   dataDir: string;
   version: string;
@@ -883,6 +886,15 @@ export function createApi(deps: {
   app.patch('/api/projects/:id', (req, res) => {
     res.json(projects.update(req.params.id, req.body));
     dispatcher.tick(); // a new lead triages the waiting tasks
+  });
+  /** A workspace's own internet setting (#298 §2.4): {network, allowedHosts}, each null = the project's. */
+  app.patch('/api/projects/:id/members/:agent', (req, res) => {
+    res.json(projects.updateMember(req.params.id, req.params.agent, req.body));
+  });
+  /** Hosts the allow-list refused in this project, per workspace, newest first (#298 §2.1). */
+  app.get('/api/projects/:id/refusals', (req, res) => {
+    const p = projects.get(req.params.id);
+    res.json(deps.network.refusals(p.id));
   });
   /** Archive (nothing deleted): its workflows go off, its runs stop, its tasks and chats become read-only. */
   app.post('/api/projects/:id/archive', (req, res) => {

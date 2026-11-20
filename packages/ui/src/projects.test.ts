@@ -3,7 +3,7 @@ import type { Project } from '@atlas/shared';
 import { effectiveFilter, inFilter, projectForNew, projectsInfo } from './projects.tsx';
 
 const p = (id: string, extra: Partial<Project> = {}): Project => ({
-  id, name: id[0]!.toUpperCase() + id.slice(1), repo: null, ciJob: null, lead: null, colour: 212, status: 'active',
+  id, name: id[0]!.toUpperCase() + id.slice(1), repo: null, ciJob: null, network: 'on', allowedHosts: [], lead: null, colour: 212, status: 'active',
   createdAt: '2026-11-18T00:00:00Z', archivedAt: null, members: [], kept: [], isDefault: false, reviewAgent: null, ...extra,
 });
 const one = projectsInfo([p('atlas', { isDefault: true })]);

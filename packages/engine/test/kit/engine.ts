@@ -42,9 +42,15 @@ export async function launch(o: LaunchOptions = {}) {
     if (ownDir) rmSync(dataDir, { recursive: true, force: true });
   });
   const api = engine.url + '/api';
+  // With a password (server mode), calls carry the session of one login.
+  let session: Record<string, string> = {};
+  if (rest.password) {
+    const r = await fetch(api + '/auth/login', { method: 'POST', headers: json, body: JSON.stringify({ password: rest.password }) });
+    session = { cookie: (r.headers.get('set-cookie') ?? '').split(';')[0]! };
+  }
   /** Plain JSON call; returns status and parsed body. */
   const call = async <T = unknown>(method: string, path: string, body?: unknown) => {
-    const r = await fetch(api + path, { method, headers: json, body: body === undefined ? undefined : JSON.stringify(body) });
+    const r = await fetch(api + path, { method, headers: { ...json, ...session }, body: body === undefined ? undefined : JSON.stringify(body) });
     const text = await r.text();
     return { status: r.status, body: (text ? JSON.parse(text) : null) as T };
   };

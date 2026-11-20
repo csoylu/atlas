@@ -20,7 +20,7 @@ with « Sandbox unavailable: no sandbox on Windows » (file tools, engine tools 
 | `/tmp` | a private, empty tmpfs |
 | The rest of `$HOME`, the Atlas data dir (the database, other agents' workspaces, outputs) | **absent** (« No such file or directory »). A data dir inside `/opt` is hidden by an empty tmpfs |
 | `/proc` | its own pid namespace: only the command's processes, never the engine's (its command line, its environment) |
-| Network | the host's (internet level On). The levels On / Allowed hosts / Off come with #298 S3 |
+| Network | per workspace (#298 S3, below): the host's at On; its own network namespace at Allowed hosts and Off |
 
 `HOME` is the workspace. git and gh reach GitHub only with the project's `GH_TOKEN` secret; Master's gh login,
 `~/.ssh` and the ssh-agent never enter a sandbox. Killing a command (or the engine) ends every process it started.
@@ -81,10 +81,24 @@ curl -s http://127.0.0.1:4317/api/sandbox     # once logged in: {"enabled":true,
 If the probe fails, every agent command stops with « Sandbox unavailable: <reason>. Agent commands are stopped. », on
 the task and in `GET /api/sandbox`. There is never a fallback to running on the host.
 
-## Until #298 S3
+## Internet levels (#298 S3)
 
-- **Set `ATLAS_PASSWORD`, even with the engine on 127.0.0.1.** Agent commands share the host network, so they can
-  reach the engine's port; with a password every API call needs a login. S3 separates the agent's network.
+Each workspace has a level, the project's by default (On), set in Settings → Workspaces or through the API
+(`PATCH /api/projects/:id {network, allowedHosts}`, `PATCH /api/projects/:id/members/:agent`). A change applies from
+the workspace's next command; a background command keeps the level it started with.
+
+| Level | Inside the sandbox |
+|---|---|
+| **On** | The host network. The engine's port is reachable, so **the engine must run with `ATLAS_PASSWORD`**: then every API call needs a login (only `/api/health`, the login and webhooks `POST /hook/<token>` are public). Without a password, a command at On is refused with that reason |
+| **Allowed hosts** | `--unshare-net`: a network namespace of its own (only its loopback). The engine's allow-list proxy is bound in as a unix socket; `socat` relays it to `127.0.0.1:3128`, and `HTTPS_PROXY`/`HTTP_PROXY` (with the workspace's token) and `NODE_USE_ENV_PROXY=1` point there. Only the listed hosts (`host` or `*.suffix`) pass; the others get 403 and are recorded (`GET /api/projects/:id/refusals`). No DNS, no UDP, no direct connection. Needs `socat` |
+| **Off** | `--unshare-net`: nothing gets out; the command's own servers on its loopback still work |
+
+`web_fetch` runs in the engine and applies the same level (every redirect hop is checked); `web_search` is not
+offered at Off. The model API, PR polling, project clones and the updater are the engine's own calls: levels never
+apply to them.
+
+## Also
+
 - **Keep the engine's own secrets out of readable files outside the data dir.** `/etc` is visible read-only: an
   `EnvironmentFile` with `ATLAS_SECRETS_PASSWORD` must be root-only (`chmod 600`, systemd reads it as root), or live
   in the data dir.
