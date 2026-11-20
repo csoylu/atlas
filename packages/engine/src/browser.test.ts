@@ -1,4 +1,4 @@
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
 import { mkdtempSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
@@ -175,9 +175,20 @@ describe('the shared browser (#298 S6)', () => {
     expect(l.engine.browser.get(chat.id)!.owner).toBe('agent');
     expect(l.engine.browser.takeHandBack(chat.id)).toBe(true);
     expect(l.engine.browser.takeHandBack(chat.id)).toBe(false);
-    // Master's click in the view while the agent has it: refused by the host, said to the UI.
+    // Master's click in the view while the agent is acting: refused by the host, said to the UI (the strip).
+    l.engine.browser.acted(chat.id, { verb: 'clicked', target: 'Go', point: null });
     l.host.emit({ type: 'input-blocked', id: chat.id });
     expect(l.events.at(-1)).toEqual({ type: 'browser.updated', tab: expect.objectContaining({ owner: 'agent' }), blocked: true });
+    expect(l.host.owners.get(chat.id)).toBe('agent');
+    // The agent has it but is not acting (its last action is old): Master's click takes control (#298 §3.1).
+    vi.useFakeTimers({ now: Date.now() + DRIVING_MS + 1, toFake: ['Date'] });
+    try {
+      l.host.emit({ type: 'input-blocked', id: chat.id });
+    } finally {
+      vi.useRealTimers();
+    }
+    expect(l.host.owners.get(chat.id)).toBe('master');
+    expect(l.engine.browser.get(chat.id)!.owner).toBe('master');
     await l.call('POST', `/browser/tabs/${chat.id}/owner`, { owner: 'master' });
     expect(l.host.owners.get(chat.id)).toBe('master');
     expect((await l.call<{ error: string }>('POST', `/browser/tabs/${chat.id}/owner`, { owner: 'nobody' })).status).toBe(400);

@@ -1,4 +1,4 @@
-import { actionCaption, MASTER_PANE, normalizeAddress, paneUrlProblem, type BrowserAction, type BrowserBounds, type BrowserInspected, type BrowserOwner, type BrowserShot, type BrowserStatus, type BrowserTab } from '@atlas/shared';
+import { actionCaption, isDriving, MASTER_PANE, normalizeAddress, paneUrlProblem, type BrowserAction, type BrowserBounds, type BrowserInspected, type BrowserOwner, type BrowserShot, type BrowserStatus, type BrowserTab } from '@atlas/shared';
 import type { Db } from './store/db.ts';
 import type { Bus } from './events.ts';
 import { InvalidError, NotFoundError, type Kanban } from './kanban.ts';
@@ -360,8 +360,12 @@ export class Browser {
         live.crashed = true;
         live.error = `The page stopped (${e.reason}). Reload to open it again.`;
         break;
-      case 'input-blocked':
-        return void this.bus.emit({ type: 'browser.updated', tab: this.toTab(r), blocked: true });
+      case 'input-blocked': {
+        // #298 §3.1: Master's click in the pane takes control, except while the agent is acting (the strip says so).
+        const tab = this.toTab(r);
+        if (!isDriving(tab)) return void this.setOwner(e.id, 'master');
+        return void this.bus.emit({ type: 'browser.updated', tab, blocked: true });
+      }
     }
     this.changed(e.id);
   }
