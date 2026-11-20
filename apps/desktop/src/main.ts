@@ -6,7 +6,7 @@ import { OrbOverlay } from './orb/overlay.ts';
 import { DesktopVoice, voiceLog } from './voice.ts';
 import { nativeHoldKey } from './optionkey.ts';
 import { AtlasTray } from './tray/tray.ts';
-import type { TrayAction, TrayInput } from './tray/model.ts';
+import { dockBadge, type TrayAction, type TrayInput } from './tray/model.ts';
 
 /**
  * Atlas desktop. Default: runs the engine in this process (design §2) with data in the app's user-data folder, and
@@ -168,8 +168,20 @@ function startTray(e: Engine) {
     }
   };
   tray = new AtlasTray({ input, act, log: (line) => voiceLog(voiceLogFile(), `tray ${line}`) });
+  // The Dock icon stays still (#310); « needs you » is its badge: the count of tasks needing Master, cleared at zero.
+  // Bursts of events (a run streaming card updates) read the Inbox once, like the tray (150 ms).
+  let dockTimer: ReturnType<typeof setTimeout> | null = null;
+  const setDock = () => app.dock?.setBadge(dockBadge({ needs: e.notifications.inbox().needsYou }));
+  const syncDock = () => {
+    dockTimer ??= setTimeout(() => {
+      dockTimer = null;
+      setDock();
+    }, 150);
+  };
+  setDock();
   e.bus.on((ev) => {
     if (ev.type === 'card.updated' || ev.type === 'card.deleted' || ev.type === 'inbox.changed' || ev.type === 'notification.created' || ev.type === 'voice.updated') tray?.changed();
+    if (ev.type === 'card.updated' || ev.type === 'card.deleted' || ev.type === 'inbox.changed') syncDock();
   });
 }
 

@@ -2,7 +2,7 @@ import { describe, expect, it } from 'vitest';
 import type { Card, InboxNeed, VoiceStatus } from '@atlas/shared';
 import { animation, BREATH, FRAMES, hex, renderIcon, type IconKind } from './icons.ts';
 import { breathLayer } from './breathe.ts';
-import { badgeCount, cardLabel, iconKind, isAwake, tomorrowMorning, tooltip, trayMenu, trayVoice, voiceLine, MAX_ROWS, type TrayInput, type TrayItem } from './model.ts';
+import { badgeCount, cardLabel, dockBadge, iconKind, isAwake, tomorrowMorning, tooltip, trayMenu, trayVoice, voiceLine, MAX_ROWS, type TrayInput, type TrayItem } from './model.ts';
 
 const card = (n: number, over: Partial<Card> = {}): Card => ({
   id: `c_${n}`,
@@ -134,6 +134,9 @@ describe('tray: menu', () => {
     expect(find(m, '#54 Card 54 — your answer')).toMatchObject({ dot: 'blocked', action: { type: 'go', hash: '#/inbox/c_54' } });
     expect(find(m, '#51 Card 51 — review').dot).toBe('review');
     expect(badgeCount({ needs })).toBe(3);
+    // the Dock badge (#310): the same count, cleared at zero
+    expect(dockBadge({ needs })).toBe('3');
+    expect(dockBadge({ needs: [] })).toBe('');
     const many = Array.from({ length: 8 }, (_, i) => need(card(i + 1, { status: 'review' })));
     const big = trayMenu(input({ needs: many }));
     expect(big.filter((i) => i.action?.type === 'go' && i.action.hash.startsWith('#/inbox/'))).toHaveLength(MAX_ROWS);

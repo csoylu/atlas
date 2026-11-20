@@ -91,6 +91,9 @@ export const isAwake = (v: TrayVoice) => v === 'wake' || v === 'listening' || v 
 /** The count on the icon: cards that need Master (blocked on them, or in review). */
 export const badgeCount = (i: Pick<TrayInput, 'needs'>) => i.needs.length;
 
+/** The Dock icon's badge (#310): the count of tasks needing Master, nothing (badge cleared) at zero. */
+export const dockBadge = (i: Pick<TrayInput, 'needs'>) => (i.needs.length > 0 ? String(i.needs.length) : '');
+
 /** « 18:30 », « tomorrow 08:00 », « Mon 08:00 ». */
 export function whenLabel(iso: string, now: Date): string {
   const d = new Date(iso);

@@ -24,8 +24,10 @@
   --text: #e3e4e6;
   --muted: #959aa3; /* 6.3:1 on --raised (#112) */
   --faint: #8e939b; /* 4.5:1+ on raised/hover/selected/diff-line bgs: the floor for information (#112, #125) */
-  /* accent */
-  --accent: #6cc0d2;
+  /* accent: the dark and light accents are also the Living Orb's two blues (#310), the same in both themes */
+  --accent-dark: #6cc0d2;
+  --accent-light: #1b6c80;
+  --accent: var(--accent-dark);
   --accent-hi: #8fd3e1;
   --accent-soft: rgba(108, 192, 210, 0.14);
   --on-accent: #0b2a31;
@@ -68,8 +70,8 @@
   --text: #1b1c1f;
   --muted: #55595f; /* 6.5:1 on --app (#112) */
   --faint: #5f636a; /* 4.7:1+ on hover/selected/diff-line bgs: the floor for information (#112, #125) */
-  --accent: #1b6c80;
-  --accent-hi: #1b6c80;
+  --accent: var(--accent-light);
+  --accent-hi: var(--accent-light);
   --accent-soft: #e2eff2;
   --on-accent: #ffffff;
   --st-yellow: #dfa800;
@@ -292,7 +294,33 @@ select { padding: 4px 8px; }
   font-size: var(--fs-small); font-weight: var(--fw-regular); line-height: var(--lh-tight); white-space: nowrap;
 }
 .ws-k:hover { background: var(--hover); color: var(--text); }
-.mark { flex: none; display: block; }
+/*
+ * Living Orb mark (#310, paris's atlas-icon.html v23, .lv*): base · glow · swirl · badge, stacked, moved by transform
+ * and opacity only so the compositor runs it. Idle: the glow breathes every 4 s. Working: the swirl turns every 3 s and
+ * the glow beats faster. Needs you: the swirl stops and dims, the badge knocks twice, then stays.
+ */
+.lv { position: relative; display: inline-block; width: var(--s); height: var(--s); flex: none; }
+.lv-tile { position: absolute; inset: 0; border-radius: 29.2%; overflow: hidden; }
+.lv-l { position: absolute; inset: 0; display: block; width: 100%; height: 100%; }
+.lv-halo { background: radial-gradient(circle at 50% 50%, color-mix(in srgb, var(--accent-dark) 60%, transparent) 0 26%, transparent 52%); opacity: 0.2; will-change: opacity; }
+.lv-spin { will-change: transform, opacity; }
+.lv-still .lv-halo { display: none; }
+.lv-badge {
+  position: absolute; right: -12%; top: -12%; width: 38%; height: 38%; border-radius: 50%; background: var(--st-orange);
+  box-shadow: 0 0 0 calc(var(--s) / 14) var(--app); opacity: 0; transform: scale(0.3);
+}
+.st-idle .lv-halo { animation: lv-breath 4s ease-in-out infinite; }
+.st-work .lv-halo { opacity: 0.6; animation: lv-breath-fast 1.4s ease-in-out infinite; }
+.st-work .lv-spin { animation: lv-spin 3s linear infinite; }
+.st-need .lv-spin { opacity: 0.5; }
+.st-need .lv-halo { opacity: 0.1; }
+.st-need .lv-badge { opacity: 1; transform: none; animation: lv-knock 1.6s ease-out 2; }
+.lv-paused, .lv-paused * { animation-play-state: paused !important; }
+@keyframes lv-breath { 0%, 100% { opacity: 0.15; } 50% { opacity: 0.5; } }
+@keyframes lv-breath-fast { 0%, 100% { opacity: 0.4; } 50% { opacity: 0.85; } }
+@keyframes lv-spin { to { transform: rotate(360deg); } }
+@keyframes lv-knock { 0%, 100% { transform: scale(1); } 30% { transform: scale(1.35); } 60% { transform: scale(0.9); } }
+@media (prefers-reduced-motion: reduce) { .lv * { animation: none !important; } }
 .icon-btn {
   width: 30px; height: 30px; border-radius: var(--radius-control); display: grid; place-items: center; padding: 0; flex: none;
   border: 0; background: none; color: var(--muted); transition: background 0.12s, color 0.12s;

@@ -31,7 +31,8 @@
     "appId": "com.csoylu.atlas",
     "productName": "Atlas",
     "directories": {
-      "output": "release"
+      "output": "release",
+      "buildResources": "build"
     },
     "files": [
       "dist/**",
@@ -69,9 +70,10 @@
       ],
       "category": "public.app-category.developer-tools",
       "extendInfo": {
-        "NSMicrophoneUsageDescription": "Atlas listens for « Hi Atlas » and what you say next. Audio is processed on this Mac only."
+        "NSMicrophoneUsageDescription": "Atlas listens for \u00ab Hi Atlas \u00bb and what you say next. Audio is processed on this Mac only."
       },
-      "artifactName": "${productName}-${version}-${arch}.${ext}"
+      "artifactName": "${productName}-${version}-${arch}.${ext}",
+      "icon": "build/icon.icns"
     },
     "win": {
       "target": [
