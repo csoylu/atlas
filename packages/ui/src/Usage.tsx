@@ -27,10 +27,10 @@ export function useChatUsage(cardId: string, stream: MessageStream, onError: (e:
  * opens the picker, then the context ring (amber past 50 %, red past the 70 % compaction point); this chat's tokens and
  * the plan meter are behind the ring (hover, or a click / tap for the card). The plan meter joins the row only past
  * QUOTA_WARN. OpenAI's « Using ChatGPT plan · Manage usage » stays visible when on that plan. Right: attach, the voice
- * toggle (desktop, the voice chat only), send.
+ * toggle (desktop, the voice chat only), send. `sees`: the eye after the ring (#305), what the agent will see.
  */
 /** `send`: the composer's teal send button (a submit button of the form around it), at the right end. */
-export function ComposerMeta(props: { usage: ChatUsage | null; plan: boolean; models?: Model[]; pick?: PickProps; send?: { disabled: boolean }; attach?: ReactNode; voice?: ReactNode }) {
+export function ComposerMeta(props: { usage: ChatUsage | null; plan: boolean; models?: Model[]; pick?: PickProps; send?: { disabled: boolean }; attach?: ReactNode; voice?: ReactNode; sees?: ReactNode }) {
   const u = props.usage;
   const pct = contextPct(u);
   const level = pct === null ? '' : pct >= 70 ? ' full' : pct >= 50 ? ' warm' : '';
@@ -68,6 +68,7 @@ export function ComposerMeta(props: { usage: ChatUsage | null; plan: boolean; mo
           )}
         </PopButton>
       )}
+      {props.sees}
       {u?.plan && planHot && <PlanGauge plan={u.plan} />}
       {props.plan && !u?.plan?.quota?.fiveHour && (
         <span className="plan-inline">

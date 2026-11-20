@@ -1,6 +1,7 @@
 import { randomUUID } from 'node:crypto';
 import {
   cardRef,
+  isPaneLine,
   parseCardRef,
   CreateCard,
   IMAGE_MAX_PER_TASK,
@@ -12,6 +13,7 @@ import {
   type CardStatus,
   type ContentBlock,
   type Message,
+  type PaneSees,
   type TodoItem,
 } from '@atlas/shared';
 import type { Db } from './store/db.ts';
@@ -60,6 +62,7 @@ interface MessageRow {
   content: string;
   at: string;
   rewind_id?: string | null;
+  pane?: string | null;
 }
 
 interface AgentMessageRow {
@@ -105,6 +108,7 @@ const toMessage = (r: MessageRow): Message => ({
   content: JSON.parse(r.content) as ContentBlock[],
   at: r.at,
   ...(r.rewind_id ? { rewound: true } : {}),
+  ...(r.pane ? { pane: JSON.parse(r.pane) as PaneSees } : {}),
 });
 
 const shortId = () => 'c_' + randomUUID().slice(0, 8);
@@ -754,24 +758,26 @@ export class Kanban {
     author: string,
     content: ContentBlock[],
     contextUpto: number | null = null,
+    /** Master's message: the pane tab open when it was sent (#305). */
+    pane: PaneSees | null = null,
   ): Message {
     const card = this.get(cardId);
-    const id = this.db.transaction(() => this.insertMessage(card, role, author, content, contextUpto))();
+    const id = this.db.transaction(() => this.insertMessage(card, role, author, content, contextUpto, pane))();
     return this.emitMessage(id, card);
   }
 
   /** Insert a message (no transaction, no event: the caller holds the transaction and emits after the commit). */
-  private insertMessage(card: Card, role: 'user' | 'assistant', author: string, content: ContentBlock[], contextUpto: number | null): string {
+  private insertMessage(card: Card, role: 'user' | 'assistant', author: string, content: ContentBlock[], contextUpto: number | null, pane: PaneSees | null = null): string {
     const id = 'm_' + randomUUID();
     const { next } = this.db
       .prepare('SELECT COALESCE(MAX(seq), 0) + 1 AS next FROM messages WHERE conversation_id = ?')
       .get(card.conversationId) as { next: number };
     this.db
-      .prepare('INSERT INTO messages (id, conversation_id, seq, role, author, content, at, context_upto) VALUES (?, ?, ?, ?, ?, ?, ?, ?)')
-      .run(id, card.conversationId, next, role, author, JSON.stringify(stripData(content)), new Date().toISOString(), contextUpto);
+      .prepare('INSERT INTO messages (id, conversation_id, seq, role, author, content, at, context_upto, pane) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)')
+      .run(id, card.conversationId, next, role, author, JSON.stringify(stripData(content)), new Date().toISOString(), contextUpto, pane ? JSON.stringify(pane) : null);
     if (card.board === 'direct') {
       // Chat history: the latest chat goes first, and the user's first message names a new chat.
-      const text = content.map((b) => (b.type === 'text' ? b.text : '')).join(' ').replace(/\s+/g, ' ').trim();
+      const text = content.map((b) => (b.type === 'text' && !isPaneLine(b.text) ? b.text : '')).join(' ').replace(/\s+/g, ' ').trim();
       const title = card.title === NEW_CHAT && role === 'user' && author !== 'system' && text ? chatTitle(text) : card.title;
       this.db.prepare('UPDATE cards SET title = ?, updated_at = ? WHERE id = ?').run(title, new Date().toISOString(), card.id);
     }

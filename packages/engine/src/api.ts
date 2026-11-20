@@ -21,8 +21,9 @@ import { SecretsPasswordError } from './secretFile.ts';
 import type { Documents } from './documents.ts';
 import type { Projects } from './projects.ts';
 import type { ReviewFlow } from './reviewFlow.ts';
-import { findSection, formatDocRef, splitSections } from '@atlas/shared';
+import { findSection, formatDocRef, PaneSees, splitSections } from '@atlas/shared';
 import type { SandboxStatus } from '@atlas/shared';
+import { PanePresence, paneNote } from './pane.ts';
 import { inside } from './tools.ts';
 import { statSync } from 'node:fs';
 import { ConflictError, InvalidError, NotFoundError, type Kanban } from './kanban.ts';
@@ -92,6 +93,7 @@ export function createApi(deps: {
   const app = express();
   const uploads = new Uploads(deps.dataDir);
   const taskImages = new TaskImages(deps.dataDir, uploads);
+  const panes = new PanePresence();
   try {
     uploads.prune();
   } catch (e) {
@@ -245,7 +247,7 @@ export function createApi(deps: {
     res.json(kanban.messages(req.params.id));
   });
   app.post('/api/cards/:id/messages', async (req, res) => {
-    const { text, ref, uploads: ids } = PostMessage.parse(req.body);
+    const { text, ref, uploads: ids, pane: sent } = PostMessage.parse(req.body);
     const card = kanban.get(req.params.id);
     projects.assertActive(card.projectId, 'its tasks and chats'); // archived (#213): read-only
     if (ids.length && !card.assignee) throw new InvalidError('assign an agent before sending images: they go into its workspace');
@@ -260,6 +262,10 @@ export function createApi(deps: {
       const section = ref.section !== null && doc.kind === 'markdown' ? (findSection(splitSections(content), ref.section) ?? null) : null;
       quote = formatDocRef(doc, ref.version, section);
     }
+    // « What the agent sees » (#305): the open pane tab, one line, said when it changed. A voice message sends none:
+    // the chat's pane as its UI last reported it.
+    const pane = sent === undefined ? panes.get(card.id) : sent;
+    const seen = paneNote(kanban.messages(card.id), pane, runner.summaryOf(card.id)?.uptoSeq ?? null);
     // Pasted/dropped images: copied into the agent's workspace, then the message row written with their blocks (uploads.ts).
     // The agent's workspace in the chat's project (#214).
     const workdir = ids.length ? projects.workspace(card.assignee!, card.projectId) : '';
@@ -268,12 +274,19 @@ export function createApi(deps: {
         ...(quote ? [{ type: 'text' as const, text: quote }] : []),
         ...(text ? [{ type: 'text' as const, text }] : []),
         ...images.flatMap((im) => [im, { type: 'text' as const, text: `[attached: ${relative(workdir, im.path)}]` }]),
-      ]),
+        ...(seen ? [{ type: 'text' as const, text: seen }] : []),
+      ], null, pane),
     );
     rewinds.record(req.params.id, message.seq, snapshot);
     dispatcher.onUserMessage(req.params.id); // unblocks, resumes review, or gets a chat reply
     runner.nameChat(req.params.id); // direct chats: the user's 3rd message has the model title the chat
     res.status(201).json(message);
+  });
+  /** What the chat's pane shows now (#305), reported by its UI: a voice message (no composer) sends that. */
+  app.put('/api/cards/:id/pane', (req, res) => {
+    kanban.get(req.params.id);
+    panes.set(req.params.id, PaneSees.nullable().parse(req.body?.pane ?? null));
+    res.status(204).end();
   });
   /** Stage a pasted/dropped image (raw body, the file name in ?name=): checked now, sent with the next message. */
   const stage = async (req: express.Request, res: express.Response) => {

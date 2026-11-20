@@ -279,7 +279,8 @@ const TOOL_MSGS = [
   tmsg('user', 'tool', [res('tu3', '  1|x'), res('tu4', 'edited packages/ui/src/styles.css'), res('tu5', 'no matches'), res('tu6', 'exit 0\n 66 passed')]),
   tmsg('assistant', agent, [{ type: 'text', text: 'Done: every tool call is now one row. The spec is open in the panel.' }, call('tu7', 'panel_open', { path: 'docs/chat-activity.md' })]),
   tmsg('user', 'tool', [res('tu7', 'opened Chat activity redesign (#59) (doc_uicheck, docs/chat-activity.md, v3) in the side panel')]),
-  tmsg('user', 'user', [{ type: 'text', text: 'Now run the full check.' }]),
+  // Sent with the pane open (#305): « … was open » under it, the agent's line hidden.
+  { ...tmsg('user', 'user', [{ type: 'text', text: 'Now run the full check.' }, { type: 'text', text: '👁 Open in my pane: file packages/ui/src/docPanel.ts, lines 1–40' }]), pane: { kind: 'file', path: 'packages/ui/src/docPanel.ts', from: 1, to: 40 } },
   tmsg('assistant', agent, [call('tu8', 'todo_write', { todos: [{ content: 'Typecheck and unit tests', status: 'completed' }, { content: 'Responsive check at every width', status: 'in_progress' }, { content: 'Report back', status: 'pending' }] }), call('tu9', 'read_file', { path: 'scripts/ui-check/check.mjs' }), call('tu10', 'shell', { command: 'npm run ui:check -- --ui packages/ui/dist' })]),
   tmsg('user', 'tool', [res('tu8', 'todo list saved'), res('tu9', '  1|x')]),
 ];
@@ -589,6 +590,8 @@ const SCREENS = [
   { name: 'panel', hash: `#/chat/${chat.id}`, ready: '.side-doc', pins: true, panel: true, keys: ['.sd-tab', '.sd-ver-btn', '.side-doc h1', '.side-doc h2', '.chat-pin-title'] },
   // #211: the panel dragged to its widest (Home on the separator), so the chat is at its narrowest: pins and buttons
   // still must not cover messages or the composer. Phones have no separator: the panel stays full screen.
+  // « What the agent sees » (#305): the eye names the open tab; a click turns it off for one message; a sent message says what was open.
+  { name: 'panel-sees', hash: `#/chat/${chat.id}`, ready: '.composer .pane-eye', panel: true, tools: true, then: { js: `const back = document.querySelector('.side-doc .sd-back'); if (back) { back.click(); await new Promise((r) => setTimeout(r, 200)); } const eye = document.querySelector('.composer .pane-eye'); const bad = []; if (!eye) throw new Error('pane eye (#305): gone after « Back » to the chat (the pane is still open)'); if (eye.classList.contains('off') || eye.getAttribute('aria-pressed') !== 'true') bad.push('the eye starts off'); if (!eye.textContent.trim()) bad.push('the eye names no tab'); const was = document.querySelector('.msg .pane-was'); if (!was || !was.textContent.includes('docPanel.ts was open')) bad.push('no « docPanel.ts was open » under the sent message: ' + was?.textContent); if ([...document.querySelectorAll('.msg .md')].some((m) => m.textContent.includes('Open in my pane'))) bad.push('the agent line shows in the chat'); eye.click(); await new Promise((r) => setTimeout(r, 100)); if (!eye.classList.contains('off') || eye.getAttribute('aria-pressed') !== 'false') bad.push('a click does not turn it off'); if (bad.length) throw new Error('pane eye (#305): ' + bad.join('; ')); was.scrollIntoView({ block: 'center' });`, ready: '.composer .pane-eye.off' }, keys: ['.composer .pane-eye span', '.msg .pane-was span'] },
   { name: 'panel-max', hash: `#/chat/${chat.id}`, ready: '.side-doc', pins: true, panel: true, then: { js: `const h = document.querySelector('.sd-resize'); if (innerWidth <= 760) { if (h) throw new Error('a resize handle on a phone'); document.body.dataset.wideOk = '1'; return; } if (!h) throw new Error('no resize handle'); h.focus(); h.dispatchEvent(new KeyboardEvent('keydown', { key: 'Home', bubbles: true })); await new Promise((r) => setTimeout(r, 200)); const max = +h.getAttribute('aria-valuemax'), w = Math.round(document.querySelector('.side-doc').getBoundingClientRect().width); if (Math.abs(w - max) > 1) throw new Error('panel ' + w + 'px after Home, max ' + max); h.blur(); localStorage.removeItem('atlas.panel.width'); document.body.dataset.wideOk = '1';`, ready: 'body[data-wide-ok]' }, keys: ['.sd-tab', '.chat-pin-title'] },
   // The narrow window's Chats and More tabs (#264, ≤ 900 px: no sidebar, the tab bar): the sidebar's rows, 40 / 44 px,
   // faces, 13 px labels. A wider window has no such tab: #/chats and #/more go home.
@@ -820,6 +823,11 @@ handlers.set('Fetch.requestPaused', async ({ requestId, request }) => {
     // Opening an update in the Inbox marks it read: answer « done » without storing anything, so the page raises no
     // « Failed to fetch » banner (#225). The write is still listed as refused.
     if (request.method === 'POST' && screen?.inbox && /^\/api\/notifications\/[^/]+\/read$/.test(url.pathname)) {
+      refusedWrites.push(`${screen?.name}: ${request.method} ${url.pathname} (answered 204, nothing stored)`);
+      return await send('Fetch.fulfillRequest', { requestId, responseCode: 204, responseHeaders: [] });
+    }
+    // The chat's pane reporting what is open (#305): same, a 204 so the page shows no banner.
+    if (request.method === 'PUT' && /^\/api\/cards\/[^/]+\/pane$/.test(url.pathname)) {
       refusedWrites.push(`${screen?.name}: ${request.method} ${url.pathname} (answered 204, nothing stored)`);
       return await send('Fetch.fulfillRequest', { requestId, responseCode: 204, responseHeaders: [] });
     }

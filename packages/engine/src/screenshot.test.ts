@@ -104,6 +104,10 @@ describe('in the engine', () => {
     expect(screenshotAnswer(engine.kanban, 'POST', '/api/agents/atlas/main-chat/new')).toBeUndefined();
     expect(screenshotAnswer(engine.kanban, 'GET', '/api/agents/atlas/main-chat')).toBeUndefined();
     expect(screenshotAnswer(engine.kanban, 'POST', '/api/agents/nobody/main-chat')).toBeUndefined();
+    // The pane's report (#305) gets a harmless answer; other writes on a card are still refused.
+    expect(screenshotAnswer(engine.kanban, 'PUT', `/api/cards/${chat.id}/pane`)).toBeNull();
+    expect(screenshotAnswer(engine.kanban, 'POST', `/api/cards/${chat.id}/pane`)).toBeUndefined();
+    expect(screenshotAnswer(engine.kanban, 'PUT', `/api/cards/${chat.id}`)).toBeUndefined();
   });
 
   it('gets the engine address from the runner, so the agent never looks for a port', async () => {

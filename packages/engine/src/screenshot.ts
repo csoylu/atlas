@@ -463,6 +463,8 @@ export async function takeScreenshot(
 
 /** The read-only answers the engine gives the page for lookups the app makes with a POST (see EngineAccess.answer). */
 export function screenshotAnswer(kanban: { existingMainChat(agentId: string, projectId?: string): unknown }, method: string, path: string): unknown {
+  // The chat's pane reporting what is open (#305): a mirror of the page, nothing stored; answered so it shows no error.
+  if (method === 'PUT' && /^\/api\/cards\/[^/?]+\/pane$/.test(path)) return null;
   const m = method === 'POST' ? /^\/api\/agents\/([^/]+)\/main-chat(?:\?project=([^&]+))?$/.exec(path) : null;
   if (!m) return undefined;
   try {

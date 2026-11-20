@@ -1,11 +1,12 @@
-import { useEffect, useRef, useState } from 'react';
+import { useCallback, useEffect, useRef, useState } from 'react';
 import { usePanelResize } from './PanelResizer.tsx';
-import { type Agent, type Card, type Model } from '@atlas/shared';
+import { paneLine, type Agent, type Card, type Doc, type Model, type PaneSees } from '@atlas/shared';
 import { ThreadPanel } from './ThreadPanel.tsx';
 import { api } from './api.ts';
 import { CardPanel } from './CardPanel.tsx';
 import type { MessageStream } from './useMessages.ts';
 import { DocPanel, usePanelMode, usePanelTabs, type Quote } from './DocPanel.tsx';
+import { activeTab } from './docPanel.ts';
 
 export const LAST_AGENT = 'atlas.chat.agent';
 /** Window event: show / hide the documents panel of the chat on screen (⌘\, the palette). */
@@ -75,6 +76,33 @@ function ChatWithPanel(props: Parameters<typeof ChatView>[0] & { chat: Card }) {
   const openCard = props.onOpenCard;
   const closeThread = props.onCloseCard;
   const show = tabs.length > 0 && !hidden && !thread;
+  // « What the agent sees » (#305): the tab open in the pane (or the task beside the chat), sent with Master's message;
+  // the engine also hears it at each change, for a voice message (no composer). Closed, or hidden beside the chat: nothing.
+  const [shown, setShown] = useState<{ doc: Doc; version: number } | null>(null);
+  const onShown = useCallback((doc: Doc, version: number) => setShown((s) => (s?.doc === doc && s.version === version ? s : { doc, version })), []);
+  // Beside the chat: on screen. Overlay or phone: the pane covers the chat, so « Back » to write keeps it open (the
+  // mockup's phone composer shows the eye); closing its last tab closes it.
+  const active = show || (hidden && mode !== 'side' && !thread) ? activeTab(tabs) : undefined;
+  const sees: PaneSees | null = thread
+    ? thread.number != null
+      ? { kind: 'task', number: thread.number, title: thread.title }
+      : null
+    : active
+      ? {
+          kind: 'artifact',
+          docId: active.doc.id,
+          title: active.doc.title,
+          agentId: active.doc.agentId,
+          path: active.doc.path,
+          version: shown?.doc.id === active.doc.id ? shown.version : active.doc.version,
+        }
+      : null;
+  const seesKey = sees ? paneLine(sees) : '';
+  useEffect(() => {
+    const t = setTimeout(() => void api.reportPane(chat.id, sees).catch(onError), 300);
+    return () => clearTimeout(t);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [chat.id, seesKey]);
   // ⌘\ (App) and the palette toggle the panel of the chat on screen.
   const hasTabs = tabs.length > 0;
   useEffect(() => {
@@ -98,6 +126,7 @@ function ChatWithPanel(props: Parameters<typeof ChatView>[0] & { chat: Card }) {
         cards={props.cards}
         quote={quote}
         onQuoteClear={() => setQuote(null)}
+        sees={sees}
         hiddenDocs={hidden ? tabs.length : 0}
         onShowDocs={() => setHidden(false)}
         onHideDocs={show ? () => setHidden(true) : undefined}
@@ -151,6 +180,7 @@ function ChatWithPanel(props: Parameters<typeof ChatView>[0] & { chat: Card }) {
           stream={stream}
           onOpenCard={props.onOpenCard}
           onHide={() => setHidden(true)}
+          onShown={onShown}
           onError={onError}
           onAsk={(q) => {
             setQuote(q);

@@ -82,6 +82,8 @@ export function ArtifactViewer(props: {
   stream: MessageStream;
   onAsk?(section: DocSection | null, version: number): void;
   onSeen?(): void;
+  /** The version on screen, each time it changes (« what the agent sees », #305). */
+  onShown?(version: number): void;
   onError(e: unknown): void;
 }) {
   const { doc, onError } = props;
@@ -101,6 +103,8 @@ export function ArtifactViewer(props: {
   }, [wantKey]);
 
   const shown = version ?? doc.version;
+  const onShown = props.onShown;
+  useEffect(() => onShown?.(shown), [onShown, shown]);
   const old = version !== null && version < doc.version;
   const restore = (v: number) => api.restoreDoc(doc.id, v).then(() => setVersion(null), onError);
   const isLink = doc.kind === 'url';
