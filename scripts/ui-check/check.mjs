@@ -522,7 +522,7 @@ const PROPOSALS = [
   proposal(9504, 'archive', [MEMORIES[0]], { status: 'rejected', decidedAt: ago(90), reason: 'Looks like a one-off instruction' }),
 ];
 const panelTabs = () =>
-  doc ? [{ doc, openedBy: doc.agentId, openedAt: now, focusedAt: now, section: null, seenVersion: doc.version, active: true, cardTitle: null }] : [];
+  doc ? [{ kind: 'artifact', doc, openedBy: doc.agentId, openedAt: now, focusedAt: now, section: null, seenVersion: doc.version, active: true, cardTitle: null }] : [];
 
 // Memory has its own screens below (fixtures, edit, deep links).
 const PJ2 = 'uicheck-datinel'; // the fixture project's id (#217)

@@ -58,6 +58,10 @@ export function ArtifactViewer(props: {
   onTab?(doc: Doc): void;
   /** Left of the tabs (« ‹ Back », « ‹ Library »). */
   lead?: ReactNode;
+  /** The workbench's own tab strip (#302: tabs of every kind, +, or the phone's tab picker), in place of `tabs`. */
+  strip?: ReactNode;
+  /** The second row, under the head: the bar of the open tab's kind (#302); artifacts have none. */
+  bar?: ReactNode;
   /** Between the version controls and ⋯ (Full size, Pin). */
   tools?: ReactNode;
   /** Right of ⋯ (close). */
@@ -211,7 +215,9 @@ export function ArtifactViewer(props: {
       ) : (
         <div className="sd-head">
           {props.lead}
-          {props.tabs ? (
+          {props.strip ? (
+            props.strip
+          ) : props.tabs ? (
             <div className="sd-tabs" role="tablist" aria-label="Artifacts">
               {props.tabs.map((t) => (
                 <div key={t.doc.id} className={'sd-tab' + (t.doc.id === doc.id ? ' on' : '')}>
@@ -237,6 +243,7 @@ export function ArtifactViewer(props: {
           {controls}
         </div>
       )}
+      {props.bar}
       {deleting && <DeleteArtifactDialog doc={doc} onCancel={() => setDeleting(false)} onDeleted={() => props.onDeleted?.()} onError={onError} />}
       {src ? (
         <Source key={doc.id} doc={doc} version={version} onError={onError} />

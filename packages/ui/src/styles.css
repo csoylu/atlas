@@ -2036,6 +2036,24 @@ button.msg-quote:hover { color: var(--text); }
 .sd-back { font-weight: var(--fw-medium); flex: none; }
 .sd-head .sd-tabs + .sd-ver-btn { margin-left: 4px; }
 @media (max-width: 760px) { .sd-head .sd-tab { max-width: 150px; } }
+/* The workbench frame (#302, mockup « the right pane as a workbench »): + after the tabs, the phone’s tab picker.
+   The second row (the open kind’s bar) comes with 2/5 and 5/5. Prefix wb-. */
+.wb-add { flex: none; }
+.sd-head .wb-add + .sd-ver-btn { margin-left: 4px; }
+.wb-find { flex: none; margin: 2px 2px 4px; height: 32px; padding: 0 10px; border: 1px solid var(--line-2); border-radius: 7px; background: var(--app); color: var(--text); font: inherit; font-size: var(--fs-small); }
+.wb-find:focus { outline: none; border-color: var(--accent); }
+.wb-tabsel { flex: 1; min-width: 0; display: flex; align-items: center; gap: 6px; height: 30px; border: 0; background: none; color: var(--text); font: inherit; font-size: var(--fs-small); padding: 0 8px; border-radius: 7px; cursor: pointer; }
+.wb-tabsel:hover, .wb-tabsel.open { background: var(--hover); }
+.wb-tabsel:focus-visible { outline: 2px solid var(--accent); outline-offset: -2px; }
+.wb-tabsel .icon { flex: none; }
+.wb-tabsel .t { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.wb-tabsel .n { color: var(--faint); flex: none; white-space: nowrap; }
+.wb-pick { display: flex; align-items: center; border-radius: 6px; min-width: 0; }
+.wb-pick:hover { background: var(--hover); }
+.wb-pick.on { background: var(--active); }
+.wb-pick-t { flex: 1; min-width: 0; display: flex; align-items: center; gap: 8px; border: 0; background: none; color: var(--text); font: inherit; font-size: var(--fs-base); padding: 8px; text-align: left; cursor: pointer; }
+.wb-pick-t .icon { color: var(--muted); flex: none; }
+.wb-pick .sd-tab-x { opacity: 1; width: 28px; height: 28px; }
 /* Library: folders on the left, the list on the right. */
 .lib-split { flex: 1; display: flex; min-height: 0; min-width: 0; }
 .lib-folders { flex: none; width: 216px; display: flex; flex-direction: column; gap: 1px; padding: 8px; border-right: 1px solid var(--line); overflow-y: auto; }

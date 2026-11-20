@@ -142,6 +142,7 @@ function ChatWithPanel(props: Parameters<typeof ChatView>[0] & { chat: Card }) {
       {show && (
         <DocPanel
           chatId={chat.id}
+          projectId={chat.projectId}
           tabs={tabs}
           mode={mode}
           resize={resize}

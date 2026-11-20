@@ -534,6 +534,7 @@ export class Documents {
       .all(chatId) as { doc_id: string; opened_by: string; opened_at: string; focused_at: string; section: string | null; seen_version: number; card_title: string | null }[];
     const active = rows.reduce<(typeof rows)[number] | null>((a, r) => (!a || r.focused_at >= a.focused_at ? r : a), null);
     return rows.map((r) => ({
+      kind: 'artifact' as const,
       doc: this.get(r.doc_id),
       openedBy: r.opened_by,
       openedAt: r.opened_at,

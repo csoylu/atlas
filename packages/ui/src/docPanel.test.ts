@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
-import { activeTab, byline, CHAT_MIN, diagramWidth, PANEL_MIN, panelBounds, panelKey, panelMode, panelWidth, parsePanelWidth, SCREEN_MIN, taskPanelMode } from './docPanel.ts';
-import type { PanelTab } from '@atlas/shared';
+import { activeTab, ADD_MAX, artifactChoices, byline, CHAT_MIN, diagramWidth, PANEL_MIN, panelBounds, panelKey, panelMode, panelWidth, parsePanelWidth, SCREEN_MIN, taskPanelMode } from './docPanel.ts';
+import type { Doc, PanelTab } from '@atlas/shared';
 
 describe('side panel helpers', () => {
   it('chooses side by side, overlay or full screen by viewport width', () => {
@@ -76,5 +76,23 @@ describe('taskPanelMode (#222)', () => {
     expect(taskPanelMode('side', 0, CHAT_MIN)).toBe('side'); // not measured yet
     expect(taskPanelMode('overlay', 1400, CHAT_MIN)).toBe('overlay');
     expect(taskPanelMode('full', 1400, CHAT_MIN)).toBe('full');
+  });
+});
+
+describe('artifactChoices (#302, the + menu)', () => {
+  const d = (id: string, title: string, updatedAt: string, projectId = 'atlas', path = `docs/${id}.md`) => ({ id, title, path, updatedAt, projectId }) as unknown as Doc;
+  const docs = [d('a', 'Build plan', '2026-11-18'), d('b', 'Settings mockup', '2026-11-20', 'atlas', 'pages/settings.html'), d('c', 'Tenders', '2026-11-19', 'datinel'), d('e', 'Browser design', '2026-11-19')];
+  it("lists the chat's project's artifacts not open yet, latest first", () => {
+    expect(artifactChoices(docs, 'atlas', new Set(['e']), '').map((x) => x.id)).toEqual(['b', 'a']);
+    expect(artifactChoices(docs, 'datinel', new Set(), '').map((x) => x.id)).toEqual(['c']);
+  });
+  it('keeps the artifacts matching every word in the title or path, any case', () => {
+    expect(artifactChoices(docs, 'atlas', new Set(), 'PLAN build').map((x) => x.id)).toEqual(['a']);
+    expect(artifactChoices(docs, 'atlas', new Set(), 'pages/').map((x) => x.id)).toEqual(['b']);
+    expect(artifactChoices(docs, 'atlas', new Set(), 'nothing')).toEqual([]);
+  });
+  it('lists at most ADD_MAX', () => {
+    const many = Array.from({ length: ADD_MAX + 5 }, (_, i) => d('m' + i, 'Doc ' + i, `2026-11-${String(i % 28 + 1).padStart(2, '0')}`));
+    expect(artifactChoices(many, 'atlas', new Set(), '')).toHaveLength(ADD_MAX);
   });
 });
