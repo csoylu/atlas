@@ -300,6 +300,10 @@ describe('the browser tab in the pane (#306)', () => {
     const taken = (await l.call<BrowserTab>('POST', `/browser/tabs/${chat.id}/owner`, { owner: 'master' })).body;
     expect(isDriving(taken)).toBe(false);
     expect(taken.agentUsed).toBe(true);
+    // Handed back, the agent drives again only once it acts: Master's click in the idle tab takes control.
+    const back = (await l.call<BrowserTab>('POST', `/browser/tabs/${chat.id}/owner`, { owner: 'agent' })).body;
+    expect(back.action).toBeNull();
+    expect(isDriving(back)).toBe(false);
   });
 
   it('a login wall: the agent asks for Master, the pane says why; handing back clears it', async () => {
@@ -351,3 +355,39 @@ describe('link routing (#298 §3.2)', () => {
     expect(normalizeAddress('http://a.test')).toBe('http://a.test');
   });
 });
+
+describe('comments on a page of the chat’s browser (#306)', () => {
+  it('names the address and the title; an area is cropped from the picture comment mode showed, not from the page now', async () => {
+    const sharp = (await import('sharp')).default;
+    const l = await withBrowser();
+    const png = await sharp({ create: { width: 400, height: 300, channels: 3, background: '#fff' } }).png().toBuffer();
+    let captures = 0;
+    l.host.capture = async () => {
+      captures++;
+      return { image: 'data:image/png;base64,' + png.toString('base64'), width: 400, height: 300 };
+    };
+    const chat = await l.chat();
+    await l.call('POST', `/browser/tabs/${chat.id}/open`, { url: 'http://localhost:5173/tenders' });
+    // Comment mode starts: the pane takes its picture.
+    expect((await l.call('GET', `/browser/tabs/${chat.id}/shot`)).status).toBe(200);
+    expect(captures).toBe(1);
+    const target = { kind: 'browser', url: 'http://localhost:5173/tenders', title: 'Tenders' };
+    const r = await l.call('POST', `/cards/${chat.id}/messages`, {
+      comments: [
+        { target, anchor: { type: 'area', box: { x: 10, y: 20, w: 100, h: 50 }, of: { w: 400, h: 300 }, unit: 'px', inside: [] }, text: 'This table.' },
+        { target, anchor: { type: 'element', selector: 'button#go', text: 'Search', tag: 'button' }, text: 'Rename it.' },
+      ],
+    });
+    expect(r.status).toBe(201);
+    const last = l.engine.kanban.messages(chat.id).at(-1)!;
+    const texts = last.content.flatMap((b) => (b.type === 'text' ? [b.text] : []));
+    expect(texts.join('\n')).toContain('page http://localhost:5173/tenders');
+    expect(texts.join('\n')).toContain('Tenders');
+    expect(texts.join('\n')).toContain('button#go');
+    const pics = last.content.filter((b) => b.type === 'image') as { width: number; height: number }[];
+    expect(pics.map((p) => [p.width, p.height])).toEqual([[100, 50]]);
+    // Cropped from the kept picture: no second capture.
+    expect(captures).toBe(1);
+  });
+});
+

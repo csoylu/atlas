@@ -13,6 +13,8 @@ import { fileTitle } from './files.ts';
 import type { PanelResize } from './PanelResizer.tsx';
 import { CommentBox, CommentHint, CommentIcon, type PaneComment } from './CommentLayer.tsx';
 import { boxOf, draftKey, hintFor, isTyping, type Comments, type PanePick } from './comments.ts';
+import { BrowserPane, useBrowserStatus, useDriving } from './BrowserPane.tsx';
+import { browserTitle } from './browserTab.ts';
 
 /** A chat's open tabs, live (agents open and close them with panel_open / panel_close). */
 export function usePanelTabs(chatId: string, stream: MessageStream, onError: (e: unknown) => void): PanelTab[] {
@@ -20,12 +22,18 @@ export function usePanelTabs(chatId: string, stream: MessageStream, onError: (e:
   useEffect(() => {
     api.panel(chatId).then(setTabs, onError);
     const offPanel = stream.listen('panel:' + chatId, (e) => e.type === 'panel' && setTabs(e.tabs));
+    // The browser's live state (#306: loading, title, the agent's last action) comes on its own key.
+    const offBrowser = stream.listen('browser:' + chatId, (e) => {
+      if (e.type === 'browser') setTabs((ts) => ts.map((t) => (t.kind === 'browser' ? { ...t, tab: e.tab } : t)));
+      else if (e.type === 'browserClosed') setTabs((ts) => ts.filter((t) => t.kind !== 'browser'));
+    });
     const offDocs = stream.listen('docs', (e) => {
       if (e.type === 'doc')
         setTabs((ts) => (ts.some((t) => t.kind === 'artifact' && t.doc.id === e.doc.id) ? ts.map((t) => (t.kind === 'artifact' && t.doc.id === e.doc.id ? { ...t, doc: e.doc } : t)) : ts));
     });
     return () => {
       offPanel();
+      offBrowser();
       offDocs();
     };
   }, [chatId, stream, onError]);
@@ -77,13 +85,30 @@ export function DocPanel(props: {
   useDrafts();
   const tab = activeTab(tabs);
   const doc = tab?.kind === 'artifact' ? tab.doc : undefined;
+  const browserStatus = useBrowserStatus();
+  const browserTab = tabs.find((t) => t.kind === 'browser')?.tab;
+  const driving = useDriving(browserTab);
+  // Master's click refused while the agent acts (#298 §3.1): the pane's strip says so for a moment.
+  const [blockedAt, setBlockedAt] = useState(0);
+  useEffect(() => props.stream.listen('browser:' + chatId, (e) => e.type === 'browser' && e.blocked && setBlockedAt(Date.now())), [props.stream, chatId]);
+  // The pane's width: under 520 px the browser's bar uses short labels (mockup).
+  const [narrow, setNarrow] = useState(false);
   // Comment mode (#304): on for the open tab; a pick opens the box, Add puts the comment in the composer.
   const [commenting, setCommenting] = useState(false);
   const [pending, setPending] = useState<{ pick: PanePick; version: number } | null>(null);
   const aside = useRef<HTMLElement>(null);
   // The open file, when it is text (comments are on its lines); images and binaries take none yet.
   const fileText = tab?.kind === 'file' && !!tab.path && fileDrafts.get(chatId, tab.path)?.file.kind === 'text';
-  const docId = doc?.id ?? (fileText ? tabKey(tab!) : undefined);
+  // A page takes comments when it shows (not an empty tab, an error or a blocked host).
+  const pageOn = tab?.kind === 'browser' && !!tab.tab.url && !tab.tab.error && !tab.tab.crashed && !!browserStatus?.available;
+  const docId = doc?.id ?? (fileText || pageOn ? tabKey(tab!) + (tab?.kind === 'browser' ? tab.tab.url : '') : undefined);
+  useEffect(() => {
+    const el = aside.current;
+    if (!el) return;
+    const ro = new ResizeObserver(() => setNarrow(el.getBoundingClientRect().width < 520));
+    ro.observe(el);
+    return () => ro.disconnect();
+  });
   useEffect(() => {
     setCommenting(false);
     setPending(null);
@@ -121,7 +146,13 @@ export function DocPanel(props: {
   if (!tab) return null;
   const phone = props.mode === 'full';
   // What a comment is on: the artifact at its version, or the file (#303: its lines).
-  const target: CommentTarget | null = doc ? { kind: 'doc', docId: doc.id, version: doc.version } : fileText && tab.kind === 'file' ? { kind: 'file', path: tab.path } : null;
+  const target: CommentTarget | null = doc
+    ? { kind: 'doc', docId: doc.id, version: doc.version }
+    : fileText && tab.kind === 'file'
+      ? { kind: 'file', path: tab.path }
+      : pageOn && tab.kind === 'browser'
+        ? { kind: 'browser', url: tab.tab.url!, title: tab.tab.title }
+        : null;
   const mine = target ? comments.list.filter((c) => draftKey(c.target) === draftKey(target)) : [];
   const comment: PaneComment = {
     on: commenting && !pending,
@@ -131,7 +162,21 @@ export function DocPanel(props: {
   };
   const mode = phone || full ? 'full' : props.mode;
   const items: PaneTabItem[] = tabs.map((t) =>
-    t.kind === 'artifact'
+    t.kind === 'browser'
+      ? {
+          key: tabKey(t),
+          kind: t.kind,
+          icon: <Icon.globe />,
+          title: browserTitle(t.tab),
+          tip: `${t.tab.agentId ? t.tab.agentId + '’s browser' : 'Your browser'}${t.tab.url ? ' · ' + t.tab.url : ''}`,
+          on: t === tab,
+          dot: false,
+          live: driving ? `${t.tab.agentId ?? 'The agent'} is using the browser` : undefined,
+          unsaved: false,
+          onSelect: () => void api.browserFocus(chatId).catch(onError),
+          onClose: () => void api.browserClose(chatId).catch(onError),
+        }
+      : t.kind === 'artifact'
       ? {
           key: tabKey(t),
           kind: t.kind,
@@ -162,7 +207,7 @@ export function DocPanel(props: {
   ) : (
     <>
       <PaneTabs items={items} />
-      <AddMenu chatId={chatId} projectId={props.projectId} agentId={props.agentId} open={tabs} onError={onError} />
+      <AddMenu chatId={chatId} projectId={props.projectId} agentId={props.agentId} open={tabs} browser={!!browserStatus?.available} onError={onError} />
     </>
   );
   const lead = (phone || props.mode === 'overlay') && (
@@ -200,7 +245,7 @@ export function DocPanel(props: {
   );
   const commentUi = target && (
     <>
-      {commenting && !pending && <CommentHint text={hintFor(doc ? doc.kind : 'file')} waiting={comments.list.length} onDone={stop} />}
+      {commenting && !pending && <CommentHint text={hintFor(doc ? doc.kind : tab.kind === 'browser' ? 'browser' : 'file')} waiting={comments.list.length} onDone={stop} />}
       {pending && (
         <CommentBox
           key={JSON.stringify(pending.pick.rect)}
@@ -212,8 +257,9 @@ export function DocPanel(props: {
           onCancel={() => setPending(null)}
           onAdd={(text) => {
             const on: CommentTarget = target.kind === 'doc' ? { ...target, version: pending.version } : target;
-            const title = doc ? doc.title : fileTitle(tab.kind === 'file' ? tab.path : '');
-            comments.add({ target: on, anchor: pending.pick.anchor, text, title, kind: doc ? doc.kind : 'file', mark: pending.pick.mark, thumb: pending.pick.thumb ?? null });
+            const title = doc ? doc.title : tab.kind === 'browser' ? browserTitle(tab.tab) : fileTitle(tab.kind === 'file' ? tab.path : '');
+            const kind = doc ? doc.kind : tab.kind === 'browser' ? 'browser' : 'file';
+            comments.add({ target: on, anchor: pending.pick.anchor, text, title, kind, mark: pending.pick.mark, thumb: pending.pick.thumb ?? null });
             window.getSelection()?.removeAllRanges();
             setPending(null);
           }}
@@ -222,11 +268,66 @@ export function DocPanel(props: {
     </>
   );
   const end = !phone && (
-    <button type="button" className="sd-btn icon-only" title="Close the panel" aria-label="Close the panel" onClick={() => closePanel(chatId, tabs, onError)}>
+    <button type="button" className="sd-btn icon-only" title="Close the panel" aria-label="Close the panel" onClick={() => closePanel(chatId, tabs, driving, props.onHide, onError)}>
       <Icon.x />
     </button>
   );
   const style = props.resize && mode !== 'full' ? { width: props.resize.width } : undefined;
+  if (tab.kind === 'browser')
+    return (
+      <aside ref={aside} className={'side-doc ' + mode} aria-label="Panel" style={style}>
+        {mode !== 'full' && props.resize?.handle}
+        <div className="viewer panel">
+          <div className="sd-head">
+            {lead}
+            {strip}
+            {tools}
+            <PopButton className="sd-btn icon-only" title="More" ariaLabel="More" label={<Icon.dots />}>
+              {(close) => (
+                <>
+                  <div className="pop-info">
+                    <span>{tab.tab.agentId ? `${tab.tab.agentId}’s browser: cookies and logins stay with ${tab.tab.agentId} in this project` : 'Your own browser: no agent drives it'}</span>
+                    {tab.tab.url && <span className="pop-path">{tab.tab.url}</span>}
+                  </div>
+                  {tab.tab.url && (
+                    <>
+                      <div className="pop-sep" />
+                      <PopItem
+                        icon={<Icon.code />}
+                        onClick={() => {
+                          close();
+                          void navigator.clipboard.writeText(tab.tab.url!).catch(onError);
+                        }}
+                      >
+                        Copy the address
+                      </PopItem>
+                      <a className="pop-row" role="menuitem" href={tab.tab.url} target="_blank" rel="noreferrer" data-external="1" onClick={close}>
+                        <Icon.ext />
+                        <span className="pop-t">Open in system browser</span>
+                      </a>
+                    </>
+                  )}
+                </>
+              )}
+            </PopButton>
+            {end}
+          </div>
+          <BrowserPane
+            chatId={chatId}
+            tab={tab.tab}
+            agentId={props.agentId}
+            status={browserStatus}
+            phone={phone}
+            tight={narrow}
+            blockedAt={blockedAt}
+            comment={pageOn ? comment : undefined}
+            commenting={commenting}
+            onError={onError}
+          />
+        </div>
+        {commentUi}
+      </aside>
+    );
   if (tab.kind === 'file')
     return (
       <aside ref={aside} className={'side-doc ' + mode} aria-label="Panel" style={style}>
@@ -327,12 +428,18 @@ export function DocPanel(props: {
   );
 }
 
-/** × of the panel: every tab closes; unsaved files ask first. */
-function closePanel(chatId: string, tabs: PanelTab[], onError: (e: unknown) => void) {
+/**
+ * × of the panel: every tab closes; unsaved files ask first. The browser closes too, unless the agent is driving it
+ * (#306): then the pane only hides, and its button carries a dot while the agent works.
+ */
+function closePanel(chatId: string, tabs: PanelTab[], driving: boolean, hide: () => void, onError: (e: unknown) => void) {
   const dirty = tabs.filter((t): t is FileTab => t.kind === 'file' && fileDrafts.dirty(chatId, t.path));
   if (dirty.length && !confirm(`${dirty.map((t) => fileTitle(t.path)).join(', ')} ${dirty.length === 1 ? 'has' : 'have'} unsaved changes. Close the panel and lose them?`)) return;
   for (const t of tabs) if (t.kind === 'file') fileDrafts.drop(chatId, t.path);
-  void api.panelClose(chatId, null).catch(onError);
+  if (tabs.some((t) => t.kind !== 'browser')) void api.panelClose(chatId, null).catch(onError);
+  if (!tabs.some((t) => t.kind === 'browser')) return;
+  if (driving) hide();
+  else void api.browserClose(chatId).catch(onError);
 }
 
 /** One tab of the workbench (#302), whatever its kind: artifacts today; files and pages come with 2/5 and 5/5. */
@@ -348,6 +455,8 @@ export interface PaneTabItem {
   dot: boolean;
   /** A file with unsaved edits (#303): a dot in place of ×; closing asks first. */
   unsaved: boolean;
+  /** The browser while the agent drives it (#306): a live dot, this is its tooltip. */
+  live?: string;
   onSelect(): void;
   onClose(): void;
 }
@@ -368,6 +477,7 @@ function PaneTabs({ items }: { items: PaneTabItem[] }) {
             {t.icon}
             <span className="sd-tab-t">{t.title}</span>
             {t.dot && <span className="sd-dot" title="Changed since you looked" />}
+            {t.live && <span className="wb-live" title={t.live} aria-label={t.live} />}
           </button>
           <button className={'sd-tab-x' + (t.unsaved ? ' unsaved' : '')} aria-label={`Close ${t.title}${t.unsaved ? ' (unsaved changes)' : ''}`} title={t.unsaved ? 'Unsaved changes' : undefined} onClick={t.onClose}>
             {t.unsaved ? <span className="wb-udot" aria-hidden="true" /> : '×'}
@@ -416,6 +526,7 @@ function TabPicker({ items }: { items: PaneTabItem[] }) {
               {t.icon}
               <span className="pop-t">{t.title}</span>
               {t.dot && <span className="sd-dot" title="Changed since you looked" />}
+              {t.live && <span className="wb-live" title={t.live} aria-label={t.live} />}
             </button>
             <button type="button" className={'sd-tab-x' + (t.unsaved ? ' unsaved' : '')} aria-label={`Close ${t.title}${t.unsaved ? ' (unsaved changes)' : ''}`} onClick={t.onClose}>
               {t.unsaved ? <span className="wb-udot" aria-hidden="true" /> : '×'}
@@ -431,12 +542,26 @@ function TabPicker({ items }: { items: PaneTabItem[] }) {
  * + in the head row (#302, #303): open something in a new tab. First the agent's files (⌘P), then the project's
  * artifacts (a filter, latest first); a page joins with the workbench's 5/5.
  */
-function AddMenu(props: { chatId: string; projectId: string; agentId: string | null; open: PanelTab[]; onError(e: unknown): void }) {
+function AddMenu(props: { chatId: string; projectId: string; agentId: string | null; open: PanelTab[]; browser: boolean; onError(e: unknown): void }) {
   const { chatId, agentId, onError } = props;
+  const what = [props.browser && 'a page', agentId && 'a file (⌘P)', 'an artifact'].filter(Boolean).join(', ').replace(/, ([^,]*)$/, ' or $1');
   return (
-    <PopButton className="sd-btn icon-only wb-add" title={agentId ? 'Open a file (⌘P) or an artifact' : 'Open an artifact'} ariaLabel="Open" width={320} label={<Icon.plus />}>
+    <PopButton className="sd-btn icon-only wb-add" title={'Open ' + what} ariaLabel="Open" width={320} label={<Icon.plus />}>
       {(close) => (
         <>
+          {props.browser && (
+            <PopItem
+              icon={<Icon.globe />}
+              sub={props.open.some((t) => t.kind === 'browser') ? 'open' : undefined}
+              onClick={() => {
+                close();
+                // One browser per chat (#298): an open one is shown, else a new one with its address bar focused.
+                void (props.open.some((t) => t.kind === 'browser') ? api.browserFocus(chatId) : api.browserCreate(chatId)).catch(onError);
+              }}
+            >
+              A page{agentId ? ` in ${agentId}’s browser` : ''}
+            </PopItem>
+          )}
           {agentId && (
             <>
               <PopItem

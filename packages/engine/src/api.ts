@@ -320,6 +320,7 @@ export function createApi(deps: {
       ? await commentBlocks(comments, {
           workdir,
           shoot: deps.pageShot ?? null,
+          browserPage: deps.browser.status().available ? (url) => deps.browser.pageFor(card.id, url) : null,
           redact: (t) => deps.secrets.redact(t).text,
           filesDir: (root) => projects.filesDir(root).dir,
           doc: (docId, version) => {

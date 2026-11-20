@@ -336,7 +336,9 @@ export class ElectronBrowser implements BrowserHost {
       }
       e.preventDefault();
       const now = Date.now();
-      if (now - tab.blockedAt > BLOCK_REPORT_MS) emit({ type: 'input-blocked', id });
+      // Reported at most every BLOCK_REPORT_MS while the agent acts (the strip); at once when it is idle, since then
+      // the click takes control (engine browser.ts) and must not be lost to a report made just before.
+      if (now - tab.blockedAt > BLOCK_REPORT_MS || now >= tab.overlayUntil) emit({ type: 'input-blocked', id });
       tab.blockedAt = now;
     };
     wc.on('before-input-event', (e) => block(e));

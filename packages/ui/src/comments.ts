@@ -34,12 +34,12 @@ export interface CommentDraft {
   text: string;
   /** The tab's title and kind (the chip, the pin's tab). */
   title: string;
-  kind: DocKind | 'file';
+  kind: DocKind | 'file' | 'browser';
   mark: PaneMark;
   thumb: string | null;
 }
 
-export const draftKey = (target: CommentTarget) => (target.kind === 'doc' ? 'doc:' + target.docId : 'file:' + target.path);
+export const draftKey = (target: CommentTarget) => (target.kind === 'doc' ? 'doc:' + target.docId : target.kind === 'file' ? 'file:' + target.path : 'browser:' + target.url);
 export const toPost = (c: CommentDraft): PostComment => ({ target: c.target, anchor: c.anchor, text: c.text });
 /** The chip's words after the comment: « Settings mockup · « Network » row ». */
 export const chipAnchor = (c: CommentDraft) => (c.anchor.type === 'lines' ? c.title : anchorLabel(c.anchor));
@@ -115,10 +115,10 @@ export const textOf = (el: Element, n = 400) => clean((el as HTMLElement).innerT
 export { clean as cleanText };
 
 /** The hint at the bottom of the pane while comment mode is on, per kind (mockup). */
-export function hintFor(kind: DocKind | 'file'): string {
+export function hintFor(kind: DocKind | 'file' | 'browser'): string {
   if (kind === 'markdown') return 'Select text, or click a block';
   if (kind === 'file') return 'Click a line number, or drag for a range';
-  if (kind === 'html') return 'Click an element or drag an area';
+  if (kind === 'html' || kind === 'browser') return 'Click an element or drag an area';
   if (kind === 'diagram') return 'Click a shape or drag an area';
   return 'Click a spot or drag an area';
 }

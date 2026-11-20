@@ -21,6 +21,8 @@ export interface CommentDeps {
   workdir: string;
   /** null: pages are never shot (tests); the text says so. */
   shoot: PageShot | null;
+  /** The chat's browser page as Master last saw it in comment mode (#306), a png; null when that page is gone. */
+  browserPage?: ((url: string) => Promise<Buffer | null>) | null;
   /** Secrets.redact (rule 5): every comment's text, the quoted file lines included, passes it before it is stored or sent. */
   redact(text: string): string;
   now?: Date;
@@ -69,6 +71,21 @@ async function describe(c: PostComment, d: CommentDeps, n: number): Promise<{ wh
     } else if (a.type === 'area' && a.box.w >= MIN_SIDE && a.box.h >= MIN_SIDE) {
       const buf = await readFile(full);
       if (sniff(buf) || /\.svg$/i.test(full)) await crop(async () => ({ buf: await cropImage(buf, a) }));
+    }
+    return { where, extra, picture };
+  }
+
+  if (c.target.kind === 'browser') {
+    const url = c.target.url;
+    const where = { title: c.target.title.trim() || hostOf(url), what: `page ${url} in the chat's browser` };
+    if (a.type === 'area' && a.box.w >= MIN_SIDE && a.box.h >= MIN_SIDE) {
+      if (!d.browserPage) extra.noPicture = 'pages are not shot here';
+      else
+        await crop(async () => {
+          const png = await d.browserPage!(url);
+          if (!png) throw new Error('the page is no longer the one on screen');
+          return { buf: await cropImage(png, a) };
+        });
     }
     return { where, extra, picture };
   }
@@ -126,6 +143,13 @@ export async function cropImage(buf: Buffer, a: Extract<CommentAnchor, { type: '
   const height = clamp(Math.ceil(a.box.h * ky), 1, H - top);
   return (await loadSharp(await img.png().toBuffer())).extract({ left, top, width, height }).png().toBuffer();
 }
+const hostOf = (url: string) => {
+  try {
+    return new URL(url).host || url;
+  } catch {
+    return url; // not a full address: shown as it is
+  }
+};
 const clamp = (v: number, lo: number, hi: number) => Math.max(lo, Math.min(hi, v));
 
 async function save(d: CommentDeps, buf: Buffer, n: number): Promise<string> {

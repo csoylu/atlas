@@ -9,6 +9,8 @@ import { FileLinkContext, type FileLinks } from './FileRefs.tsx';
 import { DocPanel, usePanelMode, usePanelTabs } from './DocPanel.tsx';
 import { activeTab } from './docPanel.ts';
 import { useComments } from './comments.ts';
+import { useBrowserStatus, useDriving } from './BrowserPane.tsx';
+import { linkTarget } from '@atlas/shared';
 
 export const LAST_AGENT = 'atlas.chat.agent';
 /** Window event: show / hide the documents panel of the chat on screen (⌘\, the palette). */
@@ -103,7 +105,10 @@ function ChatWithPanel(props: Parameters<typeof ChatView>[0] & { chat: Card }) {
       : active?.kind === 'file' && active.path
         ? // A file (#303): its lines on screen; until the editor reports them, the line it was opened at.
           { kind: 'file', path: active.path, ...(lines?.path === active.path ? { from: lines.from, to: lines.to } : { from: active.line ?? 1, to: active.line ?? 1 }) }
-        : null; // the workspace tab (the tree alone): no file to name
+        : active?.kind === 'browser' && active.tab.url
+          ? // The chat's browser (#306): the page's address and title.
+            { kind: 'browser', url: active.tab.url, title: active.tab.title }
+          : null; // the workspace tab (the tree alone), an empty browser tab: nothing to name
   const seesKey = sees ? paneLine(sees) : '';
   useEffect(() => {
     const t = setTimeout(() => void api.reportPane(chat.id, sees).catch(onError), 300);
@@ -123,8 +128,27 @@ function ChatWithPanel(props: Parameters<typeof ChatView>[0] & { chat: Card }) {
     () => (agentId ? { chatId: chat.id, agentId, open: (path, line) => void api.panelOpenFile(chat.id, path, line).then(() => setHidden(false), onError) } : null),
     [chat.id, agentId, onError],
   );
+  // Links clicked in this chat (messages, the task beside it) open in its browser (#298 §3.2), in the desktop app.
+  const browserTab = tabs.find((t) => t.kind === 'browser')?.tab;
+  const driving = useDriving(browserTab);
+  const status = useBrowserStatus();
+  const onLink = useCallback(
+    (e: React.MouseEvent) => {
+      if (!status?.available || e.defaultPrevented || e.button !== 0) return;
+      const a = (e.target as Element).closest?.('a[href]') as HTMLAnchorElement | null;
+      if (!a || a.dataset.external || a.closest('.side-doc:not(.thread-panel)')) return; // an artifact's own links: its page handles them
+      const where = linkTarget(a.href, { meta: e.metaKey || e.ctrlKey, appOrigin: location.origin });
+      if (where !== 'pane') return;
+      e.preventDefault();
+      void api.browserOpen(chat.id, a.href, 'link').then(() => {
+        closeThread();
+        setHidden(false);
+      }, onError);
+    },
+    [status, chat.id, closeThread, onError],
+  );
   return (
-    <div ref={viewRef} className={'chat-view' + (show || thread ? ' with-doc ' + mode : '')}>
+    <div ref={viewRef} className={'chat-view' + (show || thread ? ' with-doc ' + mode : '')} onClickCapture={onLink}>
       <FileLinkContext.Provider value={fileLinks}>
         <CardPanel
           plan={chat.modelId ? props.models.find((m) => m.id === chat.modelId)?.provider === 'chatgpt' : props.planAgents.has(chat.assignee ?? '')}
@@ -140,6 +164,7 @@ function ChatWithPanel(props: Parameters<typeof ChatView>[0] & { chat: Card }) {
           sees={sees}
           comments={comments}
           hiddenDocs={hidden ? tabs.length : 0}
+          hiddenLive={hidden && driving ? `${browserTab?.agentId ?? 'The agent'} is using the browser` : undefined}
           onShowDocs={() => setHidden(false)}
           onHideDocs={show ? () => setHidden(true) : undefined}
           onOpenRef={(r) => {

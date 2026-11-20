@@ -141,7 +141,7 @@ test('a host outside the workspace’s allow-list is refused in the pane, with t
   await expect.poll(async () => (await atlas.call<Tab>('GET', `/browser/tabs/${chat.id}`)).body).toMatchObject({ title: 'Site /dev', error: null });
 });
 
-test('Master’s input is blocked while the agent has the tab; the agent’s CDP input passes; take control gives it back', async () => {
+test('Master’s input is blocked while the agent acts; a click when it is not acting takes control; the agent’s CDP input passes', async () => {
   const chat = (await atlas.call<{ id: string }>('POST', '/agents/atlas/chats')).body;
   await atlas.call('POST', `/browser/tabs/${chat.id}/open`, { url: web.url + '/input' });
   await atlas.call('PUT', '/browser/view', { chatId: chat.id, bounds: { x: 600, y: 80, width: 600, height: 700 } });
@@ -155,24 +155,31 @@ test('Master’s input is blocked while the agent has the tab; the agent’s CDP
       await new Promise((ok) => setTimeout(ok, 300));
     }, chat.id);
   const count = async () => (await atlas.view(chat.id))?.text?.match(/^\d+/)?.[0];
+  const owner = async () => (await atlas.call<Tab>('GET', `/browser/tabs/${chat.id}`)).body.owner;
+  const agentClick = () =>
+    app.evaluate(async (_e, id) => {
+      const b = (globalThis as any).__atlas.engine.browser;
+      for (const type of ['mousePressed', 'mouseReleased']) await b.cdp(id, 'Input.dispatchMouseEvent', { type, x: 100, y: 100, button: 'left', clickCount: 1 }, 'agent');
+      b.acted(id, { verb: 'clicked', target: 'Count', point: { x: 100, y: 100 } });
+    }, chat.id);
 
   await masterClick();
   await expect.poll(count).toBe('1');
 
+  // The agent has the tab and is acting: its CDP click goes through, Master's clicks are refused (and reported).
   await atlas.call('POST', `/browser/tabs/${chat.id}/owner`, { owner: 'agent' });
+  await agentClick();
+  await expect.poll(count).toBe('2');
+  // The agent's input window closes a moment after its CDP call (desktop browser.ts: send).
+  await expect.poll(() => app.evaluate((_e, id) => (globalThis as any).__atlas.host.tabs.get(id).agentInput, chat.id)).toBe(0);
   await masterClick();
   await masterClick();
-  expect(await count()).toBe('1');
+  expect(await count()).toBe('2');
+  expect(await owner()).toBe('agent');
   const blocked = await app.evaluate(() => (globalThis as any).__atlas.events.filter((e: any) => e.type === 'browser.updated' && e.blocked).length);
   expect(blocked).toBeGreaterThanOrEqual(1);
-  // The agent's click (CDP Input, S7's path) goes through.
-  await app.evaluate(async (_e, id) => {
-    const b = (globalThis as any).__atlas.engine.browser;
-    for (const type of ['mousePressed', 'mouseReleased']) await b.cdp(id, 'Input.dispatchMouseEvent', { type, x: 100, y: 100, button: 'left', clickCount: 1 }, 'agent');
-  }, chat.id);
-  await expect.poll(count).toBe('2');
 
-  // Take control: Master's clicks count again, the agent's calls are refused.
+  // Take control: Master's clicks count again, the agent's calls are refused at once.
   await atlas.call('POST', `/browser/tabs/${chat.id}/owner`, { owner: 'master' });
   await masterClick();
   await expect.poll(count).toBe('3');
@@ -185,6 +192,13 @@ test('Master’s input is blocked while the agent has the tab; the agent’s CDP
     }
   }, chat.id);
   expect(refused).toBe('Master is using the browser');
+
+  // Handed back but idle (no recent action): Master's first click takes control (swallowed), the next one counts.
+  await atlas.call('POST', `/browser/tabs/${chat.id}/owner`, { owner: 'agent' });
+  await masterClick();
+  await expect.poll(owner).toBe('master');
+  await masterClick();
+  await expect.poll(count).toBe('4');
 });
 
 /** A tab of agent atlas on the local site, on screen, loaded. */

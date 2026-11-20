@@ -111,6 +111,7 @@ export class Browser {
   private live = new Map<string, Live>();
   /** Tabs handed to the host by this process (views die with the process). */
   private opened = new Set<string>();
+  private shots = new Map<string, { url: string; shot: BrowserShot }>();
   private onScreen: string | null = null;
   /** Tabs Master handed back since the agent's last call (S7 starts that call with « Master handed back the browser »). */
   private handedBack = new Set<string>();
@@ -223,8 +224,23 @@ export class Browser {
   /** A picture of the page as shown (comment mode freezes the pane on it). */
   async shot(chatId: string): Promise<BrowserShot> {
     const host = this.need();
-    this.ensure(this.mustRow(chatId));
-    return host.capture(chatId);
+    const r = this.mustRow(chatId);
+    this.ensure(r);
+    const shot = await host.capture(chatId);
+    // Comment mode freezes the pane on this picture: a comment's area is cropped from it (pageFor), not from a page
+    // that may have moved since. Memory only: after a restart a fresh capture is taken.
+    this.shots.set(chatId, { url: r.url ?? '', shot });
+    return shot;
+  }
+
+  /** The page Master commented on, as a png (#306): the picture comment mode showed, else a fresh one if the tab is still there. */
+  async pageFor(chatId: string, url: string): Promise<Buffer | null> {
+    const kept = this.shots.get(chatId);
+    const shot = kept?.url === url ? kept.shot : this.row(chatId)?.url === url && this.host ? await this.shot(chatId) : null;
+    if (!shot) return null;
+    const m = /^data:image\/\w+;base64,(.*)$/.exec(shot.image);
+    if (!m) throw new Error('the picture of the page is not a data: URL');
+    return Buffer.from(m[1]!, 'base64');
   }
 
   /**
@@ -269,7 +285,12 @@ export class Browser {
     if (owner === 'agent' && r.owner === 'master') {
       this.handedBack.add(chatId);
       this.liveOf(chatId).needs = null; // signed in: the agent carries on
-    } else if (owner === 'master') this.handedBack.delete(chatId);
+    } else if (owner === 'master') {
+      this.handedBack.delete(chatId);
+      // Master drives now: the agent's last action is over (no live dot, no edge; after a hand back it drives again
+      // only once it acts, so Master's click in an idle tab takes control).
+      if (this.live.get(chatId)?.action && !this.live.get(chatId)!.action!.refused) this.liveOf(chatId).action = null;
+    }
     if (this.opened.has(chatId)) host.setOwner(chatId, owner);
     return this.changed(chatId);
   }
@@ -282,6 +303,7 @@ export class Browser {
   close(chatId: string): void {
     this.db.prepare('DELETE FROM browser_tabs WHERE chat_id = ?').run(chatId);
     this.live.delete(chatId);
+    this.shots.delete(chatId);
     if (this.opened.delete(chatId)) this.host?.close(chatId);
     if (this.onScreen === chatId) this.onScreen = null;
     this.onPane(chatId, false);

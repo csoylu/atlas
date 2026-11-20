@@ -124,6 +124,10 @@ export interface BrowserStatus {
   reason: string | null;
 }
 
+/** The workspace's internet setting refused the page (engine network.ts: OFFLINE, notAllowed): the pane says why. */
+export const networkRefusal = (error: string | null): 'offline' | 'host' | null =>
+  !error || !error.endsWith('(Settings → Workspaces)') ? null : error.startsWith('This workspace is offline') ? 'offline' : 'host';
+
 /** Files Atlas never opens in the pane: they download, in the system browser. */
 const DOWNLOAD = /\.(dmg|pkg|zip|tar|gz|tgz|bz2|xz|7z|rar|exe|msi|deb|rpm|appimage|iso)$/i;
 

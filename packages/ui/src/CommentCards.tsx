@@ -1,6 +1,7 @@
 // Comments (#304) in the chat: the numbered chips waiting in the composer, and a sent message's cards (a thumbnail or
 // the quoted lines, then the words). What the agent got (path, version, anchor) stays in the text block; the cards show
 // the human part, and a click opens the place in the pane.
+import { Icon } from './ScreenHeader.tsx';
 import type { ReactNode } from 'react';
 import { parseComment, type ImageBlock, type Message, type ParsedComment } from '@atlas/shared';
 import { ImageThumbs, imageUrl } from './Images.tsx';
@@ -34,7 +35,7 @@ function ChipThumb({ c }: { c: CommentDraft }) {
   if (lines) return <span className="cm-lines">L{lines[0] === lines[1] ? lines[0] : `${lines[0]}–${lines[1]}`}</span>;
   return (
     <span className="cm-kind" aria-hidden="true">
-      {c.kind === 'file' ? '‹›' : <KindIcon kind={c.kind} />}
+      {c.kind === 'file' ? '‹›' : c.kind === 'browser' ? <Icon.globe /> : <KindIcon kind={c.kind} />}
     </span>
   );
 }
