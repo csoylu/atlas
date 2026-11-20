@@ -4,7 +4,7 @@
  * page instead). The four model pages are pages of their own again (#307): no « Models & accounts » tab strip.
  */
 export const SETTINGS_GROUPS = [
-  { title: 'Team', pages: [{ id: 'projects', label: 'Projects' }, { id: 'agents', label: 'Agents' }, { id: 'memory', label: 'Memory' }, { id: 'secrets', label: 'Secrets' }, { id: 'board', label: 'Board & triage' }] },
+  { title: 'Team', pages: [{ id: 'projects', label: 'Projects' }, { id: 'agents', label: 'Agents' }, { id: 'workspaces', label: 'Workspaces' }, { id: 'memory', label: 'Memory' }, { id: 'secrets', label: 'Secrets' }, { id: 'board', label: 'Board & triage' }] },
   {
     title: 'Models',
     pages: [
@@ -90,6 +90,7 @@ export function settingsRoute(path: string): SettingsRoute | null {
 const KEYWORDS: Partial<Record<SettingsPage, string[]>> = {
   projects: ['repo', 'github', 'members', 'changelog'],
   agents: ['role', 'model', 'tasks at once', 'parallel', 'folder', 'workspace', 'enable', 'new agent'],
+  workspaces: ['internet', 'network', 'sandbox', 'allowed hosts', 'proxy', 'offline', 'gh_token', 'git', 'browser data', 'cookies'],
   memory: ['rules', 'preferences', 'facts', 'task notes', 'background review', 'pin', 'archive'],
   board: ['triage', 'review', 'reviewer', 'qa'],
   secrets: ['token', 'password', 'env', 'grant', 'keychain'],

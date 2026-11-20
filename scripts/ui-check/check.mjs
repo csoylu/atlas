@@ -569,6 +569,8 @@ const SECRET_ROWS = [
   secretRow('ANTHROPIC_API_KEY', { kind: 'model_key' }),
   secretRow('OPENROUTER_API_KEY', { kind: 'model_key' }),
 ];
+const SANDBOX_OK = { enabled: true, kind: 'seatbelt', ok: true, reason: null };
+const SANDBOX_DOWN = { enabled: true, kind: 'seatbelt', ok: false, reason: 'sandbox-exec: command not found' };
 const SECRET_STATUS = { kind: 'keychain', exists: true, locked: false, since: null, source: null, error: null };
 const SECRET_LOCKED = { kind: 'file', exists: true, locked: true, since: secAgo(3600), source: null, error: null };
 const secretList = (status) => ({ store: status.kind === 'keychain' ? 'macOS Keychain' : 'Encrypted file', status, names: SECRET_ROWS.filter((r) => r.hasValue).map((r) => r.name), secrets: SECRET_ROWS });
@@ -684,6 +686,10 @@ const SCREENS = [
   { name: 'workflow-run-pr', hash: '#/workflows/wf_uicheckev/runs/wr_uicheckev', ready: '.wf-run, .wf-phone', workflows: true, keys: ['.wf-title', '.wf-runs button'] },
   { name: 'workflow-loop', hash: '#/workflows/wf_uicheckloop', ready: '.wf-node, .wf-phone', workflows: true, keys: ['.wf-title'] },
   { name: 'workflow-new', hash: '#/workflows', ready: '.wf-row', workflows: true, then: { js: `[...document.querySelectorAll('button')].find((b) => b.textContent.trim() === 'New workflow')?.click(); for (let i = 0; i < 40 && !document.querySelector('.wf-newdlg'); i++) await new Promise((r) => setTimeout(r, 50)); [...document.querySelectorAll('.wf-newdlg [role=radio]')].find((b) => /Task event/.test(b.textContent))?.click();`, ready: '.wf-newdlg' }, keys: ['.wf-newdlg h2'] },
+  { name: 'settings-workspaces', hash: '#/settings/workspaces', ready: '.ws-agent', workspaces: SANDBOX_OK, secrets: SECRET_STATUS, keys: ['.settings-nav a', '.set-sec-title', '.set-label', '.ws-agent-name', '.ws-net', '.ws-host', '.ws-msg b', '.ws-ref-row .btn'] },
+  { name: 'settings-workspaces-refused', hash: '#/settings/workspaces', ready: '.ws-agent', workspaces: SANDBOX_OK, secrets: SECRET_STATUS, then: { js: `document.querySelector('.ws-ref').scrollIntoView({ block: 'center' });`, ready: '.ws-ref-row' }, keys: ['.ws-ref-row .btn', '.ws-ref-row .mono', '.ws-host'] },
+  { name: 'settings-workspaces-pending', hash: '#/settings/workspaces', ready: '.ws-agent', workspaces: SANDBOX_OK, secrets: SECRET_STATUS, then: { js: `document.querySelector('.ws-pmsg').scrollIntoView({ block: 'start' });`, ready: '.ws-pmsg' }, keys: ['.ws-msg b', '.ws-agent-name', '.ws-net'] },
+  { name: 'settings-workspaces-unavailable', hash: '#/settings/workspaces', ready: '.ws-top', workspaces: SANDBOX_DOWN, secrets: SECRET_STATUS, keys: ['.ws-top b', '.set-sec-title', '.ws-agent-name'] },
   { name: 'settings-secrets', hash: '#/settings/secrets', ready: '.sec-row', secrets: SECRET_STATUS, keys: ['.settings-group-title', '.sec-grant.all', '.sec-desc', '.sec-row .badge', '.sec-row .model-actions button', '.set-sec-title, .section-head h2'] },
   { name: 'settings-secrets-add', hash: '#/settings/secrets', ready: '.sec-row', secrets: SECRET_STATUS, then: { js: `[...document.querySelectorAll('.model-row.add')].find((b) => b.textContent.includes('Add a secret')).click(); await new Promise((r) => setTimeout(r, 100)); document.querySelector('.segmented [role=radio]:nth-child(2)').click(); await new Promise((r) => setTimeout(r, 100)); document.querySelector('.sec-form').scrollIntoView({ block: 'start' });`, ready: '.sec-pick label' }, keys: ['.sec-form .field', '.segmented button', '.sec-pick label', '.sec-form .actions button'] },
   { name: 'settings-secrets-locked', hash: '#/settings/secrets', ready: '.sec-lock', secrets: SECRET_LOCKED, keys: ['.sec-lock h3', '.sec-lock .sec-paused', '.update-badge-label', '.update-badge-v'] },
@@ -752,6 +758,26 @@ const projects2 = async () => {
   // Always there (the project page and the tasks moved into it need it), even when the live data has a second project.
   return live.some((p) => p.id === PJ2) ? live : [...live, fixture];
 };
+// Settings → Workspaces (#308): every state of the mockup (#299 v8) on the live projects plus Datinel: a member with its
+// own Allowed hosts and refused hosts, one at Off, background commands pending on the project's old default.
+const workspacesProjects = async () =>
+  (await projects2()).map((p) => {
+    const net = { network: p.network ?? 'on', allowedHosts: p.allowedHosts?.length ? p.allowedHosts : ['github.com', '*.npmjs.org'] };
+    if (p.id !== PJ2) return { ...p, ...net, members: p.members.map((m, i) => ({ network: null, allowedHosts: null, ...m, ...(i === 1 ? { network: 'hosts', allowedHosts: ['github.com', '*.npmjs.org', 'playwright.azureedge.net'] } : {}) })) };
+    return { ...p, network: 'hosts', allowedHosts: ['github.com', '*.npmjs.org', 'api.cloudflare.com'], members: p.members.map((m, i) => ({ ...m, network: i === 0 ? 'on' : i === 2 ? 'off' : null, allowedHosts: null, cloneState: 'ready', cloneError: null, cloneProgress: null })) };
+  });
+const workspacesRefusals = async (id) => {
+  const ps = await workspacesProjects();
+  const p = ps.find((x) => x.id === id);
+  const m = p?.members[1];
+  return m ? [{ agentId: m.agentId, host: 'registry.yarnpkg.com', count: 12, lastAt: '2026-11-20T09:00:00.000Z' }, { agentId: m.agentId, host: 'fonts.googleapis.com', count: 3, lastAt: '2026-11-20T08:00:00.000Z' }] : [];
+};
+const workspacesPending = async (id) => {
+  const ps = await workspacesProjects();
+  const p = ps.find((x) => x.id === id);
+  const m = p?.members.find((x) => x.network === null);
+  return id === PJ2 && m ? [{ agentId: m.agentId, level: 'on', count: 2 }] : [];
+};
 const inProject2 = (list) => list.map((c, i) => (i % 3 === 1 ? { ...c, projectId: PJ2 } : c));
 
 // ── API interception: fixtures in, writes out ──
@@ -780,6 +806,17 @@ handlers.set('Fetch.requestPaused', async ({ requestId, request }) => {
         default: return await send('Fetch.continueRequest', { requestId });
       }
     }
+    if (screen?.workspaces && request.method === 'GET' && url.pathname === '/api/projects') return await json(await workspacesProjects());
+    if (screen?.workspaces && request.method === 'GET' && url.pathname === '/api/sandbox') return await json(screen.workspaces);
+    if (screen?.workspaces && request.method === 'GET' && url.pathname === '/api/secrets') {
+      const ids = (await get('/agents')).map((a) => a.id);
+      const l = secretList(SECRET_STATUS);
+      return await json({ ...l, secrets: [secretRow('GH_TOKEN', { description: 'GitHub, fine-grained', grant: 'agents', agents: ids.slice(0, 2) }), ...l.secrets] });
+    }
+    const wsRefusals = screen?.workspaces && request.method === 'GET' && /^\/api\/projects\/([^/]+)\/refusals$/.exec(url.pathname);
+    if (wsRefusals) return await json(await workspacesRefusals(decodeURIComponent(wsRefusals[1])));
+    const wsPending = screen?.workspaces && request.method === 'GET' && /^\/api\/projects\/([^/]+)\/pending$/.exec(url.pathname);
+    if (wsPending) return await json(await workspacesPending(decodeURIComponent(wsPending[1])));
     if (screen?.projects2 && request.method === 'GET' && url.pathname === '/api/projects') return await json(await projects2());
     if (screen?.projects2 && request.method === 'GET' && url.pathname === '/api/cards')
       return await json(inProject2([...(await get('/cards' + url.search)), ...(screen.inbox ? INBOX_CARDS : [])]));
@@ -1171,6 +1208,30 @@ const ocr = new Map(
     .map((l) => JSON.parse(l))
     .map((o) => [o.file, o]),
 );
+// Vision on a whole page sometimes drops a line it reads at once on its own (« Available to add » level with a nav item
+// of the next column, #308). A label it found nothing at all for gets a second read: the label's box alone (+24 px).
+const sharp = (await import('sharp')).default;
+const missed = [];
+for (const { key, file } of shots) {
+  const { lines, w, h } = ocr.get(file);
+  const scale = w / Number(key.split(' ')[0]);
+  for (const [i, k] of report[key].keys.entries()) {
+    const box = { l: k.x * scale - 4, t: k.y * scale - 4, r: (k.x + k.w) * scale + 4, b: (k.y + k.h) * scale + 4 };
+    if (lines.some((o) => o.y + o.h / 2 >= box.t && o.y + o.h / 2 <= box.b && o.x < box.r && o.x + o.w > box.l)) continue;
+    const left = Math.max(0, Math.floor(box.l - 24)), top = Math.max(0, Math.floor(box.t - 24));
+    const width = Math.min(w, Math.ceil(box.r + 24)) - left, height = Math.min(h, Math.ceil(box.b + 24)) - top;
+    if (width < 8 || height < 8) continue;
+    const crop = join(OUT, `ocr-crop-${missed.length}.png`);
+    await sharp(file).extract({ left, top, width, height }).toFile(crop);
+    missed.push({ key, i, crop, left, top });
+  }
+}
+const recrop = new Map(missed.length ? runOcr(missed.map((m) => m.crop)).trim().split('\n').map((l) => JSON.parse(l)).map((o) => [o.file, o.lines]) : []);
+for (const m of missed) {
+  const { lines } = ocr.get(shots.find((s) => s.key === m.key).file);
+  for (const o of recrop.get(m.crop) ?? []) lines.push({ ...o, x: o.x + m.left, y: o.y + m.top });
+  rmSync(m.crop, { force: true });
+}
 for (const { key, file } of shots) {
   const { lines, w } = ocr.get(file);
   const scale = w / Number(key.split(' ')[0]);

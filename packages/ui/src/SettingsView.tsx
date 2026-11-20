@@ -16,6 +16,7 @@ import { findSettings, SETTINGS_GROUPS, SETTINGS_PAGES, type SettingsPage } from
 import { Icon } from './ScreenHeader.tsx';
 import { SetRow, SetRows, SetSec } from './SettingsKit.tsx';
 import { ProjectsPage } from './ProjectsPage.tsx';
+import { WorkspacesPage } from './WorkspacesPage.tsx';
 import { useProjects } from './projects.tsx';
 import { THEMES, type ThemeChoice } from './theme.ts';
 import type { MessageStream } from './useMessages.ts';
@@ -173,6 +174,8 @@ export function SettingsView(props: {
               <ProjectsPage rest={props.memoryRest} agents={props.agents} cards={props.cards} workflows={props.workflows} onError={onError} />
             ) : page === 'agents' ? (
               <AgentsView rest={props.memoryRest} settings={props.settings} cards={props.cards} chats={props.chats} onSettings={props.onSettings} onAgentsChanged={props.onAgentsChanged} onError={onError} />
+            ) : page === 'workspaces' ? (
+              <WorkspacesPage agents={props.agents} stream={stream} onError={onError} />
             ) : page === 'memory' ? (
               <MemoryPage rest={props.memoryRest} agents={props.agents} cards={props.cards} chats={props.chats} stream={stream} settings={props.settings} models={props.models} onSettings={props.onSettings} onError={onError} />
             ) : page === 'board' ? (

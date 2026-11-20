@@ -1016,6 +1016,18 @@ export function createApi(deps: {
     const p = projects.get(req.params.id);
     res.json(deps.network.refusals(p.id));
   });
+  /** Background commands still running on an older internet level, per workspace (#308, « Change pending »). */
+  app.get('/api/projects/:id/pending', (req, res) => {
+    const p = projects.get(req.params.id);
+    res.json(deps.network.pending(p.id));
+  });
+  /** « Clear browser data » (#298 §2.5): the workspace's browser profile (cookies, logins, storage, cache). */
+  app.post('/api/projects/:id/members/:agent/browser-data/clear', async (req, res) => {
+    const p = projects.get(req.params.id);
+    if (!p.members.some((m) => m.agentId === req.params.agent)) throw new NotFoundError(`@${req.params.agent} is not a member of project ${p.name}`);
+    await deps.browser.clearData(p.id, req.params.agent);
+    res.status(204).end();
+  });
   /** Archive (nothing deleted): its workflows go off, its runs stop, its tasks and chats become read-only. */
   app.post('/api/projects/:id/archive', (req, res) => {
     const p = projects.get(req.params.id);

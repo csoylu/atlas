@@ -67,6 +67,8 @@ export interface BrowserHost {
   capture(id: string): Promise<BrowserShot>;
   /** Show the agent's action over the page (#306): a pulse on `point` (viewport CSS px) and the caption, for a moment. */
   signal(id: string, s: { caption: string; point: { x: number; y: number } | null }): void;
+  /** Delete a browser profile's data (cookies, logins, storage, cache): « Clear browser data » (#308). */
+  clearData(partition: string): Promise<void>;
   on(listener: (e: HostEvent) => void): () => void;
 }
 
@@ -298,6 +300,14 @@ export class Browser {
   /** True once after Master handed the tab back: the agent's next call says so (S7). */
   takeHandBack(chatId: string): boolean {
     return this.handedBack.delete(chatId);
+  }
+
+  /**
+   * « Clear browser data » of a workspace (#308): its profile's cookies, logins, storage and cache. Open tabs stay
+   * open and are signed out at their next request.
+   */
+  async clearData(projectId: string, agentId: string): Promise<void> {
+    await this.need().clearData(partitionOf(projectId, agentId));
   }
 
   close(chatId: string): void {

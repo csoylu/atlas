@@ -6,7 +6,7 @@ import { isIP, connect, type Socket } from 'node:net';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import type { Duplex } from 'node:stream';
-import type { NetworkLevel, NetworkRefusal } from '@atlas/shared';
+import { hostAllowed, type NetworkLevel, type NetworkPending, type NetworkRefusal } from '@atlas/shared';
 import type { Db } from './store/db.ts';
 
 /**
@@ -28,11 +28,8 @@ export interface NetworkSetting {
   hosts: string[];
 }
 
-/** `host` matches a rule `host` exactly, or `*.suffix` for the suffix itself and every subdomain of it. */
-export function hostAllowed(host: string, rules: readonly string[]): boolean {
-  const h = host.toLowerCase().replace(/\.$/, '').replace(/^\[(.*)\]$/, '$1');
-  return rules.some((r) => (r.startsWith('*.') ? h === r.slice(2) || h.endsWith(r.slice(1)) : h === r));
-}
+/** The host check lives in shared (#308: Settings hides refusals the list now allows). */
+export { hostAllowed };
 
 const parseList = (s: string | null): string[] | null => {
   if (s === null) return null;
@@ -155,6 +152,21 @@ export class Network {
         last_at: string;
       }[]
     ).map((r) => ({ agentId: r.agent_id, host: r.host, count: r.count, lastAt: r.last_at }));
+  }
+
+  /**
+   * Background commands still running on a level that is no longer their workspace's (#308, « Change pending »). A
+   * command keeps its sandbox until it ends; one started at Allowed hosts goes through the proxy, which reads the
+   * setting at every connection, so it follows every change and is never pending.
+   */
+  pending(projectId: string): NetworkPending[] {
+    const rows = this.db
+      .prepare(
+        `SELECT agent_id, network, COUNT(*) AS n FROM background_processes
+         WHERE status = 'running' AND project_id = ? AND network IN ('on', 'off') GROUP BY agent_id, network`,
+      )
+      .all(projectId) as { agent_id: string; network: NetworkLevel; n: number }[];
+    return rows.filter((r) => this.setting(projectId, r.agent_id).level !== r.network).map((r) => ({ agentId: r.agent_id, level: r.network, count: r.n }));
   }
 
   /** Start the proxy: 127.0.0.1 on a free port, plus a unix socket on Linux. */

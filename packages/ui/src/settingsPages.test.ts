@@ -4,7 +4,7 @@ import { findSettings, SETTINGS_GROUPS, SETTINGS_PAGES, settingsLabel, settingsP
 describe('settings routes', () => {
   it('has the navigation of the remake (#307): Team, Models (four pages), App', () => {
     expect(SETTINGS_GROUPS.map((g) => [g.title, g.pages.map((p) => p.id)])).toEqual([
-      ['Team', ['projects', 'agents', 'memory', 'secrets', 'board']],
+      ['Team', ['projects', 'agents', 'workspaces', 'memory', 'secrets', 'board']],
       ['Models', ['model-list', 'subscriptions', 'api-keys', 'local']],
       ['App', ['profile', 'appearance', 'voice', 'usage', 'about']],
     ]);
@@ -81,6 +81,8 @@ describe('find a setting', () => {
     expect(findSettings('tasks at once')).toEqual(['agents']);
     expect(findSettings('triage')).toEqual(['board']);
     expect(findSettings('version')).toEqual(['about']);
+    expect(findSettings('allowed hosts')).toEqual(['workspaces']);
+    expect(findSettings('internet')).toEqual(['workspaces']);
   });
   it('finds nothing for a word it does not know', () => {
     expect(findSettings('zzz')).toEqual([]);

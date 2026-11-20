@@ -12,6 +12,10 @@ const SECRET = 'tok-very-secret-123456';
 
 /** One page: a button (ref 5), a text box (ref 7, its value), a select (ref 9). */
 class FakeHost implements BrowserHost {
+  cleared: string[] = [];
+  async clearData(partition: string): Promise<void> {
+    this.cleared.push(partition);
+  }
   sent: { method: string; params?: Record<string, unknown> }[] = [];
   url = '';
   value = '';

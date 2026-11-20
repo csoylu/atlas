@@ -3226,6 +3226,54 @@ button.wfl-ghead:hover { color: var(--text); background: var(--hover); }
   .set-ctl input:not([type=checkbox]), .set-ctl textarea, .set-ctl select { font-size: var(--fs-large); } /* iOS zooms in below 16 px */
 }
 
+/* ── Settings → Workspaces (#308, mockup #299 v8, fields of #298 §2.5). A member is a <details>: the summary is its
+   row (face, @agent, workspace path, level), the body its own settings. ── */
+.ws-agent + .ws-agent { border-top: 1px solid var(--line); }
+.ws-agent > summary { display: flex; align-items: center; gap: 12px; padding: 12px 16px; cursor: pointer; list-style: none; }
+.ws-agent > summary::-webkit-details-marker { display: none; }
+.ws-agent > summary .dot-avatar { width: 28px; height: 28px; flex: none; }
+.ws-agent-main { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 3px; }
+.ws-agent-name { font-size: var(--fs-base); font-weight: var(--fw-medium); line-height: var(--lh-tight); color: var(--text); display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
+.ws-agent-sub { display: flex; align-items: center; gap: 6px 14px; flex-wrap: wrap; min-width: 0; }
+.ws-agent-path { font-family: var(--mono); font-size: var(--fs-small); color: var(--muted); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; min-width: 0; }
+.ws-agent > summary select { width: 250px; flex: none; }
+.ws-body { margin: 0 16px 14px 56px; border: 1px solid var(--line); border-radius: var(--radius-card); }
+.ws-body > .set-row + .set-row, .ws-body > .ws-msg + .set-row { border-top: 1px solid var(--line); }
+.ws-net { display: inline-flex; align-items: center; gap: 6px; font-size: var(--fs-small); line-height: var(--lh-tight); color: var(--muted); }
+.ws-net i { width: 7px; height: 7px; border-radius: 50%; background: var(--positive); display: inline-block; }
+.ws-net.off i { background: var(--negative); }
+.ws-net.hosts i { background: var(--warning); }
+.badge.override { background: var(--accent-soft); color: var(--accent); }
+.ws-hl { display: flex; flex-wrap: wrap; gap: 6px; }
+.ws-host { font-family: var(--mono); font-size: var(--fs-small); color: var(--text); max-width: 100%; }
+.ws-host > span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.ws-host .x { display: inline-flex; color: var(--muted); }
+.ws-none { font-size: var(--fs-small); color: var(--muted); }
+.ws-add { display: flex; gap: 8px; margin-top: 10px; }
+.set-ctl .ws-add input { flex: 1; width: auto; max-width: 320px; font-size: var(--fs-small); }
+.ws-col { display: flex; flex-direction: column; align-items: stretch; min-width: 0; }
+.ws-err { color: var(--neg-ink); font-size: var(--fs-small); line-height: var(--lh-normal); margin-top: 6px; }
+.ws-ref { display: flex; flex-direction: column; }
+.ws-ref-row { display: flex; align-items: center; gap: 12px; padding: 6px 0; font-size: var(--fs-small); }
+.ws-ref-row + .ws-ref-row { border-top: 1px solid var(--line); }
+.ws-ref-row .mono { flex: 1; min-width: 0; overflow-wrap: anywhere; color: var(--text); font-family: var(--mono); }
+.ws-ref-row .muted { color: var(--muted); }
+.ws-msg { display: flex; flex-direction: column; gap: 4px; padding: 10px 12px; border-radius: var(--radius-control); font-size: var(--fs-small); line-height: var(--lh-normal); color: var(--text); }
+.ws-msg b { font-size: var(--fs-base); font-weight: var(--fw-bold); line-height: var(--lh-tight); }
+.ws-msg.info { margin: 12px 12px 0; background: var(--accent-soft); border: 1px solid var(--accent); }
+.ws-msg.ws-pmsg { margin: 0; }
+.ws-msg.info + .set-row { border-top: 0 !important; }
+.ws-warn { color: var(--warn-ink); font-weight: var(--fw-medium); }
+.setb > .state-err.ws-top { margin: 4px 0 0; }
+.ws-git { text-align: right; }
+@media (width <= 640px) {
+  .ws-agent > summary { flex-wrap: wrap; }
+  .ws-agent > summary select { width: 100%; }
+  .ws-body { margin: 0 12px 12px; }
+  .set-ctl .ws-add input { max-width: none; }
+  .ws-git { text-align: left; }
+}
+
 /* ── Comment mode (#304, mockup « the right pane as a workbench »): pins, areas, the box, the hint, chips, sent cards ── */
 .sd-btn.icon-only.on { background: var(--accent-soft); }
 .sd-body.commenting .doc-md { cursor: crosshair; }

@@ -231,6 +231,14 @@ export class ElectronBrowser implements BrowserHost {
     if (!o.webContents.isDestroyed()) o.webContents.close();
   }
 
+  /** « Clear browser data » (#308): cookies, logins, every storage and the cache of a workspace's profile. */
+  async clearData(partition: string): Promise<void> {
+    const ses = session.fromPartition(partition);
+    await ses.clearStorageData();
+    await ses.clearCache();
+    await ses.clearAuthCache();
+  }
+
   /** The workspace's session, its proxy set (again when the token changed: a new engine start). */
   private session(t: BrowserHostTab): Session {
     const ses = session.fromPartition(t.partition);
