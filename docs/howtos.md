@@ -35,6 +35,8 @@ what it takes away is listed here.
 - **Not there:** the Atlas data dir (`atlas.db`, other agents' workspaces), your real home (`~/.ssh`, `~/.config/gh`,
   keychains), the shared `/tmp`, the live engine's port, Docker, `open`, `osascript`, `launchctl`, Google Chrome.app, ssh.
   Use `$TMPDIR`, never a literal `/tmp/…`. Ask the engine through your tools, not `curl /api`.
+  **Quote `"$TMPDIR"` and `"$HOME"`**: both sit under `Application Support`, a path with a space. Tests that pass a
+  path to a shell command or parse it from output quote it too (#314).
 - **Internet** (Settings → Workspaces) is On, Allowed hosts or Off per project and per agent. With Allowed hosts the
   proxy variables are set for you (`HTTPS_PROXY`, `NODE_USE_ENV_PROXY=1`) and a host outside the list answers
   « <host> is not in this workspace's allowed hosts »: ask Master to allow it. Off: only localhost works (your own
@@ -50,6 +52,9 @@ what it takes away is listed here.
   report it to atlas.
 - **Browser:** `chrome-headless-shell --no-sandbox` from Playwright's cache (`npx playwright install
   chromium-headless-shell` when missing; `scripts/ui-check/tooling.mjs` does it for you). `ATLAS_CHROME` overrides.
+- **Tests inside the sandbox:** `npm run typecheck && npm test` pass (3 tests skip by name where the sandbox refuses `ps`,
+  `osascript` or a long unix-socket path; CI and your own shell run them). `test:full`'s slow suites that need the host
+  (real Chrome, voice models) skip or fail there, by design.
 - **Check a command as an agent runs it:** `node --import tsx scripts/test/sandbox-run.ts <clone> -- '<command>'` (the real
   profile on a copy of the clone, GH_TOKEN passed through from your environment).
 - **Master only** (need a real window, a screen or `/Applications`): `npm run desktop`, `orb-check`, `install:mac`.

@@ -1159,14 +1159,28 @@ screen = null;
 ws.close();
 
 // OCR every screenshot in one process, then match each key label with the text read in its box.
+// Apple Vision cannot start inside the agent sandbox (#314: it reads ~/Library/Caches, denied there). The first screenshot
+// is a probe: if Vision fails there the label check is skipped, loudly, and every other check runs. Elsewhere a Vision
+// failure still stops the run.
+let ocrSkipped = null;
+const runOcr = (files) => execFileSync(OCR_BIN, files, { encoding: 'utf8', maxBuffer: 64 << 20, stdio: ['ignore', 'pipe', 'pipe'] });
+try {
+  runOcr([shots[0].file]);
+} catch (e) {
+  if (!/Fatal error|Operation not permitted/.test(String(e.stderr ?? ''))) throw e;
+  ocrSkipped = String(e.stderr ?? e.message).split('\n').find((l) => /Fatal error|not permitted/.test(l)) ?? 'Vision failed';
+  console.log(`\nOCR skipped: Apple Vision cannot run here (${ocrSkipped.slice(0, 120)}). Key labels are NOT checked; every other check ran.`);
+}
 const ocr = new Map(
-  execFileSync(OCR_BIN, shots.map((s) => s.file), { encoding: 'utf8', maxBuffer: 64 << 20 })
-    .trim()
-    .split('\n')
-    .map((l) => JSON.parse(l))
-    .map((o) => [o.file, o]),
+  ocrSkipped
+    ? []
+    : runOcr(shots.map((s) => s.file))
+        .trim()
+        .split('\n')
+        .map((l) => JSON.parse(l))
+        .map((o) => [o.file, o]),
 );
-for (const { key, file } of shots) {
+for (const { key, file } of ocrSkipped ? [] : shots) {
   const { lines, w } = ocr.get(file);
   const scale = w / Number(key.split(' ')[0]);
   for (const k of report[key].keys) {
@@ -1186,7 +1200,7 @@ for (const { key, file } of shots) {
   }
 }
 
-writeFileSync(join(OUT, 'report.json'), JSON.stringify({ base: BASE, chat: chat.id, modalCard: modalCard.id, doc: doc?.id, report, refusedWrites }, null, 1));
+writeFileSync(join(OUT, 'report.json'), JSON.stringify({ ocrSkipped, base: BASE, chat: chat.id, modalCard: modalCard.id, doc: doc?.id, report, refusedWrites }, null, 1));
 let total = 0;
 for (const [key, r] of Object.entries(report)) {
   total += r.issues.length;
@@ -1194,6 +1208,6 @@ for (const [key, r] of Object.entries(report)) {
 }
 if (refusedWrites.length) console.log('Writes refused (read-only harness):\n  ' + [...new Set(refusedWrites)].join('\n  '));
 const labels = Object.values(report).reduce((n, r) => n + r.keys.filter((k) => k.ocr).length, 0);
-console.log(`${Object.keys(report).length} screens × checks, ${labels} labels OCR'd: ${total ? total + ' issue(s)' : 'no issues'}. Screenshots: ${OUT}`);
+console.log(`${Object.keys(report).length} screens × checks, ${ocrSkipped ? 'labels NOT checked (OCR unavailable here)' : `${labels} labels OCR'd`}: ${total ? total + ' issue(s)' : 'no issues'}. Screenshots: ${OUT}`);
 cleanup();
 process.exit(total ? 1 : 0);
