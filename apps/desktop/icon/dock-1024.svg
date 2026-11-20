@@ -1,0 +1,17 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1024 1024" width="1024" height="1024"><defs><clipPath id="t"><path d="M185 0H639A185 185 0 0 1 824 185V639A185 185 0 0 1 639 824H185A185 185 0 0 1 0 639V185A185 185 0 0 1 185 0Z"/></clipPath></defs><g transform="translate(100 100)" clip-path="url(#t)"><defs>
+<radialGradient id="dbg" cx=".5" cy=".45" r=".75"><stop offset="0" stop-color="#16202b"/><stop offset="1" stop-color="#05080c"/></radialGradient>
+<radialGradient id="dbase" cx=".5" cy=".55" r=".6"><stop offset="0" stop-color="#1b6c80"/><stop offset="1" stop-color="#0b1a2a"/></radialGradient>
+<linearGradient id="dgls" x1="0" y1="0" x2="0" y2="1"><stop offset="0" stop-color="#fff" stop-opacity=".7"/><stop offset="1" stop-color="#fff" stop-opacity="0"/></linearGradient>
+<clipPath id="dc"><circle cx="412" cy="412" r="276"/></clipPath>
+<filter id="db1" x="-50%" y="-50%" width="200%" height="200%"><feGaussianBlur stdDeviation="38"/></filter>
+<filter id="db2" x="-50%" y="-50%" width="200%" height="200%"><feGaussianBlur stdDeviation="50"/></filter></defs>
+<rect width="824" height="824" fill="url(#dbg)"/>
+<circle cx="412" cy="412" r="300" fill="#6cc0d2" opacity=".45" filter="url(#db2)"/>
+<circle cx="412" cy="412" r="276" fill="url(#dbase)"/>
+<g clip-path="url(#dc)"><g filter="url(#db1)">
+<path d="M150 470 C 250 260 420 560 640 330 L 700 520 C 560 640 330 420 170 640 Z" fill="#6cc0d2"/>
+<path d="M200 250 C 330 160 470 350 600 220 L 650 330 C 500 430 380 260 230 380 Z" fill="#8b7cf6"/>
+<ellipse cx="520" cy="560" rx="150" ry="70" fill="#f5b971" transform="rotate(-25 520 560)"/>
+<ellipse cx="330" cy="380" rx="90" ry="50" fill="#fff" opacity=".85" transform="rotate(-20 330 380)"/></g>
+<ellipse cx="370" cy="250" rx="190" ry="105" fill="url(#dgls)" transform="rotate(-18 370 250)"/></g>
+<circle cx="412" cy="412" r="274" fill="none" stroke="#fff" stroke-opacity=".35" stroke-width="5"/></g></svg>

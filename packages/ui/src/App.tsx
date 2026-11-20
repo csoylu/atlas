@@ -1,5 +1,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from 'react';
 import { AgentFace } from './AgentFace.tsx';
+import { Mark } from './Mark.tsx';
+import { markState } from './markState.ts';
 import { cardRef, type SecretStoreStatus, type UpdateStatus, type Doc, type Agent, type Card, type ChatGptStatus, type Inbox as InboxData, type Model, type Settings, type Workflow, type Project } from '@atlas/shared';
 import { api, subscribe, type AuthState } from './api.ts';
 import { Board } from './Board.tsx';
@@ -547,7 +549,7 @@ export function App() {
 
   const wsRow = (
     <div className="ws-row">
-      <Mark />
+      <Mark state={markState(cards, chats, shownInbox)} />
       <span className="ws-name">Atlas</span>
       <span className="ws-scope">{auth.enabled ? 'Server' : ''}</span>
       <span className="ws-acts">
@@ -915,18 +917,6 @@ export function App() {
       {settings?.userName && settings.userAbout && claudeWelcome && !chatgpt?.showWelcome && <ClaudeWelcome onDone={() => api.updateClaude({ welcomed: true }).then((c) => setClaudeWelcome(c.showWelcome), fail)} />}
     </div>
     </ProjectsCtx.Provider>
-  );
-}
-
-/** The Atlas mark: a meridian and a parallel on a globe, drawn in the accent. */
-function Mark({ size = 20 }: { size?: number }) {
-  return (
-    <svg className="mark" viewBox="0 0 24 24" width={size} height={size} aria-hidden="true">
-      <rect width="24" height="24" rx="7" fill="var(--accent)" />
-      <circle cx="12" cy="12" r="6.25" fill="none" stroke="var(--on-accent)" strokeWidth="1.5" />
-      <ellipse cx="12" cy="12" rx="2.6" ry="6.25" fill="none" stroke="var(--on-accent)" strokeWidth="1.5" />
-      <path d="M5.75 12h12.5" stroke="var(--on-accent)" strokeWidth="1.5" />
-    </svg>
   );
 }
 
