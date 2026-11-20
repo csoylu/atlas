@@ -1,4 +1,4 @@
-import type { PaneSees, About, Account, Agent, Card, CardStatus, ChatGptModel, ChatGptStatus, ChatUsage, ClaudePlanModel, ClaudePlanStatus, ClearEvent, CompactResult, CreateAccount, CreateAgent, CreateCard, CreateModelRequest, CreatePlanAccount, CreateWorkflow, Doc, DocContent, DocHit, DocVersion, FileChange, Folder, Inbox, LocalModel, LocalPull, LocalStatus, Memory, MemoryBudget, MemoryChange, MemoryProposal, MemoryQuery, Message, Model, ModelTest, Notification, PanelTab, PlanProvider, PostComment, RewindPreview, RewindResult, Run, CreateSecret, SecretInfo, SecretList, SecretStoreStatus, UpdateSecret, SaveWorkflowGraph, ServerEvent, Settings, Timeline, ToolCallTiming, UpdateAccount, UpdateAgent, UpdateChatGpt, UpdateClaudePlan, UpdateLocal, UpdateMemory, UpdateModelRequest, UpdatePlanAccount, UpdateStatus, UpdateVoice, Upload, UsageSummary, VoiceName, VoiceStatus, TriggerPreview, UpdateWorkflow, Workflow, WorkflowRun, WorkflowField, WorkflowRunContext, TaskWorkflow, RunWorkflow, Project, CreateProject, UpdateProject, RepoCheck, WebhookInfo, TryCondition, ConditionTryResult } from '@atlas/shared';
+import type { PaneSees, About, Account, Agent, Card, CardStatus, ChatGptModel, ChatGptStatus, ChatUsage, ClaudePlanModel, ClaudePlanStatus, ClearEvent, CompactResult, CreateAccount, CreateAgent, CreateCard, CreateModelRequest, CreatePlanAccount, CreateWorkflow, Doc, DocContent, DocHit, PostComment, DocVersion, FileChange, Folder, Inbox, LocalModel, LocalPull, LocalStatus, Memory, MemoryBudget, MemoryChange, MemoryProposal, MemoryQuery, Message, Model, ModelTest, Notification, PanelTab, PlanProvider, WsListing, WsFile, WsStat, WsSaveResult, SaveWsFile, RewindPreview, RewindResult, Run, CreateSecret, SecretInfo, SecretList, SecretStoreStatus, UpdateSecret, SaveWorkflowGraph, ServerEvent, Settings, Timeline, ToolCallTiming, UpdateAccount, UpdateAgent, UpdateChatGpt, UpdateClaudePlan, UpdateLocal, UpdateMemory, UpdateModelRequest, UpdatePlanAccount, UpdateStatus, UpdateVoice, Upload, UsageSummary, VoiceName, VoiceStatus, TriggerPreview, UpdateWorkflow, Workflow, WorkflowRun, WorkflowField, WorkflowRunContext, TaskWorkflow, RunWorkflow, Project, CreateProject, UpdateProject, RepoCheck, WebhookInfo, TryCondition, ConditionTryResult } from '@atlas/shared';
 
 /** HTTP error with the parsed body (e.g. a 409's details). */
 export class ApiError extends Error {
@@ -86,6 +86,17 @@ export const api = {
   panelClose: (chatId: string, docId: string | null) => call<PanelTab[]>('POST', `/chats/${chatId}/panel/close`, { docId }),
   panelFocus: (chatId: string, docId: string) => call<PanelTab[]>('POST', `/chats/${chatId}/panel/focus`, { docId }),
   panelSeen: (chatId: string, docId: string) => call<PanelTab[]>('POST', `/chats/${chatId}/panel/seen`, { docId }),
+  // ── Files of the chat's agent workspace (#303) ──
+  panelOpenFile: (chatId: string, path: string, line: number | null = null) => call<PanelTab[]>('POST', `/chats/${chatId}/panel/file/open`, { path, line }),
+  panelCloseFile: (chatId: string, path: string) => call<PanelTab[]>('POST', `/chats/${chatId}/panel/file/close`, { path }),
+  panelFocusFile: (chatId: string, path: string) => call<PanelTab[]>('POST', `/chats/${chatId}/panel/file/focus`, { path }),
+  filesList: (chatId: string, dir: string) => call<WsListing>('GET', `/chats/${chatId}/files/list?dir=${encodeURIComponent(dir)}`),
+  fileRead: (chatId: string, path: string) => call<WsFile>('GET', `/chats/${chatId}/files/read?path=${encodeURIComponent(path)}`),
+  fileStat: (chatId: string, path: string) => call<WsStat>('GET', `/chats/${chatId}/files/stat?path=${encodeURIComponent(path)}`),
+  fileImageUrl: (chatId: string, path: string, stamp: string) => `/api/chats/${chatId}/files/image?path=${encodeURIComponent(path)}&v=${encodeURIComponent(stamp)}`,
+  filesFind: (chatId: string, q: string) => call<{ paths: string[]; truncated: boolean }>('GET', `/chats/${chatId}/files/find?q=${encodeURIComponent(q)}`),
+  fileLinks: (chatId: string, paths: string[]) => call<Record<string, string | null>>('POST', `/chats/${chatId}/files/links`, { paths }),
+  fileSave: (chatId: string, s: SaveWsFile) => call<WsSaveResult>('POST', `/chats/${chatId}/files/save`, s),
   runs: (id: string) => call<Run[]>('GET', `/cards/${id}/runs`),
   toolCalls: (id: string) => call<ToolCallTiming[]>('GET', `/cards/${id}/tool-calls`),
   /** What the chat shows between messages (#66): unfinished runs, rewinds, the context summary point. */

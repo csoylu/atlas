@@ -1,5 +1,6 @@
 import { rehypeSecrets } from './secretsView.ts';
-import { Fragment, forwardRef, useCallback, useEffect, useMemo, useRef, useState, type ReactNode, type RefObject } from 'react';
+import { Fragment, forwardRef, useCallback, useEffect, useMemo, useRef, useState, type ComponentProps, type ReactNode, type RefObject } from 'react';
+import { MdCode, NoFileLinks } from './FileRefs.tsx';
 import { AgentFace } from './AgentFace.tsx';
 import Markdown from 'react-markdown';
 import remarkGfm from 'remark-gfm';
@@ -839,13 +840,14 @@ function TextBlock({ text: raw, onOpenRef, quotes, cardLinks, streaming }: { tex
     ) : (
       <div className="msg-quote">❝ {ref.label}</div>
     );
-  return (
+  const md = (
     <div className={'text md' + (streaming ? ' streaming' : '')}>
       {cardLinks ? (
         <Markdown
           remarkPlugins={[remarkGfm]}
           rehypePlugins={rehype}
           components={{
+            ...FILE_MD,
             a: ({ node: _n, href, children, ...a }) =>
               href?.startsWith(CARD_HREF) ? (
                 <CardRef ref_={decodeURIComponent(href.slice(CARD_HREF.length))} links={cardLinks}>
@@ -861,13 +863,25 @@ function TextBlock({ text: raw, onOpenRef, quotes, cardLinks, streaming }: { tex
           {linkCardRefsMd(text, cardLinks.known)}
         </Markdown>
       ) : (
-        <Markdown remarkPlugins={[remarkGfm]} rehypePlugins={rehype}>
+        <Markdown remarkPlugins={[remarkGfm]} rehypePlugins={rehype} components={FILE_MD}>
           {text}
         </Markdown>
       )}
     </div>
   );
+  // A reply still arriving names half-written paths: links come with the final text.
+  return streaming ? <NoFileLinks.Provider value>{md}</NoFileLinks.Provider> : md;
 }
+
+// File paths in inline code become links to the agent's workspace (#303); code blocks stay code.
+const FILE_MD = {
+  code: MdCode,
+  pre: ({ node: _n, ...p }: { node?: unknown } & ComponentProps<'pre'>) => (
+    <NoFileLinks.Provider value>
+      <pre {...p} />
+    </NoFileLinks.Provider>
+  ),
+};
 
 // [secret NAME] marks (#209) in every message; the caret too while a reply streams.
 const REHYPE = [rehypeSecrets];

@@ -1,10 +1,11 @@
-import { useCallback, useEffect, useRef, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { usePanelResize } from './PanelResizer.tsx';
 import { paneLine, type Agent, type Card, type Doc, type Model, type PaneSees } from '@atlas/shared';
 import { ThreadPanel } from './ThreadPanel.tsx';
 import { api } from './api.ts';
 import { CardPanel } from './CardPanel.tsx';
 import type { MessageStream } from './useMessages.ts';
+import { FileLinkContext, type FileLinks } from './FileRefs.tsx';
 import { DocPanel, usePanelMode, usePanelTabs } from './DocPanel.tsx';
 import { activeTab } from './docPanel.ts';
 import { useComments } from './comments.ts';
@@ -81,6 +82,8 @@ function ChatWithPanel(props: Parameters<typeof ChatView>[0] & { chat: Card }) {
   // the engine also hears it at each change, for a voice message (no composer). Closed, or hidden beside the chat: nothing.
   const [shown, setShown] = useState<{ doc: Doc; version: number } | null>(null);
   const onShown = useCallback((doc: Doc, version: number) => setShown((s) => (s?.doc === doc && s.version === version ? s : { doc, version })), []);
+  const [lines, setLines] = useState<{ path: string; from: number; to: number } | null>(null);
+  const onFileLines = useCallback((path: string, from: number, to: number) => setLines((l) => (l?.path === path && l.from === from && l.to === to ? l : { path, from, to })), []);
   // Beside the chat: on screen. Overlay or phone: the pane covers the chat, so « Back » to write keeps it open (the
   // mockup's phone composer shows the eye); closing its last tab closes it.
   const active = show || (hidden && mode !== 'side' && !thread) ? activeTab(tabs) : undefined;
@@ -88,7 +91,7 @@ function ChatWithPanel(props: Parameters<typeof ChatView>[0] & { chat: Card }) {
     ? thread.number != null
       ? { kind: 'task', number: thread.number, title: thread.title }
       : null
-    : active
+    : active?.kind === 'artifact'
       ? {
           kind: 'artifact',
           docId: active.doc.id,
@@ -97,7 +100,10 @@ function ChatWithPanel(props: Parameters<typeof ChatView>[0] & { chat: Card }) {
           path: active.doc.path,
           version: shown?.doc.id === active.doc.id ? shown.version : active.doc.version,
         }
-      : null;
+      : active?.kind === 'file' && active.path
+        ? // A file (#303): its lines on screen; until the editor reports them, the line it was opened at.
+          { kind: 'file', path: active.path, ...(lines?.path === active.path ? { from: lines.from, to: lines.to } : { from: active.line ?? 1, to: active.line ?? 1 }) }
+        : null; // the workspace tab (the tree alone): no file to name
   const seesKey = sees ? paneLine(sees) : '';
   useEffect(() => {
     const t = setTimeout(() => void api.reportPane(chat.id, sees).catch(onError), 300);
@@ -111,32 +117,40 @@ function ChatWithPanel(props: Parameters<typeof ChatView>[0] & { chat: Card }) {
     window.addEventListener(TOGGLE_PANEL, toggle);
     return () => window.removeEventListener(TOGGLE_PANEL, toggle);
   }, [hasTabs]);
+  // File paths in the chat's messages open in the pane's Files (#303).
+  const agentId = chat.assignee;
+  const fileLinks = useMemo<FileLinks | null>(
+    () => (agentId ? { chatId: chat.id, agentId, open: (path, line) => void api.panelOpenFile(chat.id, path, line).then(() => setHidden(false), onError) } : null),
+    [chat.id, agentId, onError],
+  );
   return (
     <div ref={viewRef} className={'chat-view' + (show || thread ? ' with-doc ' + mode : '')}>
-      <CardPanel
-        plan={chat.modelId ? props.models.find((m) => m.id === chat.modelId)?.provider === 'chatgpt' : props.planAgents.has(chat.assignee ?? '')}
-        models={props.models}
-        card={chat}
-        onOpen={openCard}
-        agents={props.agents}
-        stream={stream}
-        onClose={() => props.onOpenChat(null)}
-        onError={onError}
-        userName={props.userName}
-        cards={props.cards}
-        sees={sees}
-        comments={comments}
-        hiddenDocs={hidden ? tabs.length : 0}
-        onShowDocs={() => setHidden(false)}
-        onHideDocs={show ? () => setHidden(true) : undefined}
-        onOpenRef={(r) => {
-          // A chat card opens its own version (an older card shows the version it was posted with).
-          api.panelOpen(chat.id, r.docId, r.section).then(() => {
-            setWant({ docId: r.docId, version: r.version, key: String(Date.now()) });
-            setHidden(false);
-          }, onError);
-        }}
-      />
+      <FileLinkContext.Provider value={fileLinks}>
+        <CardPanel
+          plan={chat.modelId ? props.models.find((m) => m.id === chat.modelId)?.provider === 'chatgpt' : props.planAgents.has(chat.assignee ?? '')}
+          models={props.models}
+          card={chat}
+          onOpen={openCard}
+          agents={props.agents}
+          stream={stream}
+          onClose={() => props.onOpenChat(null)}
+          onError={onError}
+          userName={props.userName}
+          cards={props.cards}
+          sees={sees}
+          comments={comments}
+          hiddenDocs={hidden ? tabs.length : 0}
+          onShowDocs={() => setHidden(false)}
+          onHideDocs={show ? () => setHidden(true) : undefined}
+          onOpenRef={(r) => {
+            // A chat card opens its own version (an older card shows the version it was posted with).
+            api.panelOpen(chat.id, r.docId, r.section).then(() => {
+              setWant({ docId: r.docId, version: r.version, key: String(Date.now()) });
+              setHidden(false);
+            }, onError);
+          }}
+        />
+      </FileLinkContext.Provider>
       {thread && (
         <ThreadPanel
           key={thread.id}
@@ -171,6 +185,7 @@ function ChatWithPanel(props: Parameters<typeof ChatView>[0] & { chat: Card }) {
         <DocPanel
           chatId={chat.id}
           projectId={chat.projectId}
+          agentId={chat.assignee}
           tabs={tabs}
           mode={mode}
           resize={resize}
@@ -180,6 +195,7 @@ function ChatWithPanel(props: Parameters<typeof ChatView>[0] & { chat: Card }) {
           onOpenCard={props.onOpenCard}
           onHide={() => setHidden(true)}
           onShown={onShown}
+          onFileLines={onFileLines}
           onError={onError}
           comments={comments}
         />

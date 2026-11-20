@@ -2,11 +2,14 @@ import { afterEach, describe, expect, it } from 'vitest';
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { changedSections, findSection, parseDocRef, splitSections, type ServerEvent } from '@atlas/shared';
+import { changedSections, findSection, parseDocRef, splitSections, type ArtifactTab, type PanelTab, type ServerEvent } from '@atlas/shared';
 import { startEngine, type Engine } from './index.ts';
 import { FakeProvider } from './providers/fake.ts';
 import { MAX_TABS } from './documents.ts';
 import { runDocTool } from './docTools.ts';
+
+/** Tabs that are all artifacts here. */
+const arts = (ts: PanelTab[]) => ts as ArtifactTab[];
 
 let engines: Engine[] = [];
 afterEach(async () => {
@@ -181,14 +184,14 @@ describe('side panel tabs', () => {
     const a = docs.indexFile('atlas', 'docs/a.md', 'atlas');
     const b = docs.indexFile('atlas', 'docs/b.md', 'atlas');
     docs.open(chat.id, a.id, 'atlas');
-    let tabs = docs.open(chat.id, b.id, 'atlas');
+    let tabs = arts(docs.open(chat.id, b.id, 'atlas'));
     expect(tabs.map((t) => [t.doc.id, t.active])).toEqual([[a.id, false], [b.id, true]]);
-    tabs = docs.open(chat.id, a.id, 'atlas', 'flow');
+    tabs = arts(docs.open(chat.id, a.id, 'atlas', 'flow'));
     expect(tabs.find((t) => t.active)).toMatchObject({ doc: { id: a.id }, section: 'flow', openedBy: 'atlas' });
     expect(tabs.map((t) => t.doc.id)).toEqual([a.id, b.id]); // order kept
-    tabs = docs.focus(chat.id, b.id);
+    tabs = arts(docs.focus(chat.id, b.id));
     expect(tabs.find((t) => t.active)!.doc.id).toBe(b.id);
-    expect(docs.close(chat.id, b.id).map((t) => t.doc.id)).toEqual([a.id]);
+    expect(arts(docs.close(chat.id, b.id)).map((t) => t.doc.id)).toEqual([a.id]);
     expect(docs.close(chat.id, null)).toEqual([]);
     expect(events.filter((e) => e.type === 'panel.updated').length).toBeGreaterThanOrEqual(6);
     for (let i = 0; i < MAX_TABS + 2; i++) {
@@ -196,7 +199,7 @@ describe('side panel tabs', () => {
       docs.open(chat.id, docs.indexFile('atlas', `docs/n${i}.md`, 'atlas').id, 'atlas');
     }
     expect(docs.tabs(chat.id)).toHaveLength(MAX_TABS);
-    expect(docs.tabs(chat.id)[0]!.doc.title).toBe('2');
+    expect(arts(docs.tabs(chat.id))[0]!.doc.title).toBe('2');
   });
 
   it('brings a chat\'s tabs and the active one back after a restart (#302)', async () => {
@@ -213,11 +216,11 @@ describe('side panel tabs', () => {
     mkdirSync(join(ws, 'docs'), { recursive: true });
     for (const n of ['a', 'b', 'c']) writeFileSync(join(ws, `docs/${n}.md`), '# ' + n);
     const [a, b, c] = ['a', 'b', 'c'].map((n) => first.documents.indexFile('atlas', `docs/${n}.md`, 'atlas'));
-    for (const d of [a!, b!, c!]) first.documents.open(chat.id, d.id, 'atlas');
-    const before = first.documents.focus(chat.id, a!.id);
+    for (const d of [a!, b!, c!]) arts(first.documents.open(chat.id, d.id, 'atlas'));
+    const before = arts(first.documents.focus(chat.id, a!.id));
     await first.stop();
     const second = await start();
-    const after = second.documents.tabs(chat.id);
+    const after = arts(second.documents.tabs(chat.id));
     expect(after.map((t) => [t.kind, t.doc.id, t.active])).toEqual([['artifact', a!.id, true], ['artifact', b!.id, false], ['artifact', c!.id, false]]);
     expect(after.map((t) => t.focusedAt)).toEqual(before.map((t) => t.focusedAt));
   });
@@ -230,8 +233,8 @@ describe('side panel tabs', () => {
     docs.open(chat.id, a.id, 'atlas');
     put('docs/a.md', DESIGN + '\n## Storage\nrows\n');
     docs.indexFile('atlas', 'docs/a.md', 'atlas');
-    expect(docs.tabs(chat.id)[0]).toMatchObject({ seenVersion: 1, doc: { version: 2 } });
-    expect(docs.seen(chat.id, a.id)[0]!.seenVersion).toBe(2);
+    expect(arts(docs.tabs(chat.id))[0]).toMatchObject({ seenVersion: 1, doc: { version: 2 } });
+    expect(arts(docs.seen(chat.id, a.id))[0]!.seenVersion).toBe(2);
   });
 
   it('belongs to direct chats only', async () => {
@@ -304,7 +307,7 @@ describe('artifacts (#120)', () => {
     expect(readFileSync(join(ws, 'docs/viewer-spec.md'), 'utf8')).toBe('# Viewer spec\nbody');
     const d = docs.byPath('atlas', 'docs/viewer-spec.md')!;
     expect(docs.folder(d.folderId!).name).toBe('Artifacts redesign');
-    expect(docs.tabs(chat.id)[0]!.doc.id).toBe(d.id);
+    expect(arts(docs.tabs(chat.id))[0]!.doc.id).toBe(d.id);
     // Same title again: a new file, same folder (found case-insensitively).
     const again = runDocTool('artifact_create', { kind: 'markdown', title: 'Viewer spec', content: 'x', folder: 'artifacts REDESIGN' }, ctx);
     expect(again.output).toContain('docs/viewer-spec-2.md');

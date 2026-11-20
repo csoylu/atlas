@@ -14,6 +14,7 @@ import { Snapshots } from './snapshots.ts';
 import { Dispatcher } from './dispatcher.ts';
 import { Settings } from './settings.ts';
 import { Documents } from './documents.ts';
+import { WorkspaceFiles } from './workspaceFiles.ts';
 import { Memories } from './memory.ts';
 import { MemoryCleanup } from './cleanup.ts';
 import { MemoryReview } from './memoryReview.ts';
@@ -217,6 +218,7 @@ export async function startEngine(opts: EngineOptions): Promise<Engine> {
   let url = '';
   const voiceChat = opts.voice ? new VoiceChat(db, bus, kanban, agents, () => url) : null;
   const documents = new Documents(db, bus, kanban, opts.dataDir, secrets);
+  const files = new WorkspaceFiles(db, opts.dataDir, kanban, secrets);
   // Secret values out of stored artifact versions (#226): those stored before the value was known, at each start and
   // after each value change. A failure is logged and the pass runs again at the next start.
   const redactStored = () => {
@@ -290,6 +292,7 @@ export async function startEngine(opts: EngineOptions): Promise<Engine> {
     dispatcher,
     settings,
     documents,
+    files,
     memories,
     cleanup,
     workflows,
