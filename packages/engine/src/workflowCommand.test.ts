@@ -303,6 +303,9 @@ describe('Run a command (#273, design §10b)', { timeout: 30_000 }, () => {
     await t2.wf.commandsIdle();
   }, 30_000);
 
+  // The marker loops of the two tests below end by themselves (bounded), and the tests release them on every path.
+  const WAIT_GO = (go: string) => `n=0; while [ ! -e ${go} ] && [ $n -lt 1000 ]; do sleep 0.02; n=$((n+1)); done`;
+
   it('start() called while a step is being checked out leaves it alone: not cut off, its worktree kept, run once (#321)', async () => {
     const dataDir = mkdtempSync(join(tmpdir(), 'atlas-start-twice-'));
     const sig = mkdtempSync(join(tmpdir(), 'atlas-start-twice-sig-'));
@@ -313,17 +316,38 @@ describe('Run a command (#273, design §10b)', { timeout: 30_000 }, () => {
       dbFile: join(dataDir, 'atlas.db'),
       afterClone: (dir) => {
         const hook = join(dir, '.git', 'hooks', 'post-checkout');
-        writeFileSync(hook, `#!/bin/sh\ntouch ${sig}/reached\nwhile [ ! -e ${sig}/go ]; do sleep 0.02; done\n`, { mode: 0o755 });
+        writeFileSync(hook, `#!/bin/sh\ntouch ${sig}/reached\n${WAIT_GO(`${sig}/go`)}\n`, { mode: 0o755 });
       },
     });
     const w = t.make(`echo ran >> ${sig}/runs`);
     const r = t.wf.runNow(w.id);
-    await eventually(() => existsSync(join(sig, 'reached')), { what: 'the checkout to reach its worktree' });
-    expect(readdirSync(join(dataDir, 'checkouts', t.project.id, 'runs'))).toHaveLength(1);
-    // The window: the step is driven by this engine (checkout done, not yet spawned) when start() runs again.
-    t.wf.start(3_600_000);
-    expect(readdirSync(join(dataDir, 'checkouts', t.project.id, 'runs'))).toHaveLength(1); // its worktree was not swept as a stopped engine's
-    writeFileSync(join(sig, 'go'), '');
+    try {
+      await eventually(() => existsSync(join(sig, 'reached')), { what: 'the checkout to reach its worktree' });
+      expect(readdirSync(join(dataDir, 'checkouts', t.project.id, 'runs'))).toHaveLength(1);
+      // The window: the step is driven by this engine (checkout done, not yet spawned) when start() runs again.
+      t.wf.start(3_600_000);
+      expect(readdirSync(join(dataDir, 'checkouts', t.project.id, 'runs'))).toHaveLength(1); // its worktree was not swept as a stopped engine's
+    } finally {
+      writeFileSync(join(sig, 'go'), ''); // never leave the hook looping, whatever failed above
+    }
+    await eventually(() => t.wf.run(r.id).state === 'done', { timeout: 15_000, what: 'the command step to end' });
+    await t.wf.commandsIdle();
+    expect(t.step(t.wf.run(r.id))).toMatchObject({ exit: 'exit 0', couldntRun: null });
+    expect(readFileSync(join(sig, 'runs'), 'utf8')).toBe('ran\n');
+    expect(t.inbox('workflow.couldnt_run')).toEqual([]);
+  }, 30_000);
+
+  it('start() called while the command itself runs leaves it running: not killed, not cut off, it ends by itself, run once (#321)', async () => {
+    const sig = mkdtempSync(join(tmpdir(), 'atlas-start-twice-run-'));
+    const t = await setup();
+    const w = t.make(`touch ${sig}/started; ${WAIT_GO(`${sig}/go`)}; echo ran >> ${sig}/runs`);
+    const r = t.wf.runNow(w.id);
+    try {
+      await eventually(() => existsSync(join(sig, 'started')) && t.e.db.prepare("SELECT 1 FROM workflow_run_steps WHERE json_extract(data, '$.pid') IS NOT NULL").get(), { what: 'the command to run, its pid stored' });
+      t.wf.start(3_600_000);
+    } finally {
+      writeFileSync(join(sig, 'go'), '');
+    }
     await eventually(() => t.wf.run(r.id).state === 'done', { timeout: 15_000, what: 'the command step to end' });
     await t.wf.commandsIdle();
     expect(t.step(t.wf.run(r.id))).toMatchObject({ exit: 'exit 0', couldntRun: null });

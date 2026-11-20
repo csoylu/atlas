@@ -347,7 +347,9 @@ export class Workflows {
   private inflight = new Map<number, Promise<void>>();
 
   start(intervalMs = 15_000): void {
-    this.stop();
+    // A second start() only replaces the clock and the subscription: commands this engine runs keep running (#321).
+    // After a stop() they are already killed, and `stopping` is reset below as it always was.
+    this.halt();
     this.unsubscribe = this.bus.on((e) => {
       if (e.type === 'card.updated' || e.type === 'card.deleted' || e.type === 'message.appended' || e.type === 'run.updated') this.soon();
     });
@@ -358,11 +360,15 @@ export class Workflows {
     this.timer.unref();
   }
 
-  stop(): void {
+  private halt(): void {
     clearInterval(this.timer);
     this.timer = undefined;
     this.unsubscribe?.();
     this.unsubscribe = undefined;
+  }
+
+  stop(): void {
+    this.halt();
     // Like a kill: each command's group goes now, its step stays running in the store and the next start says so.
     this.stopping = true;
     for (const pid of this.children.values()) signalGroup(pid, 'SIGKILL');
