@@ -5,7 +5,7 @@ import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import type { ContentBlock, SandboxStatus } from '@atlas/shared';
-import { launch } from '../test/kit/index.ts';
+import { launch, socketPathTooLong } from '../test/kit/index.ts';
 import type { ModelRequest } from './providers/types.ts';
 import { bwrapArgs, bwrapFailure, gitEnv, PROXY_PORT_INSIDE, PROXY_SOCKET, Sandbox, SandboxUnavailable, seatbeltProfile, spawnAgentCommand } from './sandbox.ts';
 import { Network } from './network.ts';
@@ -125,7 +125,8 @@ describe('sandbox (#298 S1, S2)', () => {
     expect(hosts).toContain(`--bind /d/net/proxy.sock ${PROXY_SOCKET}`);
   });
 
-  it('a command at Allowed hosts gets the proxy env with its workspace token; a level change applies from the next command; Linux On needs the engine login', async () => {
+  // binds a unix socket under tmpdir(): too long a path inside the agent sandbox (#314); CI runs it
+  it.skipIf(socketPathTooLong)('a command at Allowed hosts gets the proxy env with its workspace token; a level change applies from the next command; Linux On needs the engine login', async () => {
     const dataDir = mkdtempSync(join(tmpdir(), 'atlas-sbx-net-'));
     const ws = join(dataDir, 'workspaces', 'a');
     mkdirSync(ws, { recursive: true });

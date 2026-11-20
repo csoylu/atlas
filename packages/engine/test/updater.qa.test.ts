@@ -7,7 +7,7 @@ import { Bus } from '../src/events.ts';
 import { openDb, type Db } from '../src/store/db.ts';
 import { HELPER, Updater, zipName, type UpdaterOptions } from '../src/updater.ts';
 import { FakeGitHub, fakeApp, sha, zipOf } from './updaterKit.ts';
-import { until } from './kit/index.ts';
+import { osascriptBlocked, until } from './kit/index.ts';
 
 /**
  * QA of the app updater (#124): the cases the build task's own tests (src/updater.test.ts) do not cover. Everything runs
@@ -451,7 +451,8 @@ describe.skipIf(!mac)('the swap helper on its own (#124)', () => {
 
   // Was a known bug (#124 → #161): the swap was two renames (old → previous, new → installed) with no Atlas.app in
   // between. It is now one atomic swap (renamex_np RENAME_SWAP); the only mv left moves the old app to Atlas.previous.app.
-  it('helper killed between the two renames: an Atlas.app must still exist at the installed path (old or new, never none)', async () => {
+  // the atomic swap goes through osascript, which the agent sandbox refuses: the fallback has the gap this test forbids (#314)
+  it.skipIf(osascriptBlocked)('helper killed between the two renames: an Atlas.app must still exist at the installed path (old or new, never none)', async () => {
     const r = rig();
     // the shim lets the first mv through, then freezes the helper in the gap
     r.shim('mv', `/bin/mv "$@"; rc=$?\nif [ ! -e "${r.root}/paused" ]; then touch "${r.root}/paused"; sleep 30; fi\nexit $rc`);
