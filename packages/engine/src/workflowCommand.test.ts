@@ -305,7 +305,7 @@ describe('Run a command (#273, design §10b)', { timeout: 30_000 }, () => {
   }, 30_000);
 
   // The marker loops of the two tests below end by themselves (bounded), and the tests release them on every path.
-  const WAIT_GO = (go: string) => `n=0; while [ ! -e ${go} ] && [ $n -lt 1000 ]; do sleep 0.02; n=$((n+1)); done`;
+  const WAIT_GO = (go: string) => `n=0; while [ ! -e "${go}" ] && [ $n -lt 1000 ]; do sleep 0.02; n=$((n+1)); done`;
 
   it('start() called while a step is being checked out leaves it alone: not cut off, its worktree kept, run once (#321)', async () => {
     const dataDir = mkdtempSync(join(tmpdir(), 'atlas-start-twice-'));
@@ -317,10 +317,10 @@ describe('Run a command (#273, design §10b)', { timeout: 30_000 }, () => {
       dbFile: join(dataDir, 'atlas.db'),
       afterClone: (dir) => {
         const hook = join(dir, '.git', 'hooks', 'post-checkout');
-        writeFileSync(hook, `#!/bin/sh\ntouch ${sig}/reached\n${WAIT_GO(`${sig}/go`)}\n`, { mode: 0o755 });
+        writeFileSync(hook, `#!/bin/sh\ntouch "${sig}/reached"\n${WAIT_GO(`${sig}/go`)}\n`, { mode: 0o755 });
       },
     });
-    const w = t.make(`echo ran >> ${sig}/runs`);
+    const w = t.make(`echo ran >> "${sig}/runs"`);
     const r = t.wf.runNow(w.id);
     try {
       await eventually(() => existsSync(join(sig, 'reached')), { what: 'the checkout to reach its worktree' });
@@ -341,7 +341,7 @@ describe('Run a command (#273, design §10b)', { timeout: 30_000 }, () => {
   it('start() called while the command itself runs leaves it running: not killed, not cut off, it ends by itself, run once (#321)', async () => {
     const sig = mkdtempSync(join(tmpdir(), 'atlas-start-twice-run-'));
     const t = await setup();
-    const w = t.make(`touch ${sig}/started; ${WAIT_GO(`${sig}/go`)}; echo ran >> ${sig}/runs`);
+    const w = t.make(`touch "${sig}/started"; ${WAIT_GO(`${sig}/go`)}; echo ran >> "${sig}/runs"`);
     const r = t.wf.runNow(w.id);
     try {
       await eventually(() => existsSync(join(sig, 'started')) && t.e.db.prepare("SELECT 1 FROM workflow_run_steps WHERE json_extract(data, '$.pid') IS NOT NULL").get(), { what: 'the command to run, its pid stored' });
