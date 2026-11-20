@@ -20,6 +20,8 @@ const sharp = async (input: Buffer, o?: SharpOptions): Promise<Sharp> => {
   );
   return (await lib)(input, o);
 };
+/** The same loader for other modules (comment pictures, #304). */
+export const loadSharp = sharp;
 import { IMAGE_KEEP, IMAGE_MAX_BYTES, type ContentBlock, type ImageBlock, type ImageMediaType } from '@atlas/shared';
 import type { ModelRequest } from './providers/types.ts';
 

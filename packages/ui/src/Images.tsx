@@ -250,7 +250,7 @@ export function AttachButton({ onFiles, disabled, label }: { onFiles(files: File
   );
 }
 
-const imageUrl = (cardId: string, path: string) => `/api/cards/${encodeURIComponent(cardId)}/image?path=${encodeURIComponent(path)}`;
+export const imageUrl = (cardId: string, path: string) => `/api/cards/${encodeURIComponent(cardId)}/image?path=${encodeURIComponent(path)}`;
 const baseName = (p: string) => p.split('/').pop() ?? p;
 
 /** Pictures in a message: thumbnails; a click opens the picture full size. */

@@ -1,5 +1,5 @@
 import { randomUUID } from 'node:crypto';
-import { USER, parseDocRef, type Block, type CardStatus, type FileChange, type Message, type RewindEvent, type RewindPreview, type RewindResult, type SideEffect } from '@atlas/shared';
+import { USER, isPaneLine, parseComment, parseDocRef, type Block, type CardStatus, type FileChange, type Message, type RewindEvent, type RewindPreview, type RewindResult, type SideEffect } from '@atlas/shared';
 import type { Db } from './store/db.ts';
 import type { Bus } from './events.ts';
 import { ConflictError, InvalidError, NotFoundError, type Kanban } from './kanban.ts';
@@ -111,10 +111,10 @@ const stateOf = (sha: string | null, mode: string | null): FileState => (sha ? {
 const changeOf = (op: FileOp): FileChange => ({ path: op.path, change: op.to === null ? 'deleted' : op.from === null ? 'recreated' : 'restored' });
 const reverse = (op: FileOp): FileOp => ({ ...op, from: op.to, to: op.from });
 
-/** The text the user typed (a quoted document part, sent first, is left out). */
+/** The text the user typed (a quoted document part, a comment on the pane, #304, and the pane line, #305, are left out). */
 export const userText = (m: Message): string =>
   m.content
-    .flatMap((b) => (b.type === 'text' && !parseDocRef(b.text) ? [b.text] : []))
+    .flatMap((b) => (b.type === 'text' && !parseDocRef(b.text) && !parseComment(b.text) && !isPaneLine(b.text) ? [b.text] : []))
     .join('\n\n')
     .trim();
 

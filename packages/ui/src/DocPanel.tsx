@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useRef, useState, type ReactNode } from 'react';
-import { KIND_WORD, type Doc, type DocRef, type PaneKind, type PanelTab } from '@atlas/shared';
+import { KIND_WORD, type Doc, type PaneKind, type PanelTab } from '@atlas/shared';
 import { api } from './api.ts';
 import type { MessageStream } from './useMessages.ts';
 import { activeTab, artifactChoices, byline, panelMode, type PanelMode } from './docPanel.ts';
@@ -8,12 +8,8 @@ import { Icon } from './ScreenHeader.tsx';
 import { PopButton, PopItem } from './HeadMenu.tsx';
 import { libraryHref } from './library.ts';
 import type { PanelResize } from './PanelResizer.tsx';
-
-/** What « Ask about this » puts in the composer: the reference sent with the message and the chip's label. */
-export interface Quote {
-  ref: DocRef;
-  label: string;
-}
+import { CommentBox, CommentHint, CommentIcon, type PaneComment } from './CommentLayer.tsx';
+import { boxOf, draftKey, hintFor, isTyping, type Comments, type PanePick } from './comments.ts';
 
 /** A chat's open tabs, live (agents open and close them with panel_open / panel_close). */
 export function usePanelTabs(chatId: string, stream: MessageStream, onError: (e: unknown) => void): PanelTab[] {
@@ -59,17 +55,48 @@ export function DocPanel(props: {
   userName: string | null;
   want: { docId: string; version: number; key: string } | null;
   stream: MessageStream;
-  onAsk(q: Quote): void;
+  /** The chat's waiting comments (#304): comment mode adds to them, the composer sends them. */
+  comments: Comments;
   onOpenCard(id: string): void;
   onHide(): void;
   /** The open artifact and the version on screen (#305: sent with Master's message). */
   onShown?(doc: Doc, version: number): void;
   onError(e: unknown): void;
 }) {
-  const { chatId, tabs, onError } = props;
+  const { chatId, tabs, onError, comments } = props;
   const [full, setFull] = useState(false);
   const tab = activeTab(tabs);
   const doc = tab?.doc;
+  // Comment mode (#304): on for the open tab; a pick opens the box, Add puts the comment in the composer.
+  const [commenting, setCommenting] = useState(false);
+  const [pending, setPending] = useState<{ pick: PanePick; version: number } | null>(null);
+  const aside = useRef<HTMLElement>(null);
+  const docId = doc?.id;
+  useEffect(() => {
+    setCommenting(false);
+    setPending(null);
+  }, [docId]);
+  const stop = () => {
+    setPending(null);
+    setCommenting(false);
+  };
+  // C enters comment mode (not while typing), Esc leaves it; first, before the chat's own Esc (rewind).
+  useEffect(() => {
+    if (!docId) return;
+    const key = (e: KeyboardEvent) => {
+      if (e.metaKey || e.ctrlKey || e.altKey || e.defaultPrevented) return;
+      if (e.key === 'Escape' && commenting && !pending) {
+        e.preventDefault();
+        e.stopPropagation();
+        setCommenting(false);
+      } else if ((e.key === 'c' || e.key === 'C') && !isTyping(e.target) && !document.querySelector('[role=dialog][aria-modal=true]')) {
+        e.preventDefault();
+        setCommenting(true);
+      }
+    };
+    window.addEventListener('keydown', key, true);
+    return () => window.removeEventListener('keydown', key, true);
+  }, [docId, commenting, pending]);
   const unseen = !!tab && !!doc && tab.seenVersion < doc.version;
   const report = props.onShown;
   const shown = useCallback((v: number) => void (doc && report?.(doc, v)), [doc, report]);
@@ -81,6 +108,14 @@ export function DocPanel(props: {
   }, [chatId, doc, unseen, onError]);
   if (!tab || !doc) return null;
   const phone = props.mode === 'full';
+  const target = { kind: 'doc' as const, docId: doc.id, version: doc.version };
+  const mine = comments.list.filter((c) => draftKey(c.target) === draftKey(target));
+  const comment: PaneComment = {
+    on: commenting && !pending,
+    marks: [...mine.map((c) => ({ n: c.n, mark: c.mark })), ...(pending ? [{ n: comments.list.length + 1, mark: pending.pick.mark }] : [])],
+    onPick: (pick, version) => setPending({ pick, version }),
+    onKey: (k) => (k === 'Escape' ? (pending ? setPending(null) : setCommenting(false)) : setCommenting(true)),
+  };
   const mode = phone || full ? 'full' : props.mode;
   const items: PaneTabItem[] = tabs.map((t) => ({
     key: t.kind + ':' + t.doc.id,
@@ -94,7 +129,7 @@ export function DocPanel(props: {
     onClose: () => void api.panelClose(chatId, t.doc.id).catch(onError),
   }));
   return (
-    <aside className={'side-doc ' + mode} aria-label="Panel" style={props.resize && mode !== 'full' ? { width: props.resize.width } : undefined}>
+    <aside ref={aside} className={'side-doc ' + mode} aria-label="Panel" style={props.resize && mode !== 'full' ? { width: props.resize.width } : undefined}>
       {mode !== 'full' && props.resize?.handle}
       <ArtifactViewer
         doc={doc}
@@ -119,7 +154,18 @@ export function DocPanel(props: {
         want={props.want && props.want.docId === doc.id ? props.want : null}
         onShown={shown}
         tools={
-          !phone && (
+          <>
+          <button
+            type="button"
+            className={'sd-btn icon-only' + (commenting ? ' on' : '')}
+            title={commenting ? 'Leave comment mode (Esc)' : 'Comment (C)'}
+            aria-label="Comment"
+            aria-pressed={commenting}
+            onClick={() => (commenting ? stop() : setCommenting(true))}
+          >
+            <CommentIcon />
+          </button>
+          {!phone && (
             <button
               type="button"
               className={'sd-btn icon-only' + (full ? ' on' : '')}
@@ -130,7 +176,8 @@ export function DocPanel(props: {
             >
               {full ? <Icon.shrink /> : <Icon.expand />}
             </button>
-          )
+          )}
+          </>
         }
         by={byline({ openedBy: tab.openedBy, cardTitle: null }, props.userName)}
         menu={(close) => (
@@ -163,10 +210,27 @@ export function DocPanel(props: {
         scrollKey={tab.focusedAt}
         seenVersion={tab.seenVersion}
         stream={props.stream}
-        onAsk={(s, v) => props.onAsk({ ref: { docId: doc.id, version: v, section: s?.id ?? null }, label: s?.title ? `${doc.title} › ${s.title}` : doc.title })}
+        comment={comment}
         onSeen={() => void api.panelSeen(chatId, doc.id).catch(onError)}
         onError={onError}
       />
+      {commenting && !pending && <CommentHint text={hintFor(doc.kind)} waiting={comments.list.length} onDone={stop} />}
+      {pending && (
+        <CommentBox
+          key={JSON.stringify(pending.pick.rect)}
+          n={comments.list.length + 1}
+          anchor={pending.pick.anchor}
+          rect={pending.pick.rect}
+          within={aside.current ? boxOf(aside.current.getBoundingClientRect()) : null}
+          sheet={phone}
+          onCancel={() => setPending(null)}
+          onAdd={(text) => {
+            comments.add({ target: { ...target, version: pending.version }, anchor: pending.pick.anchor, text, title: doc.title, kind: doc.kind, mark: pending.pick.mark, thumb: pending.pick.thumb ?? null });
+            window.getSelection()?.removeAllRanges();
+            setPending(null);
+          }}
+        />
+      )}
     </aside>
   );
 }

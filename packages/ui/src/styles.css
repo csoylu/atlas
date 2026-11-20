@@ -1579,15 +1579,10 @@ body.panel-resizing iframe { pointer-events: none; }
 .sd-sp { flex: 1; }
 .sd-link { border: 0; background: none; padding: 0; color: var(--accent); font: inherit; cursor: pointer; }
 .sd-link:hover { text-decoration: underline; }
-.sd-ask, .doc-ask {
-  border: 1px solid var(--border); background: var(--sheet); border-radius: 7px; font-size: var(--fs-small); padding: 3px 8px; color: var(--accent);
-  white-space: nowrap; cursor: pointer;
-}
-.sd-ask:hover, .doc-ask:hover { border-color: var(--accent); }
 .doc-chg { border: 0; border-radius: 5px; padding: 1px 7px; font-size: var(--fs-small); background: var(--pos-bg); color: var(--positive); cursor: pointer; white-space: nowrap; }
 .sd-body { flex: 1; min-height: 0; overflow-y: auto; display: flex; flex-direction: column; }
 .sd-body.html { overflow: hidden; }
-/* Markdown: a readable column, sections that light up on hover with « Ask about this ». */
+/* Markdown: a readable column, sections that light up on hover. */
 .doc-md { width: 100%; max-width: 720px; margin: 0 auto; padding: 12px 24px 48px; font-size: var(--fs-base); line-height: var(--lh-long); }
 .doc-md.md h1 { font-size: var(--fs-xl); margin: 10px 0 8px; letter-spacing: -0.015em; }
 .doc-md.md h2 { font-size: var(--fs-xl); margin: 6px 0 4px; letter-spacing: -0.01em; }
@@ -1596,13 +1591,9 @@ body.panel-resizing iframe { pointer-events: none; }
 .doc-md.md li + li { margin-top: 0.35em; }
 .doc-md.md code, .doc-md.md pre { font-size: var(--fs-base); }
 .doc-sec { position: relative; padding: 8px 12px; margin: 0 -12px; border-radius: 10px; border: 1px solid transparent; scroll-margin-top: 8px; }
-.doc-sec:hover { border-color: var(--rule); }
 .doc-sec.changed { background: color-mix(in srgb, var(--pos-bg) 50%, transparent); }
 .doc-sec > :is(h1, h2, h3):first-of-type { padding-right: 150px; }
 .doc-sec-tools { position: absolute; top: 8px; right: 8px; display: flex; gap: 6px; align-items: center; z-index: 1; }
-.doc-ask { display: none; }
-.doc-sec:hover .doc-ask, .doc-ask:focus-visible { display: inline-block; }
-@media (hover: none), (max-width: 760px) { .doc-ask { display: inline-block; } }
 /* HTML pages at real size; diagrams fit the width but keep their text readable (then scroll sideways). */
 /* #294: no background on a frame. The page inside paints its own: a page without color-scheme gets an opaque white
    canvas, a raw file (JSON, text) or a theme-aware page follows the app's theme. A white frame under a dark-scheme
@@ -1611,14 +1602,7 @@ body.panel-resizing iframe { pointer-events: none; }
 .doc-diagram { overflow-x: auto; padding: 16px; }
 .doc-diagram img { display: block; height: auto; max-width: none; }
 .doc-empty { padding: 16px 24px; }
-/* « Ask about this » → a quote chip in the composer, then a quote line in the message. */
-.quote-chip {
-  display: flex; align-items: center; gap: 6px; width: fit-content; max-width: 100%; margin: 2px 0; padding: 2px 3px 2px 8px;
-  border-radius: 6px; background: var(--accent-soft); color: var(--accent); font-size: var(--fs-small);
-}
-.quote-chip-label { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.quote-chip button { flex: none; border: 0; background: none; color: inherit; width: 20px; height: 20px; padding: 0; border-radius: 4px; font-size: var(--fs-base); line-height: var(--lh-tight); }
-.quote-chip button:hover { background: var(--sheet); }
+/* An old « Ask about this » message (before #304): its quote line. */
 .msg-quote {
   display: block; max-width: 100%; margin: 0 0 4px auto; padding: 2px 10px; border: 0; border-left: 3px solid var(--accent); background: none;
   font-size: var(--fs-small); color: var(--muted); text-align: left; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
@@ -3127,3 +3111,79 @@ button.wfl-ghead:hover { color: var(--text); background: var(--hover); }
   .set-ctl .segmented button { flex: 1; height: 32px; white-space: nowrap; padding: 0 6px; }
   .set-ctl input:not([type=checkbox]), .set-ctl textarea, .set-ctl select { font-size: var(--fs-large); } /* iOS zooms in below 16 px */
 }
+
+/* ── Comment mode (#304, mockup « the right pane as a workbench »): pins, areas, the box, the hint, chips, sent cards ── */
+.sd-btn.icon-only.on { background: var(--accent-soft); }
+.sd-body.commenting .doc-md { cursor: crosshair; }
+.sd-body.commenting .doc-md [data-l1]:hover { background: var(--accent-soft); border-radius: 4px; }
+.doc-md { position: relative; }
+.doc-md ::selection { background: color-mix(in srgb, var(--accent) 28%, transparent); }
+.cm-pic { position: relative; display: inline-block; max-width: none; }
+.cm-pic-frame { display: flex; flex: 1; width: 100%; min-height: 0; }
+.sd-body.url:has(.cm-pic:not(.cm-pic-frame)) { align-items: center; justify-content: center; }
+.cm-catch { position: absolute; inset: 0; z-index: 3; cursor: crosshair; touch-action: none; }
+.cm-svg-hits { position: absolute; inset: 0; opacity: 0; pointer-events: none; }
+.cm-marks { position: absolute; inset: 0; pointer-events: none; z-index: 2; }
+.cm-area, .cm-hl { position: absolute; box-sizing: border-box; border-radius: 4px; pointer-events: none; }
+.cm-area { border: 2px dashed var(--accent); background: color-mix(in srgb, var(--accent) 12%, transparent); }
+.cm-hl { outline: 2px solid var(--accent); background: color-mix(in srgb, var(--accent-soft) 60%, transparent); }
+.cm-pin {
+  position: absolute; width: 24px; height: 24px; margin: -24px 0 0 -2px; border-radius: 12px 12px 12px 2px; background: var(--accent); color: var(--on-accent);
+  display: grid; place-items: center; font-size: var(--fs-small); font-weight: var(--fw-bold); line-height: var(--lh-tight); box-shadow: var(--float-shadow); font-variant-numeric: tabular-nums;
+}
+.cm-num {
+  flex: none; width: 20px; height: 20px; border-radius: 6px; background: var(--accent); color: var(--on-accent); display: inline-grid; place-items: center;
+  font-size: var(--fs-small); font-weight: var(--fw-bold); line-height: var(--lh-tight); font-variant-numeric: tabular-nums;
+}
+.cm-box {
+  position: fixed; z-index: 60; width: 300px; max-width: calc(100vw - 16px); padding: 10px; border-radius: 10px; background: var(--raised);
+  border: 1px solid var(--line-2); box-shadow: var(--float-shadow); display: flex; flex-direction: column; gap: 8px;
+}
+.cm-box.sheet { left: 0; right: 0; bottom: 0; width: 100%; max-width: none; border-radius: 14px 14px 0 0; padding: 14px 14px calc(14px + env(safe-area-inset-bottom)); }
+.cm-box-head { display: flex; align-items: center; gap: 8px; min-width: 0; font-size: var(--fs-small); color: var(--muted); line-height: var(--lh-tight); }
+.cm-box-what { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.cm-box textarea {
+  width: 100%; resize: vertical; min-height: 56px; border-radius: 8px; border: 1px solid var(--accent); background: var(--app); color: var(--text);
+  padding: 8px 10px; font: var(--fw-regular) var(--fs-base) / var(--lh-normal) var(--font); outline: none;
+}
+@media (max-width: 640px) { .cm-box textarea { font-size: var(--fs-large); } }
+.cm-box-foot { display: flex; align-items: center; gap: 6px; }
+.cm-hint {
+  position: absolute; left: 50%; bottom: 16px; transform: translateX(-50%); z-index: 30; display: flex; align-items: center; gap: 6px; max-width: calc(100% - 24px);
+  padding: 6px 6px 6px 14px; border-radius: 999px; background: var(--raised); border: 1px solid var(--line-2); box-shadow: var(--float-shadow);
+  font-size: var(--fs-small); line-height: var(--lh-tight); white-space: nowrap;
+}
+.cm-hint > span:first-child { min-width: 0; overflow: hidden; text-overflow: ellipsis; }
+.cm-hint-n { color: var(--muted); }
+.cm-hint .sd-btn { display: inline-flex; align-items: center; gap: 6px; color: var(--text); }
+/* Composer: the waiting comments, one chip each. */
+.cm-chips { display: flex; flex-direction: column; align-items: flex-start; gap: 6px; margin-bottom: 4px; }
+.cm-chip {
+  display: flex; align-items: center; gap: 8px; max-width: 100%; padding: 3px 4px 3px 4px; border: 1px solid var(--line-2); border-radius: 8px;
+  background: var(--raised); font-size: var(--fs-small); line-height: var(--lh-tight);
+}
+.cm-chip-t { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--text); }
+.cm-chip-t i { font-style: normal; color: var(--muted); }
+.cm-chip button { flex: none; border: 0; background: none; color: var(--muted); width: 22px; height: 22px; padding: 0; border-radius: 5px; font-size: var(--fs-base); line-height: var(--lh-tight); cursor: pointer; }
+.cm-chip button:hover { background: var(--hover); color: var(--text); }
+.cm-thumb { flex: none; width: 44px; height: 28px; object-fit: cover; border-radius: 4px; border: 1px solid var(--line); background: var(--app); }
+.cm-lines { flex: none; padding: 1px 6px; border-radius: 4px; background: var(--hover); color: var(--muted); font: var(--fw-medium) var(--fs-small) / var(--lh-tight) var(--mono); }
+.cm-kind { flex: none; display: inline-grid; place-items: center; width: 28px; height: 22px; border-radius: 4px; background: var(--hover); color: var(--muted); }
+/* A sent message: a card per comment under the text. */
+.cm-sent { display: flex; flex-direction: column; gap: 6px; margin-top: 6px; }
+.cm-sref {
+  display: flex; align-items: flex-start; gap: 10px; width: 100%; padding: 8px 10px; border: 1px solid var(--line); border-radius: 10px; background: var(--raised);
+  color: var(--text); text-align: left; font: inherit;
+}
+button.cm-sref { cursor: pointer; }
+button.cm-sref:hover { border-color: var(--accent); }
+.cm-sref .cm-thumb { width: 48px; height: 32px; }
+.cm-sref-main { min-width: 0; flex: 1; display: flex; flex-direction: column; gap: 4px; }
+.cm-sref-w { font-size: var(--fs-small); color: var(--muted); line-height: var(--lh-tight); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.cm-sref-pre { margin: 0; padding: 6px 8px; border-radius: 6px; background: var(--app); font: var(--fw-regular) var(--fs-small) / var(--lh-normal) var(--mono); overflow: hidden; white-space: pre; text-overflow: ellipsis; }
+.cm-sref-q {
+  padding: 2px 0 2px 8px; border-left: 2px solid var(--accent); color: var(--muted); font-size: var(--fs-small); line-height: var(--lh-normal);
+  display: -webkit-box; -webkit-line-clamp: 3; -webkit-box-orient: vertical; overflow: hidden;
+}
+.cm-sref-c { font-size: var(--fs-base); line-height: var(--lh-normal); white-space: pre-wrap; overflow-wrap: anywhere; }
+@media (hover: none) { .cm-hint .kbd { display: none; } }

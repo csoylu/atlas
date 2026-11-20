@@ -15,6 +15,7 @@ import {
   type Message,
   type PaneSees,
   type TodoItem,
+  parseComment,
 } from '@atlas/shared';
 import type { Db } from './store/db.ts';
 import type { Bus } from './events.ts';
@@ -777,7 +778,10 @@ export class Kanban {
       .run(id, card.conversationId, next, role, author, JSON.stringify(stripData(content)), new Date().toISOString(), contextUpto, pane ? JSON.stringify(pane) : null);
     if (card.board === 'direct') {
       // Chat history: the latest chat goes first, and the user's first message names a new chat.
-      const text = content.map((b) => (b.type === 'text' && !isPaneLine(b.text) ? b.text : '')).join(' ').replace(/\s+/g, ' ').trim();
+      // Comments (#304) name it by their words, not by their place lines; the pane line (#305) never names it.
+      const words = (b: (typeof content)[number]) => (b.type !== 'text' || isPaneLine(b.text) ? '' : (parseComment(b.text)?.comment ?? b.text));
+      const plain = content.filter((b) => b.type === 'text' && !isPaneLine(b.text) && !parseComment(b.text));
+      const text = (plain.length ? plain : content).map(words).join(' ').replace(/\s+/g, ' ').trim();
       const title = card.title === NEW_CHAT && role === 'user' && author !== 'system' && text ? chatTitle(text) : card.title;
       this.db.prepare('UPDATE cards SET title = ?, updated_at = ? WHERE id = ?').run(title, new Date().toISOString(), card.id);
     }

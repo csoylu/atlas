@@ -1,8 +1,8 @@
-import { useEffect, useMemo, useRef, useState, type ReactNode } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from 'react';
 import { createPortal } from 'react-dom';
 import Markdown from 'react-markdown';
 import remarkGfm from 'remark-gfm';
-import { changedSections, findSection, linkOf, splitSections, USER, type Doc, type DocContent, type DocSection, type DocVersion } from '@atlas/shared';
+import { changedSections, findSection, linkOf, splitSections, USER, withPaneHelper, type Doc, type DocContent, type DocSection, type DocVersion } from '@atlas/shared';
 import { api, ApiError } from './api.ts';
 import type { MessageStream } from './useMessages.ts';
 import { diagramWidth } from './docPanel.ts';
@@ -11,6 +11,8 @@ import { AgentFace } from './AgentFace.tsx';
 import { PopButton, PopItem } from './HeadMenu.tsx';
 import { relAgo } from './library.ts';
 import { fileUrl, folderName, isImageUrl, sandboxFor, SANDBOX, useFolders, versionLabel } from './artifacts.ts';
+import { Marks, markdownMarks, markdownPick, PickOverlay, pictureMarks, picturePick, SvgHitLayer, useFrameComments, useSizeTick, type PaneComment, type PictureSpace, type SvgHits } from './CommentLayer.tsx';
+import { boxOf, containRect, svgSpace, type Box } from './comments.ts';
 
 /** Where the viewer is: the chat's side panel, the Library, or inside a card / inbox item. */
 export type ViewerMode = 'panel' | 'library' | 'inline';
@@ -48,7 +50,7 @@ const who = (id: string) => (id === USER ? 'you' : '@' + id);
  * inbox. ONE head row in every state: tabs (or the title), the version picker (« vN », « vN of M » in warn colours on
  * an old version), « Latest » on an old version, « Source × » while the source shows, the caller's tools (Full
  * size, Pin), ⋯, and the caller's end (×). The ⋯ menu has who / folder / path, Show source (or address), Open in the
- * browser (links), Ask about this, then the caller's items (Open in the Library; Pin and Move to in the Library).
+ * browser (links), then the caller's items (Open in the Library; Pin and Move to in the Library).
  */
 export function ArtifactViewer(props: {
   doc: Doc;
@@ -80,7 +82,8 @@ export function ArtifactViewer(props: {
   /** Sections changed since this version get a « changed » mark. */
   seenVersion?: number;
   stream: MessageStream;
-  onAsk?(section: DocSection | null, version: number): void;
+  /** Comment mode (#304): the pane's marks and picks; none in the Library. */
+  comment?: PaneComment;
   onSeen?(): void;
   /** The version on screen, each time it changes (« what the agent sees », #305). */
   onShown?(version: number): void;
@@ -182,17 +185,6 @@ export function ArtifactViewer(props: {
               {src ? 'Show the preview' : isLink ? 'Show the address' : 'Show the source'}
             </PopItem>
             {isLink && <OpenInBrowser doc={doc} version={version} onDone={close} onError={onError} />}
-            {props.onAsk && doc.kind !== 'markdown' && (
-              <PopItem
-                icon={<Icon.ask />}
-                onClick={() => {
-                  props.onAsk!(null, shown);
-                  close();
-                }}
-              >
-                Ask about this
-              </PopItem>
-            )}
             {props.menu?.(close)}
             <div className="pop-sep" />
             <PopItem
@@ -260,7 +252,7 @@ export function ArtifactViewer(props: {
           scrollKey={props.scrollKey}
           seenVersion={props.seenVersion}
           path={lib}
-          onAsk={props.onAsk}
+          comment={props.comment}
           onSeen={props.onSeen}
           onError={onError}
         />
@@ -402,8 +394,7 @@ function Source({ doc, version, onError }: { doc: Doc; version: number | null; o
 }
 
 /**
- * Preview: the artifact rendered by kind. Markdown at a readable width, sections with « Ask about this » and
- * « changed » marks; an html page at real size, sandboxed; an svg diagram fit to the width (text kept readable); a
+ * Preview: the artifact rendered by kind. Markdown at a readable width, sections with « changed » marks; an html page at real size, sandboxed; an svg diagram fit to the width (text kept readable); a
  * link as the running app (an image link fit to the box).
  */
 function DocBody(props: {
@@ -415,7 +406,7 @@ function DocBody(props: {
   seenVersion?: number;
   /** The file path as a quiet line on top of a document (the Library). */
   path?: boolean;
-  onAsk?(section: DocSection | null, version: number): void;
+  comment?: PaneComment;
   onSeen?(): void;
   onError(e: unknown): void;
 }) {
@@ -464,70 +455,181 @@ function DocBody(props: {
 
   if (!data) return <div className="sd-body loading" />;
   const shown = data.version;
+  const cm = props.comment;
   return (
-    <div className={'sd-body ' + doc.kind}>
+    <div className={'sd-body ' + doc.kind + (cm?.on ? ' commenting' : '')}>
       {doc.kind === 'markdown' ? (
-        <article className="doc-md md">
-          {props.path && <p className="doc-path">{doc.path}</p>}
-          {sections.map((s) => (
-            <section key={s.id || '_intro'} id={secId(doc.id, s.id)} className={'doc-sec' + (changed.has(s.id) ? ' changed' : '')}>
-              <div className="doc-sec-tools">
-                {changed.has(s.id) && (
-                  <button className="doc-chg" title="Mark as seen" onClick={props.onSeen}>
-                    changed
-                  </button>
-                )}
-                {props.onAsk && (
-                  <button className="doc-ask" onClick={() => props.onAsk!(s, shown)}>
-                    Ask about this
-                  </button>
-                )}
-              </div>
-              <MarkdownText text={s.text} />
-            </section>
-          ))}
-          {!sections.length && <p className="muted">This document is empty.</p>}
-        </article>
+        <MarkdownDoc doc={doc} sections={sections} changed={changed} path={props.path} version={shown} comment={cm} onSeen={props.onSeen} />
       ) : doc.kind === 'html' ? (
-        version === null ? (
-          <iframe
-            key={doc.version + ':' + (props.scrollKey ?? '')}
-            className="doc-frame"
-            title={doc.title}
-            sandbox={SANDBOX}
-            src={fileUrl(doc) + (props.section ? '#' + encodeURIComponent(props.section) : '')}
-          />
-        ) : (
-          <iframe className="doc-frame" title={doc.title} sandbox={SANDBOX} srcDoc={data.content} />
-        )
+        <PageFrame
+          key={(version === null ? doc.version + ':' + (props.scrollKey ?? '') : 'v' + version) + (cm ? ':pane' : '')}
+          title={doc.title}
+          src={version === null ? fileUrl(doc) + (cm ? '?pane=1' : '') + (props.section ? '#' + encodeURIComponent(props.section) : '') : undefined}
+          srcDoc={version === null ? undefined : cm ? withPaneHelper(data.content) : data.content}
+          version={shown}
+          comment={cm}
+        />
       ) : doc.kind === 'diagram' ? (
-        <Diagram svg={data.content} title={doc.title} />
+        <Diagram svg={data.content} title={doc.title} version={shown} comment={cm} />
       ) : (
-        <LinkView url={linkOf(data.content)} title={doc.title} />
+        <LinkView url={linkOf(data.content)} title={doc.title} version={shown} comment={cm} />
       )}
     </div>
   );
 }
 
-const MarkdownText = ({ text }: { text: string }) => (
-  <Markdown remarkPlugins={[remarkGfm]} components={{ a: ({ node: _n, ...a }) => <a {...a} target="_blank" rel="noreferrer" /> }}>
-    {text}
-  </Markdown>
-);
+/**
+ * Markdown, by section; each block carries its source lines (data-l1/l2, lines of the whole file) so a comment says
+ * exactly where. In comment mode a selection or a click on a block opens the comment box (#304).
+ */
+function MarkdownDoc(props: { doc: Doc; sections: DocSection[]; changed: Set<string>; path?: boolean; version: number; comment?: PaneComment; onSeen?(): void }) {
+  const { doc, comment: cm } = props;
+  const art = useRef<HTMLElement>(null);
+  const tick = useSizeTick(art, !!cm?.marks.length);
+  const marks = useMemo(() => (art.current && cm?.marks.length ? markdownMarks(art.current, cm.marks) : []), [cm?.marks, tick]); // eslint-disable-line react-hooks/exhaustive-deps
+  const sectionOf = useCallback((el: Element) => (el.closest('[data-sec]') as HTMLElement | null)?.dataset.sec ?? null, []);
+  return (
+    <article
+      ref={art}
+      className="doc-md md"
+      onClickCapture={(e) => {
+        if (!cm?.on) return;
+        if ((e.target as Element).closest('a')) e.preventDefault(); // a link is commented on, not followed
+      }}
+      onMouseUp={(e) => {
+        if (!cm?.on || e.button !== 0 || !art.current) return;
+        const p = markdownPick(art.current, e.target, sectionOf);
+        if (p) cm.onPick(p, props.version);
+      }}
+    >
+      {props.path && <p className="doc-path">{doc.path}</p>}
+      {props.sections.map((s) => (
+        <section key={s.id || '_intro'} id={secId(doc.id, s.id)} data-sec={s.id} className={'doc-sec' + (props.changed.has(s.id) ? ' changed' : '')}>
+          {props.changed.has(s.id) && (
+            <div className="doc-sec-tools">
+              <button className="doc-chg" title="Mark as seen" onClick={props.onSeen}>
+                changed
+              </button>
+            </div>
+          )}
+          <MarkdownText text={s.text} line={s.line} />
+        </section>
+      ))}
+      {!props.sections.length && <p className="muted">This document is empty.</p>}
+      {marks.length > 0 && <Marks items={marks} />}
+    </article>
+  );
+}
+
+/** An html page, sandboxed; in the pane its helper (added by the engine, ?pane=1) answers comment mode. */
+function PageFrame(props: { title: string; src?: string; srcDoc?: string; version: number; comment?: PaneComment }) {
+  const frame = useRef<HTMLIFrameElement>(null);
+  useFrameComments(frame, props.comment, props.version);
+  return <iframe ref={frame} className="doc-frame" title={props.title} sandbox={SANDBOX} src={props.src} srcDoc={props.srcDoc} />;
+}
+
+const LINE_TAGS = ['p', 'li', 'h1', 'h2', 'h3', 'h4', 'h5', 'h6', 'pre', 'blockquote', 'tr'] as const;
+type MdNode = { position?: { start: { line: number }; end: { line: number } } };
+/** react-markdown components that put each block's lines of the file on it (`line`: the text's first line in the file). */
+function lineComponents(line: number) {
+  const out: Record<string, (p: Record<string, unknown> & { node?: MdNode }) => ReactNode> = {};
+  for (const T of LINE_TAGS)
+    out[T] = ({ node, ...rest }) => {
+      const pos = node?.position;
+      const Tag = T as 'p';
+      return <Tag {...(rest as object)} data-l1={pos ? pos.start.line + line - 1 : undefined} data-l2={pos ? pos.end.line + line - 1 : undefined} />;
+    };
+  return out;
+}
+const MarkdownText = ({ text, line }: { text: string; line?: number }) => {
+  const lined = useMemo(() => (line ? lineComponents(line) : {}), [line]);
+  return (
+    <Markdown remarkPlugins={[remarkGfm]} components={{ ...lined, a: ({ node: _n, ...a }) => <a {...a} target="_blank" rel="noreferrer" /> }}>
+      {text}
+    </Markdown>
+  );
+};
 
 /** A link: the running app or page in a frame, an image fit to the box. */
-function LinkView({ url, title, preview }: { url: string; title: string; preview?: boolean }) {
+function LinkView({ url, title, preview, version, comment }: { url: string; title: string; preview?: boolean; version?: number; comment?: PaneComment }) {
   if (!url) return <p className="state-empty inline doc-empty">This link has no address.</p>;
+  if (comment && !preview) return isImageUrl(url) ? <CommentImage url={url} title={title} version={version ?? 0} comment={comment} /> : <CommentLink url={url} title={title} version={version ?? 0} comment={comment} />;
   if (isImageUrl(url)) return <img className={preview ? 'lib-pv-img' : 'doc-link-img'} src={url} alt={preview ? '' : title} />;
   return <iframe className={preview ? undefined : 'doc-frame'} title={title} sandbox={sandboxFor(url)} src={url} tabIndex={preview ? -1 : undefined} aria-hidden={preview || undefined} loading="lazy" />;
 }
 
+/** An image link in the pane: a spot or an area in the image's own pixels (#304). */
+function CommentImage({ url, title, version, comment: cm }: { url: string; title: string; version: number; comment: PaneComment }) {
+  const img = useRef<HTMLImageElement>(null);
+  const [nat, setNat] = useState<{ w: number; h: number } | null>(null);
+  const tick = useSizeTick(img, true);
+  const space = (): PictureSpace | null => {
+    const el = img.current;
+    if (!el || !nat) return null;
+    return { shown: containRect(boxOf(el.getBoundingClientRect()), nat), of: nat, origin: { x: 0, y: 0 }, unit: 'px' };
+  };
+  const s = space();
+  void tick;
+  return (
+    <div className="cm-pic">
+      <img ref={img} className="doc-link-img" src={url} alt={title} onLoad={(e) => setNat({ w: e.currentTarget.naturalWidth || 1, h: e.currentTarget.naturalHeight || 1 })} />
+      {s && img.current && <Marks items={pictureMarks(cm.marks, s, boxOf(img.current.getBoundingClientRect()))} />}
+      {cm.on && (
+        <PickOverlay
+          label="Click a spot or drag an area of the image"
+          onPick={(b, click) => {
+            const sp = space();
+            const p = sp && picturePick(b, click, sp, img.current);
+            if (p) cm.onPick(p, version);
+          }}
+        />
+      )}
+    </div>
+  );
+}
+
+/** A link's page (another site: nothing can be read inside it): a spot or an area of the frame as shown (#304). */
+function CommentLink({ url, title, version, comment: cm }: { url: string; title: string; version: number; comment: PaneComment }) {
+  const box = useRef<HTMLDivElement>(null);
+  const tick = useSizeTick(box, true);
+  void tick;
+  const space = (): PictureSpace | null => {
+    const el = box.current;
+    if (!el) return null;
+    const r = boxOf(el.getBoundingClientRect());
+    return { shown: r, of: { w: Math.max(1, Math.round(r.w)), h: Math.max(1, Math.round(r.h)) }, origin: { x: 0, y: 0 }, unit: 'px' };
+  };
+  const s = space();
+  return (
+    <div ref={box} className="cm-pic cm-pic-frame">
+      <iframe className="doc-frame" title={title} sandbox={sandboxFor(url)} src={url} loading="lazy" />
+      {s && <Marks items={pictureMarks(cm.marks, s, s.shown)} />}
+      {cm.on && (
+        <PickOverlay
+          label="Click a spot or drag an area of the page"
+          onPick={(b, click) => {
+            const sp = space();
+            const p = sp && picturePick(b, click, sp, null);
+            if (p) cm.onPick(p, version);
+          }}
+        />
+      )}
+    </div>
+  );
+}
+
+
 const secId = (docId: string, section: string) => `docsec-${docId}-${section}`;
 
-/** An svg as an image (no scripts), fit to the width unless its text would get too small to read. */
-function Diagram({ svg, title }: { svg: string; title: string }) {
+/**
+ * An svg as an image (no scripts), fit to the width unless its text would get too small to read. In comment mode a
+ * click names the shape under it, a drag the shapes inside the area, in the svg's own units (#304).
+ */
+function Diagram({ svg, title, version, comment: cm }: { svg: string; title: string; version?: number; comment?: PaneComment }) {
   const box = useRef<HTMLDivElement>(null);
+  const img = useRef<HTMLImageElement>(null);
   const [w, setW] = useState(0);
+  const [hits, setHits] = useState<SvgHits | null>(null);
   const url = useMemo(() => URL.createObjectURL(new Blob([svg], { type: 'image/svg+xml' })), [svg]);
   useEffect(() => () => URL.revokeObjectURL(url), [url]);
   useEffect(() => {
@@ -537,9 +639,35 @@ function Diagram({ svg, title }: { svg: string; title: string }) {
     ro.observe(el);
     return () => ro.disconnect();
   }, []);
+  const [loaded, setLoaded] = useState(false);
+  const space = (): PictureSpace | null => {
+    const el = img.current;
+    if (!el || !loaded) return null;
+    const sp = svgSpace(svg) ?? { of: { w: el.naturalWidth || 1, h: el.naturalHeight || 1 }, origin: { x: 0, y: 0 } };
+    return { shown: containRect(boxOf(el.getBoundingClientRect()), sp.of), of: sp.of, origin: sp.origin, unit: 'svg' };
+  };
+  const s = cm ? space() : null;
+  const el: Box | null = img.current ? boxOf(img.current.getBoundingClientRect()) : null;
+  const onHits = useCallback((h: SvgHits | null) => setHits(h), []);
   return (
     <div className="doc-diagram" ref={box}>
-      {w > 0 && <img src={url} alt={title} style={{ width: diagramWidth(svg, w) }} />}
+      {w > 0 && (
+        <div className="cm-pic">
+          <img ref={img} src={url} alt={title} style={{ width: diagramWidth(svg, w) }} onLoad={() => setLoaded(true)} />
+          {cm?.on && <SvgHitLayer svg={svg} onReady={onHits} />}
+          {s && el && <Marks items={pictureMarks(cm!.marks, s, el)} />}
+          {cm?.on && (
+            <PickOverlay
+              label="Click a shape or drag an area of the diagram"
+              onPick={(b, click) => {
+                const sp = space();
+                const p = sp && picturePick(b, click, sp, img.current, hits);
+                if (p) cm.onPick(p, version ?? 0);
+              }}
+            />
+          )}
+        </div>
+      )}
     </div>
   );
 }
