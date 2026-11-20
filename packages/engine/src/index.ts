@@ -105,9 +105,9 @@ export interface EngineOptions {
    */
   /**
    * The agent command sandbox (#298): on with ATLAS_SANDBOX=1 in `env` (temporary, until S5). Tests can force it and
-   * point it at another home or sandbox-exec.
+   * point it at another home, sandbox-exec, bwrap or /proc/sys.
    */
-  sandbox?: Partial<Pick<SandboxOptions, 'enabled' | 'home' | 'platform' | 'sandboxExec'>>;
+  sandbox?: Partial<Pick<SandboxOptions, 'enabled' | 'home' | 'platform' | 'sandboxExec' | 'bwrap' | 'procSys'>>;
   updates?: { host: UpdateHost | null; cannotInstall?: string; api?: string; fetch?: typeof fetch; intervalMs?: number | false; openCommand?: string; pid?: number };
 }
 

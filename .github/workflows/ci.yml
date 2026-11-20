@@ -82,9 +82,9 @@ jobs:
           CRASH_KILLS: '30'
         run: npx vitest run --project slow packages/engine/test/crash.test.ts
       # The agent command sandbox with the real sandbox-exec (#298 S1): A cannot read or change B, home, the database,
-      # /tmp, the keychain or the engine port; git push with and without GH_TOKEN (reaches github.com).
+      # /tmp, the keychain or the engine port; git push with and without GH_TOKEN (reaches github.com). Linux: job sandbox-linux.
       - name: Sandbox isolation test (real sandbox-exec)
-        run: npx vitest run --project slow packages/engine/test/sandbox.seatbelt.test.ts
+        run: npx vitest run --project slow packages/engine/test/sandbox.isolation.test.ts
       # The screenshot tool against the runner's Google Chrome and the built UI (#133). The test skips itself without
       # Chrome or a UI build, so both are checked first: a skip here would hide a regression.
       - name: Screenshot test (real Chrome)
@@ -93,9 +93,35 @@ jobs:
           npm -w @atlas/ui run build
           npx vitest run --project slow packages/engine/test/screenshot.chrome.test.ts
 
+  # The same isolation test with the real bubblewrap (#298 S2, server mode), on the Ubuntu that blocks it as shipped:
+  # first the probe must report that restriction with its fix, then the AppArmor profile of docs/server-sandbox.md is
+  # installed (the documented setup) and the whole test must pass. In parallel with `test`; the review flow reads every
+  # check on the PR's head, and a release needs this job too.
+  sandbox-linux:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: npm
+      - name: Install bubblewrap and socat
+        run: sudo apt-get update -qq && sudo apt-get install -y -qq bubblewrap socat
+      - run: npm ci
+      - name: Probe on the stock runner reports the user-namespace restriction and the fix
+        env:
+          SBX_EXPECT_USERNS_BLOCKED: '1'
+        run: npx vitest run --project slow packages/engine/test/sandbox.isolation.test.ts -t "probe on this machine"
+      - name: AppArmor profile for bwrap (docs/server-sandbox.md)
+        run: |
+          sudo install -m 644 docs/server-sandbox/bwrap.apparmor /etc/apparmor.d/bwrap
+          sudo apparmor_parser -r /etc/apparmor.d/bwrap
+      - name: Sandbox isolation test (real bwrap)
+        run: npx vitest run --project slow packages/engine/test/sandbox.isolation.test.ts
+
   # Each Mac chip on its own runner: native modules (better-sqlite3, sharp, sherpa-onnx) install for the runner's chip.
   mac:
-    needs: [changelog, test]
+    needs: [changelog, test, sandbox-linux]
     strategy:
       matrix:
         include:
