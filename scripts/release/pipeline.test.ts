@@ -31,7 +31,15 @@ describe('CI job graph (docs/updater.md step 3)', () => {
   const j = jobs();
 
   it('has the jobs the design names', () => {
-    expect(Object.keys(j)).toEqual(['changelog', 'test', 'mac', 'release', 'windows']);
+    expect(Object.keys(j)).toEqual(['changelog', 'test', 'sandbox-linux', 'mac', 'release', 'windows']);
+  });
+
+  it('the Linux sandbox isolation test (#298 S2) runs on ubuntu-24.04 on every PR, blocks the release, and checks the probe first', () => {
+    const l = j['sandbox-linux']!;
+    expect(l.cond).toBeNull();
+    expect(l.text).toContain('runs-on: ubuntu-24.04');
+    expect(l.text).toMatch(/SBX_EXPECT_USERNS_BLOCKED[\s\S]*apparmor_parser[\s\S]*npx vitest run --project slow packages\/engine\/test\/sandbox\.isolation\.test\.ts\n/);
+    expect(j.mac!.needs).toContain('sandbox-linux');
   });
 
   it('no release without green tests: the Mac build needs `test` and `changelog`, the release needs the Mac build', () => {

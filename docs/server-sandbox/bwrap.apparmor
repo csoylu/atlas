@@ -1,0 +1,12 @@
+# AppArmor profile that lets bubblewrap create the user namespace of Atlas's agent command sandbox (#298 S2) on
+# Ubuntu 23.10+ / 24.04, where kernel.apparmor_restrict_unprivileged_userns=1 blocks it for every other program.
+# Install: sudo install -m 644 bwrap.apparmor /etc/apparmor.d/bwrap && sudo apparmor_parser -r /etc/apparmor.d/bwrap
+# See docs/server-sandbox.md. CI (job sandbox-linux) installs this exact file before the isolation test.
+abi <abi/4.0>,
+include <tunables/global>
+
+profile bwrap /usr/bin/bwrap flags=(unconfined) {
+  userns,
+
+  include if exists <local/bwrap>
+}

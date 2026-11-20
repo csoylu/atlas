@@ -1,15 +1,16 @@
 import { spawn, execFile, type ChildProcess } from 'node:child_process';
-import { mkdirSync, realpathSync } from 'node:fs';
+import { lstatSync, mkdirSync, readFileSync, readlinkSync, realpathSync } from 'node:fs';
 import { homedir } from 'node:os';
 import { delimiter, dirname, isAbsolute, join, resolve, sep } from 'node:path';
 import type { SandboxStatus } from '@atlas/shared';
 
 /**
- * Agent command sandbox (#298 §1.2, §1.5, §1.6; S1 = macOS Seatbelt). Every agent command (shell, background shell,
- * secret_set's command, workflow command steps) goes through `spawnAgentCommand`. With the sandbox on, it runs as
- * `sandbox-exec -p <profile> /bin/bash -c <cmd>` with HOME = the workspace, a private TMPDIR and cache under the data
- * dir, and a git config that takes GitHub credentials from $GH_TOKEN only. Fail closed: if the startup probe failed,
- * every agent command throws SandboxUnavailable and the run stops; there is never a host fallback.
+ * Agent command sandbox (#298 §1.2, §1.4, §1.5, §1.6). Every agent command (shell, background shell, secret_set's
+ * command, workflow command steps) goes through `spawnAgentCommand`. With the sandbox on, it runs as
+ * `sandbox-exec -p <profile> /bin/bash -c <cmd>` on macOS (S1) or `bwrap <args> -- /bin/bash -c <cmd>` on Linux (S2),
+ * with HOME = the workspace, a private TMPDIR and cache under the data dir, and a git config that takes GitHub
+ * credentials from $GH_TOKEN only. Fail closed: if the startup probe failed (Windows always: no sandbox there), every
+ * agent command throws SandboxUnavailable and the run stops; there is never a host fallback. Server setup: docs/server-sandbox.md.
  *
  * Temporary (S1–S4): the sandbox is on only with ATLAS_SANDBOX=1. Off, commands spawn on the host exactly as before.
  */
@@ -40,10 +41,12 @@ export interface SandboxOptions {
   dataDir: string;
   /** The engine's HTTP port once it listens: denied to agent commands. */
   enginePort: () => number | null;
-  /** Tests: another home, platform or sandbox-exec. */
+  /** Tests: another home, platform, sandbox-exec, bwrap or /proc/sys. */
   home?: string;
   platform?: NodeJS.Platform;
   sandboxExec?: string;
+  bwrap?: string;
+  procSys?: string;
 }
 
 /** Toolchains under $HOME that stay readable (besides the PATH's own folders under $HOME). */
@@ -129,6 +132,98 @@ export function seatbeltProfile(i: ProfileInput): string {
   return L.join('\n') + '\n';
 }
 
+/** Linux: toolchains under $HOME that stay readable (besides the PATH's own folders). */
+const HOME_READABLE_LINUX = ['.nvm', '.cargo', '.rustup', '.cache/ms-playwright'];
+/** Linux: the system, read-only. /bin, /lib… are symlinks into /usr on merged-/usr systems (Ubuntu), folders elsewhere. */
+const SYSTEM_RO = ['/usr', '/etc', '/opt', '/sys', '/run/systemd/resolve'];
+const SYSTEM_LINKS = ['/bin', '/sbin', '/lib', '/lib32', '/lib64', '/libx32'];
+
+export interface BwrapInput {
+  home: string;
+  dataDir: string;
+  workspace: string;
+  /** The private folder: TMPDIR and caches. */
+  private: string;
+  /** The command's working directory (in the workspace). */
+  cwd: string;
+  /** The command's PATH: its folders (toolchains) stay readable, unless they open $HOME or the data dir. */
+  path: string;
+  /** Tests: what a path is on this machine. */
+  kind?: (p: string) => { link: string } | 'dir' | 'file' | null;
+}
+
+const fsKind = (p: string): { link: string } | 'dir' | 'file' | null => {
+  try {
+    const st = lstatSync(p);
+    if (st.isSymbolicLink()) return { link: readlinkSync(p) };
+    return st.isDirectory() ? 'dir' : 'file';
+  } catch {
+    return null;
+  }
+};
+
+/**
+ * The bubblewrap arguments of one (project, agent) workspace (#298 §1.4). bwrap starts from an empty root (a tmpfs) and
+ * mounts only what is listed: the system read-only, the PATH's toolchains read-only, a private /proc (own pid
+ * namespace), /dev, a tmpfs /tmp, then the workspace and the private folder read-write, last. $HOME and the data dir
+ * (database, other workspaces, outputs) are never mounted: inside, they do not exist. When one of them lies under a
+ * mounted system folder (a data dir in /opt), an empty tmpfs hides it. Children inherit it all; --die-with-parent and
+ * the pid namespace end every process of the command with it. Network: the host's (level On; levels come with S3).
+ */
+export function bwrapArgs(i: BwrapInput): string[] {
+  const kind = i.kind ?? fsKind;
+  const home = real(i.home);
+  const data = real(i.dataDir);
+  const ws = real(i.workspace);
+  const priv = real(i.private);
+  const a = ['--unshare-pid', '--unshare-ipc', '--die-with-parent', '--new-session'];
+  const mounted: string[] = [];
+  for (const d of SYSTEM_LINKS) {
+    const k = kind(d);
+    if (k && typeof k === 'object') a.push('--symlink', k.link, d);
+    else if (k === 'dir') a.push('--ro-bind', d, d), mounted.push(d);
+  }
+  for (const d of SYSTEM_RO) if (kind(d) === 'dir') a.push('--ro-bind', d, d), mounted.push(d);
+  // Hide $HOME and the data dir if a system mount holds them (deepest last, so the data dir's mask is not undone).
+  for (const d of [home, data]) if (mounted.some((m) => within(d, m))) a.push('--tmpfs', d);
+  const pathDirs = i.path
+    .split(delimiter)
+    .filter((d) => isAbsolute(d))
+    .map(real)
+    .filter((d) => d !== '/' && !within(home, d) && !within(data, d) && !within(d, data) && !mounted.some((m) => within(d, m)));
+  const tool = [...HOME_READABLE_LINUX.map((d) => join(home, d)), ...pathDirs].filter((d) => !within(d, data) && kind(d) === 'dir');
+  for (const d of [...new Set(tool)]) a.push('--ro-bind', d, d);
+  a.push('--proc', '/proc', '--dev', '/dev', '--tmpfs', '/tmp');
+  // The command's own workspace and private folder, after everything else: they win over any mask above.
+  a.push('--bind', ws, ws, '--bind', priv, priv);
+  a.push('--chdir', within(real(i.cwd), ws) || within(real(i.cwd), priv) ? real(i.cwd) : ws);
+  return a;
+}
+
+/** Why bwrap cannot make its namespaces here, and the fix (#298 §1.4: Ubuntu 24.04 blocks it as shipped). */
+export function bwrapFailure(stderr: string, procSys: string): string {
+  const msg = stderr.trim().split('\n').slice(-3).join(' ').slice(0, 300) || 'bwrap failed';
+  const read = (f: string) => {
+    try {
+      return readFileSync(join(procSys, f), 'utf8').trim();
+    } catch {
+      return null;
+    }
+  };
+  if (!/uid map|Permission denied|Operation not permitted|No permissions to creat|namespace/i.test(msg)) return `bwrap failed: ${msg}`;
+  if (read('kernel/apparmor_restrict_unprivileged_userns') === '1')
+    return (
+      `bwrap cannot create a user namespace (${msg}): this system restricts unprivileged user namespaces ` +
+      '(kernel.apparmor_restrict_unprivileged_userns=1, Ubuntu 23.10+). Fix: add the AppArmor profile for bwrap in ' +
+      'docs/server-sandbox.md, or run `sudo sysctl -w kernel.apparmor_restrict_unprivileged_userns=0`, then restart Atlas'
+    );
+  if (read('kernel/unprivileged_userns_clone') === '0')
+    return `bwrap cannot create a user namespace (${msg}): unprivileged user namespaces are off (kernel.unprivileged_userns_clone=0). Fix: \`sudo sysctl -w kernel.unprivileged_userns_clone=1\` (docs/server-sandbox.md), then restart Atlas`;
+  if (read('user/max_user_namespaces') === '0')
+    return `bwrap cannot create a user namespace (${msg}): user.max_user_namespaces=0. Fix: \`sudo sysctl -w user.max_user_namespaces=15000\` (docs/server-sandbox.md), then restart Atlas`;
+  return `bwrap cannot create its namespaces (${msg}): see docs/server-sandbox.md`;
+}
+
 /**
  * The generic git config of §1.5, as env (nothing written to disk): ssh GitHub remotes go over https, the only
  * credential helper answers x-access-token / $GH_TOKEN for github.com, and without GH_TOKEN it stops git with what to do.
@@ -164,14 +259,16 @@ export class Sandbox {
   private readonly home: string;
   private readonly platform: NodeJS.Platform;
   private readonly exec: string;
+  private readonly bwrap: string;
 
   constructor(private o: SandboxOptions) {
     this.home = o.home ?? homedir();
     this.platform = o.platform ?? process.platform;
     this.exec = o.sandboxExec ?? '/usr/bin/sandbox-exec';
+    this.bwrap = o.bwrap ?? 'bwrap';
     this.state = {
       enabled: o.enabled,
-      kind: this.platform === 'darwin' ? 'seatbelt' : null,
+      kind: this.platform === 'darwin' ? 'seatbelt' : this.platform === 'linux' ? 'bwrap' : null,
       ok: false,
       reason: o.enabled ? 'not checked yet' : 'off (ATLAS_SANDBOX is not 1): agent commands run unconfined',
     };
@@ -191,8 +288,8 @@ export class Sandbox {
   }
 
   /**
-   * The startup probe (§1.6): `true` under a real profile. Any failure is kept as the reason every agent command
-   * fails with, and logged. Off: nothing to check.
+   * The startup probe (§1.6): `true` under a real profile (macOS) or the real bwrap arguments (Linux). Any failure is
+   * kept as the reason every agent command fails with, and logged. Off: nothing to check.
    */
   async probe(): Promise<SandboxStatus> {
     if (!this.o.enabled) return this.status();
@@ -201,17 +298,22 @@ export class Sandbox {
       console.error(`Sandbox unavailable: ${reason}. Agent commands are stopped.`);
       return this.status();
     };
-    if (this.platform === 'linux') return fail('no Linux sandbox yet (bubblewrap comes with #298 S2)');
-    if (this.platform !== 'darwin') return fail(`no sandbox on ${this.platform}`);
+    if (this.platform === 'win32') return fail('no sandbox on Windows');
+    if (this.platform !== 'darwin' && this.platform !== 'linux') return fail(`no sandbox on ${this.platform}`);
     try {
       const priv = this.privateDir('_probe', '_probe');
       mkdirSync(join(priv, 'tmp'), { recursive: true });
-      const profile = seatbeltProfile({ home: this.home, dataDir: this.o.dataDir, workspace: priv, private: priv, enginePort: this.o.enginePort(), path: '' });
-      await new Promise<void>((ok, ko) =>
-        execFile(this.exec, ['-p', profile, '/usr/bin/true'], { timeout: 15_000 }, (e, _out, err) =>
-          e ? ko(new Error(`${this.exec} failed: ${(String(err).trim() || e.message).slice(0, 300)}`)) : ok(),
-        ),
-      );
+      if (this.platform === 'darwin') {
+        const profile = seatbeltProfile({ home: this.home, dataDir: this.o.dataDir, workspace: priv, private: priv, enginePort: this.o.enginePort(), path: '' });
+        await run(this.exec, ['-p', profile, '/usr/bin/true'], (err, e) => `${this.exec} failed: ${(err.trim() || e.message).slice(0, 300)}`);
+      } else {
+        const args = bwrapArgs({ home: this.home, dataDir: this.o.dataDir, workspace: priv, private: priv, cwd: priv, path: '' });
+        await run(this.bwrap, [...args, '--', '/bin/sh', '-c', 'true'], (err, e) =>
+          (e as NodeJS.ErrnoException).code === 'ENOENT'
+            ? `bubblewrap is not installed (\`${this.bwrap}\` not found): install the bubblewrap package (docs/server-sandbox.md)`
+            : bwrapFailure(err || e.message, this.o.procSys ?? '/proc/sys'),
+        );
+      }
       this.identity = await gitIdentity();
       this.state = { ...this.state, ok: true, reason: null };
       return this.status();
@@ -226,7 +328,7 @@ export class Sandbox {
   }
 
   /** The command line and env of a sandboxed command. Throws SandboxUnavailable when it can't run. */
-  wrap(scope: SandboxScope, command: string, env: NodeJS.ProcessEnv): { file: string; args: string[]; env: NodeJS.ProcessEnv } {
+  wrap(scope: SandboxScope, command: string, env: NodeJS.ProcessEnv, cwd: string = scope.workspace): { file: string; args: string[]; env: NodeJS.ProcessEnv } {
     if (!this.state.ok) throw new SandboxUnavailable(this.state.reason ?? 'unknown');
     const priv = this.privateDir(scope.projectId, scope.agentId);
     const tmp = join(priv, 'tmp');
@@ -247,9 +349,18 @@ export class Sandbox {
     // No password prompt of any kind (§1.5).
     delete full.GIT_ASKPASS;
     delete full.SSH_ASKPASS;
+    if (this.platform === 'linux') {
+      const args = bwrapArgs({ home: this.home, dataDir: this.o.dataDir, workspace: scope.workspace, private: priv, cwd, path: full.PATH ?? '' });
+      return { file: this.bwrap, args: [...args, '--', '/bin/bash', '-c', command], env: full };
+    }
     const profile = seatbeltProfile({ home: this.home, dataDir: this.o.dataDir, workspace: scope.workspace, private: priv, enginePort: this.o.enginePort(), path: full.PATH ?? '' });
     return { file: this.exec, args: ['-p', profile, '/bin/bash', '-c', command], env: full };
   }
+}
+
+/** Runs a probe command; a failure becomes an Error with `why(stderr, error)` as its message. */
+function run(file: string, args: string[], why: (stderr: string, e: Error) => string): Promise<void> {
+  return new Promise<void>((ok, ko) => execFile(file, args, { timeout: 15_000 }, (e, _out, err) => (e ? ko(new Error(why(String(err), e))) : ok())));
 }
 
 /** Master's git name and email (global config), read once by the probe: HOME is the workspace inside the sandbox. */
@@ -277,7 +388,7 @@ export function spawnAgentCommand(ctx: AgentCommandContext, command: string, o: 
   const detached = process.platform !== 'win32';
   const s = ctx.sandbox;
   if (s && s.sandbox.enabled) {
-    const w = s.sandbox.wrap(s, command, ctx.env);
+    const w = s.sandbox.wrap(s, command, ctx.env, ctx.cwd);
     return spawn(w.file, w.args, { cwd: ctx.cwd, env: w.env, detached, stdio });
   }
   return spawn(command, { cwd: ctx.cwd, shell: o.bash ? 'bash' : true, env: ctx.env, detached, stdio });

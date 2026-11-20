@@ -78,7 +78,9 @@ Settings → Subscriptions, API keys or Local.
 
 **Server mode:** `npm run build && npm start` serves the built UI from the engine (http://localhost:4317). Set `ATLAS_PASSWORD` (12+
 characters) to require a login, keep the engine on `127.0.0.1` and put Caddy (HTTPS) or Tailscale in front of it.
-See `.env.example`.
+See `.env.example`. Agent commands run in a bubblewrap sandbox there (for now only with
+`ATLAS_SANDBOX=1`): install `bubblewrap` and `socat`, and on Ubuntu 24.04 add the AppArmor profile, as in
+[docs/server-sandbox.md](docs/server-sandbox.md).
 
 Secrets on a server (model keys typed in Settings, agent secrets) go in `<data dir>/secrets.enc`, encrypted with
 AES-256-GCM under a key derived from a secrets password (scrypt). The password is never stored. Set

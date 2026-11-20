@@ -1,13 +1,13 @@
 import { describe, expect, it, onTestFinished, vi } from 'vitest';
 import { execFileSync } from 'node:child_process';
-import { chmodSync, existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, writeFileSync } from 'node:fs';
+import { chmodSync, existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, realpathSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import type { ContentBlock, SandboxStatus } from '@atlas/shared';
 import { launch } from '../test/kit/index.ts';
 import type { ModelRequest } from './providers/types.ts';
-import { gitEnv, Sandbox, SandboxUnavailable, seatbeltProfile, spawnAgentCommand } from './sandbox.ts';
+import { bwrapArgs, bwrapFailure, gitEnv, Sandbox, SandboxUnavailable, seatbeltProfile, spawnAgentCommand } from './sandbox.ts';
 import { spawnCommand } from './workflowCommand.ts';
 
 /** #298 S1: one way to spawn an agent command, the Seatbelt profile, the git credential env, fail closed. */
@@ -27,7 +27,17 @@ function fakeSandboxExec(): { bin: string; profile: string } {
   return { bin, profile };
 }
 
-describe('sandbox (#298 S1)', () => {
+/** A stand-in for bwrap: writes its arguments next to itself, drops everything up to `--`, runs the rest unconfined. */
+function fakeBwrap(): { bin: string; args: string } {
+  const dir = mkdtempSync(join(tmpdir(), 'atlas-bwrap-fake-'));
+  const bin = join(dir, 'bwrap');
+  const args = join(dir, 'last.args');
+  writeFileSync(bin, `#!/bin/sh\nprintf '%s\\n' "$@" > '${args}'\nwhile [ "$#" -gt 0 ] && [ "$1" != -- ]; do shift; done\nshift\nexec "$@"\n`);
+  chmodSync(bin, 0o755);
+  return { bin, args };
+}
+
+describe('sandbox (#298 S1, S2)', () => {
   it('no agent command is spawned anywhere but spawnAgentCommand: a test fails on any other shell spawn in engine/src', () => {
     // The engine's own processes (the login-shell PATH read, the updater's swap helper) are not agent commands.
     const own = new Set(['sandbox.ts', 'shellEnv.ts', 'updater.ts']);
@@ -173,9 +183,89 @@ describe('sandbox (#298 S1)', () => {
     expect(() => spawnAgentCommand({ cwd: ws, env: {}, sandbox: scope }, 'touch x')).toThrow('Sandbox unavailable: gone. Agent commands are stopped.');
   });
 
-  it('Linux and Windows: no sandbox yet, the probe says why (fail closed)', async () => {
+  it('bwrap arguments (Linux, §1.4): pid/ipc namespaces, system read-only, no $HOME nor data dir, workspace and private folder last', () => {
+    const fs: Record<string, { link: string } | 'dir'> = { '/bin': { link: 'usr/bin' }, '/lib': { link: 'usr/lib' }, '/lib64': { link: 'usr/lib64' }, '/usr': 'dir', '/etc': 'dir', '/opt': 'dir', '/sys': 'dir', '/home/u/.nvm': 'dir', '/home/u/.local/bin': 'dir', '/srv/tools/bin': 'dir', '/opt/atlas/data/workspaces/a/node_modules/.bin': 'dir' };
+    const kind = (p: string) => fs[p] ?? null;
+    const a = bwrapArgs({ home: '/home/u', dataDir: '/opt/atlas/data', workspace: '/opt/atlas/data/workspaces/a', private: '/opt/atlas/data/sandbox/p/a', cwd: '/opt/atlas/data/workspaces/a/sub', path: '/home/u/.local/bin:/home/u:/srv/tools/bin:/usr/bin:/opt/atlas/data/workspaces/a/node_modules/.bin:/:relative', kind });
+    const s = a.join(' ');
+    expect(a.slice(0, 4)).toEqual(['--unshare-pid', '--unshare-ipc', '--die-with-parent', '--new-session']);
+    expect(s).toContain('--symlink usr/bin /bin');
+    expect(s).toContain('--ro-bind /usr /usr');
+    expect(s).toContain('--ro-bind /etc /etc');
+    expect(s).not.toContain('/lib32'); // absent here
+    // The data dir sits under /opt (mounted): an empty tmpfs hides it. $HOME is not under a mount: simply absent.
+    expect(s).toContain('--tmpfs /opt/atlas/data');
+    expect(s).not.toContain('--tmpfs /home/u');
+    expect(a.filter((x) => x === '/home/u')).toEqual([]);
+    // Toolchains: ~/.nvm, PATH folders outside system mounts; never $HOME itself, /, a relative entry or a folder in the data dir.
+    expect(s).toContain('--ro-bind /home/u/.nvm /home/u/.nvm');
+    expect(s).toContain('--ro-bind /home/u/.local/bin /home/u/.local/bin');
+    expect(s).toContain('--ro-bind /srv/tools/bin /srv/tools/bin');
+    expect(s).not.toContain('--ro-bind /usr/bin');
+    expect(s).not.toContain('node_modules');
+    expect(s).not.toContain('relative');
+    expect(s).toContain('--proc /proc --dev /dev --tmpfs /tmp');
+    // Last: the workspace and the private folder, read-write, after the data dir's mask; then the working directory.
+    expect(a.slice(-8)).toEqual(['--bind', '/opt/atlas/data/workspaces/a', '/opt/atlas/data/workspaces/a', '--bind', '/opt/atlas/data/sandbox/p/a', '/opt/atlas/data/sandbox/p/a', '--chdir', '/opt/atlas/data/workspaces/a/sub']);
+    expect(a.indexOf('--bind')).toBeGreaterThan(a.indexOf('/opt/atlas/data'));
+    // A working directory outside the workspace falls back to the workspace.
+    expect(bwrapArgs({ home: '/h', dataDir: '/d', workspace: '/d/w', private: '/d/p', cwd: '/etc', path: '', kind }).slice(-2)).toEqual(['--chdir', '/d/w']);
+  });
+
+  it('bwrap probe failures say why and how to fix it: Ubuntu userns restriction, userns off, not installed', async () => {
+    const sys = mkdtempSync(join(tmpdir(), 'atlas-procsys-'));
+    mkdirSync(join(sys, 'kernel'));
+    writeFileSync(join(sys, 'kernel', 'apparmor_restrict_unprivileged_userns'), '1\n');
+    const uidMap = 'bwrap: setting up uid map: Permission denied\n';
+    expect(bwrapFailure(uidMap, sys)).toMatch(/kernel\.apparmor_restrict_unprivileged_userns=1.*AppArmor profile for bwrap in docs\/server-sandbox\.md.*sysctl -w kernel\.apparmor_restrict_unprivileged_userns=0/);
+    writeFileSync(join(sys, 'kernel', 'apparmor_restrict_unprivileged_userns'), '0\n');
+    writeFileSync(join(sys, 'kernel', 'unprivileged_userns_clone'), '0\n');
+    expect(bwrapFailure('bwrap: No permissions to creating new namespace', sys)).toContain('kernel.unprivileged_userns_clone=1');
+    expect(bwrapFailure('bwrap: Can\'t mount proc on /newroot/proc: Device busy', sys)).toBe("bwrap failed: bwrap: Can't mount proc on /newroot/proc: Device busy");
+
+    // Through the probe: a bwrap that fails like Ubuntu 24.04's, then one that is missing.
+    writeFileSync(join(sys, 'kernel', 'apparmor_restrict_unprivileged_userns'), '1\n');
+    const dir = mkdtempSync(join(tmpdir(), 'atlas-bwrap-blocked-'));
+    const bin = join(dir, 'bwrap');
+    writeFileSync(bin, `#!/bin/sh\necho 'bwrap: setting up uid map: Permission denied' >&2\nexit 1\n`);
+    chmodSync(bin, 0o755);
     const dataDir = mkdtempSync(join(tmpdir(), 'atlas-sbx-os-'));
-    expect((await new Sandbox({ enabled: true, dataDir, enginePort: () => null, platform: 'linux' }).probe()).reason).toContain('bubblewrap');
-    expect((await new Sandbox({ enabled: true, dataDir, enginePort: () => null, platform: 'win32' }).probe())).toMatchObject({ ok: false, reason: 'no sandbox on win32' });
+    const blocked = await new Sandbox({ enabled: true, dataDir, enginePort: () => null, platform: 'linux', bwrap: bin, procSys: sys }).probe();
+    expect(blocked).toMatchObject({ enabled: true, kind: 'bwrap', ok: false });
+    expect(blocked.reason).toContain('apparmor_restrict_unprivileged_userns=1');
+    const missing = await new Sandbox({ enabled: true, dataDir, enginePort: () => null, platform: 'linux', bwrap: '/nonexistent/bwrap', procSys: sys }).probe();
+    expect(missing.reason).toBe('bubblewrap is not installed (`/nonexistent/bwrap` not found): install the bubblewrap package (docs/server-sandbox.md)');
+  });
+
+  it('Linux on: the command goes through bwrap with the §1.4 arguments, HOME = workspace, a private TMPDIR, the git env', async () => {
+    const fake = fakeBwrap();
+    const l = await launch({
+      dispatch: false,
+      env: {},
+      shellPath: 'engine',
+      sandbox: { enabled: true, platform: 'linux', bwrap: fake.bin },
+      script: [tool('u1', 'shell', { command: 'echo "home=$HOME tmp=$TMPDIR prompt=$GIT_TERMINAL_PROMPT shell=$BASH_VERSION"' }), text('done')],
+    });
+    expect((await l.call<SandboxStatus>('GET', '/sandbox')).body).toEqual({ enabled: true, kind: 'bwrap', ok: true, reason: null });
+    const card = l.engine.kanban.create({ title: 'on', assignee: 'atlas' }, 'user');
+    l.engine.kanban.appendMessage(card.id, 'user', 'user', text('go'));
+    l.engine.runner.wake(card.id);
+    await l.engine.runner.settled(card.id);
+    const out = results(l.fake.calls[1]!)[0]!;
+    const priv = join(l.dataDir, 'sandbox', l.engine.projects.list()[0]!.id, 'atlas');
+    expect(out).toContain(`home=${l.workdir} tmp=${join(priv, 'tmp')}/ prompt=0 shell=`);
+    const args = readFileSync(fake.args, 'utf8').split('\n');
+    expect(args.slice(0, 4)).toEqual(['--unshare-pid', '--unshare-ipc', '--die-with-parent', '--new-session']);
+    expect(args.join(' ')).toContain(`--bind ${realpathSync(l.workdir)} ${realpathSync(l.workdir)}`);
+    expect(args.slice(args.indexOf('--'), args.indexOf('--') + 3)).toEqual(['--', '/bin/bash', '-c']);
+  });
+
+  it('Windows: no sandbox, the probe says so and agent commands stop (fail closed)', async () => {
+    const dataDir = mkdtempSync(join(tmpdir(), 'atlas-sbx-os-'));
+    expect(await new Sandbox({ enabled: true, dataDir, enginePort: () => null, platform: 'win32' }).probe()).toEqual({ enabled: true, kind: null, ok: false, reason: 'no sandbox on Windows' });
+    const sandbox = new Sandbox({ enabled: true, dataDir, enginePort: () => null, platform: 'win32' });
+    await sandbox.probe();
+    const scope = { sandbox, projectId: 'p', projectName: 'P', agentId: 'a', workspace: join(dataDir, 'w') };
+    expect(() => spawnAgentCommand({ cwd: dataDir, env: {}, sandbox: scope }, 'touch x')).toThrow('Sandbox unavailable: no sandbox on Windows. Agent commands are stopped.');
   });
 });
