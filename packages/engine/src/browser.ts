@@ -215,6 +215,32 @@ export class Browser {
     return host.send(chatId, method, params);
   }
 
+  /**
+   * Resolves once the chat's page is not loading (S7: a snapshot waits for the page an action led to), or after
+   * `timeoutMs` (the page is read as it is). `graceMs` first: a click's navigation starts a moment after the click.
+   */
+  async settle(chatId: string, o: { graceMs?: number; timeoutMs?: number; signal?: AbortSignal } = {}): Promise<boolean> {
+    const { graceMs = 0, timeoutMs = 15_000, signal } = o;
+    const wait = (ms: number, until: () => boolean) =>
+      new Promise<boolean>((resolve, reject) => {
+        if (until()) return resolve(true);
+        const done = (v: boolean | Error) => {
+          clearTimeout(timer);
+          off();
+          signal?.removeEventListener('abort', onAbort);
+          return v instanceof Error ? reject(v) : resolve(v);
+        };
+        const onAbort = () => done(signal!.reason instanceof Error ? signal!.reason : new Error('aborted'));
+        const timer = setTimeout(() => done(until()), ms);
+        const off = this.bus.on((e) => {
+          if (e.type === 'browser.updated' && e.tab.chatId === chatId && until()) done(true);
+        });
+        signal?.addEventListener('abort', onAbort, { once: true });
+      });
+    if (graceMs) await wait(graceMs, () => false);
+    return wait(timeoutMs, () => !this.liveOf(chatId).loading);
+  }
+
   private onHost(e: HostEvent): void {
     const r = this.row(e.id);
     if (!r) return;
