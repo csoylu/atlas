@@ -1,6 +1,6 @@
 import { execFile } from 'node:child_process';
 import { createHmac, randomBytes } from 'node:crypto';
-import { existsSync, mkdirSync, readdirSync, readFileSync, realpathSync, statSync, writeFileSync } from 'node:fs';
+import { existsSync, lstatSync, mkdirSync, readdirSync, readFileSync, realpathSync, statSync, writeFileSync } from 'node:fs';
 import { basename, dirname, extname, isAbsolute, join, relative, resolve, sep } from 'node:path';
 import { FILE_EDIT_MAX, FILE_LARGE_LINES, type GitLetter, type SaveWsFile, type WsEntry, type WsFile, type WsListing, type WsSaveResult, type WsStat } from '@atlas/shared';
 import type { Db } from './store/db.ts';
@@ -15,6 +15,17 @@ import { workspaceOf } from './projects.ts';
  * or anywhere out, is refused). Text sent to the UI passes the secrets redactor like /api/files (#226); a file that held
  * a secret value is read only, or saving would write « [secret NAME] » over the value.
  */
+
+/** The entry is there, a link to nothing included (existsSync follows links). */
+function lexists(p: string): boolean {
+  try {
+    lstatSync(p);
+    return true;
+  } catch (e) {
+    if ((e as NodeJS.ErrnoException).code === 'ENOENT' || (e as NodeJS.ErrnoException).code === 'ENOTDIR') return false;
+    throw e;
+  }
+}
 
 /** Shown as pictures (not edited). svg is text: edited as code. */
 export const IMAGE_MIME: Record<string, string> = {
@@ -88,9 +99,18 @@ export class WorkspaceFiles {
     } catch (e) {
       if ((e as NodeJS.ErrnoException).code !== 'ENOENT') throw e;
       if (!missing) throw new NotFoundError(`no file ${p} in the workspace`);
-      let parent = dirname(full);
-      while (!existsSync(parent)) parent = dirname(parent);
-      const realParent = realpathSync(parent);
+      // The nearest entry that is there, links included: a dangling link (to a missing file or folder, in or out) is
+      // « there » for lstat but not for realpath, and writing through it would follow it, so it is refused.
+      let parent = full;
+      while (!lexists(parent)) parent = dirname(parent);
+      let realParent: string;
+      try {
+        realParent = realpathSync(parent);
+      } catch (e2) {
+        if ((e2 as NodeJS.ErrnoException).code !== 'ENOENT') throw e2;
+        throw new ConflictError(`path ${p} goes through a link to nothing: it is refused`);
+      }
+      if (parent === full || !statSync(realParent).isDirectory()) throw new ConflictError(`path ${p} goes through a link to nothing: it is refused`);
       if (!under(root, realParent)) throw new ConflictError(`path ${p} links to a place outside the workspace`);
       return { abs: join(realParent, relative(parent, full)), rel };
     }
@@ -173,7 +193,8 @@ export class WorkspaceFiles {
       if (now.readOnly) throw new ConflictError(`${rel} is read only here (${READ_ONLY_WHY[now.readOnly]})`);
     }
     mkdirSync(dirname(abs), { recursive: true });
-    writeFileSync(abs, s.content);
+    // A new file is created exclusively: O_EXCL never follows a link, even one made after the check above.
+    writeFileSync(abs, s.content, { flag: there ? 'w' : 'wx' });
     return { ok: true, file: this.readAt(abs, rel) };
   }
 

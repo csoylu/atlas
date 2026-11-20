@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import { execFileSync } from 'node:child_process';
-import { mkdirSync, mkdtempSync, readFileSync, rmSync, symlinkSync, writeFileSync } from 'node:fs';
+import { mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, symlinkSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import type { ContentBlock, FileTab, PanelTab, WsFile, WsListing, WsSaveResult } from '@atlas/shared';
@@ -32,6 +32,9 @@ describe('workspace files (#303)', () => {
     symlinkSync(join(outside, 'secret.txt'), join(ws, 'out-file'));
     symlinkSync(outside, join(ws, 'out-dir'));
     symlinkSync(join(ws, 'a.txt'), join(ws, 'in-link'));
+    // Dangling links out (review of PR #118): to a file not there yet, and to a folder not there yet.
+    symlinkSync(join(outside, 'new.txt'), join(ws, 'dang'));
+    symlinkSync(join(outside, 'nodir'), join(ws, 'dang-dir'));
     mkdirSync(join(ws, '.git'));
     writeFileSync(join(ws, '.git', 'config'), '[core]');
 
@@ -43,11 +46,15 @@ describe('workspace files (#303)', () => {
     expect(abs.status).toBe(400);
     expect(abs.body.error).toMatch(/relative/);
     // Writes too: nothing lands outside, through .. or a link.
-    for (const p of ['../escape.txt', 'out-dir/new.txt', 'out-file']) {
-      const r = await l.call('POST', files('save'), { path: p, content: 'x', base: null });
-      expect(r.status, p).toBe(409);
+    for (const p of ['../escape.txt', 'out-dir/new.txt', 'out-file', 'dang', 'dang-dir/new.txt', 'dang-dir/a/b.txt']) {
+      for (const base of [null, 'x']) {
+        const r = await l.call('POST', files('save'), { path: p, content: 'pwned', base });
+        expect(r.status === 409 || (base !== null && (r.body as WsSaveResult).ok === false), `${p} base ${base}`).toBe(true);
+      }
     }
     expect(readFileSync(join(outside, 'secret.txt'), 'utf8')).toBe('outside');
+    expect(readdirSync(outside)).toEqual(['secret.txt']);
+    for (const p of ['dang', 'dang-dir/new.txt']) expect((await l.call('GET', files(`read?path=${p}`))).status, p).not.toBe(200);
     // A link that stays inside reads; links out and .git are not listed.
     expect((await l.call<WsFile>('GET', files('read?path=in-link'))).body.content).toBe('hello');
     const list = (await l.call<WsListing>('GET', files('list?dir='))).body;
