@@ -1,8 +1,8 @@
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
 import { mkdtempSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { linkTarget, MASTER_PANE, normalizeAddress, type BrowserStatus, type BrowserTab, type ServerEvent } from '@atlas/shared';
+import { actionCaption, DRIVING_MS, isDriving, linkTarget, MASTER_PANE, normalizeAddress, type BrowserPaneTab, type BrowserStatus, type BrowserTab, type PanelTab, type ServerEvent } from '@atlas/shared';
 import { launch } from '../test/kit/index.ts';
 import type { BrowserHost, HostEvent, HostTab } from './browser.ts';
 
@@ -35,6 +35,14 @@ class FakeHost implements BrowserHost {
   async send(id: string, method: string, params?: Record<string, unknown>) {
     this.calls.push(['send', id, method, params]);
     return { ok: true };
+  }
+  async capture(id: string) {
+    this.calls.push(['capture', id]);
+    return { image: 'data:image/png;base64,AAAA', width: 800, height: 600 };
+  }
+  signals: [string, { caption: string; point: { x: number; y: number } | null }][] = [];
+  signal(id: string, s: { caption: string; point: { x: number; y: number } | null }) {
+    this.signals.push([id, s]);
   }
   on(l: (e: HostEvent) => void) {
     this.listeners.add(l);
@@ -167,9 +175,20 @@ describe('the shared browser (#298 S6)', () => {
     expect(l.engine.browser.get(chat.id)!.owner).toBe('agent');
     expect(l.engine.browser.takeHandBack(chat.id)).toBe(true);
     expect(l.engine.browser.takeHandBack(chat.id)).toBe(false);
-    // Master's click in the view while the agent has it: refused by the host, said to the UI.
+    // Master's click in the view while the agent is acting: refused by the host, said to the UI (the strip).
+    l.engine.browser.acted(chat.id, { verb: 'clicked', target: 'Go', point: null });
     l.host.emit({ type: 'input-blocked', id: chat.id });
     expect(l.events.at(-1)).toEqual({ type: 'browser.updated', tab: expect.objectContaining({ owner: 'agent' }), blocked: true });
+    expect(l.host.owners.get(chat.id)).toBe('agent');
+    // The agent has it but is not acting (its last action is old): Master's click takes control (#298 §3.1).
+    vi.useFakeTimers({ now: Date.now() + DRIVING_MS + 1, toFake: ['Date'] });
+    try {
+      l.host.emit({ type: 'input-blocked', id: chat.id });
+    } finally {
+      vi.useRealTimers();
+    }
+    expect(l.host.owners.get(chat.id)).toBe('master');
+    expect(l.engine.browser.get(chat.id)!.owner).toBe('master');
     await l.call('POST', `/browser/tabs/${chat.id}/owner`, { owner: 'master' });
     expect(l.host.owners.get(chat.id)).toBe('master');
     expect((await l.call<{ error: string }>('POST', `/browser/tabs/${chat.id}/owner`, { owner: 'nobody' })).status).toBe(400);
@@ -224,6 +243,94 @@ describe('the shared browser (#298 S6)', () => {
   });
 });
 
+describe('the browser tab in the pane (#306)', () => {
+  const browserTab = (tabs: PanelTab[]) => tabs.find((t): t is BrowserPaneTab => t.kind === 'browser');
+
+  it('is a tab of the chat’s pane: opened from a link, made empty from « + », focused against artifacts; kept after a restart', async () => {
+    const dir = mkdtempSync(join(tmpdir(), 'atlas-306-'));
+    try {
+      const dbFile = join(dir, 'atlas.db');
+      const l = await withBrowser({ dbFile, dataDir: dir });
+      const chat = await l.chat();
+      // « + › Open a page »: an empty tab, Master's, no driver.
+      const empty = (await l.call<BrowserTab>('POST', `/browser/tabs/${chat.id}/create`)).body;
+      expect(empty).toMatchObject({ url: null, owner: 'master', agentUsed: false, via: null, action: null, needs: null });
+      let tabs = (await l.call<PanelTab[]>('GET', `/chats/${chat.id}/panel`)).body;
+      expect(browserTab(tabs)).toMatchObject({ active: true, tab: { url: null } });
+      // An artifact opened after it becomes the active tab; focusing the browser brings it back.
+      const doc = l.engine.documents.create('atlas', { title: 'Spec', kind: 'markdown', content: '# a' }, 'atlas');
+      tabs = (await l.call<PanelTab[]>('POST', `/chats/${chat.id}/panel/open`, { docId: doc.id })).body;
+      expect(tabs.map((t) => [t.kind, t.active])).toEqual([['browser', false], ['artifact', true]]);
+      await l.call('POST', `/browser/tabs/${chat.id}/focus`);
+      tabs = (await l.call<PanelTab[]>('GET', `/chats/${chat.id}/panel`)).body;
+      expect(tabs.map((t) => [t.kind, t.active])).toEqual([['browser', true], ['artifact', false]]);
+      // A link: the same tab moves, says it came from a link; a pane update was sent.
+      const n = l.events.length;
+      const r = (await l.call<BrowserTab>('POST', `/browser/tabs/${chat.id}/open`, { url: 'https://github.com/csoylu/atlas/pull/107', via: 'link' })).body;
+      expect(r).toMatchObject({ url: 'https://github.com/csoylu/atlas/pull/107', via: 'link', owner: 'master' });
+      expect(l.events.slice(n)).toContainEqual(expect.objectContaining({ type: 'panel.updated', chatId: chat.id }));
+      // Creating again only shows the existing tab.
+      expect((await l.call<BrowserTab>('POST', `/browser/tabs/${chat.id}/create`)).body.url).toBe('https://github.com/csoylu/atlas/pull/107');
+      await l.engine.stop();
+      const again = await withBrowser({ dbFile, dataDir: dir });
+      tabs = (await again.call<PanelTab[]>('GET', `/chats/${chat.id}/panel`)).body;
+      expect(tabs.map((t) => [t.kind, t.active])).toEqual([['browser', true], ['artifact', false]]);
+      // Closing the tab takes it out of the pane.
+      await again.call('DELETE', `/browser/tabs/${chat.id}`);
+      expect((await again.call<PanelTab[]>('GET', `/chats/${chat.id}/panel`)).body.map((t) => t.kind)).toEqual(['artifact']);
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  it('the agent’s actions: a pulse and a caption over the page, the tab shows it drives; a typed value is never in it', async () => {
+    const l = await withBrowser();
+    const chat = await l.chat();
+    l.engine.browser.open(chat.id, 'https://example.com', 'agent');
+    expect(l.engine.browser.get(chat.id)).toMatchObject({ owner: 'agent', agentUsed: true, via: null });
+    const t = l.engine.browser.acted(chat.id, { verb: 'clicked', target: 'Search', point: { x: 120, y: 40 } });
+    expect(t.action).toMatchObject({ verb: 'clicked', target: 'Search', point: { x: 120, y: 40 } });
+    expect(isDriving(t)).toBe(true);
+    expect(isDriving(t, Date.now() + DRIVING_MS + 1)).toBe(false);
+    expect(l.host.signals.at(-1)).toEqual([chat.id, { caption: 'atlas clicked « Search »', point: { x: 120, y: 40 } }]);
+    l.engine.browser.acted(chat.id, { verb: 'typed in', target: 'Password', point: { x: 10, y: 80 } });
+    expect(l.host.signals.at(-1)![1].caption).toBe('atlas typed in « Password »');
+    expect(actionCaption('paris', { verb: 'opened', target: 'localhost:5173/tenders' })).toBe('paris opened localhost:5173/tenders');
+    // Master takes control: no longer driving; the agent's next action is refused (« Master is using the browser »).
+    const taken = (await l.call<BrowserTab>('POST', `/browser/tabs/${chat.id}/owner`, { owner: 'master' })).body;
+    expect(isDriving(taken)).toBe(false);
+    expect(taken.agentUsed).toBe(true);
+    // Handed back, the agent drives again only once it acts: Master's click in the idle tab takes control.
+    const back = (await l.call<BrowserTab>('POST', `/browser/tabs/${chat.id}/owner`, { owner: 'agent' })).body;
+    expect(back.action).toBeNull();
+    expect(isDriving(back)).toBe(false);
+  });
+
+  it('a login wall: the agent asks for Master, the pane says why; handing back clears it', async () => {
+    const l = await withBrowser();
+    const chat = await l.chat();
+    l.engine.browser.open(chat.id, 'https://github.com/login', 'agent');
+    expect(l.engine.browser.ask(chat.id, 'to sign in to github.com').needs).toBe('to sign in to github.com');
+    await l.call('POST', `/browser/tabs/${chat.id}/owner`, { owner: 'master' });
+    expect(l.engine.browser.get(chat.id)!.needs).toBe('to sign in to github.com');
+    const back = (await l.call<BrowserTab>('POST', `/browser/tabs/${chat.id}/owner`, { owner: 'agent' })).body;
+    expect(back.needs).toBeNull();
+  });
+
+  it('comment mode: a picture of the page and what is at a point, read as Master whoever drives', async () => {
+    const l = await withBrowser();
+    const chat = await l.chat();
+    l.engine.browser.open(chat.id, 'https://example.com', 'agent');
+    const shot = (await l.call<{ image: string }>('GET', `/browser/tabs/${chat.id}/shot`)).body;
+    expect(shot.image).toMatch(/^data:image\/png;base64,/);
+    // The fake host answers every CDP call { ok: true }: no value, so the page "could not be read".
+    const r = await l.call<{ error: string }>('POST', `/browser/tabs/${chat.id}/inspect`, { x: 10, y: 10 });
+    expect(r.status).toBe(500);
+    expect(l.host.calls.at(-1)).toEqual(['send', chat.id, 'Runtime.evaluate', expect.objectContaining({ returnByValue: true })]);
+    expect((await l.call('POST', `/browser/tabs/${chat.id}/inspect`, { x: 'a' })).status).toBe(400);
+  });
+});
+
 describe('link routing (#298 §3.2)', () => {
   const app = 'http://127.0.0.1:4317';
   it('web pages open in the pane; ⌘-click, other schemes, downloads and sign-in pages stay external; Atlas routes stay in the app', () => {
@@ -248,3 +355,39 @@ describe('link routing (#298 §3.2)', () => {
     expect(normalizeAddress('http://a.test')).toBe('http://a.test');
   });
 });
+
+describe('comments on a page of the chat’s browser (#306)', () => {
+  it('names the address and the title; an area is cropped from the picture comment mode showed, not from the page now', async () => {
+    const sharp = (await import('sharp')).default;
+    const l = await withBrowser();
+    const png = await sharp({ create: { width: 400, height: 300, channels: 3, background: '#fff' } }).png().toBuffer();
+    let captures = 0;
+    l.host.capture = async () => {
+      captures++;
+      return { image: 'data:image/png;base64,' + png.toString('base64'), width: 400, height: 300 };
+    };
+    const chat = await l.chat();
+    await l.call('POST', `/browser/tabs/${chat.id}/open`, { url: 'http://localhost:5173/tenders' });
+    // Comment mode starts: the pane takes its picture.
+    expect((await l.call('GET', `/browser/tabs/${chat.id}/shot`)).status).toBe(200);
+    expect(captures).toBe(1);
+    const target = { kind: 'browser', url: 'http://localhost:5173/tenders', title: 'Tenders' };
+    const r = await l.call('POST', `/cards/${chat.id}/messages`, {
+      comments: [
+        { target, anchor: { type: 'area', box: { x: 10, y: 20, w: 100, h: 50 }, of: { w: 400, h: 300 }, unit: 'px', inside: [] }, text: 'This table.' },
+        { target, anchor: { type: 'element', selector: 'button#go', text: 'Search', tag: 'button' }, text: 'Rename it.' },
+      ],
+    });
+    expect(r.status).toBe(201);
+    const last = l.engine.kanban.messages(chat.id).at(-1)!;
+    const texts = last.content.flatMap((b) => (b.type === 'text' ? [b.text] : []));
+    expect(texts.join('\n')).toContain('page http://localhost:5173/tenders');
+    expect(texts.join('\n')).toContain('Tenders');
+    expect(texts.join('\n')).toContain('button#go');
+    const pics = last.content.filter((b) => b.type === 'image') as { width: number; height: number }[];
+    expect(pics.map((p) => [p.width, p.height])).toEqual([[100, 50]]);
+    // Cropped from the kept picture: no second capture.
+    expect(captures).toBe(1);
+  });
+});
+

@@ -1,4 +1,4 @@
-import { MASTER_PANE, normalizeAddress, paneUrlProblem, type BrowserBounds, type BrowserOwner, type BrowserStatus, type BrowserTab } from '@atlas/shared';
+import { actionCaption, isDriving, MASTER_PANE, normalizeAddress, paneUrlProblem, type BrowserAction, type BrowserBounds, type BrowserInspected, type BrowserOwner, type BrowserShot, type BrowserStatus, type BrowserTab } from '@atlas/shared';
 import type { Db } from './store/db.ts';
 import type { Bus } from './events.ts';
 import { InvalidError, NotFoundError, type Kanban } from './kanban.ts';
@@ -63,6 +63,10 @@ export interface BrowserHost {
   setOwner(id: string, owner: BrowserOwner): void;
   /** A CDP command on the tab's page (the debugger attaches after the first load). */
   send(id: string, method: string, params?: Record<string, unknown>): Promise<unknown>;
+  /** A picture of the page as shown (png data: URL) and its size in CSS px; the view must exist. */
+  capture(id: string): Promise<BrowserShot>;
+  /** Show the agent's action over the page (#306): a pulse on `point` (viewport CSS px) and the caption, for a moment. */
+  signal(id: string, s: { caption: string; point: { x: number; y: number } | null }): void;
   on(listener: (e: HostEvent) => void): () => void;
 }
 
@@ -81,13 +85,21 @@ interface Row {
   title: string;
   owner: BrowserOwner;
   updated_at: string;
+  opened_at: string | null;
+  focused_at: string | null;
+  agent_used: number;
 }
 
 interface Live {
   loading: boolean;
   error: string | null;
   crashed: boolean;
+  needs: string | null;
+  via: 'link' | 'typed' | null;
+  action: BrowserAction | null;
 }
+
+const LIVE = (): Live => ({ loading: false, error: null, crashed: false, needs: null, via: null, action: null });
 
 const safe = (s: string) => s.replace(/[^A-Za-z0-9_.-]/g, '_');
 
@@ -99,6 +111,7 @@ export class Browser {
   private live = new Map<string, Live>();
   /** Tabs handed to the host by this process (views die with the process). */
   private opened = new Set<string>();
+  private shots = new Map<string, { url: string; shot: BrowserShot }>();
   private onScreen: string | null = null;
   /** Tabs Master handed back since the agent's last call (S7 starts that call with « Master handed back the browser »). */
   private handedBack = new Set<string>();
@@ -134,7 +147,7 @@ export class Browser {
    * Open `url` in the chat's tab (made if new), as Master (a click on a link: Master gets the input) or as the agent
    * (refused while Master has it).
    */
-  open(chatId: string, typed: string, by: BrowserOwner): BrowserTab {
+  open(chatId: string, typed: string, by: BrowserOwner, via: 'link' | 'typed' = 'typed'): BrowserTab {
     const host = this.need();
     const url = normalizeAddress(typed);
     const bad = paneUrlProblem(url);
@@ -145,15 +158,100 @@ export class Browser {
     const now = new Date().toISOString();
     this.db
       .prepare(
-        `INSERT INTO browser_tabs (chat_id, project_id, agent_id, url, title, owner, updated_at) VALUES (?, ?, ?, ?, '', ?, ?)
-         ON CONFLICT (chat_id) DO UPDATE SET project_id = excluded.project_id, agent_id = excluded.agent_id, url = excluded.url, owner = excluded.owner, updated_at = excluded.updated_at`,
+        `INSERT INTO browser_tabs (chat_id, project_id, agent_id, url, title, owner, updated_at, opened_at, focused_at, agent_used) VALUES (?, ?, ?, ?, '', ?, ?, ?, ?, ?)
+         ON CONFLICT (chat_id) DO UPDATE SET project_id = excluded.project_id, agent_id = excluded.agent_id, url = excluded.url, owner = excluded.owner,
+           updated_at = excluded.updated_at, agent_used = MAX(agent_used, excluded.agent_used)`,
       )
-      .run(chatId, ws.projectId, ws.agentId, url, by, now);
-    this.live.set(chatId, { loading: true, error: null, crashed: false });
+      .run(chatId, ws.projectId, ws.agentId, url, by, now, now, now, by === 'agent' ? 1 : 0);
+    const prevLive = this.liveOf(chatId);
+    this.live.set(chatId, { ...LIVE(), loading: true, via: by === 'master' ? via : null, action: by === 'agent' ? prevLive.action : null });
     host.open(this.hostTab(this.row(chatId)!, true));
     this.opened.add(chatId);
     host.setOwner(chatId, by);
+    this.onPane(chatId, true); // the pane shows the browser (an agent's open shows the pane again)
     return this.changed(chatId);
+  }
+
+  /**
+   * The browser tab of a chat with no page yet (#306, « + › Open a page »): the address bar waits. Master has it.
+   * An existing tab is only focused.
+   */
+  create(chatId: string): BrowserTab {
+    this.need();
+    const ws = this.workspace(chatId);
+    const now = new Date().toISOString();
+    this.db
+      .prepare(
+        `INSERT INTO browser_tabs (chat_id, project_id, agent_id, url, title, owner, updated_at, opened_at, focused_at) VALUES (?, ?, ?, NULL, '', 'master', ?, ?, ?)
+         ON CONFLICT (chat_id) DO NOTHING`,
+      )
+      .run(chatId, ws.projectId, ws.agentId, now, now, now);
+    this.onPane(chatId, true);
+    return this.changed(chatId);
+  }
+
+  /** Master shows the browser tab (it becomes the pane's active tab). */
+  focus(chatId: string): void {
+    this.mustRow(chatId);
+    this.onPane(chatId, true);
+  }
+
+  /**
+   * The agent acted on the page (#306; S7's browser_open and browser_act call it after each action): the pane shows a
+   * pulse on the spot and a caption, the tab shows the agent is driving. `target` never carries a typed value.
+   */
+  acted(chatId: string, a: Omit<BrowserAction, 'at'>): BrowserTab {
+    const r = this.mustRow(chatId);
+    const action: BrowserAction = { verb: a.verb, target: a.target.slice(0, 200), point: a.point, at: new Date().toISOString(), ...(a.refused ? { refused: true } : {}) };
+    this.liveOf(chatId).action = action;
+    if (a.refused) return this.changed(chatId); // Master drives: only the pane's caption says it
+    if (!r.agent_used) this.db.prepare('UPDATE browser_tabs SET agent_used = 1 WHERE chat_id = ?').run(chatId);
+    if (this.opened.has(chatId)) this.host?.signal(chatId, { caption: actionCaption(r.agent_id ?? 'the agent', action), point: action.point });
+    return this.changed(chatId);
+  }
+
+  /**
+   * The agent needs Master on the page (#306: a login wall): the pane says why, with Take control. Cleared when
+   * Master hands it back.
+   */
+  ask(chatId: string, why: string): BrowserTab {
+    this.mustRow(chatId);
+    this.liveOf(chatId).needs = why.replace(/\s+/g, ' ').trim().slice(0, 300) || 'to act on the page';
+    this.onPane(chatId, true);
+    return this.changed(chatId);
+  }
+
+  /** A picture of the page as shown (comment mode freezes the pane on it). */
+  async shot(chatId: string): Promise<BrowserShot> {
+    const host = this.need();
+    const r = this.mustRow(chatId);
+    this.ensure(r);
+    const shot = await host.capture(chatId);
+    // Comment mode freezes the pane on this picture: a comment's area is cropped from it (pageFor), not from a page
+    // that may have moved since. Memory only: after a restart a fresh capture is taken.
+    this.shots.set(chatId, { url: r.url ?? '', shot });
+    return shot;
+  }
+
+  /** The page Master commented on, as a png (#306): the picture comment mode showed, else a fresh one if the tab is still there. */
+  async pageFor(chatId: string, url: string): Promise<Buffer | null> {
+    const kept = this.shots.get(chatId);
+    const shot = kept?.url === url ? kept.shot : this.row(chatId)?.url === url && this.host ? await this.shot(chatId) : null;
+    if (!shot) return null;
+    const m = /^data:image\/\w+;base64,(.*)$/.exec(shot.image);
+    if (!m) throw new Error('the picture of the page is not a data: URL');
+    return Buffer.from(m[1]!, 'base64');
+  }
+
+  /**
+   * What is at a point (w = h = 0) or in an area of the page (comment mode, #306), read in the page as Master (allowed
+   * whoever drives: it changes nothing). Selectors are rebuilt from ids and nth-of-type, like the html pages' helper.
+   */
+  async inspect(chatId: string, box: { x: number; y: number; w: number; h: number }): Promise<BrowserInspected> {
+    const expression = `(${INSPECT.toString()})(${JSON.stringify(box)})`;
+    const r = (await this.cdp(chatId, 'Runtime.evaluate', { expression, returnByValue: true }, 'master')) as { result?: { value?: BrowserInspected }; exceptionDetails?: { text?: string } };
+    if (r.exceptionDetails || !r.result?.value) throw new Error(`the page could not be read (${r.exceptionDetails?.text ?? 'no answer'})`);
+    return r.result.value;
   }
 
   /** Show the chat's tab at `bounds` (its view made and its last page loaded if this process has none yet), or none. */
@@ -184,8 +282,15 @@ export class Browser {
     const r = this.mustRow(chatId);
     if (owner === 'agent' && !r.agent_id) throw new InvalidError('Master’s own pane has no agent to hand it to');
     this.db.prepare('UPDATE browser_tabs SET owner = ?, updated_at = ? WHERE chat_id = ?').run(owner, new Date().toISOString(), chatId);
-    if (owner === 'agent' && r.owner === 'master') this.handedBack.add(chatId);
-    else if (owner === 'master') this.handedBack.delete(chatId);
+    if (owner === 'agent' && r.owner === 'master') {
+      this.handedBack.add(chatId);
+      this.liveOf(chatId).needs = null; // signed in: the agent carries on
+    } else if (owner === 'master') {
+      this.handedBack.delete(chatId);
+      // Master drives now: the agent's last action is over (no live dot, no edge; after a hand back it drives again
+      // only once it acts, so Master's click in an idle tab takes control).
+      if (this.live.get(chatId)?.action && !this.live.get(chatId)!.action!.refused) this.liveOf(chatId).action = null;
+    }
     if (this.opened.has(chatId)) host.setOwner(chatId, owner);
     return this.changed(chatId);
   }
@@ -198,10 +303,15 @@ export class Browser {
   close(chatId: string): void {
     this.db.prepare('DELETE FROM browser_tabs WHERE chat_id = ?').run(chatId);
     this.live.delete(chatId);
+    this.shots.delete(chatId);
     if (this.opened.delete(chatId)) this.host?.close(chatId);
     if (this.onScreen === chatId) this.onScreen = null;
+    this.onPane(chatId, false);
     this.bus.emit({ type: 'browser.closed', chatId });
   }
+
+  /** The pane's tab list changed (Documents, wired in index.ts): `focus` makes the browser the tab shown. */
+  onPane: (chatId: string, focus: boolean) => void = () => {};
 
   /**
    * A CDP command on the chat's page. An agent's call is refused while Master has the browser (S7's tools come
@@ -273,8 +383,12 @@ export class Browser {
         live.crashed = true;
         live.error = `The page stopped (${e.reason}). Reload to open it again.`;
         break;
-      case 'input-blocked':
-        return void this.bus.emit({ type: 'browser.updated', tab: this.toTab(r), blocked: true });
+      case 'input-blocked': {
+        // #298 §3.1: Master's click in the pane takes control, except while the agent is acting (the strip says so).
+        const tab = this.toTab(r);
+        if (!isDriving(tab)) return void this.setOwner(e.id, 'master');
+        return void this.bus.emit({ type: 'browser.updated', tab, blocked: true });
+      }
     }
     this.changed(e.id);
   }
@@ -341,13 +455,19 @@ export class Browser {
 
   private liveOf(chatId: string): Live {
     let l = this.live.get(chatId);
-    if (!l) this.live.set(chatId, (l = { loading: false, error: null, crashed: false }));
+    if (!l) this.live.set(chatId, (l = LIVE()));
     return l;
   }
 
   private toTab(r: Row): BrowserTab {
-    const l = this.live.get(r.chat_id) ?? { loading: false, error: null, crashed: false };
-    return { chatId: r.chat_id, projectId: r.project_id, agentId: r.agent_id, url: r.url, title: r.title, owner: r.owner, ...l, updatedAt: r.updated_at };
+    const l = this.live.get(r.chat_id) ?? LIVE();
+    return { chatId: r.chat_id, projectId: r.project_id, agentId: r.agent_id, url: r.url, title: r.title, owner: r.owner, ...l, agentUsed: !!r.agent_used, updatedAt: r.updated_at };
+  }
+
+  /** The chat's browser as a pane tab (Documents.tabs): its tab and its place in the pane's order. */
+  paneTab(chatId: string): { tab: BrowserTab; openedAt: string; focusedAt: string } | null {
+    const r = this.row(chatId);
+    return r ? { tab: this.toTab(r), openedAt: r.opened_at ?? r.updated_at, focusedAt: r.focused_at ?? r.updated_at } : null;
   }
 
   private changed(chatId: string): BrowserTab {
@@ -355,4 +475,48 @@ export class Browser {
     this.bus.emit({ type: 'browser.updated', tab });
     return tab;
   }
+}
+
+/**
+ * Runs in the page (Runtime.evaluate, comment mode): the element at a point, or the elements inside an area, each with
+ * a selector that finds it again and its text. Plain DOM, no closure: it is sent as source.
+ */
+function INSPECT(b: { x: number; y: number; w: number; h: number }) {
+  const sel = (el: Element): string => {
+    const parts: string[] = [];
+    for (let e: Element | null = el; e && e !== document.documentElement && parts.length < 6; e = e.parentElement) {
+      if (e.id && /^[A-Za-z][\w-]*$/.test(e.id)) {
+        parts.unshift('#' + e.id);
+        break;
+      }
+      const tag = e.tagName.toLowerCase();
+      const same = e.parentElement ? Array.from(e.parentElement.children).filter((c) => c.tagName === e!.tagName) : [];
+      parts.unshift(same.length > 1 ? `${tag}:nth-of-type(${same.indexOf(e) + 1})` : tag);
+    }
+    return parts.join(' > ') || el.tagName.toLowerCase();
+  };
+  const text = (el: Element): string => {
+    const h = el as HTMLElement;
+    const own = (h.getAttribute('aria-label') || (h as HTMLInputElement).placeholder || h.innerText || h.getAttribute('title') || '').replace(/\s+/g, ' ').trim();
+    // A field's value is never read (a password, a token): only its label.
+    return own.slice(0, 300);
+  };
+  const rect = (el: Element) => {
+    const r = el.getBoundingClientRect();
+    return { x: r.left, y: r.top, w: r.width, h: r.height };
+  };
+  const viewport = { w: window.innerWidth, h: window.innerHeight };
+  if (!b.w || !b.h) {
+    const el = document.elementFromPoint(b.x, b.y);
+    return { element: el ? { selector: sel(el), text: text(el), tag: el.tagName.toLowerCase(), box: rect(el) } : null, inside: [], viewport };
+  }
+  const inside: { selector: string; text: string }[] = [];
+  for (const el of Array.from(document.body ? document.body.querySelectorAll('a,button,input,select,textarea,img,h1,h2,h3,h4,label,li,td,th,p,[role]') : [])) {
+    const r = el.getBoundingClientRect();
+    if (!r.width || !r.height || r.left < b.x || r.top < b.y || r.right > b.x + b.w || r.bottom > b.y + b.h) continue;
+    inside.push({ selector: sel(el), text: text(el).slice(0, 120) });
+    if (inside.length >= 12) break;
+  }
+  const mid = document.elementFromPoint(b.x + b.w / 2, b.y + b.h / 2);
+  return { element: mid ? { selector: sel(mid), text: text(mid).slice(0, 300), tag: mid.tagName.toLowerCase(), box: rect(mid) } : null, inside, viewport };
 }

@@ -59,6 +59,13 @@ export const Icon = {
   panel: svg(<><rect x="2" y="2.5" width="12" height="11" rx="1.5" /><path d="M9.5 2.5v11" /></>, 14),
   globe: svg(<><circle cx="8" cy="8" r="5.5" /><path d="M2.5 8h11M8 2.5c1.6 1.7 2.3 3.5 2.3 5.5S9.6 11.8 8 13.5C6.4 11.8 5.7 10 5.7 8S6.4 4.2 8 2.5z" /></>, 12),
   logout: svg(<path d="M6 2.5H3v11h3M10.5 5l3 3-3 3M13.5 8H6.5" />, 14),
+  fwd: svg(<path d="m6 4 4 4-4 4" />, 14),
+  reload: svg(<path d="M12.5 5.5A5 5 0 1 0 13 9 M13 2.5v3h-3" />, 14),
+  stop: svg(<path d="M4 4l8 8M12 4l-8 8" />, 14),
+  lock: svg(<path d="M4.5 7.5h7v6h-7z M6 7.5V5.5a2 2 0 0 1 4 0v2" />, 13),
+  warn: svg(<path d="M8 2.5l6 10.5H2z M8 6.5v3M8 11.3v.1" />, 14),
+  crash: svg(<path d="M3 3h10v10H3z M5.5 6l1.5 1.5M5.5 7.5 7 6M9 6l1.5 1.5M9 7.5 10.5 6M5.5 11c1.5-1.3 3.5-1.3 5 0" />),
+  wifiOff: svg(<path d="M2.5 2.5l11 11 M1.5 6.5c1.4-1.3 3-2.1 4.7-2.4 M14.5 6.5a9 9 0 0 0-4-2.3 M4 9c.8-.7 1.7-1.2 2.7-1.4 M8 12.5v.1" />),
   up: () => (
     <svg className="icon" viewBox="0 0 16 16" width="14" height="14" fill="none" stroke="currentColor" strokeWidth="1.7" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
       <path d="M8 13V3M4 7l4-4 4 4" />

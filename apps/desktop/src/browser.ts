@@ -1,5 +1,6 @@
 import { session, shell, WebContentsView, type BrowserWindow, type Session, type WebContents } from 'electron';
 import type { BrowserHost, BrowserHostEvent, BrowserHostTab } from '@atlas/engine';
+import { DRIVING_MS, type BrowserShot } from '@atlas/shared';
 
 /**
  * The shared browser's Electron backend (#298 §3.1, S6): one WebContentsView per chat tab, laid over the pane's page
@@ -30,9 +31,37 @@ interface Tab {
   blockedAt: number;
   /** Last time Master's own input reached the page (a user gesture, used once to open something outside). */
   gestureAt: number;
+  /**
+   * The agent's action shown over the page (#306): a transparent view laid on the page while the agent drives, with
+   * the accent edge, the pulse and the caption. It takes Master's clicks then (they are refused anyway, and reported).
+   */
+  overlay: WebContentsView | null;
+  /** Until when the overlay shows (DRIVING_MS after the agent's last action). */
+  overlayUntil: number;
+  overlayTimer: ReturnType<typeof setTimeout> | null;
 }
 
 const BLOCK_REPORT_MS = 1500;
+
+/**
+ * The overlay's page (#306, mockup « workbench » Browser › Agent clicks): an accent edge around the page, a pulse on
+ * the spot (30 px ring, 8 px dot) and the caption at the bottom left. Atlas's tokens, both themes (`show` sets it).
+ */
+export const OVERLAY_HTML = `<!doctype html><meta charset="utf-8"><style>
+html,body{margin:0;height:100%;background:transparent;overflow:hidden;font:440 13px/1.3 -apple-system,BlinkMacSystemFont,"Inter",sans-serif}
+:root{--accent:#6cc0d2;--soft:rgba(108,192,210,.14);--raised:#17181b;--line:rgba(255,255,255,.11);--text:#e3e4e6;--shadow:0 12px 32px rgba(0,0,0,.55)}
+:root.light{--accent:#1b6c80;--soft:#e2eff2;--raised:#fbfbfc;--line:rgba(0,0,0,.11);--text:#1b1c1f;--shadow:0 10px 28px rgba(16,24,40,.14)}
+#edge{position:fixed;inset:0;box-shadow:inset 0 0 0 2px var(--accent);pointer-events:none}
+#pulse{position:fixed;width:30px;height:30px;margin:-15px 0 0 -15px;border-radius:50%;border:2px solid var(--accent);background:var(--soft);box-sizing:border-box;animation:ping 1.6s ease-out 3}
+#pulse::after{content:'';position:absolute;left:50%;top:50%;width:8px;height:8px;margin:-4px 0 0 -4px;border-radius:50%;background:var(--accent)}
+@keyframes ping{0%{transform:scale(.5);opacity:1}100%{transform:scale(1.6);opacity:0}}
+#cap{position:fixed;left:12px;bottom:12px;display:flex;align-items:center;gap:8px;max-width:calc(100% - 48px);padding:6px 12px 6px 8px;border-radius:10px;background:var(--raised);border:1px solid var(--line);box-shadow:var(--shadow);color:var(--text)}
+#cap i{width:8px;height:8px;border-radius:50%;background:var(--accent);flex:none;margin:0 3px}
+#cap span{min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+</style><div id="edge"></div><div id="cap" hidden><i></i><span></span></div><script>
+function show(s){document.documentElement.className=s.theme;const c=document.getElementById('cap');c.hidden=!s.caption;c.querySelector('span').textContent=s.caption;
+const old=document.getElementById('pulse');if(old)old.remove();if(s.point){const p=document.createElement('div');p.id='pulse';p.style.left=s.point.x+'px';p.style.top=s.point.y+'px';document.body.appendChild(p)}}
+</script>`;
 /** How long Master's click or key counts as the gesture that lets the page open a mailto: or start a download. */
 const GESTURE_MS = 1000;
 /** The only schemes a page may hand to the system, after Master's gesture (§3.2: mail and phone links). */
@@ -89,6 +118,7 @@ export class ElectronBrowser implements BrowserHost {
     this.tabs.delete(id);
     this.window()?.contentView.removeChildView(tab.view);
     if (!tab.view.webContents.isDestroyed()) tab.view.webContents.close();
+    this.dropOverlay(tab);
     if (this.onScreen === id) this.onScreen = null;
   }
 
@@ -100,7 +130,39 @@ export class ElectronBrowser implements BrowserHost {
 
   setOwner(id: string, owner: 'agent' | 'master'): void {
     const tab = this.tabs.get(id);
-    if (tab) tab.owner = owner;
+    if (!tab) return;
+    tab.owner = owner;
+    if (owner === 'master' && tab.overlayUntil) {
+      tab.overlayUntil = 0; // Master drives: nothing over the page
+      this.place();
+    }
+  }
+
+  async capture(id: string): Promise<BrowserShot> {
+    const tab = this.need(id);
+    const img = await tab.view.webContents.capturePage();
+    const zoom = this.window()?.webContents.getZoomFactor() ?? 1;
+    const b = tab.view.getBounds();
+    return { image: img.toDataURL(), width: Math.round(b.width / zoom) || img.getSize().width, height: Math.round(b.height / zoom) || img.getSize().height };
+  }
+
+  signal(id: string, s: { caption: string; point: { x: number; y: number } | null }): void {
+    const tab = this.tabs.get(id);
+    if (!tab || tab.view.webContents.isDestroyed()) return;
+    const overlay = tab.overlay ?? this.makeOverlay(tab);
+    tab.overlayUntil = Date.now() + DRIVING_MS;
+    if (tab.overlayTimer) clearTimeout(tab.overlayTimer);
+    tab.overlayTimer = setTimeout(() => {
+      tab.overlayTimer = null;
+      tab.overlayUntil = 0;
+      this.place();
+    }, DRIVING_MS);
+    const theme = this.window()?.webContents.executeJavaScript('document.documentElement.dataset.theme || "dark"') ?? Promise.resolve('dark');
+    void theme
+      .catch(() => 'dark') // the window is reloading: the dark look, the caption still shows
+      .then((t: unknown) => overlay.webContents.executeJavaScript(`show(${JSON.stringify({ ...s, theme: t === 'light' ? 'light' : 'dark' })})`))
+      .catch((e: unknown) => console.error('[browser] overlay', e));
+    this.place();
   }
 
   async send(id: string, method: string, params?: Record<string, unknown>): Promise<unknown> {
@@ -127,11 +189,46 @@ export class ElectronBrowser implements BrowserHost {
     // WebRTC: no UDP that skips the proxy (STUN would reach the internet directly, past the workspace's level).
     view.webContents.setWebRTCIPHandlingPolicy('disable_non_proxied_udp');
     view.setVisible(false);
-    const tab: Tab = { id: t.id, view, partition: t.partition, proxyKey, owner: 'master', agentInput: 0, attached: false, blockedAt: 0, gestureAt: 0 };
+    const tab: Tab = { id: t.id, view, partition: t.partition, proxyKey, owner: 'master', agentInput: 0, attached: false, blockedAt: 0, gestureAt: 0, overlay: null, overlayUntil: 0, overlayTimer: null };
     this.tabs.set(t.id, tab);
     this.wire(tab, view.webContents);
     this.window()?.contentView.addChildView(view);
     return tab;
+  }
+
+  /** The overlay of a tab: a transparent page of Atlas's own (no network, no script from the site). */
+  private makeOverlay(tab: Tab): WebContentsView {
+    const overlay = new WebContentsView({ webPreferences: { sandbox: true, contextIsolation: true, nodeIntegration: false, javascript: true } });
+    overlay.setBackgroundColor('#00000000');
+    overlay.setVisible(false);
+    void overlay.webContents.loadURL('data:text/html;charset=utf-8,' + encodeURIComponent(OVERLAY_HTML));
+    overlay.webContents.setWindowOpenHandler(() => ({ action: 'deny' }));
+    overlay.webContents.on('will-navigate', (e) => e.preventDefault());
+    // Master's click or key while the agent acts lands here: refused like on the page, and reported (the strip).
+    const blocked = (e: Electron.Event) => {
+      e.preventDefault();
+      const now = Date.now();
+      if (now - tab.blockedAt > BLOCK_REPORT_MS) this.emit({ type: 'input-blocked', id: tab.id });
+      tab.blockedAt = now;
+    };
+    overlay.webContents.on('before-input-event', (e) => blocked(e));
+    overlay.webContents.on('before-mouse-event', (e, m) => {
+      if (m.type === 'mouseDown' || m.type === 'mouseWheel') blocked(e);
+    });
+    tab.overlay = overlay;
+    this.window()?.contentView.addChildView(overlay);
+    return overlay;
+  }
+
+  private dropOverlay(tab: Tab): void {
+    if (tab.overlayTimer) clearTimeout(tab.overlayTimer);
+    tab.overlayTimer = null;
+    tab.overlayUntil = 0;
+    const o = tab.overlay;
+    tab.overlay = null;
+    if (!o) return;
+    this.window()?.contentView.removeChildView(o);
+    if (!o.webContents.isDestroyed()) o.webContents.close();
   }
 
   /** The workspace's session, its proxy set (again when the token changed: a new engine start). */
@@ -239,7 +336,9 @@ export class ElectronBrowser implements BrowserHost {
       }
       e.preventDefault();
       const now = Date.now();
-      if (now - tab.blockedAt > BLOCK_REPORT_MS) emit({ type: 'input-blocked', id });
+      // Reported at most every BLOCK_REPORT_MS while the agent acts (the strip); at once when it is idle, since then
+      // the click takes control (engine browser.ts) and must not be lost to a report made just before.
+      if (now - tab.blockedAt > BLOCK_REPORT_MS || now >= tab.overlayUntil) emit({ type: 'input-blocked', id });
       tab.blockedAt = now;
     };
     wc.on('before-input-event', (e) => block(e));
@@ -275,11 +374,18 @@ export class ElectronBrowser implements BrowserHost {
       }
       if (!win.contentView.children.includes(tab.view)) win.contentView.addChildView(tab.view);
       const on = tab.id === this.onScreen && !!this.bounds && this.bounds.width > 0 && this.bounds.height > 0;
-      if (on) {
-        const b = this.bounds!;
-        tab.view.setBounds({ x: Math.round(b.x * zoom), y: Math.round(b.y * zoom), width: Math.round(b.width * zoom), height: Math.round(b.height * zoom) });
-      }
+      const bounds = on ? { x: Math.round(this.bounds!.x * zoom), y: Math.round(this.bounds!.y * zoom), width: Math.round(this.bounds!.width * zoom), height: Math.round(this.bounds!.height * zoom) } : null;
+      if (bounds) tab.view.setBounds(bounds);
       tab.view.setVisible(on);
+      const o = tab.overlay;
+      if (o && !o.webContents.isDestroyed()) {
+        const over = !!bounds && tab.owner === 'agent' && Date.now() < tab.overlayUntil;
+        if (over) {
+          o.setBounds(bounds);
+          win.contentView.addChildView(o); // on top of the page
+        }
+        o.setVisible(over);
+      }
     }
   }
 

@@ -1,7 +1,7 @@
 import { randomUUID } from 'node:crypto';
 import { mkdirSync, readFileSync, readdirSync, statSync, unlinkSync, writeFileSync } from 'node:fs';
 import { dirname, join, relative, sep } from 'node:path';
-import { DOC_FOLDERS, KIND_FILE, docKindOf, docTitle, type Doc, type DocContent, type DocHit, type DocKind, type DocVersion, type Folder, type PanelTab } from '@atlas/shared';
+import { DOC_FOLDERS, KIND_FILE, docKindOf, docTitle, type Doc, type DocContent, type DocHit, type DocKind, type DocVersion, type Folder, type PanelTab, type BrowserTab } from '@atlas/shared';
 import type { Db } from './store/db.ts';
 import type { Bus } from './events.ts';
 import { canvasPage } from './canvasPage.ts';
@@ -86,6 +86,15 @@ export class Documents {
      */
     private secrets?: { redact(text: string): { text: string }; redactor(): { values: string[]; redact: (text: string) => string } },
   ) {}
+
+  /** The chat's browser tab (#306), from Browser (wired in index.ts); none in tests that don't wire it. */
+  browserTab: (chatId: string) => { tab: BrowserTab; openedAt: string; focusedAt: string } | null = () => null;
+
+  /** The browser tab changed (Browser.onPane): `focus` makes it the pane's active tab; the pane's tabs are sent again. */
+  browserChanged(chatId: string, focus: boolean): void {
+    if (focus) this.db.prepare('UPDATE browser_tabs SET focused_at = ? WHERE chat_id = ?').run(this.now(chatId), chatId);
+    this.emitPanel(chatId);
+  }
 
   private redact(text: string): string {
     return this.secrets ? this.secrets.redact(text).text : text;
@@ -549,6 +558,9 @@ export class Documents {
       })),
       ...files.map((r) => ({ kind: 'file' as const, path: r.path, openedBy: r.opened_by, openedAt: r.opened_at, focusedAt: r.focused_at, line: r.line, active: false })),
     ];
+    // The chat's browser (#306): one tab, ordered with the others.
+    const b = this.browserTab(chatId);
+    if (b) tabs.push({ kind: 'browser', tab: b.tab, openedAt: b.openedAt, focusedAt: b.focusedAt, active: false });
     // Stable: artifacts and files opened in the same millisecond keep their table order.
     tabs.sort((a, b) => (a.openedAt < b.openedAt ? -1 : a.openedAt > b.openedAt ? 1 : 0));
     const active = tabs.reduce<PanelTab | null>((a, t) => (!a || t.focusedAt >= a.focusedAt ? t : a), null);
@@ -652,7 +664,7 @@ export class Documents {
   private now(chatId: string): string {
     const now = new Date().toISOString();
     const last = (
-      this.db.prepare('SELECT MAX(m) AS m FROM (SELECT MAX(focused_at) AS m FROM panel_tabs WHERE chat_id = ? UNION ALL SELECT MAX(focused_at) FROM panel_files WHERE chat_id = ?)').get(chatId, chatId) as {
+      this.db.prepare('SELECT MAX(m) AS m FROM (SELECT MAX(focused_at) AS m FROM panel_tabs WHERE chat_id = ? UNION ALL SELECT MAX(focused_at) FROM panel_files WHERE chat_id = ? UNION ALL SELECT focused_at FROM browser_tabs WHERE chat_id = ?)').get(chatId, chatId, chatId) as {
         m: string | null;
       }
     ).m;

@@ -3,6 +3,7 @@ import { join } from 'node:path';
 import { z } from 'zod';
 import type { ImageBlock } from '@atlas/shared';
 import type { ToolSpec } from './providers/types.ts';
+import type { BrowserAction } from '@atlas/shared';
 import { BrowserBusyError, type Browser } from './browser.ts';
 import { describeImage, imageLine } from './images.ts';
 import { specsOf } from './toolSpec.ts';
@@ -53,6 +54,11 @@ const SPECS = {
       text: z.string().max(10_000).optional().describe('type: the text; press: a key (Enter, Tab, Meta+a); select: option label or value; scroll: up or down'),
     }),
   },
+  browser_ask: {
+    description:
+      "Ask Master to act on the page themselves (sign in, a captcha, a payment): the pane shows why with Take control. Then stop and wait: in a task, task_block needs_input; your next browser call after they hand back gets the page.",
+    input: z.object({ why: z.string().min(1).max(300).describe('what Master should do, e.g. « sign in to github.com »') }),
+  },
 } as const;
 
 export const isBrowserTool = (name: string): boolean => name in SPECS;
@@ -78,13 +84,24 @@ export async function runBrowserTool(name: string, raw: unknown, ctx: BrowserToo
 async function call(name: keyof typeof SPECS, input: unknown, ctx: BrowserToolContext): Promise<{ output: string; images?: ImageBlock[] }> {
   const { browser, chatId } = ctx;
   const tab = browser.get(chatId);
-  if (tab?.owner === 'master') throw new BrowserBusyError();
+  if (tab?.owner === 'master') {
+    // At once, nothing done; the pane says what the agent tried (#306 « Master has control »).
+    if (name === 'browser_open' || name === 'browser_act') browser.acted(chatId, await tried(ctx, name, input));
+    throw new BrowserBusyError();
+  }
   const back = !!tab && browser.takeHandBack(chatId);
   if (name === 'browser_open') {
     const { url } = input as Input<'browser_open'>;
     const left = back ? `${HANDED_BACK} ${tab!.url ?? 'no page'}${tab!.title ? ` (${tab!.title})` : ''}. Now opening ${url}:\n` : '';
-    browser.open(chatId, url, 'agent');
+    const opened = browser.open(chatId, url, 'agent');
+    browser.acted(chatId, { verb: 'opened', target: shortUrl(opened.url ?? url), point: null });
     return snapshot(ctx, false, left);
+  }
+  if (name === 'browser_ask') {
+    // Master gets the input at once (the pane's banner says why); the agent waits for the hand-back.
+    browser.ask(chatId, (input as Input<'browser_ask'>).why);
+    browser.setOwner(chatId, 'master');
+    return { output: 'Master was asked and now has the browser. Stop here and wait (in a task: task_block needs_input saying what you asked); your next browser call after they hand it back gets the page as they left it.' };
   }
   if (!tab?.url) throw new Error("No page is open in this chat's browser: browser_open a URL first.");
   if (back) {
@@ -93,9 +110,52 @@ async function call(name: keyof typeof SPECS, input: unknown, ctx: BrowserToolCo
     return { ...r, output: r.output + note };
   }
   if (name === 'browser_snapshot') return snapshot(ctx, (input as Input<'browser_snapshot'>).image, '');
-  // TODO(#306): Browser.acted(chatId, {verb, target, point}) after each successful open / act (the pane's pulse).
-  const done = await act(ctx, input as Input<'browser_act'>);
+  const o = input as Input<'browser_act'>;
+  // What the pane shows is read first: after a click the element may be gone (a new page).
+  const seen = await shown(ctx, o);
+  const done = await act(ctx, o);
+  browser.acted(chatId, seen);
   return snapshot(ctx, false, done ? done + '\n' : '', ACT_GRACE_MS);
+}
+
+/** What a refused call would have done, for the pane's caption: the element's name read without touching the page. */
+async function tried(ctx: BrowserToolContext, name: 'browser_open' | 'browser_act', input: unknown): Promise<Omit<BrowserAction, 'at'>> {
+  if (name === 'browser_open') return { verb: 'opened', target: shortUrl((input as Input<'browser_open'>).url), point: null, refused: true };
+  const o = input as Input<'browser_act'>;
+  let target = o.action === 'press' ? (o.text ?? '') : '';
+  if (o.ref !== undefined && o.action !== 'press' && o.action !== 'back') {
+    // A read (no input) as Master's side: the agent's own calls are refused now. A page that can't answer: no name.
+    const r = await ctx.browser.cdp(ctx.chatId, 'Accessibility.getPartialAXTree', { backendNodeId: o.ref, fetchRelatives: false }, 'master').then(
+      (v) => v as { nodes: AxNode[] },
+      () => ({ nodes: [] as AxNode[] }),
+    );
+    target = String(r.nodes.find((x) => x.backendDOMNodeId === o.ref)?.name?.value ?? '').trim();
+  }
+  return { verb: VERB[o.action], target, point: null, refused: true };
+}
+
+/** « localhost:5173/tenders », for the caption. */
+const shortUrl = (url: string) => url.replace(/^https?:\/\//, '').replace(/\/$/, '');
+
+const VERB = { click: 'clicked', type: 'typed in', press: 'pressed', select: 'selected', scroll: 'scrolled', back: 'went back' } as const;
+
+/**
+ * The pane shows the action (#306): a pulse on the element, a caption naming it (its accessible name; for a key, the
+ * key). Never the typed text or the chosen value: « paris typed in « Password » ».
+ */
+async function shown(ctx: BrowserToolContext, o: Input<'browser_act'>): Promise<Omit<BrowserAction, 'at'>> {
+  let target = o.action === 'press' ? (o.text ?? '') : '';
+  let point: { x: number; y: number } | null = null;
+  if (o.ref !== undefined && o.action !== 'back') {
+    const ref = o.ref;
+    await ctx.browser.settle(ctx.chatId, { signal: ctx.signal }); // the debugger attaches only after the first load
+    const { nodes } = await onNode(ctx, ref, () => cdp<{ nodes: AxNode[] }>(ctx, 'Accessibility.getPartialAXTree', { backendNodeId: ref, fetchRelatives: false }));
+    const n = nodes.find((x) => x.backendDOMNodeId === o.ref) ?? nodes[0];
+    const name = String(n?.name?.value ?? '').trim();
+    if (o.action !== 'press') target = name || String(n?.role?.value ?? '');
+    if (o.action !== 'scroll') point = await center(ctx, ref);
+  }
+  return { verb: VERB[o.action], target: o.action === 'scroll' ? (o.text ?? 'down').trim() : target, point };
 }
 
 /** CDP on the chat's tab, as the agent (refused while Master has it). */

@@ -1,4 +1,4 @@
-import type { PaneSees, About, Account, Agent, Card, CardStatus, ChatGptModel, ChatGptStatus, ChatUsage, ClaudePlanModel, ClaudePlanStatus, ClearEvent, CompactResult, CreateAccount, CreateAgent, CreateCard, CreateModelRequest, CreatePlanAccount, CreateWorkflow, Doc, DocContent, DocHit, PostComment, DocVersion, FileChange, Folder, Inbox, LocalModel, LocalPull, LocalStatus, Memory, MemoryBudget, MemoryChange, MemoryProposal, MemoryQuery, Message, Model, ModelTest, Notification, PanelTab, PlanProvider, WsListing, WsFile, WsStat, WsSaveResult, SaveWsFile, RewindPreview, RewindResult, Run, CreateSecret, SecretInfo, SecretList, SecretStoreStatus, UpdateSecret, SaveWorkflowGraph, ServerEvent, Settings, Timeline, ToolCallTiming, UpdateAccount, UpdateAgent, UpdateChatGpt, UpdateClaudePlan, UpdateLocal, UpdateMemory, UpdateModelRequest, UpdatePlanAccount, UpdateStatus, UpdateVoice, Upload, UsageSummary, VoiceName, VoiceStatus, TriggerPreview, UpdateWorkflow, Workflow, WorkflowRun, WorkflowField, WorkflowRunContext, TaskWorkflow, RunWorkflow, Project, CreateProject, UpdateProject, RepoCheck, WebhookInfo, TryCondition, ConditionTryResult } from '@atlas/shared';
+import type { PaneSees, About, Account, Agent, Card, CardStatus, ChatGptModel, ChatGptStatus, ChatUsage, ClaudePlanModel, ClaudePlanStatus, ClearEvent, CompactResult, CreateAccount, CreateAgent, CreateCard, CreateModelRequest, CreatePlanAccount, CreateWorkflow, Doc, DocContent, DocHit, PostComment, DocVersion, FileChange, Folder, Inbox, LocalModel, LocalPull, LocalStatus, Memory, MemoryBudget, MemoryChange, MemoryProposal, MemoryQuery, Message, Model, ModelTest, Notification, PanelTab, PlanProvider, WsListing, WsFile, WsStat, WsSaveResult, SaveWsFile, RewindPreview, RewindResult, Run, CreateSecret, SecretInfo, SecretList, SecretStoreStatus, UpdateSecret, SaveWorkflowGraph, ServerEvent, Settings, Timeline, ToolCallTiming, UpdateAccount, UpdateAgent, UpdateChatGpt, UpdateClaudePlan, UpdateLocal, UpdateMemory, UpdateModelRequest, UpdatePlanAccount, UpdateStatus, UpdateVoice, Upload, UsageSummary, VoiceName, VoiceStatus, TriggerPreview, UpdateWorkflow, Workflow, WorkflowRun, WorkflowField, WorkflowRunContext, TaskWorkflow, RunWorkflow, Project, CreateProject, UpdateProject, RepoCheck, WebhookInfo, TryCondition, ConditionTryResult, BrowserTab, BrowserStatus, BrowserShot, BrowserInspected, BrowserBounds } from '@atlas/shared';
 
 /** HTTP error with the parsed body (e.g. a 409's details). */
 export class ApiError extends Error {
@@ -86,6 +86,19 @@ export const api = {
   panelClose: (chatId: string, docId: string | null) => call<PanelTab[]>('POST', `/chats/${chatId}/panel/close`, { docId }),
   panelFocus: (chatId: string, docId: string) => call<PanelTab[]>('POST', `/chats/${chatId}/panel/focus`, { docId }),
   panelSeen: (chatId: string, docId: string) => call<PanelTab[]>('POST', `/chats/${chatId}/panel/seen`, { docId }),
+  // ── The chat's browser (#298 S6, #306) ──
+  browserStatus: () => call<BrowserStatus>('GET', '/browser'),
+  browserTabs: () => call<BrowserTab[]>('GET', '/browser/tabs'),
+  browserTab: (chatId: string) => call<BrowserTab | null>('GET', `/browser/tabs/${chatId}`),
+  browserOpen: (chatId: string, url: string, via: 'link' | 'typed' = 'typed') => call<BrowserTab>('POST', `/browser/tabs/${chatId}/open`, { url, via }),
+  browserCreate: (chatId: string) => call<BrowserTab>('POST', `/browser/tabs/${chatId}/create`, {}),
+  browserFocus: (chatId: string) => call<BrowserTab>('POST', `/browser/tabs/${chatId}/focus`, {}),
+  browserNav: (chatId: string, action: 'back' | 'forward' | 'reload' | 'stop') => call<BrowserTab>('POST', `/browser/tabs/${chatId}/nav`, { action }),
+  browserOwner: (chatId: string, owner: 'agent' | 'master') => call<BrowserTab>('POST', `/browser/tabs/${chatId}/owner`, { owner }),
+  browserClose: (chatId: string) => call<void>('DELETE', `/browser/tabs/${chatId}`),
+  browserShot: (chatId: string) => call<BrowserShot>('GET', `/browser/tabs/${chatId}/shot`),
+  browserInspect: (chatId: string, box: { x: number; y: number; w: number; h: number }) => call<BrowserInspected>('POST', `/browser/tabs/${chatId}/inspect`, box),
+  browserView: (chatId: string | null, bounds: BrowserBounds | null) => call<void>('PUT', '/browser/view', { chatId, bounds }),
   // ── Files of the chat's agent workspace (#303) ──
   panelOpenFile: (chatId: string, path: string, line: number | null = null) => call<PanelTab[]>('POST', `/chats/${chatId}/panel/file/open`, { path, line }),
   panelCloseFile: (chatId: string, path: string) => call<PanelTab[]>('POST', `/chats/${chatId}/panel/file/close`, { path }),

@@ -232,6 +232,9 @@ export async function startEngine(opts: EngineOptions): Promise<Engine> {
   const voiceChat = opts.voice ? new VoiceChat(db, bus, kanban, agents, () => url) : null;
   const documents = new Documents(db, bus, kanban, opts.dataDir, secrets);
   const files = new WorkspaceFiles(db, opts.dataDir, kanban, secrets);
+  // The chat's browser is a tab of its pane (#306).
+  documents.browserTab = (chatId) => browser.paneTab(chatId);
+  browser.onPane = (chatId, focus) => documents.browserChanged(chatId, focus);
   // Secret values out of stored artifact versions (#226): those stored before the value was known, at each start and
   // after each value change. A failure is logged and the pass runs again at the next start.
   const redactStored = () => {

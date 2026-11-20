@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import type { ContentBlock } from '@atlas/shared';
+import { actionCaption, type ContentBlock } from '@atlas/shared';
 import { launch } from '../test/kit/index.ts';
 import type { BrowserHost, HostEvent, HostTab } from './browser.ts';
 import type { ModelRequest } from './providers/types.ts';
@@ -34,7 +34,18 @@ class FakeHost implements BrowserHost {
   history() {}
   close() {}
   show() {}
-  setOwner() {}
+  owner: 'agent' | 'master' = 'master';
+  setOwner(_id: string, o: 'agent' | 'master') {
+    this.owner = o;
+  }
+  async capture() {
+    return { image: 'data:image/png;base64,AAAA', width: 800, height: 600 };
+  }
+  /** What the pane showed over the page (#306): the caption and the pulse's spot. */
+  signals: { caption: string; point: { x: number; y: number } | null }[] = [];
+  signal(_id: string, s: { caption: string; point: { x: number; y: number } | null }) {
+    this.signals.push(s);
+  }
   async send(id: string, method: string, params?: Record<string, unknown>) {
     this.sent.push({ method, ...(params ? { params } : {}) });
     const cur = this.entries.length - 1;
@@ -53,6 +64,12 @@ class FakeHost implements BrowserHost {
             { nodeId: '6', parentId: '1', role: { value: 'combobox' }, name: { value: 'Size' }, backendDOMNodeId: 9 },
           ],
         };
+      case 'Accessibility.getPartialAXTree': {
+        const names: Record<number, [string, string]> = { 5: ['button', 'Click me'], 7: ['textbox', 'Name'], 9: ['combobox', 'Size'] };
+        const n = names[params?.backendNodeId as number];
+        if (!n) throw new Error('No node with given id found');
+        return { nodes: [{ nodeId: 'x', role: { value: n[0] }, name: { value: n[1] }, backendDOMNodeId: params!.backendNodeId }] };
+      }
       case 'DOM.getContentQuads':
         if (params?.backendNodeId === 404) throw new Error('No node with given id found');
         return { quads: [[10, 20, 110, 20, 110, 60, 10, 60]] };
@@ -120,7 +137,7 @@ describe('browser tools (#298 S7)', () => {
       await l.engine.runner.settled(card.id);
       const names = l.fake.calls[0]!.tools.map((t) => t.name);
       const browserNames = names.filter((n) => n.startsWith('browser_'));
-      expect(browserNames).toEqual(withHost ? ['browser_open', 'browser_snapshot', 'browser_act'] : []);
+      expect(browserNames).toEqual(withHost ? ['browser_open', 'browser_snapshot', 'browser_act', 'browser_ask'] : []);
       expect(names).toContain('screenshot'); // unchanged
       const r = lastResult(l.fake.calls[1]!);
       expect(r.content).toBe(withHost ? "No page is open in this chat's browser: browser_open a URL first." : 'unknown tool browser_snapshot');
@@ -187,6 +204,41 @@ describe('browser tools (#298 S7)', () => {
     expect((await l.tool('browser_open', { url: 'file:///etc/passwd' })).output).toContain('file: addresses never open');
   });
 
+  it('the pane shows each action (#306): a caption naming the element, the pulse at its middle; never the typed text', async () => {
+    const l = await setup();
+    await l.tool('browser_open', { url: 'http://localhost:5173/tenders' });
+    await l.tool('browser_act', { action: 'click', ref: 5 });
+    await l.tool('browser_act', { action: 'type', ref: 7, text: 'hunter2' });
+    await l.tool('browser_act', { action: 'press', text: 'Enter' });
+    await l.tool('browser_act', { action: 'select', ref: 9, text: 'Large' });
+    await l.tool('browser_act', { action: 'scroll', text: 'down' });
+    expect(l.host.signals).toEqual([
+      { caption: 'atlas opened localhost:5173/tenders', point: null },
+      { caption: 'atlas clicked « Click me »', point: { x: 60, y: 40 } },
+      { caption: 'atlas typed in « Name »', point: { x: 60, y: 40 } },
+      { caption: 'atlas pressed « Enter »', point: null },
+      { caption: 'atlas selected « Size »', point: { x: 60, y: 40 } },
+      { caption: 'atlas scrolled « down »', point: null },
+    ]);
+    expect(JSON.stringify(l.host.signals)).not.toContain('hunter2');
+    expect(JSON.stringify(l.engine.browser.get(l.chat.id))).not.toContain('hunter2');
+    expect(l.engine.browser.get(l.chat.id)!.action).toMatchObject({ verb: 'scrolled' });
+  });
+
+  it('browser_ask: the pane says why, Master gets the input at once; handing back clears it and the agent reads the page', async () => {
+    const l = await setup();
+    await l.tool('browser_open', { url: 'https://github.com/login' });
+    const r = await l.tool('browser_ask', { why: 'sign in to github.com' });
+    expect(r.isError).toBe(false);
+    expect(r.output).toContain('Stop here and wait');
+    expect(l.engine.browser.get(l.chat.id)).toMatchObject({ owner: 'master', needs: 'sign in to github.com' });
+    expect(l.host.owner).toBe('master');
+    expect(await l.tool('browser_snapshot', {})).toEqual({ output: BUSY, isError: true });
+    await l.call('POST', `/browser/tabs/${l.chat.id}/owner`, { owner: 'agent' });
+    expect(l.engine.browser.get(l.chat.id)!.needs).toBeNull();
+    expect((await l.tool('browser_snapshot', {})).output.startsWith(HANDED_BACK)).toBe(true);
+  });
+
   it('snapshot with image: a screenshot saved in the workspace and returned as a picture', async () => {
     const l = await setup();
     await l.tool('browser_open', { url: 'http://localhost:3000/' });
@@ -201,6 +253,9 @@ describe('browser tools (#298 S7)', () => {
     await l.tool('browser_open', { url: 'http://localhost:3000/a' });
     await l.call('POST', `/browser/tabs/${l.chat.id}/owner`, { owner: 'master' });
     l.host.sent = [];
+    l.host.signals = [];
+    const events: { type: string; tab?: { action: { verb: string; target: string; refused?: boolean } | null } }[] = [];
+    l.engine.bus.on((e) => void events.push(e as (typeof events)[number]));
     for (const [name, input] of [
       ['browser_snapshot', {}],
       ['browser_act', { action: 'click', ref: 5 }],
@@ -209,8 +264,13 @@ describe('browser tools (#298 S7)', () => {
       const r = await l.tool(name, input);
       expect(r).toEqual({ output: BUSY, isError: true });
     }
-    expect(l.host.sent).toEqual([]);
+    // Only a read of the element's name, for the pane's caption: no input reached the page.
+    expect(l.host.sent.map((s) => s.method)).toEqual(['Accessibility.getPartialAXTree']);
+    expect(events.some((e) => e.type === 'browser.updated' && e.tab?.action?.refused && e.tab.action.verb === 'clicked' && e.tab.action.target === 'Click me')).toBe(true);
     expect(l.engine.browser.get(l.chat.id)!.url).toBe('http://localhost:3000/a');
+    expect(l.engine.browser.get(l.chat.id)!.action).toMatchObject({ verb: 'opened', target: 'localhost:3000/z', refused: true });
+    expect(actionCaption('atlas', l.engine.browser.get(l.chat.id)!.action!)).toBe('atlas tried to open localhost:3000/z: you have control');
+    expect(l.host.signals).toEqual([]); // the overlay shows only while the agent drives
 
     // Master types in the page, then hands back.
     l.host.value = 'typed by Master';

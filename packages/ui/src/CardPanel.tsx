@@ -146,6 +146,8 @@ export function CardPanel(props: {
   comments?: Comments;
   /** Tabs open in a hidden side panel (overlay mode): a button brings it back. */
   hiddenDocs?: number;
+  /** The hidden pane holds the browser the agent is driving (#306): a dot on the button, this as its tooltip. */
+  hiddenLive?: string;
   onShowDocs?(): void;
   /** The side panel is on screen: a header button hides it (⌘\ toggles). */
   onHideDocs?(): void;
@@ -162,9 +164,16 @@ export function CardPanel(props: {
       <HeaderActions>
         <ChatPins chatId={card.id} cards={props.cards} stream={stream} onOpen={props.onOpen} onError={onError} />
         {!!props.hiddenDocs && (
-          <button type="button" className="btn doc-reopen" onClick={props.onShowDocs} title="Show the documents panel (⌘\)" aria-label={`Show the documents panel: ${props.hiddenDocs} open`}>
+          <button
+            type="button"
+            className="btn doc-reopen"
+            onClick={props.onShowDocs}
+            title={'Show the documents panel (⌘\\)' + (props.hiddenLive ? ' · ' + props.hiddenLive : '')}
+            aria-label={`Show the documents panel: ${props.hiddenDocs} open${props.hiddenLive ? ', ' + props.hiddenLive : ''}`}
+          >
             <Icon.doc /> <span className="doc-reopen-l">Documents · </span>
             {props.hiddenDocs}
+            {props.hiddenLive && <span className="wb-hdot" aria-hidden="true" />}
           </button>
         )}
         {props.onHideDocs && (

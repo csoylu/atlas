@@ -41,6 +41,8 @@ export type CommentAnchor = z.infer<typeof CommentAnchor>;
 export const CommentTarget = z.discriminatedUnion('kind', [
   z.object({ kind: z.literal('doc'), docId: z.string().min(1), version: z.number().int().nonnegative() }),
   z.object({ kind: z.literal('file'), path: z.string().min(1).max(1000) }),
+  /** The chat's browser (#306): the page at that address, as it was on screen when the comment was picked. */
+  z.object({ kind: z.literal('browser'), url: z.string().min(1).max(4000), title: z.string().max(300).default('') }),
 ]);
 export type CommentTarget = z.infer<typeof CommentTarget>;
 
@@ -174,6 +176,7 @@ export function parseComment(text: string): ParsedComment | null {
   const doc = /, (doc_[\w-]+) v(\d+)/.exec(on);
   const sec = /, section #([^,\s]+)/.exec(on);
   const file = /^file (.+?)(?:, line|$)/.exec(on);
+  // « page http://… in paris's browser, … »: no file, no artifact (the card shows it, a click opens nothing).
   const ln = /, lines? (\d+)(?:–(\d+))?/.exec(on);
   return {
     n: Number(m[1]),

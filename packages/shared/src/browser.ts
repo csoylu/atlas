@@ -25,8 +25,58 @@ export interface BrowserTab {
   loading: boolean;
   error: string | null;
   crashed: boolean;
+  /** The agent has opened or driven this tab (#306): once Master takes it, the bar offers Hand back. */
+  agentUsed: boolean;
+  /** The agent asked Master to act on the page (a login wall), with why; cleared when Master hands it back (#306). */
+  needs: string | null;
+  /** How Master opened the page (live, #306): from a link in Atlas or typed; null when the agent opened it. */
+  via: 'link' | 'typed' | null;
+  /** The agent's last action on the page (live): the tab shows it is driving for a while after. */
+  action: BrowserAction | null;
   updatedAt: string;
 }
+
+/**
+ * One action of the agent on the page (#306), shown as a pulse on the spot and a caption (« paris clicked « Search » »).
+ * `target` names what was acted on (an accessible name, a field's label, an address), never a typed value.
+ */
+export interface BrowserAction {
+  verb: 'opened' | 'clicked' | 'typed in' | 'pressed' | 'selected' | 'scrolled' | 'went back';
+  target: string;
+  /** The spot, in CSS px of the page's viewport (a click, the field typed in); null for actions without one. */
+  point: { x: number; y: number } | null;
+  at: string;
+  /** Master had the input: the action was not done (« paris tried to click « Search »: you have control »). */
+  refused?: boolean;
+}
+
+/** The caption under the page: « paris clicked « Search » », « paris opened localhost:5173 ». */
+export function actionCaption(agent: string, a: Pick<BrowserAction, 'verb' | 'target' | 'refused'>): string {
+  const t = a.target.replace(/\s+/g, ' ').trim();
+  const shown = t.length > 60 ? t.slice(0, 59).trimEnd() + '…' : t;
+  if (a.refused) {
+    const what = a.verb === 'opened' ? (shown ? `open ${shown}` : 'open a page') : `${TRIED[a.verb]}${shown ? ` « ${shown} »` : ''}`;
+    return `${agent} tried to ${what}: you have control`;
+  }
+  if (!shown) return `${agent} ${a.verb}`;
+  return a.verb === 'opened' ? `${agent} opened ${shown}` : `${agent} ${a.verb} « ${shown} »`;
+}
+const TRIED: Record<BrowserAction['verb'], string> = {
+  opened: 'open',
+  clicked: 'click',
+  'typed in': 'type in',
+  pressed: 'press',
+  selected: 'select',
+  scrolled: 'scroll',
+  'went back': 'go back',
+};
+
+/** How long after its last action the agent still counts as driving (live dot, accent edge, pane-button dot). */
+export const DRIVING_MS = 20_000;
+
+/** The agent is driving the tab now: it has the input and acted in the last DRIVING_MS. */
+export const isDriving = (t: Pick<BrowserTab, 'owner' | 'action'>, now = Date.now()): boolean =>
+  t.owner === 'agent' && !!t.action && !t.action.refused && now - Date.parse(t.action.at) < DRIVING_MS;
 
 /** Where the view sits in the window, in CSS px of the Atlas page (the pane's page area). */
 export const BrowserBounds = z.object({
@@ -41,7 +91,30 @@ export type BrowserBounds = z.infer<typeof BrowserBounds>;
 export const BrowserView = z.object({ chatId: z.string().min(1).max(100).nullable(), bounds: BrowserBounds.nullable().default(null) });
 export type BrowserView = z.infer<typeof BrowserView>;
 
-export const BrowserOpen = z.object({ url: z.string().min(1).max(4000) });
+export const BrowserOpen = z.object({ url: z.string().min(1).max(4000), via: z.enum(['link', 'typed']).default('typed') });
+
+/** What is under a point or in an area of the page (comment mode, #306): CSS px of the viewport. */
+export const BrowserInspect = z.object({
+  x: z.number().finite(),
+  y: z.number().finite(),
+  w: z.number().finite().nonnegative().default(0),
+  h: z.number().finite().nonnegative().default(0),
+});
+export interface BrowserInspected {
+  /** The element under the point (a click), or the element around the area. */
+  element: { selector: string; text: string; tag: string; box: { x: number; y: number; w: number; h: number } } | null;
+  /** Elements inside the area (an area), at most 12. */
+  inside: { selector: string; text: string }[];
+  /** The viewport's size, CSS px. */
+  viewport: { w: number; h: number };
+}
+
+/** A picture of the page as it is now (comment mode freezes the pane on it): a data: URL and its size in CSS px. */
+export interface BrowserShot {
+  image: string;
+  width: number;
+  height: number;
+}
 export const BrowserNav = z.object({ action: z.enum(['back', 'forward', 'reload', 'stop']) });
 export const BrowserSetOwner = z.object({ owner: z.enum(['agent', 'master']) });
 
@@ -50,6 +123,10 @@ export interface BrowserStatus {
   available: boolean;
   reason: string | null;
 }
+
+/** The workspace's internet setting refused the page (engine network.ts: OFFLINE, notAllowed): the pane says why. */
+export const networkRefusal = (error: string | null): 'offline' | 'host' | null =>
+  !error || !error.endsWith('(Settings → Workspaces)') ? null : error.startsWith('This workspace is offline') ? 'offline' : 'host';
 
 /** Files Atlas never opens in the pane: they download, in the system browser. */
 const DOWNLOAD = /\.(dmg|pkg|zip|tar|gz|tgz|bz2|xz|7z|rar|exe|msi|deb|rpm|appimage|iso)$/i;

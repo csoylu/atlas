@@ -543,6 +543,25 @@ const FILE_MSGS = [
   tmsg('assistant', 'atlas', [{ type: 'text', text: 'I fixed the panel width rule in `packages/ui/src/docPanel.ts:12` and the copy in `docs/empty-states.md`. I did not touch `src/pages/Search.tsx`: it does not exist yet.' }]),
 ];
 
+// The chat's browser (#306): a browser tab in the pane in each state the mockup draws. The page itself is a native
+// view of the desktop app (absent here): the screens check the bar, who drives, the strips and the empty states.
+const browserTab = (state) => {
+  const base = { chatId: chat.id, projectId: 'atlas', agentId: 'atlas', url: 'http://localhost:5173/tenders?q=road+maintenance', title: 'Tenders', owner: 'agent', loading: false, error: null, crashed: false, agentUsed: true, needs: null, via: null, action: { verb: 'clicked', target: 'Search', point: { x: 120, y: 80 }, at: new Date().toISOString() }, updatedAt: now };
+  if (state === 'you') return { ...base, owner: 'master', action: null };
+  if (state === 'login') return { ...base, url: 'https://github.com/login', title: 'Sign in to GitHub', owner: 'agent', action: null, needs: 'to sign in to github.com' };
+  if (state === 'empty') return { ...base, url: null, title: '', owner: 'master', agentUsed: false, action: null };
+  if (state === 'loading') return { ...base, loading: true, action: null, owner: 'master', via: 'typed' };
+  if (state === 'link') return { ...base, url: 'https://github.com/csoylu/atlas/pull/107', title: 'Pull request #107', owner: 'master', agentUsed: false, via: 'link', action: null };
+  if (state === 'blocked') return { ...base, url: 'https://api.github.com/', title: '', owner: 'agent', action: null, error: "api.github.com is not in this workspace's allowed hosts (Settings → Workspaces)" };
+  if (state === 'crash') return { ...base, crashed: true, action: null };
+  return base;
+};
+const browserTabs = (state) => [{ kind: 'browser', tab: browserTab(state), openedAt: now, focusedAt: now, active: true }];
+const BROWSER_RECENT = [
+  { ...browserTab('agent'), chatId: 'c_uicheck_b1', url: 'http://localhost:5173/', title: 'Atlas dev', updatedAt: now },
+  { ...browserTab('agent'), chatId: 'c_uicheck_b2', url: 'https://github.com/csoylu/atlas', title: 'csoylu/atlas', updatedAt: ago(60 * 26) },
+];
+
 // Memory has its own screens below (fixtures, edit, deep links).
 const PJ2 = 'uicheck-datinel'; // the fixture project's id (#217)
 const SETTINGS = ['projects', 'agents', 'agents/atlas', 'board', 'subscriptions', 'api-keys', 'local', 'model-list', 'usage', 'profile', 'appearance', 'voice', 'about'];
@@ -608,6 +627,15 @@ const SCREENS = [
   // Files (#303): the file tab beside the chat (tree + editor; the phone shows the editor full width), and the chat's
   // file links (a link, a missing path as plain code).
   { name: 'panel-files', hash: `#/chat/${chat.id}`, ready: '.side-doc .cm-content', files: true, then: { js: `const n = document.querySelectorAll('.wb-flink').length, miss = document.querySelectorAll('.wb-fmiss').length; if (n < 2 || miss < 1) throw new Error('file links (#303): ' + n + ' links, ' + miss + ' missing, want 2 and 1');`, ready: '.side-doc .cm-content' }, keys: ['.sd-tab', '.wb-path b'] },
+  // The chat's browser (#306), one screen per state of the mockup.
+  { name: 'panel-browser', hash: `#/chat/${chat.id}`, ready: '.wb-browser .wb-driver', browser: 'agent', keys: ['.sd-tab', '.wb-driver span', '.wb-driver .btn'] },
+  { name: 'panel-browser-you', hash: `#/chat/${chat.id}`, ready: '.wb-browser .wb-driver .you', browser: 'you', keys: ['.wb-driver .you', '.wb-driver .btn'] },
+  { name: 'panel-browser-login', hash: `#/chat/${chat.id}`, ready: '.wb-browser .wb-strip.warn', browser: 'login', keys: ['.wb-strip.warn b', '.wb-strip.warn .btn'] },
+  { name: 'panel-browser-empty', hash: `#/chat/${chat.id}`, ready: '.wb-browser .wb-recent button', browser: 'empty', keys: ['.wb-empty b', '.wb-recent .t'] },
+  { name: 'panel-browser-loading', hash: `#/chat/${chat.id}`, ready: '.wb-browser .wb-progress', browser: 'loading', keys: ['.sd-tab'] },
+  { name: 'panel-browser-link', hash: `#/chat/${chat.id}`, ready: '.wb-browser .wb-strip.acc', browser: 'link', keys: ['.wb-strip.acc .grow', '.wb-strip.acc .btn'] },
+  { name: 'panel-browser-blocked', hash: `#/chat/${chat.id}`, ready: '.wb-browser .wb-empty', browser: 'blocked', keys: ['.wb-empty b', '.wb-empty .btn'] },
+  { name: 'panel-browser-crash', hash: `#/chat/${chat.id}`, ready: '.wb-browser .wb-empty', browser: 'crash', keys: ['.wb-empty b', '.wb-empty .btn'] },
   { name: 'panel', hash: `#/chat/${chat.id}`, ready: '.side-doc', pins: true, panel: true, keys: ['.sd-tab', '.sd-ver-btn', '.side-doc h1', '.side-doc h2', '.chat-pin-title'] },
   // #211: the panel dragged to its widest (Home on the separator), so the chat is at its narrowest: pins and buttons
   // still must not cover messages or the composer. Phones have no separator: the panel stays full screen.
@@ -839,7 +867,18 @@ handlers.set('Fetch.requestPaused', async ({ requestId, request }) => {
       const r = await fetch(BASE + url.pathname + url.search);
       return await json(r.ok ? await r.json() : []);
     }
-    if (url.pathname === `/api/chats/${chat.id}/panel` && request.method === 'GET') return await json(screen?.files ? fileTabs() : screen?.panel ? panelTabs() : []);
+    if (url.pathname === `/api/chats/${chat.id}/panel` && request.method === 'GET') return await json(screen?.browser ? browserTabs(screen.browser) : screen?.files ? fileTabs() : screen?.panel ? panelTabs() : []);
+    if (screen?.browser) {
+      if (url.pathname === '/api/browser' && request.method === 'GET') return await json({ available: true, reason: null });
+      if (url.pathname === '/api/browser/tabs' && request.method === 'GET') return await json([browserTab(screen.browser), ...BROWSER_RECENT]);
+      if (url.pathname === `/api/browser/tabs/${chat.id}` && request.method === 'GET') return await json(browserTab(screen.browser));
+      if (/^\/api\/chats\/[^/]+\/panel\/(seen|focus)$/.test(url.pathname)) return await json(browserTabs(screen.browser));
+      // Where the native view goes and focusing the tab: answered, nothing stored (still listed as refused writes).
+      if ((url.pathname === '/api/browser/view' && request.method === 'PUT') || /^\/api\/browser\/tabs\/[^/]+\/focus$/.test(url.pathname)) {
+        refusedWrites.push(`${screen?.name}: ${request.method} ${url.pathname} (answered 204, nothing stored)`);
+        return await send('Fetch.fulfillRequest', { requestId, responseCode: 204, responseHeaders: [] });
+      }
+    }
     if (screen?.files && /^\/api\/chats\/[^/]+\/panel\/(seen|focus)$/.test(url.pathname)) return await json(fileTabs());
     if (screen?.files && request.method === 'GET' && url.pathname === `/api/cards/${chat.id}/messages`) return await json([...(await get(`/cards/${chat.id}/messages`)), ...FILE_MSGS]);
     if (screen?.files && /^\/api\/chats\/[^/]+\/files\//.test(url.pathname)) {

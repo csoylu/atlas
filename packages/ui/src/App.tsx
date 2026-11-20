@@ -233,6 +233,8 @@ export function App() {
         } else if (e.type === 'memory.updated') stream.push('memories', { type: 'memory', memory: e.memory });
         else if (e.type === 'memory.proposal') stream.push('memories', { type: 'proposal', proposal: e.proposal });
         else if (e.type === 'panel.updated') stream.push('panel:' + e.chatId, { type: 'panel', tabs: e.tabs });
+        else if (e.type === 'browser.updated') stream.push('browser:' + e.tab.chatId, { type: 'browser', tab: e.tab, blocked: !!e.blocked });
+        else if (e.type === 'browser.closed') stream.push('browser:' + e.chatId, { type: 'browserClosed' });
         else if (e.type === 'workflow.updated') setWorkflows((ws) => { const i = ws.findIndex(w => w.id === e.workflow.id); const next = ws.slice(); if (i < 0) return [...ws, e.workflow]; next[i] = e.workflow; return next; });
         else if (e.type === 'project.updated')
           setProjects((ps) => (ps.some((p) => p.id === e.project.id) ? ps.map((p) => (p.id === e.project.id ? e.project : p)) : [...ps, e.project]));
