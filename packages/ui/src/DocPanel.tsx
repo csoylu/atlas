@@ -1,11 +1,11 @@
-import { useEffect, useRef, useState } from 'react';
-import { KIND_WORD, type Doc, type DocRef, type PanelTab } from '@atlas/shared';
+import { useEffect, useRef, useState, type ReactNode } from 'react';
+import { KIND_WORD, type Doc, type DocRef, type PaneKind, type PanelTab } from '@atlas/shared';
 import { api } from './api.ts';
 import type { MessageStream } from './useMessages.ts';
-import { activeTab, byline, panelMode, type PanelMode } from './docPanel.ts';
+import { activeTab, artifactChoices, byline, panelMode, type PanelMode } from './docPanel.ts';
 import { ArtifactViewer, KindIcon } from './Viewer.tsx';
 import { Icon } from './ScreenHeader.tsx';
-import { PopItem } from './HeadMenu.tsx';
+import { PopButton, PopItem } from './HeadMenu.tsx';
 import { libraryHref } from './library.ts';
 import type { PanelResize } from './PanelResizer.tsx';
 
@@ -50,6 +50,8 @@ export function usePanelMode(): PanelMode {
  */
 export function DocPanel(props: {
   chatId: string;
+  /** The chat's project: the + menu lists its artifacts. */
+  projectId: string;
   tabs: PanelTab[];
   mode: PanelMode;
   /** Drag handle and width (#211); none on a phone. */
@@ -76,18 +78,33 @@ export function DocPanel(props: {
   if (!tab || !doc) return null;
   const phone = props.mode === 'full';
   const mode = phone || full ? 'full' : props.mode;
+  const items: PaneTabItem[] = tabs.map((t) => ({
+    key: t.kind + ':' + t.doc.id,
+    kind: t.kind,
+    icon: <KindIcon kind={t.doc.kind} />,
+    title: t.doc.title,
+    tip: t.doc.path,
+    on: t === tab,
+    dot: t.seenVersion < t.doc.version,
+    onSelect: () => void api.panelFocus(chatId, t.doc.id).catch(onError),
+    onClose: () => void api.panelClose(chatId, t.doc.id).catch(onError),
+  }));
   return (
-    <aside className={'side-doc ' + mode} aria-label="Artifacts" style={props.resize && mode !== 'full' ? { width: props.resize.width } : undefined}>
+    <aside className={'side-doc ' + mode} aria-label="Panel" style={props.resize && mode !== 'full' ? { width: props.resize.width } : undefined}>
       {mode !== 'full' && props.resize?.handle}
       <ArtifactViewer
         doc={doc}
         mode="panel"
-        tabs={tabs.map((t) => ({
-          doc: t.doc,
-          dot: t.seenVersion < t.doc.version,
-          onClose: () => void api.panelClose(chatId, t.doc.id).catch(onError),
-        }))}
-        onTab={(d) => void api.panelFocus(chatId, d.id).catch(onError)}
+        strip={
+          phone ? (
+            <TabPicker items={items} />
+          ) : (
+            <>
+              <PaneTabs items={items} />
+              <AddMenu chatId={chatId} projectId={props.projectId} open={tabs} onError={onError} />
+            </>
+          )
+        }
         lead={
           (phone || props.mode === 'overlay') && (
             <button type="button" className="sd-btn sd-back" title="Back to the chat" onClick={props.onHide}>
@@ -146,6 +163,153 @@ export function DocPanel(props: {
         onError={onError}
       />
     </aside>
+  );
+}
+
+/** One tab of the workbench (#302), whatever its kind: artifacts today; files and pages come with 2/5 and 5/5. */
+export interface PaneTabItem {
+  key: string;
+  kind: PaneKind;
+  icon: ReactNode;
+  title: string;
+  /** Tooltip: the artifact's path (a file's path, a page's address). */
+  tip: string;
+  on: boolean;
+  /** « Changed since you looked ». */
+  dot: boolean;
+  onSelect(): void;
+  onClose(): void;
+}
+
+/** The head row's tabs (#302, mockup « the right pane as a workbench »): one strip, every kind, the active one kept in view. */
+function PaneTabs({ items }: { items: PaneTabItem[] }) {
+  const strip = useRef<HTMLDivElement>(null);
+  const on = items.find((i) => i.on)?.key;
+  // A block body: recent Chrome returns a Promise from scrollIntoView, and React would call it as the cleanup.
+  useEffect(() => {
+    strip.current?.querySelector('.sd-tab.on')?.scrollIntoView({ block: 'nearest', inline: 'nearest' });
+  }, [on, items.length]);
+  return (
+    <div ref={strip} className="sd-tabs" role="tablist" aria-label="Panel tabs">
+      {items.map((t) => (
+        <div key={t.key} className={'sd-tab' + (t.on ? ' on' : '')} data-kind={t.kind}>
+          <button role="tab" aria-selected={t.on} title={t.tip} onClick={() => !t.on && t.onSelect()}>
+            {t.icon}
+            <span className="sd-tab-t">{t.title}</span>
+            {t.dot && <span className="sd-dot" title="Changed since you looked" />}
+          </button>
+          <button className="sd-tab-x" aria-label={`Close ${t.title}`} onClick={t.onClose}>
+            ×
+          </button>
+        </div>
+      ))}
+    </div>
+  );
+}
+
+/** On a phone (#302): the active tab's title and « · N tabs »; a menu lists every tab, each with its ×. */
+function TabPicker({ items }: { items: PaneTabItem[] }) {
+  const on = items.find((i) => i.on) ?? items.at(-1);
+  if (!on) return null;
+  return (
+    <PopButton
+      className="wb-tabsel"
+      title="Switch tab"
+      ariaLabel={`${on.title}, ${items.length} ${items.length === 1 ? 'tab' : 'tabs'}: switch tab`}
+      width={300}
+      label={
+        <>
+          {on.icon}
+          <span className="t">{on.title}</span>
+          <span className="n">
+            · {items.length} {items.length === 1 ? 'tab' : 'tabs'}
+          </span>
+          <Icon.chevDown />
+        </>
+      }
+    >
+      {(close) =>
+        items.map((t) => (
+          <div key={t.key} className={'wb-pick' + (t === on ? ' on' : '')} data-kind={t.kind}>
+            <button
+              type="button"
+              role="menuitemradio"
+              aria-checked={t === on}
+              className="wb-pick-t"
+              title={t.tip}
+              onClick={() => {
+                close();
+                if (t !== on) t.onSelect();
+              }}
+            >
+              {t.icon}
+              <span className="pop-t">{t.title}</span>
+              {t.dot && <span className="sd-dot" title="Changed since you looked" />}
+            </button>
+            <button type="button" className="sd-tab-x" aria-label={`Close ${t.title}`} onClick={t.onClose}>
+              ×
+            </button>
+          </div>
+        ))
+      }
+    </PopButton>
+  );
+}
+
+/**
+ * + in the head row (#302): open something in a new tab. Artifacts only for now (a filter, the project's artifacts
+ * latest first); a file (⌘P) and a page join as a first group with the workbench's 2/5 and 5/5.
+ */
+function AddMenu(props: { chatId: string; projectId: string; open: PanelTab[]; onError(e: unknown): void }) {
+  return (
+    <PopButton className="sd-btn icon-only wb-add" title="Open an artifact" ariaLabel="Open an artifact" width={320} label={<Icon.plus />}>
+      {(close) => <ArtifactPick {...props} onDone={close} />}
+    </PopButton>
+  );
+}
+
+function ArtifactPick(props: { chatId: string; projectId: string; open: PanelTab[]; onDone(): void; onError(e: unknown): void }) {
+  const { onError } = props;
+  const [docs, setDocs] = useState<Doc[] | null>(null);
+  const [q, setQ] = useState('');
+  const find = useRef<HTMLInputElement>(null);
+  // Not autoFocus: the popover is still hidden while PopButton places it, and a hidden field can't take focus.
+  useEffect(() => {
+    const f = requestAnimationFrame(() => find.current?.focus());
+    return () => cancelAnimationFrame(f);
+  }, []);
+  useEffect(() => {
+    let live = true;
+    api.documents().then((d) => live && setDocs(d), onError);
+    return () => {
+      live = false;
+    };
+  }, [onError]);
+  const list = docs ? artifactChoices(docs, props.projectId, new Set(props.open.map((t) => t.doc.id)), q) : [];
+  const pick = (d: Doc) => {
+    props.onDone();
+    void api.panelOpen(props.chatId, d.id).catch(onError);
+  };
+  return (
+    <>
+      <input
+        ref={find}
+        className="wb-find"
+        type="search"
+        value={q}
+        placeholder="Find an artifact"
+        aria-label="Find an artifact"
+        onChange={(e) => setQ(e.target.value)}
+        onKeyDown={(e) => e.key === 'Enter' && list[0] && pick(list[0])}
+      />
+      {!docs && <span className="pop-note">Loading…</span>}
+      {docs && !list.length && <span className="pop-note">{q ? 'No artifact matches.' : 'Every artifact of this project is open.'}</span>}
+      {list.map((d) => (
+        <PopItem key={d.id} icon={<KindIcon kind={d.kind} />} sub={KIND_WORD[d.kind]} onClick={() => pick(d)}>
+          {d.title}
+        </PopItem>
+      ))}
+    </>
   );
 }
 

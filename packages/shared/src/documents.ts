@@ -94,8 +94,15 @@ export interface DocContent {
   content: string;
 }
 
-/** A tab in a chat's side panel. */
+/**
+ * What a tab of the right pane shows (#302, the workbench): an artifact, a file of the agent's workspace, a web page.
+ * Only artifacts exist so far; files come with the workbench's 2/5, pages with 5/5.
+ */
+export type PaneKind = 'artifact' | 'file' | 'browser';
+
+/** A tab in a chat's side panel (the workbench, #302), stored per chat in SQLite with the active one. */
 export interface PanelTab {
+  kind: 'artifact';
   doc: Doc;
   openedBy: string;
   openedAt: string;

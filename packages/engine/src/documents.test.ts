@@ -199,6 +199,29 @@ describe('side panel tabs', () => {
     expect(docs.tabs(chat.id)[0]!.doc.title).toBe('2');
   });
 
+  it('brings a chat\'s tabs and the active one back after a restart (#302)', async () => {
+    const dataDir = mkdtempSync(join(tmpdir(), 'atlas-docs-'));
+    const dbFile = join(dataDir, 'atlas.db');
+    const start = async () => {
+      const e = await startEngine({ dbFile, dataDir, port: 0, dispatch: false, providers: () => new FakeProvider([]), env: {}, memoryReview: false });
+      engines.push(e);
+      return e;
+    };
+    const first = await start();
+    const chat = first.kanban.newChat('atlas');
+    const ws = join(dataDir, 'workspaces', 'atlas');
+    mkdirSync(join(ws, 'docs'), { recursive: true });
+    for (const n of ['a', 'b', 'c']) writeFileSync(join(ws, `docs/${n}.md`), '# ' + n);
+    const [a, b, c] = ['a', 'b', 'c'].map((n) => first.documents.indexFile('atlas', `docs/${n}.md`, 'atlas'));
+    for (const d of [a!, b!, c!]) first.documents.open(chat.id, d.id, 'atlas');
+    const before = first.documents.focus(chat.id, a!.id);
+    await first.stop();
+    const second = await start();
+    const after = second.documents.tabs(chat.id);
+    expect(after.map((t) => [t.kind, t.doc.id, t.active])).toEqual([['artifact', a!.id, true], ['artifact', b!.id, false], ['artifact', c!.id, false]]);
+    expect(after.map((t) => t.focusedAt)).toEqual(before.map((t) => t.focusedAt));
+  });
+
   it('remembers the version the user saw, for « changed » marks', async () => {
     const { docs, put, engine } = await setup();
     const chat = engine.kanban.newChat('atlas');

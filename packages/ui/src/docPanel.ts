@@ -1,4 +1,4 @@
-import { USER, type PanelTab } from '@atlas/shared';
+import { USER, type Doc, type PanelTab } from '@atlas/shared';
 
 /** Side by side above 960px, an overlay over the chat down to 760px, full screen below (phones). */
 export type PanelMode = 'side' | 'overlay' | 'full';
@@ -78,3 +78,19 @@ export function byline(tab: Pick<PanelTab, 'openedBy' | 'cardTitle'>, userName: 
 
 /** The tab to show: the active one, or the last. */
 export const activeTab = (tabs: PanelTab[]): PanelTab | undefined => tabs.find((t) => t.active) ?? tabs.at(-1);
+
+/** Most rows the + menu lists (#302): the filter narrows the rest. */
+export const ADD_MAX = 30;
+
+/**
+ * The artifacts the pane's + menu offers (#302): the chat's project's, not open already, matching every word of
+ * `q` in the title or path (any case), latest first, at most ADD_MAX.
+ */
+export function artifactChoices(docs: Doc[], projectId: string, open: ReadonlySet<string>, q: string): Doc[] {
+  const words = q.toLowerCase().split(/\s+/).filter(Boolean);
+  return docs
+    .filter((d) => d.projectId === projectId && !open.has(d.id))
+    .filter((d) => words.every((w) => (d.title + ' ' + d.path).toLowerCase().includes(w)))
+    .sort((a, b) => (a.updatedAt < b.updatedAt ? 1 : a.updatedAt > b.updatedAt ? -1 : 0))
+    .slice(0, ADD_MAX);
+}
