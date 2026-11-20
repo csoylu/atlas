@@ -1348,6 +1348,11 @@ button.chat-pin.open { border-color: var(--accent); }
   .chat-pins { display: none; }
   .chat-pin-count { display: inline-flex !important; }
 }
+/* A long chat title gives way, never the chips (#323): the actions keep at least their buttons' width, the crumb
+   clips what is left (its title ends in « … » first), and a phone drops the project from « Project › agent › title ». */
+.head-actions:has(.chat-menu) { min-width: min-content; }
+.screen-head:has(.chat-menu) .crumb { overflow: hidden; }
+@media (max-width: 640px) { .crumb:has(.crumb-agent) > .crumb-part:has(> .proj-crumb) { display: none; } }
 @media (pointer: coarse) { .chat-pin-x { opacity: 1; } }
 /* ── Compact chat row: icon · label · summary · time · › , expands inline (card reports #58, tool calls #59) ── */
 /* Compact chat rows (#58, #59; docs/chat-activity.md): icon · verb · object · rest · meta · time · ›. The verb is muted,
