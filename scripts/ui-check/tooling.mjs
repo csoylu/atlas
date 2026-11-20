@@ -4,6 +4,7 @@
 // the running app (the sandbox denies the live engine's port and database).
 import { spawn, spawnSync } from 'node:child_process';
 import { existsSync, readdirSync } from 'node:fs';
+import { createServer } from 'node:net';
 import { homedir, userInfo } from 'node:os';
 import { join } from 'node:path';
 
@@ -54,6 +55,32 @@ export function findBrowser({ env = process.env, install = true } = {}) {
 export function browserArgs(binary, { port, profile }) {
   const shell = /chrome-headless-shell$/.test(binary);
   return [...(shell ? [] : ['--headless=new']), '--no-sandbox', `--remote-debugging-port=${port}`, `--user-data-dir=${profile}`, '--hide-scrollbars', 'about:blank'];
+}
+
+/** A free TCP port on 127.0.0.1, asked of the OS (a random pick among 50 collided across the four parallel runs and other agents' Chromes). */
+export function freePort() {
+  return new Promise((ok, ko) => {
+    const srv = createServer();
+    srv.once('error', ko);
+    srv.listen(0, '127.0.0.1', () => {
+      const { port } = srv.address();
+      srv.close(() => ok(port));
+    });
+  });
+}
+
+/**
+ * What ui:check:fast does with its flags: `ui` (the build to serve, or undefined for the default), `ownEngine` (no --port:
+ * start a throwaway one) and the flags the four children get (without --ui, which the engine already serves; --port is
+ * added by the caller once the engine is up).
+ */
+export function parallelPlan(args) {
+  const i = args.indexOf('--ui');
+  const ui = i >= 0 ? args[i + 1] : undefined;
+  if (i >= 0 && (ui === undefined || ui.startsWith('--'))) throw new Error('--ui needs a folder: --ui packages/ui/dist');
+  const ownEngine = !args.includes('--port');
+  const childArgs = ownEngine && i >= 0 ? args.filter((_, j) => j !== i && j !== i + 1) : [...args];
+  return { ui, ownEngine, childArgs };
 }
 
 /**

@@ -107,7 +107,8 @@ for (const [title, status, body, assignee] of tasks) await call('POST', '/cards'
 
 // Documents of every kind (the Library lists, the panel opens them).
 const docs: [string, 'markdown' | 'html' | 'diagram' | 'url', string][] = [
-  ['Release plan', 'markdown', '# Release plan\n\n## One\n\nText with a [link](https://example.com), and the notes the team reads first.\n\n## Two\n\n- a\n- b\n\n| a | b |\n| - | - |\n| 1 | 2 |\n'],
+  // A short title: the composer's eye chip (#305) shows it and shrinks to « Release… » at 390 px, which the label check reads as wrong.
+  ['Plan', 'markdown', '# Plan\n\n## One\n\nText with a [link](https://example.com), and the notes the team reads first.\n\n## Two\n\n- a\n- b\n\n| a | b |\n| - | - |\n| 1 | 2 |\n'],
   ['Spec: sandbox', 'markdown', '# Spec\n\n' + Array.from({ length: 30 }, (_, i) => `Line ${i + 1} of a longer document, so it scrolls.`).join('\n\n')],
   ['Mockup', 'html', '<!doctype html><title>Mockup</title><body style="font-family:sans-serif"><h1>Mockup</h1><p>A page.</p></body>'],
   ['Diagram', 'diagram', '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 200 100"><rect width="200" height="100" fill="#eef"/><circle cx="100" cy="50" r="30" fill="#66c"/></svg>'],

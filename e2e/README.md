@@ -11,7 +11,7 @@ Every feature is run on both surfaces: a direct chat and a task chat (ticket mod
 The browser is Playwright's `chrome-headless-shell` (no window, so it runs inside an agent's sandbox: #314); `playwright.config.ts`
 finds it in `~/Library/Caches/ms-playwright` even when `HOME` is the workspace. `ATLAS_CHROME=<binary>` overrides it. To use
 Google Chrome instead: `E2E_CHANNEL=chrome npx playwright test` (not in the sandbox).
-Use a checkout path without spaces (native modules fail to build in "Application Support").
+`npm ci` and the specs also run from a path with a space (« Application Support », an agent workspace).
 
 Specs: `slash-popup` (#99 step 1), `slash-compact` (2), `slash-clear` (3), `slash-running` (4), `slash-rewind` (5), `slash-restart` (6).
 `updater` (#124): the update badge, notes dialog and Settings → About at 1440 and 390 px, dark and light (screenshots in `shots/updater/`), and an update clicked while two agents work (fake GitHub + fake Atlas.app from `packages/engine/test/updaterKit.ts`; Mac only).

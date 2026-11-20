@@ -173,7 +173,7 @@ describe('sandbox (#298 S1, S2)', () => {
     delete env.GH_TOKEN;
     const fill = (host: string, extra: NodeJS.ProcessEnv = {}) => {
       try {
-        return { out: execFileSync('git', ['credential', 'fill'], { input: `protocol=https\nhost=${host}\n\n`, env: { ...env, ...extra }, encoding: 'utf8', stdio: ['pipe', 'pipe', 'pipe'] }), err: '' };
+        return { out: execFileSync('git', ['credential', 'fill'], { input: `protocol=https\nhost=${host}\n\n`, env: { ...env, ...extra }, cwd: tmpdir(), encoding: 'utf8', stdio: ['pipe', 'pipe', 'pipe'] }), err: '' };
       } catch (e) {
         const x = e as { stdout: string; stderr: string };
         return { out: x.stdout, err: x.stderr };
@@ -188,7 +188,7 @@ describe('sandbox (#298 S1, S2)', () => {
     expect(without.err).toContain('terminal prompts disabled');
     // Another host never gets the token.
     expect(fill('example.com', { GH_TOKEN: 'ghp_test_token_123' }).out).not.toContain('ghp_test_token_123');
-    const url = (u: string) => execFileSync('git', ['ls-remote', '--get-url', u], { env, encoding: 'utf8' }).trim();
+    const url = (u: string) => execFileSync('git', ['ls-remote', '--get-url', u], { env, cwd: tmpdir(), encoding: 'utf8' }).trim();
     expect(url('git@github.com:csoylu/atlas.git')).toBe('https://github.com/csoylu/atlas.git');
     expect(execFileSync('git', ['config', 'user.email'], { env, encoding: 'utf8', cwd: tmpdir() }).trim()).toBe('m@example.com');
   });

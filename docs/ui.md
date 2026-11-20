@@ -40,10 +40,10 @@ messages or the composer, the modal or panel off-screen, uncaught page errors, a
   workflows' history. So a screen's overflow with a very long real title, or a list that scrolls only at 300 rows, can
   pass here and fail live. The seed's own fixtures and every check are the same in both; ask Master for a run with
   `--port` on live data when the change depends on volume.
-- **OCR inside the sandbox.** Apple Vision needs `~/Library/Caches`, which the sandbox denies, so there the key-label check is
-  skipped and the run says so (« OCR skipped … labels NOT checked », `ocrSkipped` in `report.json`); every other check runs
-  and gives the same issues as outside (same build, compared on 20 Nov 2026). A change to text size or wording: also run
-  ui-check in your own shell (no sandbox) or ask Master.
+- **OCR inside the sandbox.** Apple Vision writes a cache under the real `~/Library/Caches`, which the sandbox denies (it
+  dies with « Fatal error … nilError »). ui-check starts the OCR with `CFFIXED_USER_HOME=$HOME`, so the cache goes to the
+  shell's own home (the workspace in the sandbox); no extra access, and the label check runs there like anywhere. If you
+  run `scripts/ui-check/ocr.swift` or your own Vision script in the sandbox, set the same variable.
 - Read-only: the harness refuses every API write from the page. Pins and the panel come from fixtures added to the
   responses the page sees (4 cards in every pin state, a real document in a panel tab); nothing is stored.
 - `--ui DIR` serves another build than `packages/ui/dist` (with `--port`: a proxy in front of that engine).
@@ -63,8 +63,11 @@ messages or the composer, the modal or panel off-screen, uncaught page errors, a
   - **Full run** (no `--only`) only when the change touches something every screen shares: global styles (`styles.css`
     tokens and resets), the app shell or sidebar, shared headers, the side panel shell, fonts
     (`main.tsx` imports), or `scripts/ui-check` itself.
-  - **One ui-check at a time** on the machine (two at once give false failures): `pgrep -fl check.mjs` first, wait if
-    one runs.
+  - **One ui-check at a time of yours.** Two at once on a busy Mac give false failures (layout width, « never showed ») from
+    timing. Each run has its own engine, browser profile and `$TMPDIR`, so runs of different agents do not collide, but
+    in the sandbox you cannot see them (`pgrep`/`ps` are refused, #322): don't try. If a screen fails that your change
+    cannot affect, rerun it alone (`--only <screen> --widths <w>`) before believing it. Before a second run of your own, read
+    the first with `shell_output` (or `shell_kill` it).
 
 
 ## Screenshot tool
@@ -81,8 +84,8 @@ fails after 15 s naming what never appeared, and returns page errors + refused w
 - The task view is `packages/ui/src/CardView.tsx`, shared by `CardModal.tsx` and `ThreadPanel.tsx`: edit it for both.
 - `ui-check` tests the built UI (`npm run build` first: a stale `packages/ui/dist` gives false errors) and needs
   `npm ci` once in the clone ("Cannot find package 'sharp'" otherwise). Several runs at once give false failures
-  (layout width, "never showed .settings"): check `pgrep -fl check.mjs`, rerun the failing screens alone with `--only`
-  and `--widths`. The OCR reading "All" as "AIl" or "Links" as "LInks" is a known quirk: the
+  (layout width, "never showed .settings"): rerun the failing screens alone with `--only` and `--widths` (the machine is
+  busy; the sandbox cannot show who else runs one, see « One ui-check at a time »). The OCR reading "All" as "AIl" or "Links" as "LInks" is a known quirk: the
   comparison folds `i`, `I` and `l` into one letter (nothing else is forgiven).
 - An HTML mockup in the side panel gets the panel's width, so a page with a 640 px breakpoint shows its phone layout
   there: judge the desktop layout full size (`/api/files/<agent>/pages/<file>.html`).

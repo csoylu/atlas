@@ -8,7 +8,7 @@
 // dir is made under $SANDBOX_DATA (default: next to the clone), never in /tmp, so the profile's rules are the real
 // ones (a data dir is denied, the workspace inside it re-allowed). GH_TOKEN (and any other variable named in
 // SANDBOX_RUN_ENV, comma-separated) is passed through from your own environment. Exit code: the command's.
-import { cpSync, mkdirSync, mkdtempSync, rmSync } from 'node:fs';
+import { cpSync, mkdirSync, mkdtempSync, rmSync, statSync } from 'node:fs';
 import { basename, dirname, join, resolve } from 'node:path';
 import { Sandbox, spawnAgentCommand } from '../../packages/engine/src/sandbox.ts';
 
@@ -34,6 +34,8 @@ if (net !== 'on') {
   process.exit(2);
 }
 const clone = resolve(argv[0]);
+// A git worktree's .git is a file that points at the main clone, outside the copy: git inside would fail (« not a git repository »).
+if (statSync(join(clone, '.git'), { throwIfNoEntry: false })?.isFile()) console.error('[sandbox-run] note: this is a git worktree; its copy has no usable .git (git commands fail). Use a full clone for those.');
 const command = argv.slice(2).join(' ');
 
 const base = resolve(dataArg ?? join(process.env.SANDBOX_DATA ?? dirname(clone)));

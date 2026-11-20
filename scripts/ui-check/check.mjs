@@ -19,7 +19,7 @@ import { connect as netConnect } from 'node:net';
 import { join, dirname, extname } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { SPEC_AUDIT, FONT_SCALE, FONT_EXCEPTIONS, MIN_CONTRAST } from './spec-audit.mjs';
-import { findBrowser, browserArgs, startThrowawayEngine } from './tooling.mjs';
+import { findBrowser, browserArgs, freePort, startThrowawayEngine } from './tooling.mjs';
 
 const HERE = dirname(fileURLToPath(import.meta.url));
 const arg = (name, def) => {
@@ -694,7 +694,7 @@ const SCREENS = [
 if (!doc) console.warn('No document in the workspace: the panel screen is skipped.');
 
 // ── Chrome ──
-const CDP_PORT = 9340 + Math.floor(Math.random() * 50);
+const CDP_PORT = await freePort();
 const profile = mkdtempSync(join(tmpdir(), 'atlas-ui-check-'));
 const BROWSER = findBrowser();
 const chrome = spawn(BROWSER, browserArgs(BROWSER, { port: CDP_PORT, profile }), { stdio: 'ignore' });
@@ -709,8 +709,9 @@ process.on('exit', cleanup);
 let targets = [];
 for (let i = 0; i < 50 && !targets.some((t) => t.type === 'page'); i++) {
   await sleep(200);
-  targets = await fetch(`http://127.0.0.1:${CDP_PORT}/json`).then((r) => r.json(), () => []);
+  targets = await fetch(`http://127.0.0.1:${CDP_PORT}/json`, { signal: AbortSignal.timeout(2000) }).then((r) => r.json(), () => []);
 }
+if (!targets.some((t) => t.type === 'page')) throw new Error(`The browser (${BROWSER}) showed no page on its debugging port ${CDP_PORT} after 10 s.`);
 const ws = new WebSocket(targets.find((t) => t.type === 'page').webSocketDebuggerUrl);
 await new Promise((r, j) => ((ws.onopen = r), (ws.onerror = j)));
 let seq = 0;
@@ -1159,28 +1160,18 @@ screen = null;
 ws.close();
 
 // OCR every screenshot in one process, then match each key label with the text read in its box.
-// Apple Vision cannot start inside the agent sandbox (#314: it reads ~/Library/Caches, denied there). The first screenshot
-// is a probe: if Vision fails there the label check is skipped, loudly, and every other check runs. Elsewhere a Vision
-// failure still stops the run.
-let ocrSkipped = null;
-const runOcr = (files) => execFileSync(OCR_BIN, files, { encoding: 'utf8', maxBuffer: 64 << 20, stdio: ['ignore', 'pipe', 'pipe'] });
-try {
-  runOcr([shots[0].file]);
-} catch (e) {
-  if (!/Fatal error|Operation not permitted/.test(String(e.stderr ?? ''))) throw e;
-  ocrSkipped = String(e.stderr ?? e.message).split('\n').find((l) => /Fatal error|not permitted/.test(l)) ?? 'Vision failed';
-  console.log(`\nOCR skipped: Apple Vision cannot run here (${ocrSkipped.slice(0, 120)}). Key labels are NOT checked; every other check ran.`);
-}
+// Apple Vision writes its cache under ~/Library/Caches of the user's real home, which the agent sandbox denies (#314): it
+// dies with « Fatal error … nilError ». CFFIXED_USER_HOME = $HOME points that cache at the shell's own home (the workspace in
+// the sandbox, the real home elsewhere, so nothing changes there). A Vision failure stops the run, in or out of the sandbox.
+const runOcr = (files) => execFileSync(OCR_BIN, files, { encoding: 'utf8', maxBuffer: 64 << 20, stdio: ['ignore', 'pipe', 'pipe'], env: { ...process.env, CFFIXED_USER_HOME: process.env.HOME } });
 const ocr = new Map(
-  ocrSkipped
-    ? []
-    : runOcr(shots.map((s) => s.file))
-        .trim()
-        .split('\n')
-        .map((l) => JSON.parse(l))
-        .map((o) => [o.file, o]),
+  runOcr(shots.map((s) => s.file))
+    .trim()
+    .split('\n')
+    .map((l) => JSON.parse(l))
+    .map((o) => [o.file, o]),
 );
-for (const { key, file } of ocrSkipped ? [] : shots) {
+for (const { key, file } of shots) {
   const { lines, w } = ocr.get(file);
   const scale = w / Number(key.split(' ')[0]);
   for (const k of report[key].keys) {
@@ -1200,7 +1191,7 @@ for (const { key, file } of ocrSkipped ? [] : shots) {
   }
 }
 
-writeFileSync(join(OUT, 'report.json'), JSON.stringify({ ocrSkipped, base: BASE, chat: chat.id, modalCard: modalCard.id, doc: doc?.id, report, refusedWrites }, null, 1));
+writeFileSync(join(OUT, 'report.json'), JSON.stringify({ base: BASE, chat: chat.id, modalCard: modalCard.id, doc: doc?.id, report, refusedWrites }, null, 1));
 let total = 0;
 for (const [key, r] of Object.entries(report)) {
   total += r.issues.length;
@@ -1208,6 +1199,6 @@ for (const [key, r] of Object.entries(report)) {
 }
 if (refusedWrites.length) console.log('Writes refused (read-only harness):\n  ' + [...new Set(refusedWrites)].join('\n  '));
 const labels = Object.values(report).reduce((n, r) => n + r.keys.filter((k) => k.ocr).length, 0);
-console.log(`${Object.keys(report).length} screens × checks, ${ocrSkipped ? 'labels NOT checked (OCR unavailable here)' : `${labels} labels OCR'd`}: ${total ? total + ' issue(s)' : 'no issues'}. Screenshots: ${OUT}`);
+console.log(`${Object.keys(report).length} screens × checks, ${labels} labels OCR'd: ${total ? total + ' issue(s)' : 'no issues'}. Screenshots: ${OUT}`);
 cleanup();
 process.exit(total ? 1 : 0);

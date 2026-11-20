@@ -50,9 +50,13 @@ what it takes away is listed here.
   the code reads differently: a stack trace, a failed assertion, a missing module. Check with the same command on a
   path inside your workspace before you chase the code, and never work around a denial (symlinks, copying secrets):
   report it to atlas.
+- **Other processes are invisible (#322).** `ps` is refused and `pgrep`/`pkill` fail (« Cannot get process list »,
+  exit 3 or 126), and a signal only reaches your own command's tree. To see or stop something you started, keep the id of
+  a background `shell` and use `shell_output` / `shell_kill`. You cannot tell whether another agent runs a ui-check: see
+  « One ui-check at a time » in `docs/ui.md`.
 - **Browser:** `chrome-headless-shell --no-sandbox` from Playwright's cache (`npx playwright install
   chromium-headless-shell` when missing; `scripts/ui-check/tooling.mjs` does it for you). `ATLAS_CHROME` overrides.
-- **Tests inside the sandbox:** `npm run typecheck && npm test` pass (3 tests skip by name where the sandbox refuses `ps`,
+- **Tests inside the sandbox:** `npm run typecheck && npm test` pass (a few tests skip by name where the sandbox refuses `ps`/`pgrep`,
   `osascript` or a long unix-socket path; CI and your own shell run them). `test:full`'s slow suites that need the host
   (real Chrome, voice models) skip or fail there, by design.
 - **Check a command as an agent runs it:** `node --import tsx scripts/test/sandbox-run.ts <clone> -- '<command>'` (the real
@@ -77,10 +81,8 @@ what it takes away is listed here.
 - Agents do not read the live database or call the live engine: the sandbox denies both (Sandbox, above). Test against a
   throwaway engine on a seeded database in `$TMPDIR`: `scripts/ui-check/engine.ts` for the UI, the kit's `launch()` or
   `e2e/harness` for the engine (`docs/testing.md`). A change that needs real data: ask Master to run it on the live app.
-- Master's own notes, for a shell outside the sandbox: the live database is `~/Library/Application Support/Atlas/data/atlas.db`
-  (`sqlite3 -readonly`, never write); the engine's port changes at every launch (`lsof -nP -iTCP -sTCP:LISTEN -a -c Atlas`);
-  `ATLAS_ENGINE=http://127.0.0.1:<port> npm -w @atlas/ui run dev` shows a local UI on the live data;
-  `ui-check --port N` checks any engine you started.
+- Checks on the live app (its database, its port) are Master's, from his own shell: `ui-check --port N` checks any engine he
+  started. Ask him for one when a change depends on real volume.
 - An engine started from a clone cannot decrypt the plan tokens (Electron safeStorage): checks against the real Claude
   or ChatGPT models need the installed app's engine.
 - `POST /api/cards` in status `triage` wakes atlas. Throwaway test cards: status `todo`, no assignee.

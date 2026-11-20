@@ -4,7 +4,7 @@
 import { spawn } from 'node:child_process';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { startThrowawayEngine } from './tooling.mjs';
+import { parallelPlan, startThrowawayEngine } from './tooling.mjs';
 const args = process.argv.slice(2);
 // check.mjs reads the first occurrence of a flag, so a user's --widths/--out would reach all four children.
 const refused = args.find((a) => /^--(widths|out)(=|$)/.test(a));
@@ -12,11 +12,11 @@ if (refused) {
   console.error(`ui:check:fast sets its own widths and output folders: ${refused.split('=')[0]} is not allowed (use ui:check for that).`);
   process.exit(2);
 }
-// One engine for the four runs (check.mjs would start one each): the user's --port, or a throwaway one.
-const own = args.includes('--port') ? null : await startThrowawayEngine({ ui: args[args.indexOf('--ui') + 1] });
-// The engine already serves that build, so the children do not get --ui (they would proxy it again).
-const ui = args.indexOf('--ui');
-const childArgs = own ? [...args.filter((_, i) => i !== ui && i !== ui + 1 || ui < 0), '--port', new URL(own.base).port] : args;
+// One engine for the four runs (check.mjs would start one each): the user's --port, or a throwaway one. The engine already
+// serves that build, so the children do not get --ui (they would proxy it again).
+const plan = parallelPlan(args);
+const own = plan.ownEngine ? await startThrowawayEngine({ ui: plan.ui }) : null;
+const childArgs = own ? [...plan.childArgs, '--port', new URL(own.base).port] : plan.childArgs;
 const widths = ['1440', '1100', '900', '390'];
 const out = join(tmpdir(), 'atlas-ui-check');
 const run = (w) => new Promise((res) => {

@@ -3,7 +3,7 @@ import { chmodSync, existsSync, mkdirSync, mkdtempSync, readdirSync, rmSync, wri
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { eventually } from '../../packages/engine/test/kit/index.ts';
-import { browserArgs, findBrowser, startThrowawayEngine } from './tooling.mjs';
+import { browserArgs, findBrowser, freePort, parallelPlan, startThrowawayEngine } from './tooling.mjs';
 
 /** A fake Playwright cache with the given revisions of chromium_headless_shell. */
 function cache(...revs: string[]): string {
@@ -78,4 +78,32 @@ describe('the throwaway engine (#314)', () => {
       expect(left).toEqual([]);
     }, { timeout: 30_000, what: 'the throwaway engine removed its data dir' });
   }, 120_000);
+});
+
+describe('ui:check:fast arguments (#314)', () => {
+  it('no flag: a throwaway engine on the default build, nothing passed on', () => {
+    expect(parallelPlan([])).toEqual({ ui: undefined, ownEngine: true, childArgs: [] });
+  });
+  it('--only x without --ui is passed on whole (it was read as the UI folder)', () => {
+    expect(parallelPlan(['--only', 'palette'])).toEqual({ ui: undefined, ownEngine: true, childArgs: ['--only', 'palette'] });
+  });
+  it('--ui dir goes to the engine and is dropped from the children, other flags stay in order', () => {
+    expect(parallelPlan(['--only', 'palette', '--ui', 'dist2', '--spec'])).toEqual({ ui: 'dist2', ownEngine: true, childArgs: ['--only', 'palette', '--spec'] });
+  });
+  it('--port n: no engine of its own, every flag (even --ui) reaches the children', () => {
+    expect(parallelPlan(['--port', '4399', '--only', 'palette'])).toEqual({ ui: undefined, ownEngine: false, childArgs: ['--port', '4399', '--only', 'palette'] });
+    expect(parallelPlan(['--port', '4399', '--ui', 'd'])).toMatchObject({ ownEngine: false, childArgs: ['--port', '4399', '--ui', 'd'] });
+  });
+  it('--ui without a folder is an error', () => {
+    expect(() => parallelPlan(['--ui'])).toThrow(/--ui needs a folder/);
+    expect(() => parallelPlan(['--ui', '--only', 'x'])).toThrow(/--ui needs a folder/);
+  });
+});
+
+describe('freePort (#314)', () => {
+  it('gives distinct ports that can be bound', async () => {
+    const ports = await Promise.all([freePort(), freePort(), freePort(), freePort()]);
+    expect(ports.every((p) => p > 1024)).toBe(true);
+    expect(new Set(ports).size).toBe(ports.length);
+  });
 });
