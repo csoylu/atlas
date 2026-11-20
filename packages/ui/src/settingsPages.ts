@@ -1,10 +1,19 @@
 /**
- * Settings: one page with a grouped sub-navigation (design §12, redesign #272). Each page lives at #/settings/<id>;
- * #/settings alone is the list of pages (the phone's settings screen; a wide window opens the last page instead).
+ * Settings: one page with a grouped sub-navigation (design §12, redesign #272, remake #307). Each page lives at
+ * #/settings/<id>; #/settings alone is the list of pages (the phone's settings screen; a wide window opens the last
+ * page instead). The four model pages are pages of their own again (#307): no « Models & accounts » tab strip.
  */
 export const SETTINGS_GROUPS = [
-  { title: 'Team', pages: [{ id: 'projects', label: 'Projects' }, { id: 'agents', label: 'Agents' }, { id: 'memory', label: 'Memory' }, { id: 'board', label: 'Board & triage' }, { id: 'secrets', label: 'Secrets' }] },
-  { title: 'Models', pages: [{ id: 'models', label: 'Models & accounts' }] },
+  { title: 'Team', pages: [{ id: 'projects', label: 'Projects' }, { id: 'agents', label: 'Agents' }, { id: 'memory', label: 'Memory' }, { id: 'secrets', label: 'Secrets' }, { id: 'board', label: 'Board & triage' }] },
+  {
+    title: 'Models',
+    pages: [
+      { id: 'model-list', label: 'Model list' },
+      { id: 'subscriptions', label: 'Subscriptions' },
+      { id: 'api-keys', label: 'API keys' },
+      { id: 'local', label: 'Local models' },
+    ],
+  },
   {
     title: 'App',
     pages: [
@@ -22,28 +31,12 @@ export const SETTINGS_PAGES: { id: SettingsPage; label: string }[] = SETTINGS_GR
 /** Never throws: an unknown page (stale hash, old localStorage) is labelled like the page it opens, Agents. */
 export const settingsLabel = (p: string) => (SETTINGS_PAGES.find((x) => x.id === p) ?? SETTINGS_PAGES.find((x) => x.id === 'agents')!).label;
 
-/**
- * Models & accounts (#272): today's four model pages are the four sections of one page, chosen by a row of links at
- * its top (#/settings/models/<section>), so each stays one click away. The first one is the default.
- */
-export const MODEL_SECTIONS = [
-  { id: 'subscriptions', label: 'Subscriptions' },
-  { id: 'api-keys', label: 'API keys' },
-  { id: 'local', label: 'Local (Ollama)' },
-  { id: 'model-list', label: 'Model list' },
-] as const;
-export type ModelSection = (typeof MODEL_SECTIONS)[number]['id'];
-export const modelSectionOf = (rest: string): ModelSection => MODEL_SECTIONS.find((s) => s.id === rest)?.id ?? 'subscriptions';
-export const modelsHref = (s: ModelSection) => '#/settings/models' + (s === 'subscriptions' ? '' : '/' + s);
+/** The model pages, which « Models & accounts » (#272) showed as tabs: #/settings/models[/<page>] lands on them. */
+const MODEL_PAGES: SettingsPage[] = ['model-list', 'subscriptions', 'api-keys', 'local'];
+const modelPageOf = (rest: string | undefined): SettingsPage => MODEL_PAGES.find((p) => p === rest) ?? 'subscriptions';
 
-/** Hashes from before a restructure → their page and what follows it (#/settings/api-keys → models, api-keys). */
-const LEGACY: Record<string, { page: SettingsPage; rest: string }> = {
-  canvas: { page: 'appearance', rest: '' },
-  subscriptions: { page: 'models', rest: '' },
-  'api-keys': { page: 'models', rest: 'api-keys' },
-  local: { page: 'models', rest: 'local' },
-  'model-list': { page: 'models', rest: 'model-list' },
-};
+/** Hashes from before a restructure → their page (#/settings/canvas → appearance). */
+const LEGACY: Record<string, SettingsPage> = { canvas: 'appearance' };
 
 /**
  * The settings page a hash points to, or null when it isn't a settings hash. `view` and `id` are the hash's first two
@@ -51,15 +44,15 @@ const LEGACY: Record<string, { page: SettingsPage; rest: string }> = {
  */
 export function settingsPageOf(view: string | undefined, id: string | undefined): SettingsPage | null {
   if (view === 'agents') return 'agents';
-  if (view === 'models') return 'models';
+  if (view === 'models') return 'subscriptions';
   if (view !== 'settings') return null;
   const known = SETTINGS_PAGES.find((p) => p.id === id);
-  return known ? known.id : (LEGACY[id ?? '']?.page ?? 'agents');
+  return known ? known.id : id === 'models' ? 'subscriptions' : (LEGACY[id ?? ''] ?? 'agents');
 }
 
 export type SettingsRoute = {
   page: SettingsPage;
-  /** What follows the page: a memory scope or m12, a project id, an agent id, a models section. */
+  /** What follows the page: a memory scope or m12, a project id, an agent id. */
   rest: string;
   /** The canonical path to rewrite the hash to. */
   path: string;
@@ -81,12 +74,11 @@ export function settingsRoute(path: string): SettingsRoute | null {
   // A project's page (#217): #/settings/projects/<id>[/repo]; an agent's page (#272): #/settings/agents/<id>.
   if (view === 'settings' && (id === 'projects' || id === 'agents') && more.length)
     return { page: id, rest: more.map(decodeURIComponent).join('/'), path: `#/settings/${id}/` + more.join('/') };
+  // « Models & accounts » and its tabs (#272) → the model page of its own (#307).
   if (view === 'models' || (view === 'settings' && id === 'models')) {
-    const s = modelSectionOf(view === 'models' ? '' : (more[0] ?? ''));
-    return { page: 'models', rest: s === 'subscriptions' ? '' : s, path: modelsHref(s) };
+    const page = modelPageOf(view === 'models' ? undefined : more[0]);
+    return { page, rest: '', path: '#/settings/' + page };
   }
-  const legacy = view === 'settings' ? LEGACY[id ?? ''] : undefined;
-  if (legacy) return { page: legacy.page, rest: legacy.rest, path: legacy.page === 'models' ? modelsHref(modelSectionOf(legacy.rest)) : '#/settings/' + legacy.page };
   const page = settingsPageOf(view, id);
   return page ? { page, rest: '', path: '#/settings/' + page } : null;
 }
@@ -97,11 +89,14 @@ export function settingsRoute(path: string): SettingsRoute | null {
  */
 const KEYWORDS: Partial<Record<SettingsPage, string[]>> = {
   projects: ['repo', 'github', 'members', 'changelog'],
-  agents: ['role', 'model', 'parallel', 'folder', 'workspace', 'enable', 'new agent'],
+  agents: ['role', 'model', 'tasks at once', 'parallel', 'folder', 'workspace', 'enable', 'new agent'],
   memory: ['rules', 'preferences', 'facts', 'task notes', 'background review', 'pin', 'archive'],
   board: ['triage', 'review', 'reviewer', 'qa'],
   secrets: ['token', 'password', 'env', 'grant', 'keychain'],
-  models: ['subscriptions', 'claude', 'chatgpt', 'api keys', 'anthropic', 'openai', 'ollama', 'local', 'model list', 'accounts'],
+  'model-list': ['models', 'available', 'limits', 'add a model'],
+  subscriptions: ['claude', 'chatgpt', 'plan', 'sign in', 'accounts'],
+  'api-keys': ['anthropic', 'openai', 'accounts', 'key'],
+  local: ['ollama', 'llama', 'download', 'installed'],
   profile: ['name', 'profile'],
   appearance: ['theme', 'dark', 'light', 'auto'],
   voice: ['speech', 'microphone', 'wake word'],

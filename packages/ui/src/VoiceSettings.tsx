@@ -164,10 +164,7 @@ export function VoiceSettings(props: { stream: MessageStream; onError(e: unknown
 
   return (
     <section className="voice-settings">
-      <header className="section-head">
-        <h2>Voice</h2>
-        <p>Say « Hi Atlas » and talk to Atlas. Wake word, speech to text and the voice all run on this Mac: audio never leaves it, only the text of what you say goes to the agent.</p>
-      </header>
+      <p className="set-lead">Say « Hi Atlas » and talk to Atlas. Wake word, speech to text and the voice all run on this Mac: audio never leaves it, only the text of what you say goes to the agent.</p>
       <div className="model-list">
         <div className={'model-row' + (s.enabled && (s.error || (s.mic !== 'granted' && s.mic !== 'not-determined')) ? ' bad' : s.ready ? ' ok' : '')}>
           <div className="model-main">
@@ -249,7 +246,7 @@ export function VoiceSettings(props: { stream: MessageStream; onError(e: unknown
         </div>
       </div>
 
-      <h3 className="voice-sub">How you start talking</h3>
+      <h2 className="set-sec-title set-sec-rule">How you start talking</h2>
       <div className="model-list">
         <div className="model-row">
           <div className="model-main">

@@ -50,7 +50,7 @@ export function ClaudePlanSection(props: { stream: MessageStream; keyStore: stri
   );
 
   return (
-    <section>
+    <section className="set-sec first">
       <header className="section-head">
         <h2>Claude plan</h2>
         <p>

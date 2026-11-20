@@ -28,7 +28,7 @@ export function ModelListSection(props: { stream: MessageStream; chatgpt: ChatGp
 
   return (
     <>
-    <section>
+    <section className="set-sec first">
       <header className="section-head">
         <h2>Available to agents</h2>
         <p>
@@ -124,7 +124,7 @@ function AvailableToAdd(props: {
 
   const sources: AvailableSource[] = [claudeSource(claude, claudeModels, props.models), chatgptSource(g, gptModels, props.models), localSource(local, installed)];
   return (
-    <section>
+    <section className="set-sec">
       <header className="section-head">
         <h2>Available to add</h2>
         <p>Models from your plans and from this machine. « Give to agents » puts one in the list above.</p>

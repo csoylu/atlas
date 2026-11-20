@@ -2,11 +2,11 @@ import { useCallback, useEffect, useState } from 'react';
 import { type Agent, type Card, type Memory, type Model, type Settings } from '@atlas/shared';
 import { api, ApiError } from './api.ts';
 import { AgentFace } from './AgentFace.tsx';
-import { Icon } from './ScreenHeader.tsx';
+import { HeaderActions, Icon } from './ScreenHeader.tsx';
+import { SetRow, SetRows, SetSec } from './SettingsKit.tsx';
 import { EmptyState, ErrorState, Skeleton } from './Kit.tsx';
 import { memoryHref } from './memoryView.ts';
 import { friendlyModel, friendlyModelOf } from './modelNames.ts';
-import { modelsHref } from './settingsPages.ts';
 import { useProjects } from './projects.tsx';
 
 /**
@@ -67,19 +67,19 @@ function AgentList(props: {
   const busy = (id: string) => props.cards.some((c) => c.assignee === id && c.status === 'running') || props.chats.some((c) => c.assignee === id && c.working);
   return (
     <section className="set-page">
-      <div className="set-head">
-        <h2>Agents</h2>
+      {/* The header names the page (#307): « New agent » sits in its row. */}
+      <HeaderActions>
         <span className="head-sp" />
         {!adding && (
-          <button type="button" className="btn" onClick={() => setAdding(true)}>
+          <button type="button" className="btn small" onClick={() => setAdding(true)}>
             <Icon.plus />
             New agent
           </button>
         )}
-      </div>
+      </HeaderActions>
       <p className="set-lead">
-        Who works on your tasks. Open one to change its role, model, folder and memory. Models and their accounts are in{' '}
-        <a href={modelsHref('subscriptions')}>Models &amp; accounts</a>.
+        Who works on your tasks. Open one to change its role, model, folder and memory. Their models, plans and keys are in the Models group, starting with the{' '}
+        <a href="#/settings/model-list">Model list</a>.
       </p>
       {adding && <NewAgent models={props.models} onCreated={() => { setAdding(false); props.onChanged(); }} onCancel={() => setAdding(false)} onError={props.onError} />}
       {!props.agents ? (
@@ -153,34 +153,42 @@ function AgentPage(props: { agent: Agent; models: Model[]; settings: Settings | 
   const projects = pinfo.active.filter((p) => p.members.some((m) => m.agentId === a.id));
   const triage = props.settings?.triageAgent === a.id;
   const reviewer = pinfo.active.filter((p) => p.reviewAgent === a.id).map((p) => p.name);
+  const modelBadge = model?.lastError
+    ? 'model failing'
+    : model?.provider === 'chatgpt' && !model.credentialPresent
+      ? 'ChatGPT not signed in'
+      : model?.provider === 'claude_plan' && !model.credentialPresent
+        ? 'Claude not signed in'
+        : model && !model.credentialPresent && (model.credentialEnv || model.provider === 'anthropic')
+          ? 'key missing'
+          : null;
   return (
     <section className={'set-page agent-page' + (a.enabled ? '' : ' off')}>
-      <div className="set-head">
-        <AgentFace id={a.id} />
-        <h2>@{a.id}</h2>
-        {triage && <span className="badge">triage</span>}
-        {reviewer.length > 0 && <span className="badge">reviewer</span>}
-        {model?.lastError ? <span className="badge bad">model failing</span> : model?.provider === 'chatgpt' && !model.credentialPresent ? <span className="badge bad">ChatGPT not signed in</span> : model?.provider === 'claude_plan' && !model.credentialPresent ? <span className="badge bad">Claude not signed in</span> : model && !model.credentialPresent && (model.credentialEnv || model.provider === 'anthropic') ? <span className="badge bad">key missing</span> : null}
-        <span className="head-sp" />
-        <label className="switch" title="Enabled">
-          <input type="checkbox" aria-label="Enabled" checked={draft.enabled} onChange={(e) => setDraft({ ...draft, enabled: e.target.checked })} />
-          <span />
-        </label>
-      </div>
+      {(triage || reviewer.length > 0 || modelBadge) && (
+        <div className="set-tools">
+          {triage && <span className="badge">triage</span>}
+          {reviewer.length > 0 && <span className="badge">reviewer</span>}
+          {modelBadge && <span className="badge bad">{modelBadge}</span>}
+        </div>
+      )}
       <p className="set-lead">
         {projects.length ? <>Member of {projects.map((p) => p.name).join(', ')}. </> : 'Member of no project. '}
         {reviewer.length ? <>Reviews the pull requests of {reviewer.join(', ')}. </> : null}
         The triage role is set in <a href="#/settings/board">Board &amp; triage</a>, each project's review agent in <a href="#/settings/projects">Projects</a>.
       </p>
-      <div className="set-card">
-        <label className="field">
-          Role
-          <textarea rows={4} value={draft.rolePrompt} onChange={(e) => setDraft({ ...draft, rolePrompt: e.target.value })} placeholder="Who this agent is and what it does. First line shows to other agents." />
-        </label>
-        <div className="field-row">
-          <label className="field">
-            Model
-            <select value={draft.modelId} onChange={(e) => setDraft({ ...draft, modelId: e.target.value })}>
+      <SetSec first>
+        <SetRows>
+          <SetRow label="Enabled" auto>
+            <label className="switch" title="Enabled">
+              <input type="checkbox" aria-label="Enabled" checked={draft.enabled} onChange={(e) => setDraft({ ...draft, enabled: e.target.checked })} />
+              <span />
+            </label>
+          </SetRow>
+          <SetRow label="Role" help="Who this agent is and what it does. The first line shows to other agents." stack>
+            <textarea aria-label="Role" rows={4} value={draft.rolePrompt} onChange={(e) => setDraft({ ...draft, rolePrompt: e.target.value })} />
+          </SetRow>
+          <SetRow label="Model" help="Plans, keys and local models are in the Models group.">
+            <select aria-label="Model" value={draft.modelId} onChange={(e) => setDraft({ ...draft, modelId: e.target.value })}>
               {!model && <option value={draft.modelId}>{draft.modelId} (missing)</option>}
               {props.models.map((m) => (
                 <option key={m.id} value={m.id}>
@@ -188,75 +196,75 @@ function AgentPage(props: { agent: Agent; models: Model[]; settings: Settings | 
                 </option>
               ))}
             </select>
-          </label>
-          <label className="field narrow">
-            Parallel
-            <input type="number" min={1} max={10} value={draft.maxRuns} onChange={(e) => setDraft({ ...draft, maxRuns: Number(e.target.value) || 1 })} />
-          </label>
-        </div>
-        <label className="field">
-          Working folder
-          <input value={draft.workdir ?? ''} placeholder={`default: data/workspaces/${a.id}`} onChange={(e) => setDraft({ ...draft, workdir: e.target.value || null })} />
-        </label>
-        <div className="actions">
-          {dirty && (
-            <>
-              <button type="button" className="btn ghost" onClick={() => setDraft(a)}>
-                Cancel
-              </button>
-              <button
-                type="button"
-                className="btn primary small"
-                onClick={() =>
-                  api
-                    .updateAgent(a.id, { rolePrompt: draft.rolePrompt, modelId: draft.modelId, workdir: draft.workdir, enabled: draft.enabled, maxRuns: draft.maxRuns })
-                    .then(props.onChanged, onError)
-                }
-              >
-                Save
-              </button>
-            </>
-          )}
-        </div>
-      </div>
-      <a className="set-card set-link" href={memoryHref('agent:' + a.id)} title="Open this agent's memory in Settings → Memory">
-        <Icon.memory />
-        <span>Memory</span>
-        <span className="muted">{memory === null ? '…' : `${memory.length} active`}</span>
-        {budget && (
-          <span className={'muted' + (budget.used > budget.limit ? ' over' : '')} title="Always on: rules, preferences and pinned (own + shared)">
-            · <span className="num">{budget.used}/{budget.limit}</span> chars always on
-          </span>
-        )}
-        <span className="head-sp" />
-        <Icon.chev />
-      </a>
-      <div className="set-danger">
-        {!confirming ? (
-          <button
-            type="button"
-            className="btn danger"
-            disabled={dirty}
-            title={dirty ? 'Save or cancel your changes first' : undefined}
-            onClick={() => {
-              setRefusal(null);
-              setConfirming(true);
-            }}
-          >
-            Delete @{a.id}…
-          </button>
-        ) : (
-          <>
-            <span className="confirm-text">Its schedules go with it; its chat is archived.</span>
-            <button type="button" className="btn ghost" onClick={() => setConfirming(false)}>
+          </SetRow>
+          <SetRow label="Tasks at once" help="How many of its tasks can run in parallel." auto>
+            <input className="set-num" aria-label="Tasks at once" type="number" min={1} max={10} value={draft.maxRuns} onChange={(e) => setDraft({ ...draft, maxRuns: Number(e.target.value) || 1 })} />
+          </SetRow>
+          <SetRow label="Working folder" help="Its home workspace, where its commands run.">
+            <input aria-label="Working folder" value={draft.workdir ?? ''} placeholder={`default: data/workspaces/${a.id}`} onChange={(e) => setDraft({ ...draft, workdir: e.target.value || null })} />
+          </SetRow>
+        </SetRows>
+        {dirty && (
+          <div className="actions">
+            <button type="button" className="btn ghost" onClick={() => setDraft(a)}>
               Cancel
             </button>
-            <button type="button" className="btn primary small danger" onClick={remove}>
-              Delete @{a.id}
+            <button
+              type="button"
+              className="btn primary small"
+              onClick={() =>
+                api
+                  .updateAgent(a.id, { rolePrompt: draft.rolePrompt, modelId: draft.modelId, workdir: draft.workdir, enabled: draft.enabled, maxRuns: draft.maxRuns })
+                  .then(props.onChanged, onError)
+              }
+            >
+              Save
             </button>
-          </>
+          </div>
         )}
-      </div>
+      </SetSec>
+      <SetSec title="Memory">
+        <a className="set-card set-link" href={memoryHref('agent:' + a.id)} title="Open this agent's memory in Settings → Memory">
+          <Icon.memory />
+          <span>Memory</span>
+          <span className="muted">{memory === null ? '…' : `${memory.length} active`}</span>
+          {budget && (
+            <span className={'muted' + (budget.used > budget.limit ? ' over' : '')} title="Always on: rules, preferences and pinned (own + shared)">
+              · <span className="num">{budget.used}/{budget.limit}</span> chars always on
+            </span>
+          )}
+          <span className="head-sp" />
+          <Icon.chev />
+        </a>
+      </SetSec>
+      <SetSec title="Delete">
+        <SetRows>
+          <SetRow label={`Delete @${a.id}`} help="Its schedules go with it; its chat is archived." auto>
+            {!confirming ? (
+              <button
+                type="button"
+                className="btn danger"
+                disabled={dirty}
+                title={dirty ? 'Save or cancel your changes first' : undefined}
+                onClick={() => {
+                  setRefusal(null);
+                  setConfirming(true);
+                }}
+              >
+                Delete @{a.id}…
+              </button>
+            ) : (
+              <>
+                <button type="button" className="btn ghost" onClick={() => setConfirming(false)}>
+                  Cancel
+                </button>
+                <button type="button" className="btn primary small danger" onClick={remove}>
+                  Delete @{a.id}
+                </button>
+              </>
+            )}
+          </SetRow>
+        </SetRows>
       {refusal && (
         <ErrorState as="p">
           {refusal}
@@ -274,6 +282,7 @@ function AgentPage(props: { agent: Agent; models: Model[]; settings: Settings | 
           )}
         </ErrorState>
       )}
+      </SetSec>
     </section>
   );
 }

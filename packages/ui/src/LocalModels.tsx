@@ -62,7 +62,7 @@ export function LocalModels(props: {
 
   return (
     <>
-      <section>
+      <section className="set-sec first">
         <div className="section-head">
           <h2>Ollama on this machine</h2>
           <p>
@@ -73,7 +73,7 @@ export function LocalModels(props: {
         {status ? <ServerPanel status={status} loadedMemory={loadedMemory} busy={busy} act={act} /> : <Skeleton />}
       </section>
 
-      <section>
+      <section className="set-sec">
         <div className="section-head">
           <h2>Installed models</h2>
           <p>To give one to agents, use « Available to add » on the <a href="#/settings/model-list">Model list</a>, then pick it as an agent's model on the <a href="#/settings/agents">Agents</a> page.</p>
@@ -88,7 +88,7 @@ export function LocalModels(props: {
         />
       </section>
 
-      <section>
+      <section className="set-sec">
         <div className="section-head">
           <h2>Download</h2>
           <p>

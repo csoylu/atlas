@@ -321,12 +321,9 @@ export function UsageSection(props: { stream: MessageStream; onError(e: unknown)
 
   return (
     <section>
-      <header className="section-head">
-        <h2>Usage</h2>
-        <p>
-          Tokens sent to and received from models over the last {s.days} days, counted by Atlas from what each provider reports. It is not a bill.
-        </p>
-      </header>
+      <p className="set-lead">
+        Tokens sent to and received from models over the last {s.days} days, counted by Atlas from what each provider reports. It is not a bill.
+      </p>
       {s.total.calls === 0 ? (
         <div className="state-empty">No model calls in the last {s.days} days yet.</div>
       ) : (
