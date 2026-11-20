@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import type { ContentBlock } from '@atlas/shared';
+import { actionCaption, type ContentBlock } from '@atlas/shared';
 import { launch } from '../test/kit/index.ts';
 import type { BrowserHost, HostEvent, HostTab } from './browser.ts';
 import type { ModelRequest } from './providers/types.ts';
@@ -253,6 +253,9 @@ describe('browser tools (#298 S7)', () => {
     await l.tool('browser_open', { url: 'http://localhost:3000/a' });
     await l.call('POST', `/browser/tabs/${l.chat.id}/owner`, { owner: 'master' });
     l.host.sent = [];
+    l.host.signals = [];
+    const events: { type: string; tab?: { action: { verb: string; target: string; refused?: boolean } | null } }[] = [];
+    l.engine.bus.on((e) => void events.push(e as (typeof events)[number]));
     for (const [name, input] of [
       ['browser_snapshot', {}],
       ['browser_act', { action: 'click', ref: 5 }],
@@ -261,8 +264,13 @@ describe('browser tools (#298 S7)', () => {
       const r = await l.tool(name, input);
       expect(r).toEqual({ output: BUSY, isError: true });
     }
-    expect(l.host.sent).toEqual([]);
+    // Only a read of the element's name, for the pane's caption: no input reached the page.
+    expect(l.host.sent.map((s) => s.method)).toEqual(['Accessibility.getPartialAXTree']);
+    expect(events.some((e) => e.type === 'browser.updated' && e.tab?.action?.refused && e.tab.action.verb === 'clicked' && e.tab.action.target === 'Click me')).toBe(true);
     expect(l.engine.browser.get(l.chat.id)!.url).toBe('http://localhost:3000/a');
+    expect(l.engine.browser.get(l.chat.id)!.action).toMatchObject({ verb: 'opened', target: 'localhost:3000/z', refused: true });
+    expect(actionCaption('atlas', l.engine.browser.get(l.chat.id)!.action!)).toBe('atlas tried to open localhost:3000/z: you have control');
+    expect(l.host.signals).toEqual([]); // the overlay shows only while the agent drives
 
     // Master types in the page, then hands back.
     l.host.value = 'typed by Master';

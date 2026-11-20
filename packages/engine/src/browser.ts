@@ -201,8 +201,9 @@ export class Browser {
    */
   acted(chatId: string, a: Omit<BrowserAction, 'at'>): BrowserTab {
     const r = this.mustRow(chatId);
-    const action: BrowserAction = { verb: a.verb, target: a.target.slice(0, 200), point: a.point, at: new Date().toISOString() };
+    const action: BrowserAction = { verb: a.verb, target: a.target.slice(0, 200), point: a.point, at: new Date().toISOString(), ...(a.refused ? { refused: true } : {}) };
     this.liveOf(chatId).action = action;
+    if (a.refused) return this.changed(chatId); // Master drives: only the pane's caption says it
     if (!r.agent_used) this.db.prepare('UPDATE browser_tabs SET agent_used = 1 WHERE chat_id = ?').run(chatId);
     if (this.opened.has(chatId)) this.host?.signal(chatId, { caption: actionCaption(r.agent_id ?? 'the agent', action), point: action.point });
     return this.changed(chatId);

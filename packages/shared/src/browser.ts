@@ -46,22 +46,37 @@ export interface BrowserAction {
   /** The spot, in CSS px of the page's viewport (a click, the field typed in); null for actions without one. */
   point: { x: number; y: number } | null;
   at: string;
+  /** Master had the input: the action was not done (« paris tried to click « Search »: you have control »). */
+  refused?: boolean;
 }
 
 /** The caption under the page: « paris clicked « Search » », « paris opened localhost:5173 ». */
-export function actionCaption(agent: string, a: Pick<BrowserAction, 'verb' | 'target'>): string {
+export function actionCaption(agent: string, a: Pick<BrowserAction, 'verb' | 'target' | 'refused'>): string {
   const t = a.target.replace(/\s+/g, ' ').trim();
   const shown = t.length > 60 ? t.slice(0, 59).trimEnd() + '…' : t;
+  if (a.refused) {
+    const what = a.verb === 'opened' ? (shown ? `open ${shown}` : 'open a page') : `${TRIED[a.verb]}${shown ? ` « ${shown} »` : ''}`;
+    return `${agent} tried to ${what}: you have control`;
+  }
   if (!shown) return `${agent} ${a.verb}`;
   return a.verb === 'opened' ? `${agent} opened ${shown}` : `${agent} ${a.verb} « ${shown} »`;
 }
+const TRIED: Record<BrowserAction['verb'], string> = {
+  opened: 'open',
+  clicked: 'click',
+  'typed in': 'type in',
+  pressed: 'press',
+  selected: 'select',
+  scrolled: 'scroll',
+  'went back': 'go back',
+};
 
 /** How long after its last action the agent still counts as driving (live dot, accent edge, pane-button dot). */
 export const DRIVING_MS = 20_000;
 
 /** The agent is driving the tab now: it has the input and acted in the last DRIVING_MS. */
 export const isDriving = (t: Pick<BrowserTab, 'owner' | 'action'>, now = Date.now()): boolean =>
-  t.owner === 'agent' && !!t.action && now - Date.parse(t.action.at) < DRIVING_MS;
+  t.owner === 'agent' && !!t.action && !t.action.refused && now - Date.parse(t.action.at) < DRIVING_MS;
 
 /** Where the view sits in the window, in CSS px of the Atlas page (the pane's page area). */
 export const BrowserBounds = z.object({

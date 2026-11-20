@@ -84,7 +84,11 @@ export async function runBrowserTool(name: string, raw: unknown, ctx: BrowserToo
 async function call(name: keyof typeof SPECS, input: unknown, ctx: BrowserToolContext): Promise<{ output: string; images?: ImageBlock[] }> {
   const { browser, chatId } = ctx;
   const tab = browser.get(chatId);
-  if (tab?.owner === 'master') throw new BrowserBusyError();
+  if (tab?.owner === 'master') {
+    // At once, nothing done; the pane says what the agent tried (#306 « Master has control »).
+    if (name === 'browser_open' || name === 'browser_act') browser.acted(chatId, await tried(ctx, name, input));
+    throw new BrowserBusyError();
+  }
   const back = !!tab && browser.takeHandBack(chatId);
   if (name === 'browser_open') {
     const { url } = input as Input<'browser_open'>;
@@ -112,6 +116,22 @@ async function call(name: keyof typeof SPECS, input: unknown, ctx: BrowserToolCo
   const done = await act(ctx, o);
   browser.acted(chatId, seen);
   return snapshot(ctx, false, done ? done + '\n' : '', ACT_GRACE_MS);
+}
+
+/** What a refused call would have done, for the pane's caption: the element's name read without touching the page. */
+async function tried(ctx: BrowserToolContext, name: 'browser_open' | 'browser_act', input: unknown): Promise<Omit<BrowserAction, 'at'>> {
+  if (name === 'browser_open') return { verb: 'opened', target: shortUrl((input as Input<'browser_open'>).url), point: null, refused: true };
+  const o = input as Input<'browser_act'>;
+  let target = o.action === 'press' ? (o.text ?? '') : '';
+  if (o.ref !== undefined && o.action !== 'press' && o.action !== 'back') {
+    // A read (no input) as Master's side: the agent's own calls are refused now. A page that can't answer: no name.
+    const r = await ctx.browser.cdp(ctx.chatId, 'Accessibility.getPartialAXTree', { backendNodeId: o.ref, fetchRelatives: false }, 'master').then(
+      (v) => v as { nodes: AxNode[] },
+      () => ({ nodes: [] as AxNode[] }),
+    );
+    target = String(r.nodes.find((x) => x.backendDOMNodeId === o.ref)?.name?.value ?? '').trim();
+  }
+  return { verb: VERB[o.action], target, point: null, refused: true };
 }
 
 /** « localhost:5173/tenders », for the caption. */
