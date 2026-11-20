@@ -347,7 +347,9 @@ export class Workflows {
   private inflight = new Map<number, Promise<void>>();
 
   start(intervalMs = 15_000): void {
-    this.stop();
+    // A second start() only replaces the clock and the subscription: commands this engine runs keep running (#321).
+    // After a stop() they are already killed, and `stopping` is reset below as it always was.
+    this.halt();
     this.unsubscribe = this.bus.on((e) => {
       if (e.type === 'card.updated' || e.type === 'card.deleted' || e.type === 'message.appended' || e.type === 'run.updated') this.soon();
     });
@@ -358,11 +360,15 @@ export class Workflows {
     this.timer.unref();
   }
 
-  stop(): void {
+  private halt(): void {
     clearInterval(this.timer);
     this.timer = undefined;
     this.unsubscribe?.();
     this.unsubscribe = undefined;
+  }
+
+  stop(): void {
+    this.halt();
     // Like a kill: each command's group goes now, its step stays running in the store and the next start says so.
     this.stopping = true;
     for (const pid of this.children.values()) signalGroup(pid, 'SIGKILL');
@@ -1808,7 +1814,8 @@ export class Workflows {
    * At start (#273, design §6): a command step still running in the store ran in an engine that stopped. Its process
    * group is killed if it is still the same process (pid + start time), its worktree removed, and the step couldn't
    * run « Atlas stopped while the command ran »: never retried by itself (a deploy run twice is worse than one
-   * waiting), Master told at once.
+   * waiting), Master told at once. A step this engine is driving right now (checkout, spawn) is not one a stopped
+   * engine left: a second `start()` leaves it, and its worktree, alone.
    */
   private recoverCommands(): void {
     const rows = this.db
@@ -1818,7 +1825,7 @@ export class Workflows {
       )
       .all() as StepRow[];
     for (const step of rows) {
-      if (this.children.has(step.id)) continue; // ours, still going (start called twice)
+      if (this.running.has(step.id)) continue; // ours, still going (start called twice): from the checkout on, not only once spawned
       const d = dataOf(step) as CommandData;
       // No pid: killed between storing « running » and the spawn's pid (the command may have started, unknown).
       if (d.pid) killIfSame(d.pid, d.started ?? null);
@@ -1839,7 +1846,7 @@ export class Workflows {
       });
     }
     // No command runs yet in this engine: every step worktree left on disk is a stopped engine's.
-    if (this.opts.command && !this.children.size) removeStaleWorktrees(this.opts.command.dataDir);
+    if (this.opts.command && !this.running.size) removeStaleWorktrees(this.opts.command.dataDir);
   }
 
   /** Command steps whose turn it is: queued, or couldn't run and due again (not one cut off by a stop: Master's call). */
