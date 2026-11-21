@@ -1,5 +1,5 @@
 import { spawn, execFile, type ChildProcess } from 'node:child_process';
-import { createWriteStream, existsSync, mkdirSync, type WriteStream } from 'node:fs';
+import { createWriteStream, existsSync, mkdirSync, realpathSync, type WriteStream } from 'node:fs';
 import { totalmem } from 'node:os';
 import { join } from 'node:path';
 import { UpdateLocal, PullName, type LocalModel, type LocalPull, type LocalStatus } from '@atlas/shared';
@@ -37,7 +37,12 @@ export interface LocalOptions {
   /** Tests: no binary lookup / no spawning. */
   binary?: string | null;
   fetch?: typeof fetch;
+  /** Tests: the brew path (null: no Homebrew) and the command runner, so no real brew runs. */
+  brew?: string | null;
+  run?: Run;
 }
+
+export type Run = (cmd: string, args: string[], timeout?: number) => Promise<string>;
 
 export class Local {
   readonly url: string;
@@ -47,6 +52,8 @@ export class Local {
   private restarts: number[] = [];
   private error: string | null = null;
   private installing = false;
+  private updating = false;
+  private latest: string | null = null;
   private version: string | null = null;
   private running = false;
   private starting: Promise<void> | null = null;
@@ -54,6 +61,7 @@ export class Local {
   private poll: NodeJS.Timeout | null = null;
   private fetch: typeof fetch;
   private binaryOverride: string | null | undefined;
+  private run: Run;
 
   constructor(
     private db: Db,
@@ -63,6 +71,7 @@ export class Local {
     this.url = (opts.url ?? DEFAULT_URL).replace(/\/+$/, '');
     this.fetch = opts.fetch ?? fetch;
     this.binaryOverride = opts.binary;
+    this.run = opts.run ?? run;
   }
 
   // ── settings (settings table, keys local_*) ───────────────────────────
@@ -84,6 +93,7 @@ export class Local {
     return CANDIDATES.find((p) => existsSync(p)) ?? null;
   }
   private brew(): string | null {
+    if (this.opts.brew !== undefined) return this.opts.brew;
     return process.platform === 'darwin' ? (BREW.find((p) => existsSync(p)) ?? null) : null;
   }
 
@@ -99,6 +109,9 @@ export class Local {
       contextLength: this.contextLength,
       canInstall: !!this.brew(),
       installing: this.installing,
+      canUpdate: this.brewOwned(),
+      updating: this.updating,
+      latest: this.latest && this.version && newer(this.latest, this.version) ? this.latest : null,
       error: this.error,
       totalMemory: totalmem(),
     };
@@ -200,6 +213,20 @@ export class Local {
   }
 
   /** Stop the server. One Atlas started: kill it. An external brew service: stop the service. Others: say what runs it. */
+  /** Homebrew installed this binary: its real path is in brew's Cellar (/opt/homebrew/bin/ollama → ../Cellar/ollama/<v>/bin/ollama). */
+  private brewOwned(): boolean {
+    const bin = this.binary();
+    if (!bin || !this.brew()) return false;
+    try {
+      return realpathSync(bin).includes('/Cellar/ollama/');
+    } catch {
+      return false; // a dangling link: not something brew can upgrade
+    }
+  }
+  private async brewService(brew: string): Promise<boolean> {
+    return /^ollama\s+started/m.test(await this.run(brew, ['services', 'list']).catch(() => ''));
+  }
+
   async stop(): Promise<void> {
     if (this.child) {
       const child = this.child;
@@ -216,8 +243,8 @@ export class Local {
     }
     if (!(await this.probe())) return;
     const brew = this.brew();
-    if (brew && /^ollama\s+started/m.test(await run(brew, ['services', 'list']).catch(() => ''))) {
-      await run(brew, ['services', 'stop', 'ollama']);
+    if (brew && (await this.brewService(brew))) {
+      await this.run(brew, ['services', 'stop', 'ollama']);
       for (let i = 0; i < 20 && (await this.probe()); i++) await new Promise((r) => setTimeout(r, 250));
       this.changed();
       return;
@@ -276,7 +303,7 @@ export class Local {
     this.installing = true;
     this.error = null;
     this.changed();
-    run(brew, ['install', 'ollama'], 15 * 60_000)
+    this.run(brew, ['install', 'ollama'], 15 * 60_000)
       .then(() => {
         this.installing = false;
         if (!this.binary()) this.error = 'brew finished but no ollama binary was found';
@@ -288,6 +315,77 @@ export class Local {
         this.error = `Installing Ollama failed: ${e.message.slice(-300)}`;
         this.changed();
       });
+  }
+
+  // ── update (#326) ──────────────────────────────────────────────────────
+  /** The newest version Homebrew knows, for « update available ». Called when the page opens; never polls. */
+  async checkLatest(): Promise<void> {
+    const brew = this.brew();
+    if (!brew || !this.brewOwned() || this.updating) return;
+    try {
+      const info = JSON.parse(await this.run(brew, ['info', '--json=v2', 'ollama'])) as { formulae?: { versions?: { stable?: string } }[] };
+      this.latest = info.formulae?.[0]?.versions?.stable ?? null;
+    } catch {
+      this.latest = null; // only a hint: the Update button works without it
+    }
+  }
+
+  /**
+   * Upgrade a Homebrew Ollama: refresh the formulae (run() sets HOMEBREW_NO_AUTO_UPDATE, so brew would not see the new
+   * version), `brew upgrade ollama`, then restart the server so the new binary runs: Atlas's own child is stopped and
+   * started, a brew service is restarted by brew. The old server keeps running during the upgrade, so a failure leaves
+   * it as it was. Returns at once; progress arrives as local.updated. Downloads that failed for needing a newer Ollama
+   * start again after a successful update.
+   */
+  async upgrade(): Promise<void> {
+    const brew = this.brew();
+    if (!this.binary()) throw new ConflictError('Ollama is not installed.');
+    if (!brew || !this.brewOwned()) throw new ConflictError('This Ollama was not installed with Homebrew: update it from https://ollama.com/download.');
+    if (this.updating) return;
+    const running = this.pulls_().filter((p) => !p.done);
+    if (running.length) throw new ConflictError(`Downloading ${running.map((p) => p.name).join(', ')}: wait for it to finish or cancel it, then update Ollama.`);
+    this.updating = true;
+    this.error = null;
+    this.changed();
+    void (async () => {
+      try {
+        await this.run(brew, ['update'], 10 * 60_000);
+        await this.run(brew, ['upgrade', 'ollama'], 15 * 60_000);
+      } catch (e) {
+        this.updating = false;
+        this.error = `Updating Ollama failed: ${(e instanceof Error ? e.message : String(e)).trim().slice(-300)}`;
+        this.changed();
+        return;
+      }
+      try {
+        if (this.child) {
+          await this.stop();
+          await this.start();
+        } else if (await this.probe()) {
+          if (!(await this.brewService(brew))) throw new Error('Ollama was started outside Atlas: restart it there to run the new version.');
+          await this.run(brew, ['services', 'restart', 'ollama']);
+          // brew returns before the new server answers: wait for it (20 s, like a start).
+          let up = false;
+          for (let i = 0; i < 40 && !up; i++) {
+            await new Promise((r) => setTimeout(r, 500));
+            up = await this.probe();
+          }
+          if (!up) throw new Error('the Ollama service did not come back within 20 s after the restart');
+        }
+        this.latest = null;
+      } catch (e) {
+        this.error = `Ollama was updated, but restarting it failed: ${e instanceof Error ? e.message : String(e)}`;
+      }
+      this.updating = false;
+      if (!this.running) await this.probe();
+      this.changed();
+      if (this.error || !this.running) return;
+      for (const [name, p] of this.pulls) {
+        if (!p.pull.needsUpdate) continue;
+        this.pulls.delete(name);
+        await this.pull(name).catch(() => {});
+      }
+    })();
   }
 
   // ── models ────────────────────────────────────────────────────────────
@@ -329,8 +427,9 @@ export class Local {
     const name = PullName.parse(nameIn);
     const existing = this.pulls.get(name);
     if (existing && !existing.pull.done) return existing.pull;
+    if (this.updating) throw new ConflictError('Ollama is updating: download once it is done.');
     await this.ensure();
-    const pull: LocalPull = { name, status: 'starting', completed: 0, total: 0, done: false, error: null };
+    const pull: LocalPull = { name, status: 'starting', completed: 0, total: 0, done: false, error: null, needsUpdate: false };
     const abort = new AbortController();
     this.pulls.set(name, { pull, abort });
     const emit = () => this.bus.emit({ type: 'local.pull', pull: { ...pull } });
@@ -372,7 +471,9 @@ export class Local {
         }
         if (pull.status !== 'success') throw new Error(`download ended at "${pull.status}"`);
       } catch (e) {
-        pull.error = abort.signal.aborted ? 'cancelled' : hint(e instanceof Error ? e.message : String(e));
+        const msg = e instanceof Error ? e.message : String(e);
+        pull.needsUpdate = !abort.signal.aborted && NEEDS_UPDATE.test(msg);
+        pull.error = abort.signal.aborted ? 'cancelled' : pull.needsUpdate ? 'This model needs a newer Ollama.' : hint(msg);
       }
       pull.done = true;
       emit();
@@ -407,6 +508,17 @@ export class Local {
     this.changed();
   }
 
+}
+
+/** Ollama's HTTP 412 on a pull: « The model you are attempting to pull requires a newer version of Ollama. » */
+const NEEDS_UPDATE = /requires a newer version of Ollama/i;
+
+/** a > b, for dotted versions (0.41.0 > 0.40.11). */
+export function newer(a: string, b: string): boolean {
+  const pa = a.split(/[.-]/).map((x) => parseInt(x, 10) || 0);
+  const pb = b.split(/[.-]/).map((x) => parseInt(x, 10) || 0);
+  for (let i = 0; i < Math.max(pa.length, pb.length); i++) if ((pa[i] ?? 0) !== (pb[i] ?? 0)) return (pa[i] ?? 0) > (pb[i] ?? 0);
+  return false;
 }
 
 function hint(msg: string): string {

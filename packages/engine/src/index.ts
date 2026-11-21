@@ -26,7 +26,7 @@ import { Workflows } from './workflows.ts';
 import { Auth, isLoopbackHost } from './auth.ts';
 import { screenshotAnswer, takeScreenshot } from './screenshot.ts';
 import type { PageShot } from './comments.ts';
-import { Local } from './local.ts';
+import { Local, type Run } from './local.ts';
 import { Accounts } from './accounts.ts';
 import { ChatGpt, type ChatGptOptions } from './chatgpt.ts';
 import { ClaudePlan, type ClaudePlanOptions } from './claude-plan.ts';
@@ -74,7 +74,7 @@ export interface EngineOptions {
    */
   secrets?: SecretStore;
   /** Local model server options (tests pass binary: null and a fake fetch; manageLocal: false skips the watcher). */
-  local?: { url?: string; binary?: string | null; fetch?: typeof fetch };
+  local?: { url?: string; binary?: string | null; fetch?: typeof fetch; brew?: string | null; run?: Run };
   manageLocal?: boolean;
   /** ChatGPT sign-in endpoints and callback port (tests point them at a fake OpenAI). */
   chatgpt?: ChatGptOptions;
@@ -177,7 +177,7 @@ export async function startEngine(opts: EngineOptions): Promise<Engine> {
   const startEnv = { ...(opts.env ?? process.env) };
   const env = envWithSecrets(startEnv, opts.secrets);
   const models = new Models(db, opts.providers ?? realProviders, env);
-  const local = new Local(db, bus, { dataDir: opts.dataDir, url: opts.local?.url ?? env.ATLAS_OLLAMA_URL, binary: opts.local?.binary, fetch: opts.local?.fetch });
+  const local = new Local(db, bus, { dataDir: opts.dataDir, url: opts.local?.url ?? env.ATLAS_OLLAMA_URL, binary: opts.local?.binary, fetch: opts.local?.fetch, brew: opts.local?.brew, run: opts.local?.run });
   models.setLocal(local);
   const accounts = new Accounts(db, env, opts.secrets);
   models.setAccounts(accounts);

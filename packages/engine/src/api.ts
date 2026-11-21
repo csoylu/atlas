@@ -928,8 +928,9 @@ export function createApi(deps: {
   });
 
   // ── Local model server (local.ts) ────────────────────────────────────
-  app.get('/api/local', async (_req, res) => {
+  app.get('/api/local', async (req, res) => {
     await local.probe();
+    if (req.query.check) await local.checkLatest(); // the page opening: is a newer Ollama available? (#326)
     res.json(local.status());
   });
   app.patch('/api/local', (req, res) => {
@@ -945,6 +946,10 @@ export function createApi(deps: {
   });
   app.post('/api/local/install', async (_req, res) => {
     await local.install();
+    res.json(local.status());
+  });
+  app.post('/api/local/update', async (_req, res) => {
+    await local.upgrade();
     res.json(local.status());
   });
   app.get('/api/local/models', async (_req, res) => {
