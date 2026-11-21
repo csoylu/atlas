@@ -1,5 +1,5 @@
 import { cardRef } from '@atlas/shared';
-import { afterEach, describe, expect, it } from 'vitest';
+import { afterEach, describe, expect, it, vi } from 'vitest';
 import { mkdtempSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
@@ -170,5 +170,85 @@ describe('dispatcher', () => {
     e.kanban.block(card.id, { kind: 'transient', reason: 'rate limited', until: new Date(Date.now() - 1).toISOString() }, 'atlas');
     e.dispatcher.tick();
     await until(() => e.kanban.get(card.id).status === 'done', 'done after retry');
+  });
+});
+
+describe('a ready task that does not start (#327)', () => {
+  it('an error on one ready task never keeps the others from starting, and shows on it', async () => {
+    const fake = new FakeProvider([[use('task_complete', { summary: 'ok' })]]);
+    const e = await setup(fake);
+    e.dispatcher.stop();
+    const bad = e.kanban.create({ title: 'bad', status: 'ready', assignee: 'atlas', priority: 3 }, 'user');
+    const good = e.kanban.create({ title: 'good', status: 'ready', assignee: 'atlas', priority: 0 }, 'user');
+    const wake = e.runner.wake.bind(e.runner);
+    vi.spyOn(e.runner, 'wake').mockImplementation((id, o) => {
+      if (id === bad.id) throw new Error('disk I/O error');
+      return wake(id, o);
+    });
+    const err = vi.spyOn(console, 'error').mockImplementation(() => {});
+    e.dispatcher.start(20);
+    // Before #327 the first card's error ended every tick: the second never started, and both said « starting… ».
+    await until(() => e.kanban.get(good.id).status === 'done', 'the other task done');
+    expect(e.kanban.get(bad.id)).toMatchObject({ status: 'ready', waiting: 'could not start: disk I/O error' });
+    expect(e.runner.runs(bad.id)).toEqual([]);
+    err.mockRestore();
+  });
+
+  it('a ready task whose run is refused says why, and stays in Ready without flipping its status', async () => {
+    let release!: () => void;
+    const gate = new Promise<void>((r) => (release = r));
+    const fake = new FakeProvider([]);
+    fake.complete = async (req) => {
+      if (req.system.includes('summar') || !req.tools?.length) {
+        await gate;
+        return { content: text('THE SUMMARY'), stopReason: 'end_turn', usage: { input: 1, output: 1 } };
+      }
+      return { content: [use('task_complete', { summary: 'ok' })], stopReason: 'tool_use', usage: { input: 1, output: 1 } };
+    };
+    const e = await setup(fake);
+    e.dispatcher.stop();
+    const c = e.kanban.create({ title: 'x', status: 'blocked', assignee: 'atlas' }, 'user');
+    e.kanban.appendMessage(c.id, 'user', 'user', text('some history'));
+    e.kanban.appendMessage(c.id, 'assistant', 'atlas', text('noted'));
+    const compacting = e.runner.compactNow(c.id);
+    e.kanban.update(c.id, { status: 'ready' }, 'user');
+    const statusEvents = () => e.db.prepare("SELECT COUNT(*) AS n FROM card_events WHERE card_id = ? AND kind = 'status'").get(c.id) as { n: number };
+    const before = statusEvents().n;
+    e.dispatcher.start(10);
+    await until(() => e.kanban.get(c.id).waiting === 'could not start: the conversation is being compacted', 'the reason');
+    for (let i = 0; i < 5; i++) e.dispatcher.tick();
+    // Before #327: « starting… », and Ready → Running → Ready on every tick (its time in Ready never grew: no stall).
+    expect(e.kanban.get(c.id).status).toBe('ready');
+    expect(statusEvents().n).toBe(before);
+    release();
+    await compacting;
+    await until(() => e.kanban.get(c.id).status === 'done', 'starts once the compaction ends');
+    expect(e.runner.runs(c.id).map((r) => r.kind)).toEqual(['work']);
+  });
+
+  it("another agent's message on a ready task starts its work run, not a chat run", async () => {
+    const fake = new FakeProvider([[use('task_complete', { summary: 'done it' })]]);
+    const e = await setup(fake);
+    e.dispatcher.stop(); // only the message can start it
+    const c = e.kanban.create({ title: 'x', status: 'ready', assignee: 'atlas' }, 'user');
+    expect(e.kanban.get(c.id).waiting).toBe('the dispatcher is stopped (Atlas is stopping): no task starts until Atlas restarts');
+    e.kanban.appendMessage(c.id, 'user', 'zurich', text('[from @zurich, task #1] why is this not moving?'));
+    e.dispatcher.onAgentMessage(c.id);
+    // Before #327: a chat run did the task while the card stayed in Ready (« answering you first »).
+    expect(e.runner.current(c.id)?.kind).toBe('work');
+    expect(e.kanban.get(c.id).status).toBe('running');
+    await until(() => e.kanban.get(c.id).status === 'done', 'done');
+  });
+
+  it('a stopping engine starts no run and says so', async () => {
+    const e = await setup(new FakeProvider([]));
+    e.dispatcher.stop();
+    const c = e.kanban.create({ title: 'x', status: 'ready', assignee: 'atlas' }, 'user');
+    await e.runner.shutdown();
+    const err = vi.spyOn(console, 'error').mockImplementation(() => {});
+    expect(e.runner.wake(c.id, { kind: 'chat', kick: 'hello' })).toBe(null);
+    expect(e.runner.refusal(c.id)).toBe('Atlas is stopping: no run starts until it restarts');
+    expect(e.runner.runs(c.id)).toEqual([]);
+    err.mockRestore();
   });
 });

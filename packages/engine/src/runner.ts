@@ -155,6 +155,8 @@ export class Runner {
   /** This engine instance; owns the leases of the runs it executes. */
   readonly instance = 'e_' + randomUUID().slice(0, 8);
   private timers: NodeJS.Timeout[] = [];
+  /** Set by shutdown(): no run starts any more on this engine (#327: a stopping engine went on starting chat runs). */
+  private closing = false;
   /** Set by the dispatcher. */
   onRunEnd: (end: RunEnd) => void = () => {};
   /** Set by the dispatcher: deliver a message an agent posted on another card. */
@@ -370,10 +372,26 @@ export class Runner {
     return owesTurn(this.transcript(card), this.kanban.taskNotes(card.conversationId));
   }
 
+  /**
+   * Why wake() would start no run on the card now, whatever is owed (#327): the dispatcher shows it on a ready task
+   * instead of « starting… ». null = nothing in the way.
+   */
+  refusal(cardId: string): string | null {
+    if (this.closing) return 'Atlas is stopping: no run starts until it restarts';
+    if (this.compactingCards.has(cardId)) return 'the conversation is being compacted';
+    if (this.active.has(cardId)) return 'the last run on this task has not let go of it yet';
+    if (this.current(cardId)) return 'another run is on this task';
+    return null;
+  }
+
   /** Start a run if none is active on the card and the agent owes a reply (or `kick` is given). Returns the run id. */
   wake(cardId: string, o: WakeOptions = {}): string | null {
     const card = this.kanban.get(cardId);
     const agentId = o.agentId ?? card.assignee;
+    if (this.closing) {
+      console.error(`not starting a run on ${cardId}: the engine is stopping`);
+      return null;
+    }
     if (!agentId || this.active.has(card.id) || this.compactingCards.has(card.id)) return null;
     const owed = owesTurn(this.transcript(card), this.kanban.taskNotes(card.conversationId));
     if (!owed && !o.kick) return null;
@@ -536,6 +554,7 @@ export class Runner {
 
   /** Graceful stop: abort runs (they end 'interrupted' and resume at next start), stop timers. */
   async shutdown(): Promise<void> {
+    this.closing = true;
     this.timers.forEach(clearInterval);
     this.background.shutdown();
     const all = [...this.active.values()];

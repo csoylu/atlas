@@ -20,6 +20,11 @@ export const STALL_LIMITS: Record<CardStall['rule'], number> = {
   ready: 30 * 60_000,
   todo: 10 * 60_000,
 };
+/**
+ * A ready task the dispatcher tried and failed to start (#327: its run refused, an error on it): stuck after this long,
+ * not after the 30 min of a quiet Ready (a healthy dispatcher starts a task within a second).
+ */
+export const NOT_STARTING_MS = 2 * 60_000;
 /** The dispatcher ticks every second; stalls are looked at this often. */
 export const STALL_CHECK_MS = 30_000;
 
@@ -33,6 +38,8 @@ export interface StallFacts {
   lastRunEnd: string | null;
   /** Ready: why its assignee can't start it now (busy, disabled, model failed), or null: a slot is free. */
   startProblem: string | null;
+  /** Ready with a free slot: why the dispatcher could not start it (#327), or null. */
+  notStarting?: string | null;
   /** Todo: its parents. */
   parents: Card[];
   /**
@@ -69,7 +76,9 @@ export function detectStall(f: StallFacts): CardStall | null {
       return { rule: 'running', reason: ended ? 'its last run ended and no new run started' : 'no run started', since, action: 'restart' };
     }
     case 'ready': {
-      if (!c.assignee || f.startProblem || !over(inState, 'ready', now)) return null;
+      if (!c.assignee || f.startProblem) return null;
+      if (f.notStarting && now - Date.parse(inState) >= NOT_STARTING_MS) return { rule: 'ready', reason: f.notStarting, since: inState, action: 'restart' };
+      if (!over(inState, 'ready', now)) return null;
       return { rule: 'ready', reason: `@${c.assignee} has a free slot but no run started`, since: inState, action: 'restart' };
     }
     case 'todo': {
@@ -108,6 +117,8 @@ const ACTION_HINT: Record<CardStall['action'], string> = {
 export class Stalls {
   /** Set by the dispatcher: why a ready task's assignee can't start it now (null = a free slot). */
   startProblem: (c: Card) => string | null = () => null;
+  /** Set by the dispatcher: why it could not start a ready task it tried to (#327). */
+  notStarting: (c: Card) => string | null = () => null;
   /** Set by the engine: a Review run is open on the task (#263). */
   reviewRun: (c: Card) => boolean = () => false;
   /** Set by the dispatcher: wake the agent of a chat a note was posted in. */
@@ -144,6 +155,7 @@ export class Stalls {
         running: !!this.runner.current(c.id),
         lastRunEnd: last?.endedAt ?? null,
         startProblem: c.status === 'ready' ? this.startProblem(c) : null,
+        notStarting: c.status === 'ready' ? this.notStarting(c) : null,
         parents: c.status === 'todo' ? c.parents.flatMap((p) => byId.get(p) ?? this.cardOrNone(p)) : [],
         reviewRun: c.status === 'review' && this.reviewRun(c),
       });
