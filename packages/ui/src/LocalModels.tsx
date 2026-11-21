@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useState } from 'react';
+import { useCallback, useEffect, useRef, useState } from 'react';
 import type { Agent, LocalModel, LocalPull, LocalStatus } from '@atlas/shared';
 import { api } from './api.ts';
 import type { MessageStream } from './useMessages.ts';
@@ -21,8 +21,8 @@ export function LocalModels(props: {
   const [pulls, setPulls] = useState<Map<string, LocalPull>>(new Map());
   const [busy, setBusy] = useState<string | null>(null);
 
-  const refresh = useCallback(() => {
-    api.local().then(setStatus, onError);
+  const refresh = useCallback((check = false) => {
+    api.local(check).then(setStatus, onError);
     api.localModels().then(
       (r) => {
         setModels(r.models);
@@ -31,7 +31,7 @@ export function LocalModels(props: {
       onError,
     );
   }, [onError]);
-  useEffect(refresh, [refresh]);
+  useEffect(() => refresh(true), [refresh]);
   useEffect(
     () =>
       stream.listen('local', (e) => {
@@ -58,6 +58,12 @@ export function LocalModels(props: {
   const pull = (name: string) => act('pull:' + name, () => api.pull(name).then((p) => setPulls((m) => new Map(m).set(p.name, p))));
 
   const loadedMemory = (models ?? []).reduce((s, m) => s + (m.loaded?.memory ?? 0), 0);
+  const loaded = (models ?? []).filter((m) => m.loaded).map((m) => m.name);
+  // The restart unloads models: say so before (#326).
+  const upgrade = () => {
+    if (loaded.length && !confirm(`Update Ollama? The server restarts when the update is done: ${loaded.join(', ')} will be unloaded, and an agent call running on ${loaded.length > 1 ? 'them' : 'it'} is interrupted.`)) return;
+    void act('update', api.upgradeLocal);
+  };
   const installedNames = new Set((models ?? []).map((m) => m.name));
 
   return (
@@ -70,7 +76,7 @@ export function LocalModels(props: {
             crashes. Models run on this machine and nothing leaves it.
           </p>
         </div>
-        {status ? <ServerPanel status={status} loadedMemory={loadedMemory} busy={busy} act={act} /> : <Skeleton />}
+        {status ? <ServerPanel status={status} loadedMemory={loadedMemory} busy={busy} act={act} onUpgrade={upgrade} /> : <Skeleton />}
       </section>
 
       <section className="set-sec">
@@ -96,7 +102,7 @@ export function LocalModels(props: {
             <code>qwen3:8b</code> (name, then a colon and the size).
           </p>
         </div>
-        <Downloads pulls={pulls} onCancel={(n) => act('cancel:' + n, () => api.cancelPull(n))} />
+        <Downloads pulls={pulls} status={status} onUpgrade={upgrade} onCancel={(n) => act('cancel:' + n, () => api.cancelPull(n))} />
         <Finder installed={installedNames} pulls={pulls} onPull={pull} disabled={!status?.binary} />
       </section>
     </>
@@ -111,8 +117,17 @@ function ServerPanel(props: {
   loadedMemory: number;
   busy: string | null;
   act(key: string, f: () => Promise<unknown>): void;
+  onUpgrade(): void;
 }) {
   const { status: s, busy, act } = props;
+  // « Updated to 0.41.0 » once an update ends without an error.
+  const [updated, setUpdated] = useState<string | null>(null);
+  const wasUpdating = useRef(s.updating);
+  useEffect(() => {
+    if (wasUpdating.current && !s.updating && !s.error && s.version) setUpdated(s.version);
+    if (s.updating) setUpdated(null);
+    wasUpdating.current = s.updating;
+  }, [s.updating, s.error, s.version]);
   if (!s.binary)
     return (
       <div className="model-row server-row">
@@ -146,6 +161,7 @@ function ServerPanel(props: {
         <div className="model-title">
           {s.running ? 'Running' : 'Stopped'}
           {s.version && <span className="badge">Ollama {s.version}</span>}
+          {s.latest && !s.updating && <span className="badge ok">{s.latest} available</span>}
           {s.running && <span className="muted">{s.owner === 'atlas' ? 'started by Atlas' : 'started outside Atlas'}</span>}
         </div>
         <div className="model-detail">
@@ -176,9 +192,27 @@ function ServerPanel(props: {
           </label>
           {s.owner === 'external' && <span className="muted">Context applies once Atlas runs the server (Stop, then Start).</span>}
         </div>
+        {s.updating && <div className="model-detail">Updating Ollama with Homebrew… this takes a minute or two, then the server restarts.</div>}
+        {updated && <div className="model-detail">Updated to Ollama {updated}.</div>}
+        {!s.canUpdate && (
+          <div className="model-detail">
+            <span>
+              Update Ollama from{' '}
+              <a href="https://ollama.com/download" target="_blank" rel="noreferrer">
+                ollama.com/download
+              </a>
+              .
+            </span>
+          </div>
+        )}
         {s.error && <div className="state-err">{s.error}</div>}
       </div>
       <div className="model-actions">
+        {s.canUpdate && (
+          <button className={'btn' + (s.latest ? ' primary' : '')} disabled={s.updating || busy === 'update'} onClick={props.onUpgrade}>
+            {s.updating ? 'Updating…' : 'Update'}
+          </button>
+        )}
         {s.running ? (
           <button className="btn" disabled={busy === 'stop'} onClick={() => act('stop', api.stopLocal)}>
             {busy === 'stop' ? 'Stopping…' : 'Stop'}
@@ -265,7 +299,8 @@ function Installed(props: {
 }
 
 /* ── Downloads in progress ─────────────────────────────────────────────── */
-function Downloads(props: { pulls: Map<string, LocalPull>; onCancel(name: string): void }) {
+function Downloads(props: { pulls: Map<string, LocalPull>; status: LocalStatus | null; onUpgrade(): void; onCancel(name: string): void }) {
+  const s = props.status;
   const list = [...props.pulls.values()].filter((p) => !p.done || p.error);
   if (!list.length) return null;
   return (
@@ -278,7 +313,26 @@ function Downloads(props: { pulls: Map<string, LocalPull>; onCancel(name: string
               <div className="model-title">
                 <span className="model-name">{p.name}</span>
               </div>
-              {p.error ? (
+              {p.error && p.needsUpdate ? (
+                <div className="state-err">
+                  <span>
+                    {p.error}{' '}
+                    {s?.updating
+                      ? 'Updating it now: the download starts again when it is done.'
+                      : s?.canUpdate
+                        ? 'Update Ollama, then the download starts again.'
+                        : (
+                          <>
+                            Update it from{' '}
+                            <a href="https://ollama.com/download" target="_blank" rel="noreferrer">
+                              ollama.com/download
+                            </a>
+                            , then download again.
+                          </>
+                        )}
+                  </span>
+                </div>
+              ) : p.error ? (
                 <div className="state-err">{p.error}</div>
               ) : (
                 <>
@@ -297,6 +351,11 @@ function Downloads(props: { pulls: Map<string, LocalPull>; onCancel(name: string
               )}
             </div>
             <div className="model-actions">
+              {p.needsUpdate && s?.canUpdate && (
+                <button className="btn primary small" disabled={s.updating} onClick={props.onUpgrade}>
+                  {s.updating ? 'Updating…' : 'Update Ollama'}
+                </button>
+              )}
               <button className="btn ghost" onClick={() => props.onCancel(p.name)}>
                 {p.done ? 'Dismiss' : 'Cancel'}
               </button>

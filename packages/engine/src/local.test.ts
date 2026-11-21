@@ -1,10 +1,11 @@
 import { afterEach, describe, expect, it } from 'vitest';
-import { chmodSync, mkdtempSync, writeFileSync } from 'node:fs';
+import { chmodSync, mkdirSync, mkdtempSync, symlinkSync, writeFileSync } from 'node:fs';
 import { createServer } from 'node:net';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import type { LocalPull, ServerEvent } from '@atlas/shared';
 import { startEngine, type Engine } from './index.ts';
+import { newer, type Run } from './local.ts';
 import type { Provider } from './providers/types.ts';
 
 /**
@@ -15,6 +16,8 @@ const FAKE = `#!/usr/bin/env node
 const http = require('node:http');
 const [host, port] = process.env.OLLAMA_HOST.split(':');
 const ctx = Number(process.env.OLLAMA_CONTEXT_LENGTH);
+// The version is a file next to the real binary, so a fake "brew upgrade" can change it (#326).
+const version = (() => { try { return require('node:fs').readFileSync(require('node:path').join(__dirname, 'version'), 'utf8').trim(); } catch { return '9.9.9'; } })();
 const models = [{ name: 'qwen3:8b', size: 5e9, modified_at: '2026-11-01T10:00:00Z', capabilities: ['completion', 'tools'], details: { family: 'qwen3', parameter_size: '8.2B', quantization_level: 'Q4_K_M' } }];
 let loaded = [];
 http.createServer((req, res) => {
@@ -23,12 +26,14 @@ http.createServer((req, res) => {
   req.on('end', () => {
     const j = body ? JSON.parse(body) : {};
     const send = (o) => (res.setHeader('content-type', 'application/json'), res.end(JSON.stringify(o)));
-    if (req.url === '/api/version') return send({ version: '9.9.9' });
+    if (req.url === '/api/version') return send({ version });
     if (req.url === '/api/tags') return send({ models });
     if (req.url === '/api/ps') return send({ models: loaded });
     if (req.url === '/api/generate') { loaded = j.keep_alive === 0 ? [] : [{ name: j.model, size_vram: 6e9, context_length: ctx, expires_at: '2318-01-01T00:00:00Z' }]; return send({ done: true }); }
     if (req.url === '/api/delete') { const i = models.findIndex((m) => m.name === j.model); if (i < 0) { res.statusCode = 404; return res.end('{}'); } models.splice(i, 1); return send({}); }
     if (req.url === '/api/pull') {
+      if (j.model.includes('newer') && version.startsWith('9.')) { res.write(JSON.stringify({ error: 'pull model manifest: 412: The model you are attempting to pull requires a newer version of Ollama. Please download the latest version at: https://ollama.com/download' }) + '\\n'); return res.end(); }
+      if (j.model.includes('slow')) { res.write(JSON.stringify({ status: 'pulling manifest' }) + '\\n'); return; }
       if (j.model.includes('missing')) { res.write(JSON.stringify({ error: 'pull model manifest: file does not exist' }) + '\\n'); return res.end(); }
       res.write(JSON.stringify({ status: 'pulling manifest' }) + '\\n');
       res.write(JSON.stringify({ status: 'downloading', completed: 50, total: 100 }) + '\\n');
@@ -41,6 +46,18 @@ http.createServer((req, res) => {
   });
 }).listen(Number(port), host);
 `;
+
+/** A Homebrew-like install: <dir>/bin/ollama → <dir>/Cellar/ollama/9.9.9/bin/ollama. Returns the link and the real dir. */
+function brewBinary(): { bin: string; real: string } {
+  const dir = mkdtempSync(join(tmpdir(), 'atlas-brew-'));
+  const real = join(dir, 'Cellar', 'ollama', '9.9.9', 'bin');
+  mkdirSync(real, { recursive: true });
+  mkdirSync(join(dir, 'bin'));
+  writeFileSync(join(real, 'ollama'), FAKE);
+  chmodSync(join(real, 'ollama'), 0o755);
+  symlinkSync(join(real, 'ollama'), join(dir, 'bin', 'ollama'));
+  return { bin: join(dir, 'bin', 'ollama'), real };
+}
 
 function fakeBinary(): string {
   const dir = mkdtempSync(join(tmpdir(), 'atlas-ollama-'));
@@ -150,5 +167,112 @@ describe('local model server', () => {
     const res = await fetch(engine.url + '/api/local/start', { method: 'POST' });
     expect(res.status).toBe(409);
     expect(((await res.json()) as { error: string }).error).toMatch(/not installed/);
+  });
+
+  describe('update (#326)', () => {
+    /** An engine on a Homebrew-like fake Ollama; `brew` is a fake runner that records its calls. */
+    async function brewEngine(brew: (args: string[], real: string) => string | Promise<string>) {
+      const { bin, real } = brewBinary();
+      const calls: string[] = [];
+      const run: Run = async (_cmd, args) => {
+        calls.push(args.join(' '));
+        return brew(args, real);
+      };
+      const events: ServerEvent[] = [];
+      engine = await startEngine({
+        dbFile: ':memory:',
+        dataDir: mkdtempSync(join(tmpdir(), 'atlas-')),
+        port: 0,
+        dispatch: false,
+        local: { url: `http://127.0.0.1:${await freePort()}`, binary: bin, brew: '/fake/brew', run },
+      });
+      engine.bus.on((e) => events.push(e));
+      const api = (method: string, path: string, body?: unknown) =>
+        fetch(engine!.url + '/api/local' + path, { method, headers: body ? json : undefined, body: body ? JSON.stringify(body) : undefined });
+      return { calls, events, api, real };
+    }
+    const upgradeTo = (v: string) => (args: string[], real: string) => {
+      if (args.join(' ') === 'upgrade ollama') writeFileSync(join(real, 'version'), v);
+      if (args[0] === 'info') return JSON.stringify({ formulae: [{ versions: { stable: v } }] });
+      return '';
+    };
+
+    it('upgrades with brew, restarts the server, keeps the models and retries a download that needed it', async () => {
+      const { calls, events, api } = await brewEngine(upgradeTo('10.1.0'));
+      await api('POST', '/start');
+      const before = (await (await api('GET', '?check=1')).json()) as { canUpdate: boolean; latest: string | null; version: string };
+      expect(before).toMatchObject({ canUpdate: true, latest: '10.1.0', version: '9.9.9' });
+
+      // The 412: a clear message and the flag, not « check the name ».
+      await api('POST', '/pull', { name: 'newer:1b' });
+      const failed = () => events.flatMap((e) => (e.type === 'local.pull' && e.pull.name === 'newer:1b' && e.pull.done ? [e.pull] : []));
+      await expect.poll(() => failed().length, { timeout: 5000 }).toBe(1);
+      expect(failed()[0]).toMatchObject({ error: 'This model needs a newer Ollama.', needsUpdate: true });
+
+      const res = await api('POST', '/update');
+      expect(res.status).toBe(200);
+      expect(((await res.json()) as { updating: boolean }).updating).toBe(true);
+      await expect.poll(() => engine!.local.status().updating, { timeout: 20_000 }).toBe(false);
+      expect(engine!.local.status()).toMatchObject({ running: true, owner: 'atlas', version: '10.1.0', error: null, latest: null });
+      // Formulae refreshed first (HOMEBREW_NO_AUTO_UPDATE is set), then the upgrade.
+      expect(calls.filter((c) => !c.startsWith('info'))).toEqual(['update', 'upgrade ollama']);
+      const models = (await (await api('GET', '/models')).json()) as { models: { name: string }[] };
+      expect(models.models.map((m) => m.name)).toContain('qwen3:8b');
+      // The download that needed the update started again, and succeeded.
+      await expect.poll(() => failed().at(-1)?.status, { timeout: 5000 }).toBe('success');
+      expect(failed().at(-1)).toMatchObject({ error: null, needsUpdate: false });
+    }, 60_000);
+
+    it('shows a brew failure and leaves the old server running', async () => {
+      const { api } = await brewEngine((args) => {
+        if (args[0] === 'upgrade') throw new Error('Error: ollama: failed to download resource');
+        return '';
+      });
+      await api('POST', '/start');
+      await api('POST', '/update');
+      await expect.poll(() => engine!.local.status().updating, { timeout: 10_000 }).toBe(false);
+      expect(engine!.local.status()).toMatchObject({ running: true, version: '9.9.9' });
+      expect(engine!.local.status().error).toMatch(/^Updating Ollama failed: Error: ollama: failed to download resource/);
+    }, 30_000);
+
+    it('is refused while a model downloads, and a download is refused while it updates', async () => {
+      let release!: () => void;
+      const gate = new Promise<void>((r) => (release = r));
+      const { api } = await brewEngine(async (args) => {
+        if (args[0] === 'update') await gate;
+        return '';
+      });
+      await api('POST', '/start');
+      await api('POST', '/pull', { name: 'slow:1b' });
+      const refused = await api('POST', '/update');
+      expect(refused.status).toBe(409);
+      expect(((await refused.json()) as { error: string }).error).toMatch(/Downloading slow:1b: wait for it to finish or cancel it/);
+      await api('DELETE', '/pull?name=slow%3A1b');
+      await expect.poll(async () => (await api('POST', '/update')).status, { timeout: 5000 }).toBe(200);
+      expect((await api('POST', '/pull', { name: 'qwen3:4b' })).status).toBe(409);
+      release();
+      await expect.poll(() => engine!.local.status().updating, { timeout: 20_000 }).toBe(false);
+    }, 60_000);
+
+    it('offers no update for an Ollama brew did not install', async () => {
+      engine = await startEngine({
+        dbFile: ':memory:',
+        dataDir: mkdtempSync(join(tmpdir(), 'atlas-')),
+        port: 0,
+        dispatch: false,
+        local: { url: `http://127.0.0.1:${await freePort()}`, binary: fakeBinary(), brew: '/fake/brew', run: async () => '' },
+      });
+      expect(engine.local.status()).toMatchObject({ canUpdate: false, updating: false });
+      const res = await fetch(engine.url + '/api/local/update', { method: 'POST' });
+      expect(res.status).toBe(409);
+      expect(((await res.json()) as { error: string }).error).toMatch(/ollama\.com\/download/);
+    });
+
+    it('compares versions', () => {
+      expect(newer('0.41.0', '0.40.11')).toBe(true);
+      expect(newer('0.40.11', '0.40.9')).toBe(true);
+      expect(newer('0.40.11', '0.40.11')).toBe(false);
+      expect(newer('0.40.1', '0.40.11')).toBe(false);
+    });
   });
 });
