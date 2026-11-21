@@ -271,6 +271,7 @@ export async function startEngine(opts: EngineOptions): Promise<Engine> {
   // Stuck tasks (#237): looked at on the dispatcher's tick.
   const stalls = new Stalls(db, bus, kanban, runner, opts.stallsNow);
   stalls.startProblem = (c) => dispatcher.startProblem(c);
+  stalls.notStarting = (c) => dispatcher.notStarting(c);
   stalls.reviewRun = (c) => !!openReviewRun(db, c.id);
   stalls.deliver = (id) => dispatcher.onAgentMessage(id);
   dispatcher.stalls = stalls;

@@ -13,6 +13,7 @@ import type { Stalls } from './stalls.ts';
 import { TRIAGE_KICK, WORK_KICK } from '@atlas/shared';
 export { TRIAGE_KICK, WORK_KICK };
 const TRANSIENT_RETRY_MS = 60_000;
+const errText = (e: unknown) => (e instanceof Error ? e.message : String(e));
 
 /** The note that wakes a project's lead in a task whose assignee the loop guard or the ceiling stopped (#239). */
 export const leadKick = (c: Card, run: Run, before: number) =>
@@ -37,6 +38,13 @@ export class Dispatcher {
   private pending = false;
   private ticking = false;
   private lastWaiting = new Map<string, string | null>();
+  /**
+   * Why the last try to start or move a card failed (#327): an error thrown on it, or a run that did not start. Shown
+   * as its reason and turned into a stall; cleared when the card starts or leaves Ready.
+   */
+  private failures = new Map<string, { status: Card['status']; why: string }>();
+  /** The last tick's error, if it failed outside any one card: every ready task says so instead of « starting… ». */
+  private tickError: string | null = null;
   /** Set by the PR watcher (#189): why a task In review isn't moving, and Retry on one. */
   reviewReason: (c: Card) => string | null = () => 'in review';
   recheck: (cardId: string) => void = () => {};
@@ -92,52 +100,117 @@ export class Dispatcher {
     this.ticking = true;
     try {
       const now = new Date().toISOString();
+      // Each card on its own (#327): an error on one task is shown on it and never stops the others from moving.
+      for (const c of this.kanban.list())
+        this.guard(c, () => {
+          // A temporary failure waits in todo until its time (#131); a block of kind transient from before #131 too.
+          const retryAt = c.retry?.at ?? (c.status === 'blocked' && c.block?.kind === 'transient' ? c.block.until : null);
+          if (retryAt) {
+            if (retryAt <= now && (c.status === 'blocked' || this.kanban.openParents(c).length === 0)) this.kanban.update(c.id, { status: 'ready' }, 'dispatcher');
+          } else if (c.status === 'todo' && c.parents.length && this.kanban.openParents(c).length === 0) {
+            this.kanban.update(c.id, { status: 'ready' }, 'dispatcher');
+            // Back from waiting on other tasks (#131): tell the agent they are done, so it picks up where it stopped.
+            if (this.runner.runs(c.id).some((r) => r.kind === 'work'))
+              this.kanban.appendMessage(c.id, 'user', 'system', [{ type: 'text', text: `The tasks this one waited on are done (${c.parents.map((p) => this.kanban.ref(p)).join(', ')}). Continue where you left off.` }]);
+          }
+        });
+      for (const c of this.kanban.list())
+        this.guard(c, () => {
+          // A project's new tasks go to its lead (#213).
+          const triageAgent = c.status === 'triage' ? this.kanban.leadOf(c.projectId) : null;
+          if (c.status !== 'triage' || !triageAgent || this.runner.current(c.id)) return;
+          if (this.agentUsable(triageAgent) || this.failedSinceCanWrote(c.id)) return;
+          const fresh = this.runner.runs(c.id).length === 0;
+          if (fresh || this.runner.owesReply(c.id))
+            this.runner.wake(c.id, { agentId: triageAgent, kind: 'triage', kick: fresh ? TRIAGE_KICK : undefined });
+        });
       for (const c of this.kanban.list()) {
-        // A temporary failure waits in todo until its time (#131); a block of kind transient from before #131 too.
-        const retryAt = c.retry?.at ?? (c.status === 'blocked' && c.block?.kind === 'transient' ? c.block.until : null);
-        if (retryAt) {
-          if (retryAt <= now && (c.status === 'blocked' || this.kanban.openParents(c).length === 0)) this.kanban.update(c.id, { status: 'ready' }, 'dispatcher');
-        } else if (c.status === 'todo' && c.parents.length && this.kanban.openParents(c).length === 0) {
-          this.kanban.update(c.id, { status: 'ready' }, 'dispatcher');
-          // Back from waiting on other tasks (#131): tell the agent they are done, so it picks up where it stopped.
-          if (this.runner.runs(c.id).some((r) => r.kind === 'work'))
-            this.kanban.appendMessage(c.id, 'user', 'system', [{ type: 'text', text: `The tasks this one waited on are done (${c.parents.map((p) => this.kanban.ref(p)).join(', ')}). Continue where you left off.` }]);
-        }
-      }
-      for (const c of this.kanban.list()) {
-        // A project's new tasks go to its lead (#213).
-        const triageAgent = c.status === 'triage' ? this.kanban.leadOf(c.projectId) : null;
-        if (c.status !== 'triage' || !triageAgent || this.runner.current(c.id)) continue;
-        if (this.agentUsable(triageAgent) || this.failedSinceCanWrote(c.id)) continue;
-        const fresh = this.runner.runs(c.id).length === 0;
-        if (fresh || this.runner.owesReply(c.id))
-          this.runner.wake(c.id, { agentId: triageAgent, kind: 'triage', kick: fresh ? TRIAGE_KICK : undefined });
-      }
-      for (const c of this.kanban.list()) {
-        if (c.status !== 'ready' || this.startProblem(c)) continue;
-        if (this.runner.current(c.id)) continue; // a chat reply is in progress; start after it
-        this.kanban.update(c.id, { status: 'running' }, 'dispatcher');
-        if (!this.runner.wake(c.id, { kind: 'work', kick: WORK_KICK })) this.kanban.update(c.id, { status: 'ready' }, 'dispatcher');
+        if (this.failures.get(c.id)?.status !== c.status) this.failures.delete(c.id);
+        if (c.status !== 'ready') continue;
+        this.guard(c, () => {
+          if (this.startProblem(c)) {
+            this.failures.delete(c.id);
+            return;
+          }
+          if (this.runner.current(c.id)) return; // a chat reply is in progress; start after it
+          this.startWork(c);
+        });
       }
       // A closed card does nothing more: stop its work or triage run (a chat about it may go on).
-      for (const c of this.kanban.list()) {
-        const cur = c.status === 'closed' ? this.runner.current(c.id) : null;
-        if (cur && cur.kind !== 'chat') this.runner.stop(c.id, 'task closed');
-      }
+      for (const c of this.kanban.list())
+        this.guard(c, () => {
+          const cur = c.status === 'closed' ? this.runner.current(c.id) : null;
+          if (cur && cur.kind !== 'chat') this.runner.stop(c.id, 'task closed');
+        });
       this.deliverAgentMessages();
-      this.stalls?.maybeCheck();
-      // Refresh « why not moving » in the UI when it changed.
-      for (const c of this.kanban.list()) {
-        if (this.lastWaiting.get(c.id) !== c.waiting) {
-          this.lastWaiting.set(c.id, c.waiting);
-          this.kanban.emit(c.id);
-        }
-      }
+      this.tickError = null;
     } catch (e) {
+      this.tickError = errText(e);
       console.error('dispatcher tick failed', e);
     } finally {
+      try {
+        // Even after a failed tick: a task that can't move is marked stuck (#237), never left quiet.
+        this.stalls?.maybeCheck();
+        // Refresh « why not moving » in the UI when it changed.
+        for (const c of this.kanban.list()) {
+          if (this.lastWaiting.get(c.id) !== c.waiting) {
+            this.lastWaiting.set(c.id, c.waiting);
+            this.kanban.emit(c.id);
+          }
+        }
+      } catch (e) {
+        console.error('dispatcher tick failed', e);
+      }
       this.ticking = false;
     }
+  }
+
+  /** Run one card's step of the tick: an error is logged and kept as the card's failure, the tick goes on. */
+  private guard(c: Card, fn: () => unknown): void {
+    try {
+      fn();
+    } catch (e) {
+      const why = errText(e);
+      if (this.failures.get(c.id)?.why !== why) console.error(`dispatcher: ${this.kanban.ref(c.id)} (${c.status}) failed:`, e);
+      this.failures.set(c.id, { status: c.status, why });
+    }
+  }
+
+  /**
+   * Start the work run of a ready task (status Running). A run that can't start leaves the task in Ready with the
+   * reason (#327), without flipping its status on every tick (that reset its time in Ready, so it never showed as stuck).
+   */
+  private startWork(c: Card, kick: string | undefined = WORK_KICK): string | null {
+    const refused = this.runner.refusal(c.id);
+    if (refused) {
+      this.failures.set(c.id, { status: 'ready', why: refused });
+      return null;
+    }
+    this.kanban.update(c.id, { status: 'running' }, 'dispatcher');
+    let id: string | null;
+    try {
+      id = this.runner.wake(c.id, { kind: 'work', kick });
+    } catch (e) {
+      // Never Running with no run on it: back to Ready, the error becomes its reason (guard).
+      this.kanban.update(c.id, { status: 'ready' }, 'dispatcher');
+      throw e;
+    }
+    if (id) {
+      this.failures.delete(c.id);
+      return id;
+    }
+    this.kanban.update(c.id, { status: 'ready' }, 'dispatcher');
+    this.failures.set(c.id, { status: 'ready', why: this.runner.refusal(c.id) ?? 'the work run did not start' });
+    return null;
+  }
+
+  /** Why a startable ready task did not start (#327), or null: it starts on the next tick. Stalls turn it into an Inbox item. */
+  notStarting(c: Card): string | null {
+    if (this.stopped) return 'the dispatcher is stopped (Atlas is stopping): no task starts until Atlas restarts';
+    const failed = this.failures.get(c.id);
+    if (failed?.status === c.status) return `could not start: ${failed.why}`;
+    if (this.tickError) return `the dispatcher fails: ${this.tickError}`;
+    return null;
   }
 
   /**
@@ -182,7 +255,7 @@ export class Dispatcher {
       return { state: 'failed', text: `its run ${last.status}${last.error ? `: ${last.error}` : ''}` };
     if (answer.seen && !this.runner.owesReply(cardId)) return { state: 'answered', text: answer.text };
     const c = this.kanban.get(cardId);
-    this.runner.wake(c.id, { kind: c.status === 'running' ? 'work' : 'chat', ...(answer.seen || !kick ? {} : { kick }) });
+    this.answerOn(c, answer.seen || !kick ? undefined : kick);
     return { state: 'busy', text: null };
   }
 
@@ -261,11 +334,23 @@ export class Dispatcher {
     return wrote || this.kanban.lastEventAt(cardId, 'retry') > last.startedAt ? null : (last.error ?? 'the last run failed');
   }
 
-  /** Another agent wrote on this card: its agent replies (or reads it at the next turn); no status change. */
+  /**
+   * Another agent wrote on this card: its agent replies (or reads it at the next turn). On a ready task it can start,
+   * the message starts the work (#327): a chat reply would do the task while the card stays in Ready.
+   */
   onAgentMessage(cardId: string): void {
     const c = this.kanban.get(cardId);
     if (c.status === 'triage') this.soon();
-    else this.runner.wake(c.id, { kind: c.status === 'running' ? 'work' : 'chat' });
+    else this.answerOn(c);
+  }
+
+  /** Wake the card's agent to answer: the work run on a running task, or on a ready one it can start now; else a chat run. */
+  private answerOn(c: Card, kick?: string): void {
+    if (c.status === 'ready' && !this.runner.current(c.id) && !this.startProblem(c)) {
+      this.guard(c, () => this.startWork(c, kick));
+      return;
+    }
+    this.runner.wake(c.id, { kind: c.status === 'running' ? 'work' : 'chat', ...(kick ? { kick } : {}) });
   }
 
   /** The model of the agent that would act on this card, if it is marked failed. */
@@ -356,12 +441,14 @@ export class Dispatcher {
         if (closed.length)
           return `parent ${closed.map(cardRef).join(', ')} was closed (cancelled), so this task can't start: remove it from the parents, reopen it, or close this task too`;
         if (open.length) return 'waiting on ' + open.map((p) => `${cardRef(p)} (${p.status})`).join(', ');
+        const failed = this.failures.get(c.id);
+        if (failed?.status === 'todo') return `could not move to ready: ${failed.why}`;
         return c.parents.length ? 'parents done, moving to ready…' : 'parked: move it to ready when it is time';
       }
       case 'ready': {
         const cur = this.runner.current(c.id);
         if (cur) return cur.kind === 'triage' ? 'finishing triage' : 'answering you first';
-        return this.startProblem(c) ?? 'starting…';
+        return this.startProblem(c) ?? this.notStarting(c) ?? 'starting…';
       }
       case 'blocked':
         return c.block?.kind === 'transient' && c.block.until ? `retrying at ${hhmm(c.block.until)}` : null;

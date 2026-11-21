@@ -109,6 +109,14 @@ describe('stuck tasks: the rules (#237)', () => {
     expect(detectStall(facts({ status: 'ready', statusSince: ago(31), assignee: null }))).toBe(null);
   });
 
+  it('Ready that the dispatcher tried and failed to start: 2 min, with its reason (#327)', () => {
+    const notStarting = 'could not start: the last run on this task has not let go of it yet';
+    expect(detectStall(facts({ status: 'ready', statusSince: ago(1) }, { notStarting }))).toBe(null);
+    expect(detectStall(facts({ status: 'ready', statusSince: ago(3) }, { notStarting }))).toMatchObject({ rule: 'ready', reason: notStarting, action: 'restart', since: ago(3) });
+    // Busy is not stuck, whatever happened before.
+    expect(detectStall(facts({ status: 'ready', statusSince: ago(3) }, { notStarting, startProblem: '@munih is busy with #2' }))).toBe(null);
+  });
+
   it('Todo whose parents are all done or closed: 10 min', () => {
     const p2 = card({ id: 'c_2', number: 2, status: 'done', statusSince: ago(30) });
     const p3 = card({ id: 'c_3', number: 3, status: 'done', statusSince: ago(5) });
