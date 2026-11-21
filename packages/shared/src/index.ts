@@ -1520,6 +1520,11 @@ export interface LocalStatus {
   /** One-click install is possible (Homebrew on macOS). */
   canInstall: boolean;
   installing: boolean;
+  /** One-click update is possible: the binary is Homebrew's (#326). Otherwise the UI links to ollama.com/download. */
+  canUpdate: boolean;
+  updating: boolean;
+  /** A newer version Homebrew knows about (checked when the page opens, no polling), or null. */
+  latest: string | null;
   /** Last problem (crash, failed start, failed install), cleared by the next success. */
   error: string | null;
   /** This machine's memory, to say whether a model fits. */
@@ -1548,6 +1553,8 @@ export interface LocalPull {
   total: number;
   done: boolean;
   error: string | null;
+  /** The model needs a newer Ollama (HTTP 412): updating retries the download (#326). */
+  needsUpdate: boolean;
 }
 
 export const UpdateLocal = z

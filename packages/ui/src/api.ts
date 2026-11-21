@@ -217,7 +217,9 @@ export const api = {
   deleteAccount: (id: string) => call<void>('DELETE', `/accounts/${id}`),
   testAccount: (id: string) => call<{ ok: boolean; error: string | null }>('POST', `/accounts/${id}/test`),
   // ── Local model server ────────────────────────────────────────────
-  local: () => call<LocalStatus>('GET', '/local'),
+  /** check: also ask Homebrew for a newer Ollama (when the page opens, #326). */
+  local: (check = false) => call<LocalStatus>('GET', '/local' + (check ? '?check=1' : '')),
+  upgradeLocal: () => call<LocalStatus>('POST', '/local/update'),
   updateLocal: (patch: UpdateLocal) => call<LocalStatus>('PATCH', '/local', patch),
   startLocal: () => call<LocalStatus>('POST', '/local/start'),
   stopLocal: () => call<LocalStatus>('POST', '/local/stop'),
