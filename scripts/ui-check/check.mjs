@@ -1209,28 +1209,42 @@ const ocr = new Map(
     .map((o) => [o.file, o]),
 );
 // Vision on a whole page sometimes drops a line it reads at once on its own (« Available to add » level with a nav item
-// of the next column, #308). A label it found nothing at all for gets a second read: the label's box alone (+24 px).
+// of the next column, #308). A label it found nothing at all for gets another read of the label's box alone, with a
+// margin of 24 px. Vision also drops a line from one crop and reads it from the next (#328: in one sandbox the page and
+// the 24 px crop gave nothing for a description, 0 / 8 / 60 px gave the whole line, same PNG), so a label still empty
+// is read again with other margins. Text that is truly unreadable stays empty after every margin and still fails.
 const sharp = (await import('sharp')).default;
-const missed = [];
-for (const { key, file } of shots) {
-  const { lines, w, h } = ocr.get(file);
-  const scale = w / Number(key.split(' ')[0]);
-  for (const [i, k] of report[key].keys.entries()) {
-    const box = { l: k.x * scale - 4, t: k.y * scale - 4, r: (k.x + k.w) * scale + 4, b: (k.y + k.h) * scale + 4 };
-    if (lines.some((o) => o.y + o.h / 2 >= box.t && o.y + o.h / 2 <= box.b && o.x < box.r && o.x + o.w > box.l)) continue;
-    const left = Math.max(0, Math.floor(box.l - 24)), top = Math.max(0, Math.floor(box.t - 24));
-    const width = Math.min(w, Math.ceil(box.r + 24)) - left, height = Math.min(h, Math.ceil(box.b + 24)) - top;
-    if (width < 8 || height < 8) continue;
-    const crop = join(OUT, `ocr-crop-${missed.length}.png`);
-    await sharp(file).extract({ left, top, width, height }).toFile(crop);
-    missed.push({ key, i, crop, left, top });
+const MARGINS = [24, 8, 0, 60];
+const boxOf = (k, scale) => ({ l: k.x * scale - 4, t: k.y * scale - 4, r: (k.x + k.w) * scale + 4, b: (k.y + k.h) * scale + 4 });
+const inBox = (o, box) => o.y + o.h / 2 >= box.t && o.y + o.h / 2 <= box.b && o.x < box.r && o.x + o.w > box.l;
+let cropN = 0;
+for (const margin of MARGINS) {
+  const missed = [];
+  for (const { key, file } of shots) {
+    const { lines, w, h } = ocr.get(file);
+    const scale = w / Number(key.split(' ')[0]);
+    for (const k of report[key].keys) {
+      const box = boxOf(k, scale);
+      if (lines.some((o) => inBox(o, box))) continue;
+      const left = Math.max(0, Math.floor(box.l - margin)), top = Math.max(0, Math.floor(box.t - margin));
+      const width = Math.min(w, Math.ceil(box.r + margin)) - left, height = Math.min(h, Math.ceil(box.b + margin)) - top;
+      if (width < 8 || height < 8) continue;
+      const crop = join(OUT, `ocr-crop-${cropN++}.png`);
+      await sharp(file).extract({ left, top, width, height }).toFile(crop);
+      missed.push({ key, box, crop, left, top });
+    }
   }
-}
-const recrop = new Map(missed.length ? runOcr(missed.map((m) => m.crop)).trim().split('\n').map((l) => JSON.parse(l)).map((o) => [o.file, o.lines]) : []);
-for (const m of missed) {
-  const { lines } = ocr.get(shots.find((s) => s.key === m.key).file);
-  for (const o of recrop.get(m.crop) ?? []) lines.push({ ...o, x: o.x + m.left, y: o.y + m.top });
-  rmSync(m.crop, { force: true });
+  if (!missed.length) break;
+  const recrop = new Map(runOcr(missed.map((m) => m.crop)).trim().split('\n').map((l) => JSON.parse(l)).map((o) => [o.file, o.lines]));
+  for (const m of missed) {
+    const { lines } = ocr.get(shots.find((s) => s.key === m.key).file);
+    // Only what the crop read inside the label's own box: the rest of a wide margin is its neighbours, read already.
+    for (const o of recrop.get(m.crop) ?? []) {
+      const l = { ...o, x: o.x + m.left, y: o.y + m.top };
+      if (inBox(l, m.box)) lines.push(l);
+    }
+    rmSync(m.crop, { force: true });
+  }
 }
 for (const { key, file } of shots) {
   const { lines, w } = ocr.get(file);
