@@ -373,49 +373,6 @@ describe('artifacts (#120)', () => {
     expect(docs.search('zzz')).toEqual([]);
     expect(docs.search('  ')).toEqual([]);
   });
-
-  it('converts each archived canvas once to an html page in the Canvases folder, keeping its date', async () => {
-    const { docs, engine, ws } = await setup();
-    const db = engine.db;
-    db.prepare("INSERT INTO canvases (id, name, nodes, version, updated_by, updated_at) VALUES ('cv_1', 'Old board', ?, 3, 'atlas', '2026-11-01T10:00:00.000Z')").run(
-      JSON.stringify([
-        { id: 'b', kind: 'html', x: 0, y: 500, w: 400, h: 300, title: 'Mock', html: '<b>hi</b>' },
-        { id: 'a', kind: 'markdown', x: 0, y: 0, w: 400, h: 300, title: 'Notes', text: '# Notes <x>' },
-        { id: 'c', kind: 'url', x: 500, y: 500, w: 400, h: 300, url: '/api/files/atlas/pages/x.html' },
-      ]),
-    );
-    expect(docs.convertCanvases()).toBe(1);
-    expect(docs.convertCanvases()).toBe(0);
-    const d = docs.byPath('atlas', 'pages/canvases/old-board.html')!;
-    expect(d).toMatchObject({ kind: 'html', title: 'Old board', updatedAt: '2026-11-01T10:00:00.000Z', fromCanvas: 'cv_1' });
-    expect(docs.folder(d.folderId!).name).toBe('Canvases');
-    const html = readFileSync(join(ws, d.path), 'utf8');
-    expect(html.indexOf('Notes')).toBeLessThan(html.indexOf('Mock'));
-    expect(html).toContain('# Notes &lt;x&gt;');
-    expect(html).toContain('srcdoc="&lt;b&gt;hi&lt;/b&gt;"');
-    expect(html).toContain('src="/api/files/atlas/pages/x.html"');
-  });
-
-  it('converts a canvas once: its page deleted from the Library is not back after a restart (#253)', async () => {
-    const dataDir = mkdtempSync(join(tmpdir(), 'atlas-docs-'));
-    const dbFile = join(dataDir, 'atlas.db');
-    const start = async () => {
-      const e = await startEngine({ dbFile, dataDir, port: 0, dispatch: false, providers: () => new FakeProvider([]), env: {}, memoryReview: false });
-      engines.push(e);
-      return e;
-    };
-    const first = await start();
-    first.db.prepare("INSERT INTO canvases (id, name, nodes, version, updated_by, updated_at) VALUES ('cv_1', 'Old board', '[]', 1, 'atlas', '2026-11-01T10:00:00.000Z')").run();
-    expect(first.documents.convertCanvases()).toBe(1);
-    const page = first.documents.byPath('atlas', 'pages/canvases/old-board.html')!;
-    first.documents.remove(page.id);
-    expect(first.documents.convertCanvases()).toBe(0);
-    await first.stop();
-    const second = await start(); // the start converts what is left (index.ts): nothing
-    expect(second.db.prepare("SELECT count(*) AS n FROM documents WHERE from_canvas = 'cv_1'").get()).toEqual({ n: 0 });
-    expect(existsSync(join(dataDir, 'workspaces', 'atlas', page.path))).toBe(false);
-    expect(second.db.prepare("SELECT converted_at IS NOT NULL AS done FROM canvases WHERE id = 'cv_1'").get()).toEqual({ done: 1 });
-  });
 });
 
 describe('deleting an artifact (#242)', () => {

@@ -800,8 +800,9 @@ the diagram « Secrets in Atlas: flow » and the mockup « Settings → Secrets 
   `artifact_read`, `panel_open`. A created or updated artifact shows in the chat as a card that stays on its version.
 - Library folders are flat (`folders`, `documents.folder_id`; null = Unfiled). Pinned artifacts stay on top in their
   folder. Deleting a folder moves its artifacts to Unfiled. Search covers titles and content across folders.
-- Migration 0041 deleted whiteboard documents; the `canvases` table stays as an archive. At startup each archived
-  canvas is converted once to `pages/canvases/<slug>.html` in the « Canvases » folder (`documents.from_canvas`).
+- Migration 0041 deleted whiteboard documents; the `canvases` table stays as an archive. Each archived canvas was
+  converted once to `pages/canvases/<slug>.html` in the « Canvases » folder (`documents.from_canvas`); that start-up
+  conversion was removed in #342, its pages stay ordinary html artifacts. Old chats' `canvas_*` steps show as plain rows.
 
 ## 12. UI and API
 - Screens: **Chat** (agent list + conversation, streaming, tool calls collapsible), **Board** (columns, card detail with
@@ -820,7 +821,7 @@ the diagram « Secrets in Atlas: flow » and the mockup « Settings → Secrets 
     `GET/PATCH /api/voice`, settings keys `voice_*`) · **About & data**
     (`about`: version, desktop or server, data folder, from `GET /api/about`).
   Old hashes are rewritten in place: `#/agents` → agents, `#/models` and `#/settings/models` → subscriptions,
-  `#/settings/canvas` → appearance, unknown → agents (`packages/ui/src/settingsPages.ts`). Engine error messages
+  unknown → agents (`packages/ui/src/settingsPages.ts`). Engine error messages
   point to « Settings → <page> ».
 - Side panel beside a direct chat (documents in tabs, §16 « Side panel »); `#/library/<id>` shows one document in the Library viewer (old `#/doc/<id>` and `#/canvas/<id>` links redirect there).
   Documents API: `GET /api/documents[?card=]`, `GET /api/documents/:id[?version=]`, `GET …/:id/versions`,

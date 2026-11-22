@@ -6,7 +6,7 @@ const NOW = Date.parse('2026-11-13T12:00:00Z');
 const ago = (h: number) => new Date(NOW - h * 3600_000).toISOString();
 const doc = (id: string, patch: Partial<Doc> = {}): Doc => ({
   id, agentId: 'atlas', path: `docs/${id}.md`, kind: 'markdown', title: id, cardId: null, version: 1,
-  updatedBy: 'atlas', updatedAt: ago(1), pinned: false, folderId: null, chatId: null, fromCanvas: null, projectId: 'atlas', filesRoot: 'atlas', ...patch,
+  updatedBy: 'atlas', updatedAt: ago(1), pinned: false, folderId: null, chatId: null, projectId: 'atlas', filesRoot: 'atlas', ...patch,
 });
 
 describe('library view', () => {

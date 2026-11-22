@@ -35,9 +35,6 @@ export const settingsLabel = (p: string) => (SETTINGS_PAGES.find((x) => x.id ===
 const MODEL_PAGES: SettingsPage[] = ['model-list', 'subscriptions', 'api-keys', 'local'];
 const modelPageOf = (rest: string | undefined): SettingsPage => MODEL_PAGES.find((p) => p === rest) ?? 'subscriptions';
 
-/** Hashes from before a restructure → their page (#/settings/canvas → appearance). */
-const LEGACY: Record<string, SettingsPage> = { canvas: 'appearance' };
-
 /**
  * The settings page a hash points to, or null when it isn't a settings hash. `view` and `id` are the hash's first two
  * segments (#/view/id). An unknown or missing page opens Agents.
@@ -47,7 +44,7 @@ export function settingsPageOf(view: string | undefined, id: string | undefined)
   if (view === 'models') return 'subscriptions';
   if (view !== 'settings') return null;
   const known = SETTINGS_PAGES.find((p) => p.id === id);
-  return known ? known.id : id === 'models' ? 'subscriptions' : (LEGACY[id ?? ''] ?? 'agents');
+  return known ? known.id : id === 'models' ? 'subscriptions' : 'agents';
 }
 
 export type SettingsRoute = {

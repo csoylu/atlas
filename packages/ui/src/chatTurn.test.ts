@@ -19,15 +19,12 @@ const ok = (content: string): ToolOutcome => ({ content, isError: false });
 const kinds = (s: Segment[]) => s.map((x) => (x.kind === 'group' ? `group(${x.steps.length})` : x.kind === 'pin' ? `pin:${x.pin}` : x.kind));
 
 describe('groupTurn', () => {
-  it('pins an old canvas_* call as the artifact chip of its converted page, else keeps the plain row (#174)', () => {
-    const page = { docId: 'doc_p', version: 1, title: 'Board', where: 'pages/canvases/board.html', kind: 'html' as const, section: null, updated: false };
-    const canvasPage = (id: string) => (id === 'cv_conv' ? page : undefined);
-    const ms = [msg([use('a', 'canvas_write', { id: 'cv_conv' }), use('b', 'canvas_write', { id: 'cv_gone' }), use('c', 'canvas_read', { id: 'cv_gone' })])];
-    const res = new Map([['a', ok('canvas cv_conv is now v2 with 1 node')], ['b', ok('canvas cv_gone is now v3 with 1 node')], ['c', ok('{}')]]);
-    const segs = groupTurn(ms, res, { live: false, canvasPage });
-    expect(kinds(segs)).toEqual(['pin:doc', 'group(2)']);
-    expect(stepArtifact((segs[0] as Extract<Segment, { kind: 'pin' }>).step, canvasPage)).toEqual(page);
-    expect(kinds(groupTurn(ms, res, { live: false }))).toEqual(['group(3)']);
+  it('keeps old canvas_* calls and an old panel_open({ canvas }) as plain steps, never an artifact chip (#342)', () => {
+    const ms = [msg([use('a', 'canvas_write', { id: 'cv_1' }), use('b', 'canvas_read', { id: 'cv_1' }), use('c', 'panel_open', { canvas: 'cv_1' })])];
+    const res = new Map([['a', ok('canvas cv_1 is now v2 with 1 node')], ['b', ok('{}')], ['c', ok('opened canvas')]]);
+    const segs = groupTurn(ms, res, { live: false });
+    expect(kinds(segs)).toEqual(['group(3)']);
+    for (const step of (segs[0] as Extract<Segment, { kind: 'group' }>).steps) expect(stepArtifact(step)).toBeNull();
   });
 
   it('folds 2+ calls in a row into a group; text breaks it; a single call stays a row', () => {

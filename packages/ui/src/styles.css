@@ -1173,8 +1173,6 @@ button.artifact:hover .art-open { color: var(--accent); }
 }
 .chat-history-menu button:hover, .chat-history-menu button:focus-visible { background: var(--hover); }
 
-/* Canvas nodes an agent showed inline in a chat (view only): click to grow, drag to pan, ctrl/⌘+wheel to zoom. */
-
 /* ── Plan subscriptions: quota bars (Models page) and the composer gauge ── */
 .quotas { display: grid; gap: 6px; margin-top: 8px; max-width: 460px; }
 .quota-head { display: flex; justify-content: space-between; font-size: var(--fs-small); color: var(--muted); }

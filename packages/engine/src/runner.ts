@@ -752,7 +752,7 @@ export class Runner {
               },
             };
             const invalid = invalids[i];
-            // Card, canvas and team tools run synchronously: what the tables gained in between is theirs (#138).
+            // Card and team tools run synchronously: what the tables gained in between is theirs (#138).
             const mark = this.opts.effects && !invalid && !isSecretTool(u.name) ? this.opts.effects.mark() : null;
             if (invalid) r = { output: invalid, isError: true };
             else if (isCardTool(u.name)) {

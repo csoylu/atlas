@@ -1,9 +1,9 @@
 import { createContext, useContext, useEffect, useMemo, useState, type ReactNode } from 'react';
 import { KIND_WORD, type Message, type ToolCallTiming, type parseDocRef } from '@atlas/shared';
-import { useArtifactState, useCanvasPages } from './artifacts.ts';
+import { useArtifactState } from './artifacts.ts';
 import { ChatRow, PathObject, RowIconSvg, RowMeta } from './ChatRow.tsx';
 import { isDangerous, todoList, type Artifact } from './cardModal.ts';
-import { endedOnFailure, groupSummary, groupTurn, stepArtifact, type CanvasPage, type Segment, type Step } from './chatTurn.ts';
+import { endedOnFailure, groupSummary, groupTurn, stepArtifact, type Segment, type Step } from './chatTurn.ts';
 import { CardRefLink, cardDetail, type DetailContext, type TurnCards } from './CardStepDetail.tsx';
 import { teamDetail } from './TeamStepDetail.tsx';
 import { fileDetail, isLiveShell } from './FileStepDetail.tsx';
@@ -36,15 +36,14 @@ export function Turn(props: {
   cardId?: string;
 }) {
   const ctx = useMemo(() => ({ renderText: props.renderText, cards: props.cards, cardId: props.cardId }), [props.renderText, props.cards, props.cardId]);
-  const canvasPage = useCanvasPages();
-  const segments = groupTurn(props.messages, props.results, { live: props.live, details: (id) => props.timings.get(id)?.detail, canvasPage });
+  const segments = groupTurn(props.messages, props.results, { live: props.live, details: (id) => props.timings.get(id)?.detail });
   const failedEnd = props.last && !props.live ? endedOnFailure(segments) : null;
   const now = useNow(props.live);
   const at = props.messages[0]?.at;
   return (
     <TurnContext.Provider value={ctx}>
       {segments.map((s) => (
-        <SegmentView key={keyOf(s)} s={s} {...props} now={now} at={at} failedEnd={failedEnd} canvasPage={canvasPage} />
+        <SegmentView key={keyOf(s)} s={s} {...props} now={now} at={at} failedEnd={failedEnd} />
       ))}
     </TurnContext.Provider>
   );
@@ -55,7 +54,7 @@ export const TurnContext = createContext<DetailContext>({ renderText: (t) => t }
 
 const keyOf = (s: Segment) => (s.kind === 'text' || s.kind === 'group' ? s.key : s.step.id);
 
-function SegmentView(p: Parameters<typeof Turn>[0] & { s: Segment; now: number; at?: string; failedEnd: Step | null; canvasPage: CanvasPage }) {
+function SegmentView(p: Parameters<typeof Turn>[0] & { s: Segment; now: number; at?: string; failedEnd: Step | null }) {
   const { s } = p;
   if (s.kind === 'text') return <>{p.renderText(s.text, s.key)}</>;
   if (s.kind === 'group') return <StepsGroup steps={s.steps} timings={p.timings} now={p.now} at={s.steps[0]!.at} failedEnd={p.failedEnd} />;
@@ -64,7 +63,7 @@ function SegmentView(p: Parameters<typeof Turn>[0] & { s: Segment; now: number; 
   if (s.kind === 'step') return row;
   if (s.pin === 'doc') {
     // The artifact card alone (mockup #106): it says the kind, the version and « Updated to vN ».
-    const art = stepArtifact(s.step, p.canvasPage);
+    const art = stepArtifact(s.step);
     return art ? <ArtifactChip art={art} stream={p.stream} onOpen={p.onOpenArtifact} /> : row;
   }
   return row;
