@@ -20,6 +20,7 @@ import { join, dirname, extname } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { SPEC_AUDIT, FONT_SCALE, FONT_EXCEPTIONS, MIN_CONTRAST } from './spec-audit.mjs';
 import { findBrowser, browserArgs, freePort, startThrowawayEngine } from './tooling.mjs';
+import { boxOf, inBox, labelRead } from './ocrmatch.mjs';
 
 const HERE = dirname(fileURLToPath(import.meta.url));
 const arg = (name, def) => {
@@ -38,7 +39,6 @@ const THEME = arg('theme');
 // --spec: also audit the #112 visual pass from computed styles (font scale, contrast, measures, faces, chips).
 const SPEC = process.argv.includes('--spec');
 const MIN_FONT = 13; // CLAUDE.md « UI type rules »: no text under 13 px (#112)
-const MIN_CONF = 0.5;
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 
 // ── Engine: a throwaway one (default), or the one on --port ──
@@ -1143,22 +1143,6 @@ const KEYS = (selectors) => `((sels) => {${VISIBLE_RECT}
 const OCR_SRC = join(HERE, 'ocr.swift');
 const OCR_BIN = join(tmpdir(), 'atlas-ui-check-ocr');
 if (!existsSync(OCR_BIN) || statSync(OCR_BIN).mtimeMs < statSync(OCR_SRC).mtimeMs) execFileSync('swiftc', ['-O', '-o', OCR_BIN, OCR_SRC], { stdio: 'inherit' });
-// Vision sometimes answers with Cyrillic / Greek look-alikes (« Аpp »): fold them to Latin before comparing.
-const LOOKALIKE = { а: 'a', в: 'b', е: 'e', к: 'k', м: 'm', н: 'h', о: 'o', р: 'p', с: 'c', т: 't', у: 'y', х: 'x', і: 'i', α: 'a', ο: 'o', ν: 'v', ρ: 'p', τ: 't', ι: 'i', κ: 'k' };
-// In Inter a capital I and a lowercase l are the same glyph, so OCR reads either: compare them as one letter.
-// OCR also reads a lowercase i as a capital I (« Links » → « LInks », a tab at 900 px, #225), so i, I and l count as one
-// letter. A narrow tolerance: only these three letters, only when comparing; every other letter must match.
-const norm = (s) => s.toLowerCase().normalize('NFKD').replace(/./g, (c) => LOOKALIKE[c] ?? c).replace(/[il]/g, 'l').replace(/[^a-z0-9]/g, '');
-/** Smallest edit distance between `p` and any substring of `t` (approximate substring match). */
-function fuzzy(p, t) {
-  let prev = new Array(t.length + 1).fill(0);
-  for (let i = 1; i <= p.length; i++) {
-    const cur = [i];
-    for (let j = 1; j <= t.length; j++) cur[j] = Math.min(prev[j] + 1, cur[j - 1] + 1, prev[j - 1] + (p[i - 1] === t[j - 1] ? 0 : 1));
-    prev = cur;
-  }
-  return Math.min(...prev);
-}
 
 // ── Run ──
 mkdirSync(OUT, { recursive: true });
@@ -1224,14 +1208,15 @@ const ocr = new Map(
     .map((o) => [o.file, o]),
 );
 // Vision on a whole page sometimes drops a line it reads at once on its own (« Available to add » level with a nav item
-// of the next column, #308). A label it found nothing at all for gets another read of the label's box alone, with a
+// of the next column, #308). A label whose text it did not read gets another read of the label's box alone, with a
 // margin of 24 px. Vision also drops a line from one crop and reads it from the next (#328: in one sandbox the page and
-// the 24 px crop gave nothing for a description, 0 / 8 / 60 px gave the whole line, same PNG), so a label still empty
-// is read again with other margins. Text that is truly unreadable stays empty after every margin and still fails.
+// the 24 px crop gave nothing for a description, 0 / 8 / 60 px gave the whole line, same PNG), so a label still unread
+// is read again with other margins. « Unread » is a label whose text is not in what Vision read in its box (`labelRead`),
+// not a box with no line in it (#343: at 1100 px Vision dropped the text of a row and read only its chevron or its
+// time, so the box was not empty and the label was never retried). Text that is truly unreadable stays unread after
+// every margin and still fails.
 const sharp = (await import('sharp')).default;
 const MARGINS = [24, 8, 0, 60];
-const boxOf = (k, scale) => ({ l: k.x * scale - 4, t: k.y * scale - 4, r: (k.x + k.w) * scale + 4, b: (k.y + k.h) * scale + 4 });
-const inBox = (o, box) => o.y + o.h / 2 >= box.t && o.y + o.h / 2 <= box.b && o.x < box.r && o.x + o.w > box.l;
 let cropN = 0;
 for (const margin of MARGINS) {
   const missed = [];
@@ -1240,7 +1225,7 @@ for (const margin of MARGINS) {
     const scale = w / Number(key.split(' ')[0]);
     for (const k of report[key].keys) {
       const box = boxOf(k, scale);
-      if (lines.some((o) => inBox(o, box))) continue;
+      if (labelRead(k, lines, scale).ok) continue;
       const left = Math.max(0, Math.floor(box.l - margin)), top = Math.max(0, Math.floor(box.t - margin));
       const width = Math.min(w, Math.ceil(box.r + margin)) - left, height = Math.min(h, Math.ceil(box.b + margin)) - top;
       if (width < 8 || height < 8) continue;
@@ -1265,19 +1250,10 @@ for (const { key, file } of shots) {
   const { lines, w } = ocr.get(file);
   const scale = w / Number(key.split(' ')[0]);
   for (const k of report[key].keys) {
-    const box = { l: k.x * scale - 4, t: k.y * scale - 4, r: (k.x + k.w) * scale + 4, b: (k.y + k.h) * scale + 4 };
-    const hit = lines.filter((o) => {
-      const cy = o.y + o.h / 2;
-      return cy >= box.t && cy <= box.b && o.x < box.r && o.x + o.w > box.l;
-    });
-    const read = hit.map((o) => o.text).join(' ');
-    const want = norm(k.text).slice(0, Math.min(12, Math.floor(norm(k.text).length * Math.min(1, k.shown)) - 1));
-    if (want.length < 2) continue; // icons, single glyphs
-    const conf = hit.length ? Math.max(...hit.map((o) => o.conf)) : 0;
-    const dist = fuzzy(want, norm(read));
+    const { skip, read, conf, ok } = labelRead(k, lines, scale);
+    if (skip) continue; // icons, single glyphs
     k.ocr = { read, conf: +conf.toFixed(2) };
-    if (dist > Math.floor(want.length / 5) || conf < MIN_CONF)
-      report[key].issues.push(`OCR can't read "${k.text.slice(0, 40)}" (${k.sel}): read "${read.slice(0, 40)}" conf ${conf.toFixed(2)}`);
+    if (!ok) report[key].issues.push(`OCR can't read "${k.text.slice(0, 40)}" (${k.sel}): read "${read.slice(0, 40)}" conf ${conf.toFixed(2)}`);
   }
 }
 

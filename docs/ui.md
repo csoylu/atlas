@@ -85,7 +85,7 @@ fails after 15 s naming what never appeared, and returns page errors + refused w
 - `ui-check` tests the built UI (`npm run build` first: a stale `packages/ui/dist` gives false errors) and needs
   `npm ci` once in the clone ("Cannot find package 'sharp'" otherwise). Several runs at once give false failures
   (layout width, "never showed .settings"): rerun the failing screens alone with `--only` and `--widths` (the machine is
-  busy; the sandbox cannot show who else runs one, see « One ui-check at a time »). A label Vision finds nothing for on the page is read again on crops of its box with margins of 24, 8, 0 and 60 px (#328: Vision sometimes drops a line from one crop and reads it from the next); only a label empty after all four fails. The OCR reading "All" as "AIl" or "Links" as "LInks" is a known quirk: the
+  busy; the sandbox cannot show who else runs one, see « One ui-check at a time »). A label whose text Vision did not read on the page (nothing in its box, or only its neighbours: a row's chevron or time, #343) is read again on crops of its box with margins of 24, 8, 0 and 60 px (#328: Vision sometimes drops a line from one crop and reads it from the next); only a label still unread after all four fails. The matching is `scripts/ui-check/ocrmatch.mjs` (tested). The OCR reading "All" as "AIl" or "Links" as "LInks" is a known quirk: the
   comparison folds `i`, `I` and `l` into one letter (nothing else is forgiven).
 - An HTML mockup in the side panel gets the panel's width, so a page with a 640 px breakpoint shows its phone layout
   there: judge the desktop layout full size (`/api/files/<agent>/pages/<file>.html`).
