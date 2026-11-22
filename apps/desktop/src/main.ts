@@ -8,6 +8,7 @@ import { nativeHoldKey } from './optionkey.ts';
 import { AtlasTray } from './tray/tray.ts';
 import { ElectronBrowser } from './browser.ts';
 import { dockBadge, type TrayAction, type TrayInput } from './tray/model.ts';
+import { closeForQuit, openDecision, type WindowState } from './window.ts';
 
 /**
  * Atlas desktop. Default: runs the engine in this process (design §2) with data in the app's user-data folder, and
@@ -71,7 +72,7 @@ function updateHost(): { host: UpdateHost | null; cannotInstall?: string } {
 
 let engine: Engine | undefined;
 let quitting = false;
-/** A quit is waiting for the main window to close; cleared if Master cancels at the unsaved-drawing prompt. */
+/** A quit is waiting for the main window to close; cleared when the page refuses to unload (unsaved edits, #340). */
 let quitPending = false;
 /** The Atlas window (the voice orb is a second, always-present window: never count it as « the » window). */
 let mainWindow: BrowserWindow | null = null;
@@ -121,13 +122,25 @@ async function start() {
   startTray(engine);
 }
 
-/** Atlas in front, on `hash` if given (#/inbox/<card>: that card's question or review; #/board?card=<id>: its ticket). */
-function showAtlas(e: Engine, hash?: string) {
-  const win = mainWindow;
-  if (!win) createWindow(hash ? `${e.url}/${hash}` : e.url);
+function windowState(win: BrowserWindow | null): WindowState {
+  if (!win || win.isDestroyed()) return 'none';
+  if (win.isMinimized()) return 'minimized';
+  return win.isVisible() ? 'visible' : 'hidden';
+}
+
+/**
+ * Atlas in front, on `hash` if given (#/inbox/<card>: that card's question or review; #/board?card=<id>: its ticket).
+ * Every door goes through here (#340): the Dock icon, the tray, a second launch. The rule is `openDecision` (window.ts).
+ */
+function showAtlas(door: string, hash?: string) {
+  const base = engine?.url ?? DEV_UI;
+  const d = openDecision({ window: windowState(mainWindow), quit: { pending: quitPending, stopping: quitting }, ready: !!base });
+  voiceLog(voiceLogFile(), `window ${door}: ${d.action === 'none' ? `nothing (${d.why})` : d.action}`);
+  if (d.action === 'none') return;
+  if (d.action === 'create') createWindow(hash ? `${base}/${hash}` : base!);
   else {
-    if (win.isMinimized()) win.restore();
-    if (hash) void win.webContents.executeJavaScript(`location.hash = ${JSON.stringify(hash)}`);
+    if (d.restore) mainWindow!.restore();
+    if (hash) void mainWindow!.webContents.executeJavaScript(`location.hash = ${JSON.stringify(hash)}`);
   }
   mainWindow?.show();
   mainWindow?.focus();
@@ -149,9 +162,9 @@ function startTray(e: Engine) {
     try {
       switch (a.type) {
         case 'open':
-          return showAtlas(e);
+          return showAtlas('tray');
         case 'go':
-          return showAtlas(e, a.hash);
+          return showAtlas('tray', a.hash);
         case 'talk':
           if (!talk) throw new Error('voice mode is not running: turn it on (and wait until it says Ready) first');
           return talk.talk();
@@ -238,23 +251,15 @@ function followVoice(e: Engine, voice: NonNullable<Engine['voice']>) {
 // One app per data folder: two engines on one database would fight over runs.
 if (!app.requestSingleInstanceLock()) app.quit();
 else {
-  app.on('second-instance', () => {
-    const win = mainWindow;
-    if (win) {
-      if (win.isMinimized()) win.restore();
-      win.focus();
-    }
-  });
+  // Atlas launched again (Finder, Spotlight): this one comes to the front, its window made again if closed (#340).
+  app.on('second-instance', () => showAtlas('second launch'));
   app.whenReady().then(start).catch((e: unknown) => {
     // Fail loudly (CLAUDE.md rule 3): a dialog, not a blank window.
     dialog.showErrorBox('Atlas could not start', e instanceof Error ? (e.stack ?? e.message) : String(e));
     app.exit(1);
   });
-  app.on('activate', () => {
-    // A click on the Dock icon while quitting must not open a window on an engine that is stopping (#324).
-    if (quitPending || quitting) return;
-    if (!mainWindow && (engine || DEV_UI)) createWindow(engine?.url ?? DEV_UI!);
-  });
+  // A click on the Dock icon: the tray's « Open Atlas » rule, nothing while quitting (#324, #340).
+  app.on('activate', () => showAtlas('dock'));
   app.on('window-all-closed', () => {
     if (process.platform !== 'darwin') app.quit();
   });
@@ -269,10 +274,16 @@ else {
       talk?.stop();
       engine!.stop().finally(() => app.quit());
     };
+    if (quitPending) return; // already closing the window for a quit
     quitPending = true;
     const win = mainWindow;
     if (!win || win.isDestroyed()) return stopAll();
-    win.once('closed', stopAll);
-    win.close();
+    closeForQuit(win, {
+      closed: stopAll,
+      cancelled: () => {
+        quitPending = false;
+        voiceLog(voiceLogFile(), 'quit cancelled: the page refused to close (unsaved edits)');
+      },
+    });
   });
 }
