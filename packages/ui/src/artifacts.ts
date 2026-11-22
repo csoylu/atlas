@@ -3,7 +3,6 @@ import type { Doc, Folder } from '@atlas/shared';
 import { api, ApiError } from './api.ts';
 import type { MessageStream } from './useMessages.ts';
 import type { Artifact } from './cardModal.ts';
-import type { CanvasPage } from './chatTurn.ts';
 
 /**
  * Artifacts (#120): what the viewer, the chat card and the Library share. Pages and links run in an opaque-origin
@@ -76,13 +75,12 @@ export function useFolders(stream: MessageStream, onError: (e: unknown) => void)
 const latest = new Map<string, number>();
 const deletedIds = new Set<string>();
 let latestLoad: Promise<void> | null = null;
-/** One Library fetch for the latest versions and the converted canvases (a failed fetch is retried by the next user). */
+/** One Library fetch for the latest versions (a failed fetch is retried by the next user). */
 function loadLatest(): Promise<void> {
   latestLoad ??= api.documents(undefined, true).then(
     (ds) =>
       ds.forEach((d) => {
         latest.set(d.id, Math.max(d.version, latest.get(d.id) ?? 0));
-        noteCanvas(d);
       }),
     (e: unknown) => {
       latestLoad = null;
@@ -112,38 +110,6 @@ function probe(docId: string): Promise<void> {
   return p;
 }
 
-/** A converted canvas page as the chat's artifact chip (#174): its latest version, never « Updated to ». */
-export const canvasArtifact = (d: Pick<Doc, 'id' | 'title' | 'path' | 'kind' | 'version'>): Artifact => ({
-  docId: d.id,
-  version: d.version,
-  title: d.title,
-  where: d.path,
-  kind: d.kind,
-  section: null,
-  updated: false,
-});
-const canvasPages = new Map<string, Artifact>();
-const noteCanvas = (d: Doc) => void (d.fromCanvas && canvasPages.set(d.fromCanvas, canvasArtifact(d)));
-
-/**
- * Old chats' canvas_* rows (#174): cv_ id → the html page it was converted to (#120), from the same Library fetch.
- * Re-renders once the fetch lands.
- */
-export function useCanvasPages(): CanvasPage {
-  const [, setLoaded] = useState(latestLoad !== null && canvasPages.size > 0);
-  useEffect(() => {
-    let live = true;
-    loadLatest().then(
-      () => live && setLoaded(true),
-      (e: unknown) => console.error('Library fetch for canvas pages failed', e),
-    );
-    return () => {
-      live = false;
-    };
-  }, []);
-  return (id) => canvasPages.get(id);
-}
-
 /** A chat card's artifact, live: its latest version, and whether it was deleted (#242). */
 export interface ArtifactState {
   latest: number | null;
@@ -166,7 +132,6 @@ export function useArtifactState(docId: string, stream: MessageStream): Artifact
     const off = stream.listen('docs', (e) => {
       if (e.type === 'doc') {
         latest.set(e.doc.id, e.doc.version);
-        noteCanvas(e.doc);
         if (e.doc.id === docId) update();
       } else if (e.type === 'docDeleted') {
         noteDeleted(e.id);

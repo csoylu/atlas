@@ -4,7 +4,6 @@ import { dirname, join, relative, sep } from 'node:path';
 import { DOC_FOLDERS, KIND_FILE, docKindOf, docTitle, type Doc, type DocContent, type DocHit, type DocKind, type DocVersion, type Folder, type PanelTab, type BrowserTab } from '@atlas/shared';
 import type { Db } from './store/db.ts';
 import type { Bus } from './events.ts';
-import { canvasPage } from './canvasPage.ts';
 import { ConflictError, InvalidError, NotFoundError, type Kanban } from './kanban.ts';
 import { inside } from './tools.ts';
 import { assertActive, defaultProjectId, workspaceOf, workspacesOf } from './projects.ts';
@@ -30,7 +29,6 @@ interface Row {
   pinned_at: string | null;
   folder_id: string | null;
   name: string | null;
-  from_canvas: string | null;
   project_id: string;
   /** COALESCE(chat_id, the card's origin chat), from DOC_SELECT. */
   chat: string | null;
@@ -59,7 +57,6 @@ const toDoc = (r: Row): Doc => ({
   pinned: r.pinned_at !== null,
   folderId: r.folder_id,
   chatId: r.chat,
-  fromCanvas: r.from_canvas,
   projectId: r.project_id,
   filesRoot: r.files_root,
 });
@@ -378,54 +375,6 @@ export class Documents {
   resolve(agentId: string, ref: string, cardId: string | null = null): Doc {
     if (/^doc_[\w-]+$/.test(ref)) return this.get(ref);
     return this.byPath(agentId, ref, cardId) ?? this.indexFile(agentId, ref, agentId, cardId);
-  }
-
-  /**
-   * Canvases are gone (#120): each canvas still in the archive table becomes an html page in its author's workspace
-   * (pages/canvases/…, folder « Canvases »), once: canvases.converted_at marks it (#253), so a page deleted afterwards
-   * is not made again. Its date stays the canvas's, so the Library's recent list is not flooded. Returns how many.
-   */
-  convertCanvases(): number {
-    // converted_at, not the page's existence, says a canvas is done (#253): a converted page deleted from the Library
-    // stays deleted.
-    const todo = this.db
-      .prepare('SELECT id, name, nodes, updated_by, updated_at FROM canvases WHERE converted_at IS NULL ORDER BY updated_at')
-      .all() as { id: string; name: string; nodes: string; updated_by: string; updated_at: string }[];
-    if (!todo.length) return 0;
-    const agents = (this.db.prepare('SELECT id FROM agents ORDER BY rowid').all() as { id: string }[]).map((a) => a.id);
-    if (!agents.length) return 0;
-    const folder = this.folderNamed('Canvases') ?? this.createFolder('Canvases');
-    let n = 0;
-    for (const c of todo) {
-      const agentId = agents.includes(c.updated_by) ? c.updated_by : agents.includes('atlas') ? 'atlas' : agents[0]!;
-      const project = this.projectFor(null);
-      const root = this.root(agentId, project);
-      let nodes: unknown[] = [];
-      try {
-        nodes = JSON.parse(c.nodes) as unknown[];
-      } catch {
-        nodes = [];
-      }
-      const html = canvasPage(c.name, nodes as Parameters<typeof canvasPage>[1], c.updated_at);
-      let rel = `pages/canvases/${slug(c.name) || 'canvas'}.html`;
-      for (let i = 2; this.exists(root, rel); i++) rel = `pages/canvases/${slug(c.name) || 'canvas'}-${i}.html`;
-      const full = inside(root, rel);
-      mkdirSync(dirname(full), { recursive: true });
-      writeFileSync(full, html);
-      // The page's row and the marker commit together: a crash before leaves neither, and the next start converts it.
-      const doc = this.db
-        .transaction(() => {
-          const d = this.record(agentId, project, rel, html, stampOf(full).stamp, c.updated_by, null, c.name).doc;
-          this.db.prepare('UPDATE documents SET folder_id = ?, from_canvas = ?, updated_at = ? WHERE id = ?').run(folder.id, c.id, c.updated_at, d.id);
-          this.db.prepare('UPDATE document_versions SET updated_at = ? WHERE doc_id = ?').run(c.updated_at, d.id);
-          this.db.prepare('UPDATE canvases SET converted_at = ? WHERE id = ?').run(new Date().toISOString(), c.id);
-          return d;
-        })
-        .immediate();
-      this.emitDoc(doc.id);
-      n++;
-    }
-    return n;
   }
 
   /** The document of a file in the agent's workspace of `cardId`'s project (default project without a card), if indexed. */

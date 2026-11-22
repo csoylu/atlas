@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { canvasIdOf, commandCore, duration, splitPath, toolRow } from './toolRows.ts';
+import { commandCore, duration, splitPath, toolRow } from './toolRows.ts';
 
 const ok = (content: string) => ({ content, isError: false });
 const err = (content: string) => ({ content, isError: true });
@@ -144,20 +144,3 @@ describe('helpers', () => {
   });
 });
 
-describe('canvasIdOf (#174: old canvas_* rows link to the converted page)', () => {
-  const ok = (content: string) => ({ content, isError: false });
-  it('finds the canvas of a successful canvas_create, canvas_write, canvas_read or old panel_open', () => {
-    expect(canvasIdOf('canvas_create', { name: 'Board' }, ok('created cv_a0bd7384'))).toBe('cv_a0bd7384');
-    expect(canvasIdOf('canvas_write', { id: 'cv_b8f5fc78', show: ['a'] }, ok('canvas cv_b8f5fc78 is now v2 with 2 nodes'))).toBe('cv_b8f5fc78');
-    expect(canvasIdOf('canvas_read', { id: 'cv_1' }, ok('{"id":"cv_1"}'))).toBe('cv_1');
-    expect(canvasIdOf('panel_open', { canvas: 'cv_d2d9b68d' }, ok('opened canvas'))).toBe('cv_d2d9b68d');
-  });
-  it('none for a failure, a running call, canvas_list, a panel_open of a file, or another tool', () => {
-    expect(canvasIdOf('canvas_write', { id: 'cv_1' }, { content: 'no canvas cv_1', isError: true })).toBeNull();
-    expect(canvasIdOf('canvas_write', { id: 'cv_1' }, undefined)).toBeNull();
-    expect(canvasIdOf('canvas_create', { name: 'x' }, ok('weird output'))).toBeNull();
-    expect(canvasIdOf('canvas_list', {}, ok('cv_1 "a" v2'))).toBeNull();
-    expect(canvasIdOf('panel_open', { path: 'docs/a.md', canvas: '' }, ok('opened a.md'))).toBeNull();
-    expect(canvasIdOf('read_file', { id: 'cv_1' }, ok('x'))).toBeNull();
-  });
-});

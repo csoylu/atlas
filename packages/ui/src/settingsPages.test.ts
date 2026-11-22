@@ -23,9 +23,7 @@ describe('settings routes', () => {
     expect(settingsPageOf('models', undefined)).toBe('subscriptions');
     expect(settingsPageOf('settings', 'models')).toBe('subscriptions');
     expect(settingsPageOf('settings', 'board')).toBe('board');
-    expect(settingsPageOf('settings', 'canvas')).toBe('appearance');
     expect(settingsPageOf('settings', 'nope')).toBe('agents');
-    expect(settingsRoute('#/settings/canvas')).toEqual({ page: 'appearance', rest: '', path: '#/settings/appearance' });
     expect(settingsRoute('#/settings/nope')).toEqual({ page: 'agents', rest: '', path: '#/settings/agents' });
     expect(settingsRoute('#/agents')).toEqual({ page: 'agents', rest: '', path: '#/settings/agents' });
   });
@@ -45,7 +43,7 @@ describe('settings routes', () => {
   it('labels an unknown page as Agents instead of throwing', () => {
     expect(settingsLabel('local')).toBe('Local models');
     expect(settingsLabel('models')).toBe('Agents');
-    expect(settingsLabel('canvas')).toBe('Agents');
+    expect(settingsLabel('nope')).toBe('Agents');
   });
   it('opens a project page at #/settings/projects/<id> (#217) and an agent page at #/settings/agents/<id> (#272)', () => {
     expect(settingsRoute('#/settings/projects')).toEqual({ page: 'projects', rest: '', path: '#/settings/projects' });
@@ -55,7 +53,7 @@ describe('settings routes', () => {
   });
   it('leaves other views alone', () => {
     expect(settingsPageOf('board', undefined)).toBeNull();
-    expect(settingsPageOf('canvas', 'cv_1')).toBeNull();
+    expect(settingsPageOf('library', 'doc_1')).toBeNull();
     expect(settingsRoute('#/board')).toBeNull();
   });
   it('keeps a scope or memory id on Settings → Memory, and moves old Library memory links there (#87)', () => {

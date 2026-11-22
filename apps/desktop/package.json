@@ -17,7 +17,7 @@
     "electron-builder": "^26.18.0",
     "esbuild": "^0.28.2"
   },
-  "description": "Atlas: agents, kanban and canvas",
+  "description": "Atlas: agents, kanban and artifacts",
   "author": "Can Soylu",
   "version": "0.1.0",
   "license": "AGPL-3.0-only",

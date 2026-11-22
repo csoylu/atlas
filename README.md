@@ -1,7 +1,7 @@
 # Atlas
 
 An opinionated AI agent harness. A small team of agents works off a kanban board, on your own subscriptions and
-models, with a shared canvas and a voice assistant that runs on your machine.
+models, with shared artifacts and a voice assistant that runs on your machine.
 
 ## Why
 
@@ -21,10 +21,8 @@ settings. Agents work like a small team on a board you can see, and they keep go
   isn't starting, the card tells you why.
 - **Schedules.** Cron or one-shot, in your timezone, sending a prompt to any agent. If the engine was down when a
   schedule was due, it runs once at start.
-- **Canvas.** An infinite board you and the agents both edit live. It holds HTML mockups, running
-  apps (a dev server or a built `dist/`) and markdown notes.
-- **Documents.** Agents write specs, pages and diagrams (`.md`, `.html`, `.svg`) and open them in a side panel next
-  to the chat. Every change is versioned and can be restored. Everything ends up in the Library.
+- **Artifacts.** Agents write specs, pages, diagrams and links (`.md`, `.html`, `.svg`, `.url`) and open them in a
+  side panel next to the chat. Every change is versioned and can be restored. Everything ends up in the Library.
 - **Voice assistant (Mac app).** Say « Hi Atlas »: an orb appears, you talk, and the agent answers out loud while the
   caption types. Speech recognition (Whisper large-v3-turbo, English and Turkish) and the voice (Supertonic) run
   locally with sherpa-onnx. No cloud speech service and no per-minute cost.
@@ -32,8 +30,8 @@ settings. Agents work like a small team on a board you can see, and they keep go
   card, its memory and the project's `CLAUDE.md`/`AGENTS.md`. There are no prompt files to maintain. Long
   conversations are pruned and summarized near the context limit, but the full transcript is kept and agents can
   search it.
-- **Built-in tools.** Files, ripgrep, shell (including background processes), web fetch and search, cards, canvas,
-  schedules, memory and documents.
+- **Built-in tools.** Files, ripgrep, shell (including background processes), web fetch and search, cards,
+  schedules, memory and artifacts.
 - **Usage.** Tokens per model and per day, plus a context gauge and your subscription quota next to the composer.
 - **Light and crash-safe.** One Node process and one SQLite database (WAL), with no other state store. Every state
   change is a transaction. If you kill it at any moment and restart, every run resumes where it stopped, and an

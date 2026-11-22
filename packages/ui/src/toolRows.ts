@@ -21,7 +21,7 @@ export type Meta = { text: string } | { pill: 'ok' | 'bad' | 'warn'; text: strin
 
 /** How the row expands. Generic (input JSON + output) until the family cards (#62–#66) fill in the others. */
 export type DetailKind =
-  | 'generic' | 'code' | 'diff' | 'terminal' | 'matches' | 'files' | 'card' | 'quote' | 'board' | 'canvas' | 'doc'
+  | 'generic' | 'code' | 'diff' | 'terminal' | 'matches' | 'files' | 'card' | 'quote' | 'board' | 'doc'
   | 'checklist' | 'schedule' | 'results' | 'excerpt' | 'thinking';
 
 /** What a step weighs in a group's summary: edits > shell > writes > reads. */
@@ -102,28 +102,6 @@ export function cardChanges(o: Record<string, unknown>): string {
 export const cardRef = (v: unknown) => (typeof v === 'number' ? `#${v}` : typeof v === 'string' && v ? (/^\d+$/.test(v) ? `#${v}` : v) : undefined);
 
 type Spec = Omit<RowModel, 'tone' | 'meta' | 'short' | 'detail' | 'weight'> & Partial<Pick<RowModel, 'tone' | 'meta' | 'detail' | 'weight' | 'short'>>;
-
-/**
- * The canvas an old canvas_* call was about (#174): canvas_create's « created cv_x », canvas_write / canvas_read's
- * input id, an old panel_open({ canvas }). Only successful calls; null otherwise. Since #120 that canvas may live on as
- * a converted html page (Doc.fromCanvas), which the chat then shows as the artifact chip.
- */
-export function canvasIdOf(name: string, input: unknown, result: ToolOutcome | undefined): string | null {
-  if (!result || result.isError) return null;
-  const o = (input && typeof input === 'object' ? input : {}) as Input;
-  const cv = (v: unknown) => (typeof v === 'string' && /^cv_[\w-]+$/.test(v) ? v : null);
-  switch (name) {
-    case 'canvas_create':
-      return /created (cv_[\w-]+)/.exec(result.content)?.[1] ?? null;
-    case 'canvas_write':
-    case 'canvas_read':
-      return cv(o.id);
-    case 'panel_open':
-      return cv(o.canvas);
-    default:
-      return null;
-  }
-}
 
 /** The failure wording of each tool: "Couldn't edit". */
 const FAILED: Record<string, string> = {
@@ -347,11 +325,11 @@ function describe(name: string, o: Input, out: string, ok: boolean, detail?: Too
     /* ── canvas (old chats) ── */
     case 'canvas_create': {
       const id = /created (cv_\w+)/.exec(out)?.[1];
-      return { icon: 'canvas', verb: 'Created canvas', running: 'Creating canvas', object: str(o.name) ?? '', meta: id ? [{ text: id.slice(0, 7) }] : [], detail: 'canvas', weight: 'write' };
+      return { icon: 'canvas', verb: 'Created canvas', running: 'Creating canvas', object: str(o.name) ?? '', meta: id ? [{ text: id.slice(0, 7) }] : [], detail: 'generic', weight: 'write' };
     }
     case 'canvas_write': {
       const m = /is now v(\d+) with (\d+) nodes?/.exec(out);
-      return { icon: 'canvas', tone: 'acc', verb: 'Updated canvas', running: 'Updating canvas', object: str(o.id) ?? '', meta: m ? [{ text: `${plural(Number(m[2]), 'node')} · v${m[1]}` }] : [], detail: 'canvas', weight: 'write', short: { verb: 'updated', obj: 'a canvas' } };
+      return { icon: 'canvas', tone: 'acc', verb: 'Updated canvas', running: 'Updating canvas', object: str(o.id) ?? '', meta: m ? [{ text: `${plural(Number(m[2]), 'node')} · v${m[1]}` }] : [], detail: 'generic', weight: 'write', short: { verb: 'updated', obj: 'a canvas' } };
     }
     case 'canvas_read': {
       let canvas: { name?: unknown; version?: unknown; nodes?: unknown } = {};
@@ -361,7 +339,7 @@ function describe(name: string, o: Input, out: string, ok: boolean, detail?: Too
         canvas = {}; // not JSON: the row keeps the id, the output shows when expanded
       }
       const nodes = Array.isArray(canvas.nodes) ? canvas.nodes.length : undefined;
-      return { icon: 'canvas', verb: 'Read canvas', running: 'Reading canvas', object: str(canvas.name) ?? str(o.id) ?? '', meta: nodes !== undefined ? [{ text: `v${canvas.version} · ${plural(nodes, 'node')}` }] : [], detail: 'canvas' };
+      return { icon: 'canvas', verb: 'Read canvas', running: 'Reading canvas', object: str(canvas.name) ?? str(o.id) ?? '', meta: nodes !== undefined ? [{ text: `v${canvas.version} · ${plural(nodes, 'node')}` }] : [], detail: 'generic' };
     }
     case 'canvas_list': {
       const n = out.split('\n').filter((l) => /^cv_/.test(l)).length;

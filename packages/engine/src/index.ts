@@ -352,13 +352,6 @@ export async function startEngine(opts: EngineOptions): Promise<Engine> {
   if (sandbox.enabled || opts.browser) await network.start();
   await sandbox.probe();
   // Finish a rewind a stopped engine left half done, before any run resumes and touches the files (rule 2).
-  // Canvases were replaced by artifacts (#120): each one left in the archive becomes an html page, once.
-  try {
-    const n = documents.convertCanvases();
-    if (n) console.log(`converted ${n} canvas(es) to artifacts`);
-  } catch (e) {
-    console.error('canvas conversion failed', e);
-  }
   await rewinds.recover().catch((e: unknown) => console.error('rewind recovery failed', e));
   runner.start();
   // A removed member's runs in that project stop (#214); clones a stopped engine left half done start again.

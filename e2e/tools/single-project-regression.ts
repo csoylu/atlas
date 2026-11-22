@@ -103,9 +103,6 @@ const TABLES = ['cards', 'messages', 'conversations', 'runs', 'tool_calls', 'mem
   .filter((t) => has(t));
 const countOf = (t: string) => raw<{ n: number }>(`SELECT COUNT(*) n FROM ${t}`)[0]!.n;
 const before = Object.fromEntries(TABLES.map((t) => [t, countOf(t)]));
-// Canvases the live app made after the last conversion: this build converts each one to an html page at start (#120), one
-// document with one version each; they are the only documents a start may add.
-const pending = has('canvases') && has('documents', 'from_canvas') ? raw<{ n: number }>('SELECT COUNT(*) n FROM canvases c WHERE NOT EXISTS (SELECT 1 FROM documents d WHERE d.from_canvas = c.id)')[0]!.n : 0;
 const migBefore = raw<{ name: string }>('SELECT name FROM schema_migrations ORDER BY name DESC LIMIT 1')[0]!.name;
 // The messages the API shows: every row that no rewind hid (a rewound message stays in the file, out of the chat).
 const seqs = new Map<string, number[]>();
@@ -140,10 +137,6 @@ try {
   for (const t of TABLES) {
     if (['settings', 'workflows'].includes(t)) continue; // a build may add a built-in row (checked below)
     // Starting an engine closes what a stop left open (a run cut by the last stop gets its note): rows may be added, never lost.
-    if (t === 'documents' || t === 'document_versions') {
-      ok(`${t}: ${before[t]} rows before, ${pending} canvas(es) converted, nothing else changed`, countOf(t) === before[t]! + pending, `now ${countOf(t)}`);
-      continue;
-    }
     if (['messages', 'runs', 'tool_calls', 'notifications', 'checkpoints'].includes(t)) {
       ok(`${t}: ${before[t]} rows before, none lost`, countOf(t) >= before[t]!, `now ${countOf(t)}`);
       continue;

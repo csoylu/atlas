@@ -1,6 +1,6 @@
 import { currentToolName, type ContentBlock, type Message, type ToolCallDetail } from '@atlas/shared';
 import { artifactOf, type Artifact } from './cardModal.ts';
-import { canvasIdOf, thinkingRow, toolRow, type RowIcon, type RowModel, type ToolOutcome } from './toolRows.ts';
+import { thinkingRow, toolRow, type RowIcon, type RowModel, type ToolOutcome } from './toolRows.ts';
 
 /**
  * An agent's turn in the chat (#59): its consecutive messages split into text, single steps, « N steps » groups and
@@ -45,7 +45,7 @@ type Use = Extract<ContentBlock, { type: 'tool_use' | 'server_tool_use' }>;
 export function groupTurn(
   messages: Message[],
   results: Map<string, ToolOutcome>,
-  opts: { live: boolean; details?: (id: string) => ToolCallDetail | undefined; canvasPage?: CanvasPage },
+  opts: { live: boolean; details?: (id: string) => ToolCallDetail | undefined },
 ): Segment[] {
   const out: Segment[] = [];
   let pending: Step[] = [];
@@ -70,7 +70,7 @@ export function groupTurn(
         const row = toolRow(b.name, b.input, result, detail);
         const state: StepState = result ? (result.isError || row.tone === 'bad' ? 'failed' : 'done') : opts.live ? 'running' : 'cut';
         const step: Step = { id: b.id, kind: 'tool', name: b.name, input: b.input, result, ...(detail ? { detail } : {}), row, state, at: m.at };
-        const pin = pinOf(step, b.id === lastPlan, opts.canvasPage);
+        const pin = pinOf(step, b.id === lastPlan);
         if (pin) {
           flush();
           out.push({ kind: 'pin', pin, step });
@@ -95,25 +95,19 @@ export function draftSegments(parts: readonly { kind: 'thinking' | 'text'; text:
   });
 }
 
-/** The converted page of a canvas (cv_ id → its artifact, #174), if there is one. */
-export type CanvasPage = (canvasId: string) => Artifact | undefined;
-
 /**
- * The artifact a step shows as a chip: what artifact_create / artifact_update / panel_open made or opened, or, in old
- * chats, the page an old canvas_* call's canvas was converted to (#174). Null: the step stays a plain row.
+ * The artifact a step shows as a chip: what artifact_create / artifact_update / panel_open made or opened. Null: the
+ * step stays a plain row (old chats' canvas_* calls too, #342).
  */
-export function stepArtifact(s: Pick<Step, 'name' | 'input' | 'result'>, canvasPage?: CanvasPage): Artifact | null {
+export function stepArtifact(s: Pick<Step, 'name' | 'input' | 'result'>): Artifact | null {
   if (!s.result || s.result.isError) return null;
-  const art = artifactOf(s.name, s.input, s.result.content);
-  if (art) return art;
-  const cv = canvasPage && canvasIdOf(s.name, s.input, s.result);
-  return (cv && canvasPage(cv)) || null;
+  return artifactOf(s.name, s.input, s.result.content);
 }
 
-function pinOf(s: Step, livePlan: boolean, canvasPage?: CanvasPage): Pin | null {
+function pinOf(s: Step, livePlan: boolean): Pin | null {
   if (currentToolName(s.name) === 'task_block') return 'ask';
   if (s.name === 'todo_write' && livePlan) return 'plan';
-  if (stepArtifact(s, canvasPage)) return 'doc';
+  if (stepArtifact(s)) return 'doc';
   return null;
 }
 
