@@ -54,7 +54,7 @@ messages or the composer, the modal or panel off-screen, uncaught page errors, a
   - UI change: `--only` on the screens that render the changed components, plus the ones the builder lists, at all four
     widths. `--only` matches screen-name **prefixes**: `chat` (all `chat-*`), `task` (task-board, -list, -inbox, -chat,
     -images, -blocked), `thread` (thread, thread-images), `new-task` (new-task-images, new-task-2), `panel` (panel,
-    panel-max), `drawer`, `board`, `inbox`, `library`, `project` (projects-2, project-page, project-new: **not** covered
+    panel-max, panel-sees, panel-files, panel-files-search: the Files editor and its search bar), `drawer`, `board`, `inbox`, `library`, `project` (projects-2, project-page, project-new: **not** covered
     by `settings-`, though they live under `#/settings/projects`), `settings-` (the 12 settings pages, memory and secrets
     included; or `settings-memory`, `settings-secrets`…), `workflow` (list, edit, runs, off, workflows-2), `palette`,
     `shortcuts`. The `-2` screens (board-2, drawer-2, inbox-2, workflows-2…) are the second-project fixtures (#217) and
