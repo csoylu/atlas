@@ -3,7 +3,7 @@ import type { UsageSummary } from '@atlas/shared';
 type Day = UsageSummary['perDay'][number];
 
 /** Every source a day can count, so no sum forgets one (#228: the headline skipped claude_plan). */
-export const SOURCE_KEYS = ['anthropic', 'claude_plan', 'claude_code', 'chatgpt', 'openai_compat'] as const satisfies readonly (keyof Omit<Day, 'day'>)[];
+export const SOURCE_KEYS = ['anthropic', 'claude_plan', 'chatgpt', 'openai_compat'] as const satisfies readonly (keyof Omit<Day, 'day'>)[];
 
 /** 1234 → "1.2k", 3_400_000 → "3.4M", 1_266_000_000 → "1.27B". */
 export const tok = (n: number): string => {

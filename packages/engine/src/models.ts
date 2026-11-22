@@ -21,19 +21,6 @@ export type ProviderFactory = (model: Model, env: NodeJS.ProcessEnv) => Provider
 
 /** Real providers. Missing configuration is a ModelError, never a fallback (design §5). */
 export const realProviders: ProviderFactory = (m, env) => {
-  if (m.provider === 'claude_code') {
-    const token = env['CLAUDE_CODE_OAUTH_TOKEN']?.trim();
-    const key = env['ANTHROPIC_API_KEY']?.trim();
-    if (!token && !key) throw new ModelError(`model ${m.id} needs CLAUDE_CODE_OAUTH_TOKEN or ANTHROPIC_API_KEY in the engine's environment`);
-    // Keep the legacy adapter's hardcoded identity aligned with the installed Claude Code version.
-    return new AnthropicProvider(token ? null : key!, {
-      baseURL: m.baseUrl ?? undefined,
-      authToken: token,
-      maxRetries: 0,
-      origin: token ? 'claude_code:token' : 'claude_code:key',
-      headers: { 'user-agent': 'claude-code/2.1.322', ...(token ? { 'anthropic-beta': 'oauth-2025-04-20' } : {}) },
-    });
-  }
   if (m.provider === 'chatgpt') throw new ModelError(`model ${m.id} uses the ChatGPT plan, which this engine has no sign-in for`);
   if (m.provider === 'claude_plan') throw new ModelError(`model ${m.id} uses the Claude plan, which this engine has no sign-in for`);
   const key = m.credentialEnv ? env[m.credentialEnv] : undefined;
@@ -61,13 +48,13 @@ export class Models {
       baseUrl: r.base_url,
       credentialEnv: r.credential_env,
       credentialPresent:
-        r.provider === 'claude_code' ? !!(this.env['CLAUDE_CODE_OAUTH_TOKEN']?.trim() || this.env['ANTHROPIC_API_KEY']?.trim()) : r.provider === 'chatgpt'
+        r.provider === 'chatgpt'
           ? !!this.chatgpt?.status().planUsage
           : r.provider === 'claude_plan'
             ? !!this.claude?.status().signedIn
-          : this.pooled({ provider: r.provider, credentialEnv: r.credential_env })
-            ? this.accounts!.list().some((a) => a.enabled && a.keyPresent)
-            : !!(r.credential_env && this.env[r.credential_env]),
+            : this.pooled({ provider: r.provider, credentialEnv: r.credential_env })
+              ? this.accounts!.list().some((a) => a.enabled && a.keyPresent)
+              : !!(r.credential_env && this.env[r.credential_env]),
       maxTokens: r.max_tokens,
       contextWindow: r.context_window,
       verifiedAt: r.verified_at,
@@ -183,9 +170,7 @@ export class Models {
       ? [model.credentialEnv]
       : this.pooled(model)
         ? this.accounts!.list().filter((a) => a.enabled).map((a) => a.secret)
-        : model.provider === 'claude_code'
-          ? ['CLAUDE_CODE_OAUTH_TOKEN', 'ANTHROPIC_API_KEY']
-          : [];
+        : [];
     if (needs.length && !needs.some((n) => this.env[n]?.trim()) && needs.some((n) => locked.has(n)))
       throw new ModelError(`model ${model.id}: secret store locked: unlock it in Settings → Secrets`);
   }

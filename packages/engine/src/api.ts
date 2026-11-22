@@ -5,7 +5,7 @@ import { extname, join, relative } from 'node:path';
 import { WebSocketServer } from 'ws';
 import type { ChatReads } from './chatReads.ts';
 import { ZodError } from 'zod';
-import { AddCardImages, CreateCard, SaveWsFile, CreateModelRequest, CreateSecret, SaveCardSecret, SecretsPassword, UnlockSecrets, UpdateSecret, IMAGE_MAX_BYTES, IMAGE_MAX_PER_TASK, isTimeZone, PostMessage, RewindRequest, SlashCommand, TriggerPreview, UpdateModelRequest, UpdateVoice } from '@atlas/shared';
+import { AddCardImages, CreateCard, SaveWsFile, CreateModel, CreateSecret, SaveCardSecret, SecretsPassword, UnlockSecrets, UpdateSecret, IMAGE_MAX_BYTES, IMAGE_MAX_PER_TASK, isTimeZone, PostMessage, RewindRequest, SlashCommand, TriggerPreview, UpdateModel, UpdateVoice } from '@atlas/shared';
 import type { Agents } from './agents.ts';
 import type { Models } from './models.ts';
 import type { Runner } from './runner.ts';
@@ -560,10 +560,10 @@ export function createApi(deps: {
     res.json(models.list());
   });
   app.post('/api/models', (req, res) => {
-    res.status(201).json(models.create(CreateModelRequest.parse(req.body)));
+    res.status(201).json(models.create(CreateModel.parse(req.body)));
   });
   app.patch('/api/models/:id', (req, res) => {
-    res.json(models.update(req.params.id, UpdateModelRequest.parse(req.body)));
+    res.json(models.update(req.params.id, UpdateModel.parse(req.body)));
   });
   app.delete('/api/models/:id', (req, res) => {
     models.remove(req.params.id);

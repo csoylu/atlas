@@ -275,14 +275,12 @@ function Chevron() {
 const SOURCES = [
   { key: 'anthropic', label: 'Anthropic API' },
   { key: 'claude_plan', label: 'Claude plan' },
-  { key: 'claude_code', label: 'Removed Claude integration (history)' },
   { key: 'chatgpt', label: 'ChatGPT plan' },
   { key: 'openai_compat', label: 'Local and other servers' },
 ] as const;
 const SOURCE_LABEL: Record<string, string> = {
   anthropic: 'Anthropic API',
   claude_plan: 'Claude plan',
-  claude_code: 'Removed Claude integration',
   chatgpt: 'ChatGPT plan',
   openai_compat: 'Local / server',
 };
