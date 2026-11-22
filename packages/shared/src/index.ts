@@ -169,6 +169,13 @@ export const Card = z.object({
   naming: z.boolean().default(false),
   /** Direct chats: its agent is running a turn right now (a direct chat's status stays 'done'; this is the live signal). */
   working: z.boolean().default(false),
+  /**
+   * Direct chats (#338): the agent's final reply (the message its run ended with) came while Master wasn't looking: bold
+   * name and a dot in the sidebar, counted on the Chats tab, the Dock and the title.
+   */
+  unread: z.boolean().default(false),
+  /** Direct chats (#338): the last message Master has seen (0: none). The « New » line goes above the first one after it. */
+  readSeq: z.number().int().default(0),
   /** The direct chat this card was created from (card_create in a chat): told when it finishes, closes, stops or needs the user. */
   originCard: z.string().nullable().default(null),
   /** Pictures attached to the task itself (#119): files in <data>/task-images/, shown to its assignee at each run. */
@@ -483,6 +490,10 @@ export interface Settings {
    * (a Sonnet model if there is one, else the agent's own), 'off' = no review.
    */
   memoryReviewModel: string | null;
+  /** #338, Settings → Appearance: a desktop notification when an agent replies in a chat not on screen (default on). */
+  notifyReplies: boolean;
+  /** #338: unread chats + the Inbox count on the Dock icon and in the window title, « (3) Atlas » (default on). */
+  countBadge: boolean;
 }
 /** Max length of Settings.userAbout. */
 export const USER_ABOUT_MAX = 200;
@@ -556,6 +567,8 @@ export const UpdateSettings = z
     userName: z.string().trim().min(1, 'Enter your name').max(40),
     userAbout: z.string().trim().min(1, 'Say a few words about yourself').max(USER_ABOUT_MAX),
     memoryReviewModel: z.string().min(1).nullable(),
+    notifyReplies: z.boolean(),
+    countBadge: z.boolean(),
   })
   .partial()
   .strict();
@@ -1168,6 +1181,13 @@ export const UpdateWorkflow = z.object({ name: z.string().trim().min(1).max(200)
 export type UpdateWorkflow = z.input<typeof UpdateWorkflow>;
 
 /** WebSocket events, engine → UI. */
+/**
+ * What a window tells the engine over its WebSocket (#338): the chat it has on screen while focused (null: none, or
+ * Atlas in the background). That chat is read, and a reply in it never turns it unread.
+ */
+export const ClientEvent = z.object({ type: z.literal('viewing'), chatId: z.string().nullable() });
+export type ClientEvent = z.infer<typeof ClientEvent>;
+
 export type ServerEvent =
   | { type: 'card.updated'; card: Card }
   | { type: 'card.deleted'; id: string }
@@ -1200,6 +1220,13 @@ export type ServerEvent =
   | { type: 'notification.created'; notification: Notification }
   /** Notifications were read or archived: reload the Inbox. */
   | { type: 'inbox.changed' }
+  /**
+   * An agent's final reply made a chat unread (#338): the UI's desktop notification (title « agent · project », the
+   * first lines as its body). Not sent when a window had the chat on screen and focused (then it is read at once).
+   */
+  | { type: 'chat.replied'; chatId: string; agentId: string; projectId: string; seq: number; text: string }
+  /** Settings changed (the Appearance switches): every window and the Dock follow. */
+  | { type: 'settings.updated'; settings: Settings }
   | { type: 'voice.updated'; status: VoiceStatus }
   | { type: 'update.updated'; status: UpdateStatus }
   /** A secret was added, edited, rotated, deleted or used: reload Settings → Secrets (names and metadata only). */

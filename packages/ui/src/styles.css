@@ -1631,7 +1631,7 @@ button.msg-quote:hover { color: var(--text); }
   .app:has(.side-doc.side) { --sidebar: 60px; }
   .app:has(.side-doc.side) .sidebar { padding: 10px 8px 8px; }
   .electron-mac .app:has(.side-doc.side) .sidebar { padding-top: 40px; }
-  .app:has(.side-doc.side) :is(.ws-name, .ws-scope, .ws-acts, .nav-item > span:not(.dot-avatar), .chat-hist-title, .chat-hist-when, .side-group, .me-name, .nav-item .spin) { display: none; }
+  .app:has(.side-doc.side) :is(.ws-name, .ws-scope, .ws-acts, .nav-item > span:not(.dot-avatar), .chat-hist-title, .chat-hist-when, .side-group, .me-name, .nav-item .spin, .nav-item .unread-dot, .chat-hist-item .unread-dot) { display: none; }
   .app:has(.side-doc.side) :is(.nav-item, .chat-hist-item, .ws-row) { justify-content: center; padding-left: 0; padding-right: 0; }
   .app:has(.side-doc.side) .side-agents { margin-top: 12px; }
   .app:has(.side-doc.side) .side-chats { margin-top: 12px; }
@@ -3367,3 +3367,15 @@ button.cm-sref:hover { border-color: var(--accent); }
 }
 .cm-sref-c { font-size: var(--fs-base); line-height: var(--lh-normal); white-space: pre-wrap; overflow-wrap: anywhere; }
 @media (hover: none) { .cm-hint .kbd { display: none; } }
+
+/* Unread replies (#338): a chat whose agent's final reply wasn't seen: bold name and a teal dot (the spinner takes the
+   dot's place while the agent works). Teal = something new to read; orange stays « needs you ». */
+.unread-dot { width: 7px; height: 7px; border-radius: 50%; background: var(--accent); flex: none; margin-left: auto; }
+.nav-item.agent-item.unread > span:not(.dot-avatar):not(.spin):not(.unread-dot),
+.chat-hist-item.unread .chat-hist-title { font-weight: var(--fw-bold); color: var(--text); }
+.side-proj .unread-dot { margin: 0 6px 0 0; }
+.chat-hist-item .unread-dot { margin-left: 0; }
+.chat-history-menu button.plain { color: var(--text); }
+/* The « New » line above the first unread message of a chat, until Master leaves it. */
+.new-line { display: flex; align-items: center; gap: 10px; margin: 4px 0 16px; color: var(--accent); font-size: var(--fs-small); font-weight: var(--fw-medium); line-height: var(--lh-tight); }
+.new-line::before { content: ''; flex: 1; height: 1px; background: var(--accent); }

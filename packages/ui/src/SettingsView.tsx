@@ -202,7 +202,7 @@ export function SettingsView(props: {
             ) : page === 'profile' ? (
               <ProfileSettings settings={props.settings} onSettings={props.onSettings} />
             ) : page === 'appearance' ? (
-              <Appearance theme={props.theme} onTheme={props.onTheme} />
+              <Appearance theme={props.theme} onTheme={props.onTheme} settings={props.settings} onSettings={props.onSettings} onError={onError} />
             ) : page === 'voice' ? (
               voice ? (
                 <VoiceSettings stream={stream} onError={onError} />
@@ -253,21 +253,48 @@ function BoardSettings(props: { settings: Settings | null; agents: Agent[]; onSe
   );
 }
 
-function Appearance(props: { theme: ThemeChoice; onTheme(t: ThemeChoice): void }) {
+function Appearance(props: { theme: ThemeChoice; onTheme(t: ThemeChoice): void; settings: Settings | null; onSettings(s: Settings): void; onError(e: unknown): void }) {
+  const set = (patch: Partial<Settings>) => api.updateSettings(patch).then(props.onSettings, props.onError);
+  const s = props.settings;
   return (
-    <SetSec first>
-      <SetRows>
-        <SetRow label="Theme" help="For this device, across Atlas. Auto follows your system." auto>
-          <span className="segmented" role="radiogroup" aria-label="Theme">
-            {THEMES.map((t) => (
-              <button key={t} type="button" role="radio" aria-checked={props.theme === t} className={props.theme === t ? 'on' : ''} onClick={() => props.onTheme(t)}>
-                {t === 'system' ? 'Auto' : t.charAt(0).toUpperCase() + t.slice(1)}
-              </button>
-            ))}
-          </span>
-        </SetRow>
-      </SetRows>
-    </SetSec>
+    <>
+      <SetSec first>
+        <SetRows>
+          <SetRow label="Theme" help="For this device, across Atlas. Auto follows your system." auto>
+            <span className="segmented" role="radiogroup" aria-label="Theme">
+              {THEMES.map((t) => (
+                <button key={t} type="button" role="radio" aria-checked={props.theme === t} className={props.theme === t ? 'on' : ''} onClick={() => props.onTheme(t)}>
+                  {t === 'system' ? 'Auto' : t.charAt(0).toUpperCase() + t.slice(1)}
+                </button>
+              ))}
+            </span>
+          </SetRow>
+        </SetRows>
+      </SetSec>
+      {/* Unread replies (#338): both on by default, for every window (stored in the engine). */}
+      {s && (
+        <SetSec title="Notifications">
+          <SetRows>
+            <SetRow
+              label="When an agent replies"
+              help="A desktop notification when Atlas is in the background or another chat is open. Clicking it opens the chat at the « New » line."
+              auto
+            >
+              <label className="switch" title={s.notifyReplies ? 'On' : 'Off'}>
+                <input type="checkbox" aria-label="When an agent replies" checked={s.notifyReplies} onChange={(e) => void set({ notifyReplies: e.target.checked })} />
+                <span />
+              </label>
+            </SetRow>
+            <SetRow label="Count on the Dock icon and in the window title" help="Chats with an unread reply plus the Inbox count: one number for everything waiting." auto>
+              <label className="switch" title={s.countBadge ? 'On' : 'Off'}>
+                <input type="checkbox" aria-label="Count on the Dock icon and in the window title" checked={s.countBadge} onChange={(e) => void set({ countBadge: e.target.checked })} />
+                <span />
+              </label>
+            </SetRow>
+          </SetRows>
+        </SetSec>
+      )}
+    </>
   );
 }
 

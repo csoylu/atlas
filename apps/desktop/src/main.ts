@@ -195,10 +195,12 @@ function startTray(e: Engine) {
     }
   };
   tray = new AtlasTray({ input, act, log: (line) => voiceLog(voiceLogFile(), `tray ${line}`) });
-  // The Dock icon stays still (#310); « needs you » is its badge: the count of tasks needing Master, cleared at zero.
+  // The Dock icon stays still (#310); its badge is the window title's count (#338): chats with an unread reply plus the
+  // Inbox count, cleared at zero or when Settings → Appearance turns it off.
   // Bursts of events (a run streaming card updates) read the Inbox once, like the tray (150 ms).
   let dockTimer: ReturnType<typeof setTimeout> | null = null;
-  const setDock = () => app.dock?.setBadge(dockBadge({ needs: e.notifications.inbox().needsYou }));
+  const setDock = () =>
+    app.dock?.setBadge(dockBadge({ on: e.settings.get().countBadge, unreadChats: e.reads.unreadCount(), inbox: e.notifications.inbox().badge }));
   const syncDock = () => {
     dockTimer ??= setTimeout(() => {
       dockTimer = null;
@@ -208,7 +210,7 @@ function startTray(e: Engine) {
   setDock();
   e.bus.on((ev) => {
     if (ev.type === 'card.updated' || ev.type === 'card.deleted' || ev.type === 'inbox.changed' || ev.type === 'notification.created' || ev.type === 'voice.updated') tray?.changed();
-    if (ev.type === 'card.updated' || ev.type === 'card.deleted' || ev.type === 'inbox.changed') syncDock();
+    if (ev.type === 'card.updated' || ev.type === 'card.deleted' || ev.type === 'inbox.changed' || ev.type === 'notification.created' || ev.type === 'settings.updated') syncDock();
   });
 }
 

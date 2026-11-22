@@ -3,7 +3,8 @@ import { AgentFace } from './AgentFace.tsx';
 import { Mark } from './Mark.tsx';
 import { markState } from './markState.ts';
 import { cardRef, type SecretStoreStatus, type UpdateStatus, type Doc, type Agent, type Card, type ChatGptStatus, type Inbox as InboxData, type Model, type Settings, type Workflow, type Project } from '@atlas/shared';
-import { api, subscribe, type AuthState } from './api.ts';
+import { api, setViewing, subscribe, type AuthState } from './api.ts';
+import { CheckIcon, RowMenu, useRowMenu } from './RowMenu.tsx';
 import { Board } from './Board.tsx';
 import { Inbox } from './Inbox.tsx';
 import { systemTitle } from './inboxView.ts';
@@ -260,6 +261,21 @@ export function App() {
           reloadInbox();
         } else if (e.type === 'inbox.changed') {
           reloadInbox();
+        } else if (e.type === 'settings.updated') {
+          setSettings(e.settings);
+        } else if (e.type === 'chat.replied') {
+          // Sent only when no window has that chat on screen and focused (#338).
+          const l = latest.current;
+          if (l.settings?.notifyReplies !== false) {
+            const project = l.projects.find((p) => p.id === e.projectId)?.name ?? e.projectId;
+            notify(`${e.agentId} · ${project}`, e.text, {
+              tag: `${e.chatId}:${e.seq}`,
+              onClick: () => {
+                window.focus();
+                l.go('#/chat/' + e.chatId);
+              },
+            });
+          }
         } else if (e.type === 'claude.updated') {
           stream.push('claude', { type: 'claude', status: e.status });
           setClaudeWelcome(e.status.showWelcome);
@@ -416,6 +432,23 @@ export function App() {
     },
     [fail],
   );
+  // Unread replies (#338). The chat on screen while Atlas is focused is the one this window views: the engine reads it.
+  const focused = useFocused();
+  const viewedChat = focused && route.view === 'chat' ? (chats.find((c) => c.id === route.target)?.id ?? null) : null;
+  useEffect(() => setViewing(viewedChat), [viewedChat]);
+  const unreadChats = chats.filter((c) => c.unread).length;
+  // « (3) Atlas »: unread chats + the Inbox count, in the window or tab title; the desktop app copies it to the Dock.
+  const titleCount = settings?.countBadge === false ? 0 : unreadChats + (shownInbox?.badge ?? 0);
+  useEffect(() => {
+    document.title = titleCount > 0 ? `(${titleCount}) Atlas` : 'Atlas';
+  }, [titleCount]);
+  const readChat = useCallback((chat: Card) => void api.readChat(chat.id).catch(fail), [fail]);
+  const readAllChats = useCallback(() => void api.readAllChats().catch(fail), [fail]);
+  const agentMenu = useRowMenu();
+  const closeAgentMenu = useCallback(() => agentMenu.setAt(null), [agentMenu.setAt]);
+  // What the events socket needs at the time of an event, not of its subscription.
+  const latest = useRef({ settings, projects, go });
+  latest.current = { settings, projects, go };
   const onPlan = (m: Model | undefined) => m?.provider === 'chatgpt';
   const planAgents = new Set(agents.filter((a) => onPlan(models.find((m) => m.id === a.modelId))).map((a) => a.id));
   /** A chat or card on the plan: its own model if picked, else its agent's. */
@@ -450,6 +483,20 @@ export function App() {
     </span>
   ) : null;
   const history = chats.filter((c) => !mainChats.has(c.id));
+  /** A chat with an unread reply (#338): bold name and a teal dot on its row. */
+  const isUnread = (chatId: string | null | undefined) => !!chatId && !!chats.find((c) => c.id === chatId)?.unread;
+  const menuChat = agentMenu.at ? chats.find((c) => c.id === agentMenu.at!.key) : undefined;
+  const agentRowMenu = agentMenu.at && menuChat && (
+    <RowMenu
+      at={agentMenu.at}
+      label={`Actions for your chat with @${menuChat.assignee ?? menuChat.title}`}
+      onClose={closeAgentMenu}
+      items={[
+        { label: 'Mark as read', icon: <CheckIcon />, onClick: () => readChat(menuChat) },
+        { label: 'Mark all as read', onClick: readAllChats },
+      ]}
+    />
+  );
   const runningTasks = cards.filter((c) => c.status === 'running');
   /** The header's breadcrumb (parts before the title), its title and a faint note after it. */
   const openIsMain = !!openChat && mainChats.has(openChat.id);
@@ -584,17 +631,20 @@ export function App() {
     ? // A project shows up once one member has a workspace there (cloning or failed: nothing to open yet).
       groups.filter((p) => p.members.some((m) => m.home || m.cloneState === 'ready')).map((p) => {
         const folded = groupCollapsed(p.id);
+        // A folded group keeps one dot when one of its agents' chats has an unread reply (#338).
+        const groupUnread = folded && p.members.some((m) => isUnread(p.isDefault ? agents.find((a) => a.id === m.agentId)?.mainChat : m.mainChat));
         return (
           <section key={p.id} className="side-agents" aria-label={p.name}>
             <button
               type="button"
               className="side-group side-proj"
               aria-expanded={!folded}
-              title={(folded ? 'Show' : 'Hide') + ` ${p.name}'s agents`}
+              title={(folded ? 'Show' : 'Hide') + ` ${p.name}'s agents` + (groupUnread ? ' · unread reply' : '')}
               onClick={() => (setGroupCollapsed(p.id, !folded), setFolds((n) => n + 1))}
             >
               <ProjDot hue={p.colour} />
               <span className="side-proj-name">{p.name}</span>
+              {groupUnread && <span className="unread-dot" aria-label="unread reply" />}
               <Icon.chevDown />
             </button>
             {!folded &&
@@ -604,16 +654,18 @@ export function App() {
                   const m = p.members.find((x) => x.agentId === a.id)!;
                   const main = p.isDefault ? a.mainChat : m.mainChat;
                   const working = cards.some((c) => c.projectId === p.id && c.assignee === a.id && c.status === 'running') || chats.some((c) => c.projectId === p.id && c.assignee === a.id && c.working);
+                  const unread = isUnread(main);
                   return (
                     <button
                       key={a.id}
-                      className={'nav-item agent-item' + (route.view === 'chat' && ((p.isDefault && route.target === a.id) || (!!main && route.target === main)) ? ' active' : '')}
-                      title={`Chat with @${a.id} in ${p.name}${working ? ' · working…' : ''}`}
-                      onClick={() => (main ? go('#/chat/' + main) : openMain(a.id, p))}
+                      className={'nav-item agent-item' + (route.view === 'chat' && ((p.isDefault && route.target === a.id) || (!!main && route.target === main)) ? ' active' : '') + (unread ? ' unread' : '')}
+                      title={`Chat with @${a.id} in ${p.name}${working ? ' · working…' : ''}${unread ? ' · unread reply' : ''}`}
+                      {...(main ? agentMenu.bind(main) : {})}
+                      onClick={() => agentMenu.clicked() && (main ? go('#/chat/' + main) : openMain(a.id, p))}
                     >
                       <AgentFace id={a.id} />
                       <span>{a.id}</span>
-                      {working && <span className="spin" aria-label="working" />}
+                      {working ? <span className="spin" aria-label="working" /> : unread && <span className="unread-dot" aria-label="unread reply" />}
                     </button>
                   );
                 })}
@@ -623,18 +675,22 @@ export function App() {
     : agents.length > 0 && (
         <section className="side-agents" aria-label="Agents">
           <div className="side-group">Agents</div>
-          {agents.map((a) => (
-            <button
-              key={a.id}
-              className={'nav-item agent-item' + (route.view === 'chat' && (route.target === a.id || (!!a.mainChat && route.target === a.mainChat)) ? ' active' : '')}
-              title={`Chat with @${a.id}${busy(a.id) ? ' · working…' : ''}`}
-              onClick={() => go('#/chat/' + (a.mainChat ?? a.id))}
-            >
-              <AgentFace id={a.id} />
-              <span>{a.id}</span>
-              {busy(a.id) && <span className="spin" aria-label="working" />}
-            </button>
-          ))}
+          {agents.map((a) => {
+            const unread = isUnread(a.mainChat);
+            return (
+              <button
+                key={a.id}
+                className={'nav-item agent-item' + (route.view === 'chat' && (route.target === a.id || (!!a.mainChat && route.target === a.mainChat)) ? ' active' : '') + (unread ? ' unread' : '')}
+                title={`Chat with @${a.id}${busy(a.id) ? ' · working…' : ''}${unread ? ' · unread reply' : ''}`}
+                {...(a.mainChat ? agentMenu.bind(a.mainChat) : {})}
+                onClick={() => agentMenu.clicked() && go('#/chat/' + (a.mainChat ?? a.id))}
+              >
+                <AgentFace id={a.id} />
+                <span>{a.id}</span>
+                {busy(a.id) ? <span className="spin" aria-label="working" /> : unread && <span className="unread-dot" aria-label="unread reply" />}
+              </button>
+            );
+          })}
         </section>
       );
   const runningSection = runningTasks.length > 0 && (
@@ -652,7 +708,7 @@ export function App() {
   const historySection = history.length > 0 && (
     <section className="side-chats" aria-label="History">
       <div className="side-group">History</div>
-      <ChatHistory chats={history} selected={openChat?.id} onSelect={(id) => go('#/chat/' + id)} onArchive={archiveChat} onDelete={deleteChat} />
+      <ChatHistory chats={history} selected={openChat?.id} onSelect={(id) => go('#/chat/' + id)} onArchive={archiveChat} onDelete={deleteChat} onRead={readChat} onReadAll={readAllChats} />
     </section>
   );
   const badges = (
@@ -886,6 +942,7 @@ export function App() {
               {t.icon}
               <span>{t.label}</span>
               {t.id === 'inbox' && badge > 0 && <span className="tabbar-n" title="Waiting for you and unread">{badge}</span>}
+              {t.id === 'chats' && unreadChats > 0 && <span className="tabbar-n" title="Chats with an unread reply">{unreadChats}</span>}
             </button>
           ))}
         </nav>
@@ -910,6 +967,7 @@ export function App() {
           onError={fail}
         />
       )}
+      {agentRowMenu}
       {help && <ShortcutsSheet onClose={closeHelp} />}
       {updateOpen && update && <UpdateDialog status={update} onClose={() => setUpdateOpen(false)} onError={fail} />}
       {settings && (!settings.userName || !settings.userAbout) ? (
@@ -923,9 +981,31 @@ export function App() {
 }
 
 /** A system notification (the desktop app shows it in macOS Notification Center); asks once in a browser. */
-function notify(title: string, body: string): void {
+function notify(title: string, body: string, o: { tag?: string; onClick?(): void } = {}): void {
   if (typeof Notification === 'undefined') return;
-  const show = () => void new Notification(title, { body });
+  const show = () => {
+    // The same tag in two windows is one notification.
+    const n = new Notification(title, { body, ...(o.tag ? { tag: o.tag } : {}) });
+    if (o.onClick) n.onclick = o.onClick;
+  };
   if (Notification.permission === 'granted') show();
   else if (Notification.permission !== 'denied') void Notification.requestPermission().then((p) => p === 'granted' && show());
+}
+
+/** Atlas is in front: the window has the focus and the page is visible (#338: only then is a chat on screen read). */
+function useFocused(): boolean {
+  const now = () => document.visibilityState === 'visible' && document.hasFocus();
+  const [on, setOn] = useState(now);
+  useEffect(() => {
+    const change = () => setOn(now());
+    window.addEventListener('focus', change);
+    window.addEventListener('blur', change);
+    document.addEventListener('visibilitychange', change);
+    return () => {
+      window.removeEventListener('focus', change);
+      window.removeEventListener('blur', change);
+      document.removeEventListener('visibilitychange', change);
+    };
+  }, []);
+  return on;
 }

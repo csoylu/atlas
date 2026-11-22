@@ -24,6 +24,8 @@ const card = (id: string, patch: Partial<Card> = {}): Card =>
     effort: null,
     naming: false,
     working: false,
+    unread: false,
+    readSeq: 0,
     originCard: 'c_chat',
     ...patch,
   }) as Card;

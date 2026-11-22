@@ -1,115 +1,49 @@
-import { useEffect, useLayoutEffect, useRef, useState, type KeyboardEvent as ReactKeyboardEvent } from 'react';
+import { useCallback, useEffect } from 'react';
 import { AgentFace } from './AgentFace.tsx';
-import { createPortal } from 'react-dom';
 import type { Card } from '@atlas/shared';
-import { menuPosition } from './chatHistoryMenu.ts';
+import { CheckIcon, RowMenu, useRowMenu } from './RowMenu.tsx';
 
-export function ChatHistory({ chats, selected, onSelect, onArchive, onDelete }: {
+export function ChatHistory({ chats, selected, onSelect, onArchive, onDelete, onRead, onReadAll }: {
   chats: Card[];
   selected?: string;
   onSelect(id: string): void;
   onArchive(chat: Card): void;
   onDelete(chat: Card): void;
+  /** « Mark as read », « Mark all as read » (#338). */
+  onRead(chat: Card): void;
+  onReadAll(): void;
 }) {
-  const [menu, setMenu] = useState<{ chat: Card; x: number; y: number; trigger: HTMLButtonElement } | null>(null);
-  const popup = useRef<HTMLDivElement>(null);
-  const action = useRef<HTMLButtonElement>(null);
-  const second = useRef<HTMLButtonElement>(null);
-  const close = (restoreFocus = false) => {
-    if (restoreFocus) menu?.trigger.focus();
-    setMenu(null);
-  };
-  useLayoutEffect(() => {
-    if (!menu || !popup.current) return;
-    const bounds = popup.current.getBoundingClientRect();
-    const pos = menuPosition(menu.x, menu.y, bounds.width, bounds.height, window.innerWidth, window.innerHeight);
-    popup.current.style.left = `${pos.left}px`;
-    popup.current.style.top = `${pos.top}px`;
-    action.current?.focus();
-  }, [menu]);
+  const menu = useRowMenu();
+  const close = useCallback(() => menu.setAt(null), [menu.setAt]);
+  const chat = menu.at && chats.find((c) => c.id === menu.at!.key);
   useEffect(() => {
-    if (!menu) return;
-    const outside = (e: PointerEvent) => {
-      if (!popup.current?.contains(e.target as Node)) setMenu(null);
-    };
-    const key = (e: KeyboardEvent) => {
-      if (e.key === 'Escape') {
-        e.preventDefault(); menu.trigger.focus(); setMenu(null);
-      } else if (e.key === 'Tab') {
-        // Resume ordinary sidebar tab order instead of trapping focus in the portal.
-        menu.trigger.focus(); setMenu(null);
-      }
-    };
-    const dismiss = () => setMenu(null);
-    const scroll = (e: Event) => { if (!popup.current?.contains(e.target as Node)) dismiss(); };
-    document.addEventListener('pointerdown', outside);
-    document.addEventListener('keydown', key);
-    window.addEventListener('resize', dismiss);
-    window.addEventListener('scroll', scroll, true);
-    window.addEventListener('hashchange', dismiss);
-    window.addEventListener('blur', dismiss);
-    return () => {
-      document.removeEventListener('pointerdown', outside);
-      document.removeEventListener('keydown', key);
-      window.removeEventListener('resize', dismiss);
-      window.removeEventListener('scroll', scroll, true);
-      window.removeEventListener('hashchange', dismiss);
-      window.removeEventListener('blur', dismiss);
-    };
-  }, [menu]);
-  useEffect(() => {
-    if (menu && !chats.some(c => c.id === menu.chat.id)) setMenu(null);
-  }, [chats, menu]);
-
-  /** Two items: arrows, Home and End move between them. */
-  const moveFocus = (e: ReactKeyboardEvent<HTMLButtonElement>) => {
-    if (!['ArrowDown', 'ArrowUp', 'Home', 'End'].includes(e.key)) return;
-    e.preventDefault();
-    const other = e.key === 'Home' ? action : e.key === 'End' ? second : e.currentTarget === action.current ? second : action;
-    other.current?.focus();
-  };
+    if (menu.at && !chat) close();
+  }, [menu.at, chat, close]);
 
   return <div className="chat-history">
     {chats.map(c => <button key={c.id}
-      className={'chat-hist-item' + (selected === c.id ? ' active' : '') + (c.working ? ' running' : '')}
+      className={'chat-hist-item' + (selected === c.id ? ' active' : '') + (c.working ? ' running' : '') + (c.unread ? ' unread' : '')}
       aria-current={selected === c.id ? 'page' : undefined}
       aria-busy={c.working || undefined}
-      aria-haspopup="menu" aria-expanded={menu?.chat.id === c.id}
-      aria-controls={menu?.chat.id === c.id ? 'chat-history-menu' : undefined}
-      title={`${c.title} · @${c.assignee}${c.working ? ' · working…' : ''} · Right-click or Shift+F10 for actions`}
-      onClick={() => { close(); onSelect(c.id); }}
-      onContextMenu={e => {
-        e.preventDefault();
-        setMenu({ chat: c, x: e.clientX, y: e.clientY, trigger: e.currentTarget });
-      }}
-      onKeyDown={e => {
-        if (e.key !== 'ContextMenu' && !(e.shiftKey && e.key === 'F10')) return;
-        e.preventDefault();
-        const rect = e.currentTarget.getBoundingClientRect();
-        setMenu({ chat: c, x: rect.left + 12, y: rect.bottom, trigger: e.currentTarget });
-      }}>
+      aria-controls={menu.at?.key === c.id ? 'chat-history-menu' : undefined}
+      title={`${c.title} · @${c.assignee}${c.working ? ' · working…' : ''}${c.unread ? ' · unread reply' : ''} · Right-click or Shift+F10 for actions`}
+      {...menu.bind(c.id)}
+      onClick={() => { if (!menu.clicked()) return; close(); onSelect(c.id); }}>
       <AgentFace id={c.assignee} />
       <span className="chat-hist-title">{c.naming ? <span className="chat-naming">Generating chat name…</span> : c.title}</span>
+      {c.unread && !c.working && <span className="unread-dot" aria-label="unread reply" />}
       <span className="chat-hist-when">{ago(c.updatedAt)}</span>
     </button>)}
-    {menu && createPortal(<div ref={popup} id="chat-history-menu" className="chat-history-menu" role="menu"
-      aria-label={`Actions for ${menu.chat.title}`} style={{ left: menu.x, top: menu.y }}
-      onContextMenu={e => e.preventDefault()} onBlur={e => {
-        if (!e.currentTarget.contains(e.relatedTarget)) setMenu(null);
-      }}>
-      <button ref={action} role="menuitem" onClick={() => { close(true); onArchive(menu.chat); }} onKeyDown={moveFocus}>
-        <svg viewBox="0 0 20 20" width="16" height="16" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+    {menu.at && chat && <RowMenu at={menu.at} label={`Actions for ${chat.title}`} onClose={close} items={[
+      { label: 'Mark as read', icon: <CheckIcon />, onClick: () => onRead(chat) },
+      { label: 'Mark all as read', onClick: onReadAll },
+      { label: 'Archive', danger: true, onClick: () => onArchive(chat), icon: <svg viewBox="0 0 20 20" width="16" height="16" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
           <path d="M3 4.5h14v3H3zM4.5 7.5v8h11v-8M8 10.5h4" />
-        </svg>
-        Archive
-      </button>
-      <button ref={second} role="menuitem" onClick={() => { close(true); onDelete(menu.chat); }} onKeyDown={moveFocus}>
-        <svg viewBox="0 0 20 20" width="16" height="16" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+        </svg> },
+      { label: 'Delete', danger: true, onClick: () => onDelete(chat), icon: <svg viewBox="0 0 20 20" width="16" height="16" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
           <path d="M3.5 5.5h13M8 3h4l1 2.5H7L8 3ZM5.5 5.5l.7 11h7.6l.7-11M8.5 8.5v5M11.5 8.5v5" />
-        </svg>
-        Delete
-      </button>
-    </div>, document.body)}
+        </svg> },
+    ]} />}
   </div>;
 }
 
