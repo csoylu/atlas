@@ -140,24 +140,63 @@ const LOGIN: { host: RegExp; path?: RegExp }[] = [
 ];
 
 /**
- * Where a link clicked in Atlas opens (#298 §3.2): `pane` (the chat's pane, or Master's own outside a chat), `external`
- * (the system browser: ⌘-click, non-http schemes, file://, downloads, sign-in flows) or `app` (an Atlas route: the app
- * handles it).
+ * A file Atlas serves from a workspace (`/api/files/<root>/<path>`, #339): its root (`<agent>` or `<agent>@<project>`)
+ * and its path, decoded; null for any other address. `appOrigin`: the app's own origin (the file must be on it).
  */
-export function linkTarget(href: string, o: { meta?: boolean; appOrigin?: string } = {}): 'pane' | 'external' | 'app' {
+export function servedFile(href: string, appOrigin?: string): { root: string; path: string } | null {
+  let u: URL;
+  try {
+    u = new URL(href, appOrigin);
+  } catch {
+    return null;
+  }
+  if (appOrigin && u.origin !== new URL(appOrigin).origin) return null;
+  const m = /^\/api\/files\/([^/]+)\/(.+)$/.exec(u.pathname);
+  if (!m) return null;
+  try {
+    const path = m[2]!.split('/').map(decodeURIComponent).join('/');
+    return path.split('/').every((s) => s && s !== '.' && s !== '..') ? { root: decodeURIComponent(m[1]!), path } : null;
+  } catch {
+    return null; // a malformed %-escape: not a file link
+  }
+}
+
+/**
+ * Where a link clicked in Atlas opens (#298 §3.2): `pane` (the chat's pane, or Master's own outside a chat), `external`
+ * (the system browser: ⌘-click, non-http schemes, file://, downloads, sign-in flows), `file` (a workspace file Atlas
+ * serves, #339: the side panel shows it) or `app` (an Atlas route: the app handles it).
+ */
+export function linkTarget(href: string, o: { meta?: boolean; appOrigin?: string } = {}): 'pane' | 'external' | 'file' | 'app' {
   let u: URL;
   try {
     u = new URL(href, o.appOrigin);
   } catch {
     return 'app';
   }
-  if (o.appOrigin && u.origin === new URL(o.appOrigin).origin) return 'app';
+  if (o.appOrigin && u.origin === new URL(o.appOrigin).origin) return !o.meta && servedFile(u.href, o.appOrigin) ? 'file' : 'app';
   if (u.protocol !== 'http:' && u.protocol !== 'https:') return 'external';
   if (o.meta) return 'external';
   if (DOWNLOAD.test(u.pathname) || /\/releases\/download\//.test(u.pathname)) return 'external';
   const host = u.hostname.toLowerCase();
   if (LOGIN.some((l) => l.host.test(host) && (!l.path || l.path.test(u.pathname)))) return 'external';
   return 'pane';
+}
+
+/**
+ * The Atlas window asked to load `target` in place of the app at `appUrl` (#339): `stay` (the app's own page, a
+ * reload), `external` (an http(s) page or a file Atlas serves: the system browser shows it) or `refuse` (any other
+ * scheme). The window never leaves the app: only `stay` lets the navigation happen.
+ */
+export function appNavigation(target: string, appUrl: string): 'stay' | 'external' | 'refuse' {
+  let u: URL;
+  try {
+    u = new URL(target);
+  } catch {
+    return 'refuse';
+  }
+  const app = new URL(appUrl);
+  if (u.origin === app.origin && u.pathname === app.pathname && u.search === app.search) return 'stay';
+  return u.protocol === 'http:' || u.protocol === 'https:' || u.protocol === 'mailto:' ? 'external' : 'refuse';
 }
 
 /** An address as typed (« localhost:5173/x », « github.com »): http:// for local hosts, https:// otherwise. */

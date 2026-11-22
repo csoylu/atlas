@@ -2,7 +2,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { usePanelResize } from './PanelResizer.tsx';
 import { paneLine, type Agent, type Card, type Doc, type Model, type PaneSees } from '@atlas/shared';
 import { ThreadPanel } from './ThreadPanel.tsx';
-import { api } from './api.ts';
+import { api, ApiError } from './api.ts';
 import { CardPanel } from './CardPanel.tsx';
 import type { MessageStream } from './useMessages.ts';
 import { FileLinkContext, type FileLinks } from './FileRefs.tsx';
@@ -134,11 +134,22 @@ function ChatWithPanel(props: Parameters<typeof ChatView>[0] & { chat: Card }) {
   const status = useBrowserStatus();
   const onLink = useCallback(
     (e: React.MouseEvent) => {
-      if (!status?.available || e.defaultPrevented || e.button !== 0) return;
+      if (e.defaultPrevented || e.button !== 0) return;
       const a = (e.target as Element).closest?.('a[href]') as HTMLAnchorElement | null;
       if (!a || a.dataset.external || a.closest('.side-doc:not(.thread-panel)')) return; // an artifact's own links: its page handles them
       const where = linkTarget(a.href, { meta: e.metaKey || e.ctrlKey, appOrigin: location.origin });
-      if (where !== 'pane') return;
+      if (where === 'file') {
+        // A file Atlas serves (#339): in the panel, never in place of the app. One the panel can't show (another
+        // workspace, a folder) opens outside: a new tab, the system browser in the desktop app.
+        e.preventDefault();
+        const href = a.href;
+        void api.panelOpenLink(chat.id, href).then(
+          () => (closeThread(), setHidden(false)),
+          (err: unknown) => (err instanceof ApiError && (err.status === 404 || err.status === 409) ? void window.open(href, '_blank', 'noopener') : onError(err)),
+        );
+        return;
+      }
+      if (!status?.available || where !== 'pane') return;
       e.preventDefault();
       void api.browserOpen(chat.id, a.href, 'link').then(() => {
         closeThread();

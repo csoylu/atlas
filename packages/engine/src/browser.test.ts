@@ -2,7 +2,7 @@ import { describe, expect, it, vi } from 'vitest';
 import { mkdtempSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { actionCaption, DRIVING_MS, isDriving, linkTarget, MASTER_PANE, normalizeAddress, type BrowserPaneTab, type BrowserStatus, type BrowserTab, type PanelTab, type ServerEvent } from '@atlas/shared';
+import { actionCaption, appNavigation, DRIVING_MS, servedFile, isDriving, linkTarget, MASTER_PANE, normalizeAddress, type BrowserPaneTab, type BrowserStatus, type BrowserTab, type PanelTab, type ServerEvent } from '@atlas/shared';
 import { launch } from '../test/kit/index.ts';
 import type { BrowserHost, HostEvent, HostTab } from './browser.ts';
 
@@ -349,7 +349,33 @@ describe('link routing (#298 §3.2)', () => {
       expect(linkTarget(u, { appOrigin: app }), u).toBe('external');
     expect(linkTarget('https://claude.ai/new', { appOrigin: app })).toBe('pane');
     expect(linkTarget('#/library', { appOrigin: app })).toBe('app');
-    expect(linkTarget(`${app}/api/files/munih/pages/x.html`, { appOrigin: app })).toBe('app');
+    expect(linkTarget(`${app}/#/chat/x`, { appOrigin: app })).toBe('app');
+  });
+
+  it('files Atlas serves open in the side panel (#339); ⌘-click keeps the default', () => {
+    for (const p of ['images/atlas-x-avatar-800.png', 'pages/x.html', 'diagrams/a.svg', 'docs/spec.md', 'data/report.csv'])
+      expect(linkTarget(`${app}/api/files/atlas/${p}`, { appOrigin: app }), p).toBe('file');
+    expect(linkTarget('/api/files/atlas/images/a.png', { appOrigin: app })).toBe('file');
+    expect(linkTarget(`${app}/api/files/atlas/images/a.png`, { meta: true, appOrigin: app })).toBe('app');
+    // Not a served file: the app's own API, the folder itself, another origin's /api/files (a web page).
+    expect(linkTarget(`${app}/api/cards`, { appOrigin: app })).toBe('app');
+    expect(linkTarget(`${app}/api/files/atlas/`, { appOrigin: app })).toBe('app');
+    expect(linkTarget('https://example.com/api/files/atlas/a.png', { appOrigin: app })).toBe('pane');
+    expect(servedFile(`${app}/api/files/atlas%40p2/my%20pics/a%20b.png?v=2#x`, app)).toEqual({ root: 'atlas@p2', path: 'my pics/a b.png' });
+    expect(servedFile(`${app}/api/files/atlas/a%2F..%2F..%2Fb.png`, app)).toBeNull();
+    expect(servedFile(`${app}/api/files/atlas/%E0%A4%A.png`, app)).toBeNull();
+    expect(servedFile('https://example.com/api/files/atlas/a.png', app)).toBeNull();
+  });
+
+  it('the Atlas window never leaves the app (#339): pages and files go to the system browser, other schemes are refused', () => {
+    const url = 'http://127.0.0.1:4317';
+    expect(appNavigation(`${url}/`, url)).toBe('stay');
+    expect(appNavigation(`${url}/#/board`, url)).toBe('stay');
+    expect(appNavigation(`${url}/api/files/atlas/images/a.png`, url)).toBe('external');
+    expect(appNavigation('https://github.com/csoylu/atlas', url)).toBe('external');
+    expect(appNavigation('http://localhost:5173/', url)).toBe('external');
+    for (const u of ['file:///etc/hosts', 'javascript:alert(1)', 'data:text/html,x', 'not a url']) expect(appNavigation(u, url), u).toBe('refuse');
+    expect(appNavigation('http://localhost:5173/#/chat/x', 'http://localhost:5173')).toBe('stay');
   });
 
   it('typed addresses: https by default, http for local hosts', () => {

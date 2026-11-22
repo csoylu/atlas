@@ -436,6 +436,12 @@ export class Documents {
     return row ? toDoc(row) : null;
   }
 
+  /** The artifact served at `/api/files/<filesRoot>/<path>` (#339: a link to it in a chat opens it in the panel), if any. */
+  byServed(filesRoot: string, path: string): Doc | null {
+    const row = this.db.prepare(`SELECT * FROM (${DOC_SELECT}) WHERE files_root = ? AND path = ?`).get(filesRoot, path) as Row | undefined;
+    return row ? toDoc(row) : null;
+  }
+
   /**
    * Index one file of an agent's workspace (of `cardId`'s project): create its document, or add a version if the
    * content changed. `cardId` attaches the document to that card when it isn't attached yet.

@@ -280,4 +280,28 @@ describe('file tabs in the pane (#303)', () => {
     expect((await b.call<PanelTab[]>('POST', `/chats/${chat.id}/panel/close`, { docId: null })).body).toEqual([]);
     await eventually(() => b.engine.documents.tabs(chat.id).length === 0, { what: 'no tab' });
   });
+
+  it('a link to a served file opens its artifact, else the file of the chat\'s workspace; anything else is 404 (#339)', async () => {
+    const l = await launch({ dispatch: false, env: {} });
+    const chat = await l.chat();
+    put(l.workdir, 'images/atlas x.png', Buffer.from([0x89, 0x50, 0x4e, 0x47]));
+    put(l.workdir, 'pages/a.html', '<h1>A</h1>');
+    mkdirSync(join(l.workdir, 'empty'));
+    const doc = l.engine.documents.indexFile('atlas', 'pages/a.html', 'atlas');
+    const link = (url: unknown) => l.call<PanelTab[]>('POST', `/chats/${chat.id}/panel/link`, { url });
+    const r = await link('http://127.0.0.1:1/api/files/atlas/pages/a.html');
+    const page = r.body;
+    expect(page.find((t) => t.active)).toMatchObject({ kind: 'artifact', doc: { id: doc.id } });
+    const image = (await link('/api/files/atlas/images/atlas%20x.png')).body;
+    expect(files(image)).toEqual([
+      ['artifact', 'pages/a.html', null, false],
+      ['file', 'images/atlas x.png', null, true],
+    ]);
+    expect((await link('/api/files/atlas/images/none.png')).status).toBe(404);
+    expect((await link('/api/files/atlas/empty')).status).toBe(404);
+    expect((await link('/api/files/nobody/a.png')).status).toBe(404);
+    expect((await link('/api/cards')).status).toBe(400);
+    expect((await link(42)).status).toBe(400);
+    await l.engine.stop();
+  });
 });
