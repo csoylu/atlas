@@ -611,7 +611,11 @@ export class Runner {
       if (!agent.enabled) throw new ModelError(`agent ${agentId} is disabled`);
       const first = this.kanban.get(cardId);
       // The card's own model (chosen above the composer) wins over the agent's.
-      const { model, provider } = this.models.provider(first.modelId ?? agent.modelId);
+      const picked = this.models.provider(first.modelId ?? agent.modelId);
+      const provider = picked.provider;
+      let model = picked.model;
+      // A local server's context window is re-read once per run, after the first answer (#336).
+      let windowChecked = false;
       // The workspace of the agent in the card's project (#214): never another project's folder; not ready = the run fails.
       const workdir = workspaceOf(this.db, this.opts.dataDir, agent.id, first.projectId);
       mkdirSync(workdir, { recursive: true });
@@ -695,6 +699,10 @@ export class Runner {
           .run(exact && res.usage.input > 0 ? res.usage.input : null, exact && res.usage.input > 0 ? seen : null, card.conversationId);
         if (res.content.length === 0) throw new ModelError(`model ${model.id} returned an empty answer (stop: ${res.stopReason})`);
         if (turn === 0 && model.lastError) this.models.record(model.id, null);
+        if (!windowChecked) {
+          windowChecked = true;
+          model = await this.models.refreshContextWindow(model);
+        }
         // A secret_set value is stored as [secret NAME] (#207); the calls below run with the real input.
         guard = { ...guard, turns: guard.turns + 1 };
         const reply = this.db.transaction(() => {
