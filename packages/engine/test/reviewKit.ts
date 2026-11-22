@@ -1,6 +1,7 @@
 import type { ContentBlock, WorkflowRun } from '@atlas/shared';
 import type { ModelRequest } from '../src/providers/types.ts';
-import { launch, eventually, setReviewAgent, type LaunchOptions } from './kit/index.ts';
+import { launch, eventually, setReviewers, type LaunchOptions } from './kit/index.ts';
+import { reviewWorkflowOf } from '../src/reviewFlow.ts';
 import type { GhPr } from '../src/prs.ts';
 import { mkdirSync } from 'node:fs';
 
@@ -87,6 +88,13 @@ export function byAgent(reviewer: Turn[], reviewerId = 'zurich', n = 200): ((req
 
 export const clock = { now: Date.now() };
 
+/** The agent of « Review the PR » in the project's Review workflow, or null. */
+export function reviewerOf(e: { db: E['db']; workflows: E['workflows'] }, projectId: string): string | null {
+  const id = reviewWorkflowOf(e.db, projectId)?.id;
+  const n = id ? e.workflows.get(id).nodes.find((x) => x.id === 'review') : undefined;
+  return n?.kind === 'agent' ? n.config.agentId : null;
+}
+
 export async function setupReview(o: { script?: LaunchOptions['script']; dbFile?: string; dataDir?: string; gh?: FakeGitHub; review?: boolean } = {}) {
   const gh = o.gh ?? fakeGitHub();
   const t = await launch({
@@ -100,19 +108,27 @@ export async function setupReview(o: { script?: LaunchOptions['script']; dbFile?
   const e = t.engine;
   for (const id of ['zurich', 'munih']) if (!e.agents.list().some((a) => a.id === id)) e.agents.create({ id, modelId: e.agents.get('atlas').modelId });
   e.settings.update({ triageAgent: 'atlas' });
-  if (e.projects.get('atlas').reviewAgent !== 'zurich') setReviewAgent(e, 'atlas', 'zurich');
+
   // The poller's clock (the « can't read since » item waits 15 min).
   (e.prs as unknown as { now: () => number }).now = () => clock.now;
   // The review machinery the dispatcher starts in the app (dispatch: false here): workflows, then the Review seed.
-  if (o.review !== false) startReview(e);
+  if (o.review !== false) {
+    if (reviewerOf(e, 'atlas') !== 'zurich') setReviewers(e, 'atlas', 'zurich');
+    startReview(e);
+  }
   return { ...t, e, gh };
 }
 export type E = Awaited<ReturnType<typeof setupReview>>['e'];
 
-export function startReview(e: E): void {
+/**
+ * Start the review machinery. Atlas's Review workflow, if the seed made it with no agent, gets Atlas's agents of today
+ * (#334): zurich reviews, the lead atlas reviews zurich's PRs. `reviewers: false` leaves it as the seed made it.
+ */
+export function startReview(e: E, o: { reviewers?: boolean } = {}): void {
   e.workflows.start(3_600_000);
   e.reviewFlow.start(3_600_000);
   e.prs.start();
+  if (o.reviewers !== false && reviewWorkflowOf(e.db, 'atlas') && reviewerOf(e, 'atlas') === null) setReviewers(e, 'atlas', 'zurich');
 }
 
 export const card = (e: E, assignee = 'atlas', projectId?: string) =>

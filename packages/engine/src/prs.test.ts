@@ -4,19 +4,19 @@ import { tmpdir } from 'node:os';
 import Database from 'better-sqlite3';
 import { join } from 'node:path';
 import type { ModelRequest } from './providers/types.ts';
-import { eventually, setReviewAgent } from '../test/kit/index.ts';
+import { eventually, setReviewers } from '../test/kit/index.ts';
 import { reviewWorkflowOf } from './reviewFlow.ts';
 import { HEAD, URL, atStep, byAgent, card, clock, ended, fakeGitHub, inbox, lastNote, lastRun, notes, path, setupReview as setup, text, use, verdict, type E } from '../test/reviewKit.ts';
 import { combineChecks, failedCheck, parsePrUrl, UNREADABLE_NOTIFY_MS } from './prs.ts';
 
 /**
  * Pull requests linked to tasks (#189) and their review, now each project's default Review workflow (#263, design §9):
- * a task asks for review → CI finished → green, no conflict? → the review agent in the thread → validate + merge →
+ * a task asks for review → CI finished → green, no conflict? → the review step's agent in the thread → validate + merge →
  * Done; every negative exit → back to the builder. The engine, the model (FakeProvider) and GitHub (one fake behind
  * both the PR reader and the gate's `gh api`) are the real wiring. The workflow's own tests: reviewFlow.test.ts.
  */
 
-const FULL = [['trigger', 'start'], ['ci', 'event'], ['checks', 'yes'], ['review', 'approved'], ['merge', 'merged'], ['done', 'done']];
+const FULL = [['trigger', 'start'], ['ci', 'event'], ['checks', 'yes'], ['own', 'yes'], ['review', 'approved'], ['merge', 'merged'], ['done', 'done']];
 
 describe('pull requests linked to tasks (#189), reviewed by the Review workflow (#263)', () => {
   it('parses PR urls and combines check runs', () => {
@@ -45,7 +45,8 @@ describe('pull requests linked to tasks (#189), reviewed by the Review workflow 
     expect(results[0]).toMatchObject({ is_error: true, content: expect.stringContaining('PR #41 still open') });
     expect(results[1]).toMatchObject({ is_error: true });
     expect(results[2]!.content).toContain('in review: PR #41');
-    expect(e.kanban.get(c.id)).toMatchObject({ status: 'review', reviewer: 'zurich', prs: [{ number: 41, repo: 'csoylu/atlas', url: URL }] });
+    // No reviewer yet (#334): the agent of the review step becomes it when that step starts.
+    expect(e.kanban.get(c.id)).toMatchObject({ status: 'review', reviewer: null, prs: [{ number: 41, repo: 'csoylu/atlas', url: URL }] });
     expect(e.notifications.inbox().needsYou).toEqual([]);
     expect(e.db.prepare("SELECT COUNT(*) AS n FROM notifications WHERE kind = 'card.review'").get()).toEqual({ n: 0 });
     // CI still running: the Review run waits on it, the card says where.
@@ -59,7 +60,7 @@ describe('pull requests linked to tasks (#189), reviewed by the Review workflow 
     expect(() => e.kanban.requestReview(c.id, ['https://github.com/csoylu/atlas/pull/42'], 'atlas', 'two')).toThrow(/one pull request per task in project Atlas/);
   });
 
-  it('the full path: CI green → the review agent in the same thread → validated + merged by the workflow → Done', async () => {
+  it('the full path: CI green → the review step\'s agent in the same thread → validated + merged by the workflow → Done', async () => {
     const gh = fakeGitHub();
     const { e, idle } = await setup({ gh, script: [verdict('ok', 'tests and build checked'), text('validated')] });
     const c = card(e);
@@ -168,7 +169,7 @@ describe('pull requests linked to tasks (#189), reviewed by the Review workflow 
     await again('eeeeeee1111');
     gh.pr = { ...gh.pr, ci: 'success' };
     await e.prs.poll();
-    expect(path(await back('changes asked'))).toEqual([['trigger', 'start'], ['ci', 'event'], ['checks', 'yes'], ['review', 'changes asked'], ['back', 'done']]);
+    expect(path(await back('changes asked'))).toEqual([['trigger', 'start'], ['ci', 'event'], ['checks', 'yes'], ['own', 'yes'], ['review', 'changes asked'], ['back', 'done']]);
     expect(lastNote(e, c.id)).toContain('Review the PR: changes asked (');
     expect(lastNote(e, c.id)).toContain('the limit has no test');
     await idle(c.id);
@@ -177,37 +178,37 @@ describe('pull requests linked to tasks (#189), reviewed by the Review workflow 
     await again(HEAD);
     gh.pr = { ...gh.pr, ci: 'success' };
     await e.prs.poll();
-    expect(path(await back('refused'))).toEqual([['trigger', 'start'], ['ci', 'event'], ['checks', 'yes'], ['review', 'approved'], ['merge', 'refused'], ['back', 'done']]);
+    expect(path(await back('refused'))).toEqual([['trigger', 'start'], ['ci', 'event'], ['checks', 'yes'], ['own', 'yes'], ['review', 'approved'], ['merge', 'refused'], ['back', 'done']]);
     expect(lastNote(e, c.id)).toContain('Validate + merge the PR: refused (');
     expect(gh.merges()).toEqual([]);
     await idle(c.id);
   });
 
-  it("the reviewer rule: the project's review agent; on its own PR, the project's lead; unset, the step says where to choose one", async () => {
+  it("the reviewer is the agent of the review step that runs: zurich's own PR goes to « Review the reviewer's PR » (atlas); no agent: the step says where to choose one", async () => {
     const gh = fakeGitHub();
     gh.pr.ci = 'success';
     const { e, idle } = await setup({ gh, script: [text('lead looks'), text('lead looks again')] });
-    expect(e.projects.get('atlas')).toMatchObject({ lead: 'atlas', reviewAgent: 'zurich' });
-    // zurich built it: the lead reviews.
+    // zurich built it: « Built by another agent? » says no, the second review step's agent (the lead) reviews.
     const own = card(e, 'zurich');
-    expect(e.kanban.requestReview(own.id, [URL], 'zurich', 'e2e').reviewer).toBe('atlas');
+    expect(e.kanban.requestReview(own.id, [URL], 'zurich', 'e2e').reviewer).toBe(null);
     await e.prs.poll();
     await eventually(() => e.runner.runs(own.id).some((r) => r.agentId === 'atlas'), { what: "the lead's review" });
+    expect(e.kanban.get(own.id).reviewer).toBe('atlas');
+    expect(path(lastRun(e, own.id))).toContainEqual(['own', 'no']);
     expect(e.runner.runs(own.id).map((r) => r.agentId)).not.toContain('zurich');
     await idle(own.id);
     await eventually(() => e.runner.runs(own.id).length === 2, { what: 'the second try (#221)' });
     await idle(own.id);
     e.workflows.stopRun(lastRun(e, own.id)!.id);
-    // No review agent: the step couldn't run and says where to choose one; the task says it too.
-    e.projects.update('atlas', { reviewAgent: null });
+    // No agent in « Review the PR »: the step couldn't run and says where to choose one; the task says it too.
+    setReviewers(e, 'atlas', null);
     const c = card(e);
     e.kanban.requestReview(c.id, ['https://github.com/csoylu/atlas/pull/42'], 'atlas', 'x');
     await e.prs.poll();
     const step = await eventually(() => lastRun(e, c.id)?.steps?.find((s) => s.nodeId === 'review' && s.couldntRun) ?? null, { what: 'the review step stuck' });
-    expect(step.couldntRun).toMatchObject({ reason: 'project Atlas has no review agent: choose one in Settings → Projects → Atlas' });
-    expect(e.kanban.get(c.id).waiting).toContain("couldn't run « Review the PR »: project Atlas has no review agent");
-    // A review agent must be a member (it reviews in its workspace of the project).
-    expect(() => e.projects.update('atlas', { reviewAgent: 'nobody' })).toThrow(/not a member/);
+    expect(step.couldntRun).toMatchObject({ reason: 'no agent chosen: choose one in « Review the PR » of workflow « Review »' });
+    expect(e.kanban.get(c.id).waiting).toContain("couldn't run « Review the PR »: no agent chosen");
+    expect(e.kanban.get(c.id).reviewer).toBe(null);
   });
 
   it('GitHub unreadable: nothing moves, the card says why; one Inbox item after 15 min; merged meanwhile → Done when it reads again', async () => {
@@ -367,7 +368,7 @@ describe('a restart in every state of a review (#263, rule 2)', () => {
     // Waiting on CI across the restart: the same run goes on when CI finishes, the reviewer runs once.
     gh.pr.ci = 'success';
     t = await setup({ dbFile, dataDir, gh, script: byAgent([verdict('fail', 'tests red'), text('changes asked')]) });
-    expect(t.e.kanban.get(c.id)).toMatchObject({ status: 'review', reviewer: 'zurich' });
+    expect(t.e.kanban.get(c.id)).toMatchObject({ status: 'review', reviewer: null }); // the review step has not started
     await t.e.prs.poll();
     const r = await ended(t.e, c.id);
     expect(r.id).toBe(before.id);
@@ -529,7 +530,7 @@ describe('pull requests of another project (#216): Datinel, no CI job', () => {
   const DURL = 'https://github.com/datinel/datinel/pull/7';
   const datinel = (e: E, members = ['munih', 'zurich']) => {
     const p = e.projects.create({ name: 'Datinel', repo: 'datinel/datinel', lead: 'munih', members });
-    if (members.includes('zurich')) setReviewAgent(e, p.id, 'zurich');
+    if (members.includes('zurich')) setReviewers(e, p.id, 'zurich');
     return p;
   };
   const dcard = (e: E) => e.kanban.create({ title: 'Feed', status: 'running', assignee: 'munih', projectId: 'datinel' }, 'user');
@@ -559,7 +560,7 @@ describe('pull requests of another project (#216): Datinel, no CI job', () => {
     await eventually(() => reviewWorkflowOf(e.db, 'datinel'), { what: "Datinel's Review workflow" });
     const d = dcard(e);
     e.kanban.requestReview(d.id, [DURL], 'munih', 'feed + tests');
-    expect(e.kanban.get(d.id)).toMatchObject({ status: 'review', reviewer: 'zurich', prs: [{ repo: 'datinel/datinel', number: 7, url: DURL }] });
+    expect(e.kanban.get(d.id)).toMatchObject({ status: 'review', reviewer: null, prs: [{ repo: 'datinel/datinel', number: 7, url: DURL }] });
     await e.prs.poll();
     const run = await ended(e, d.id);
     await idle(d.id);
@@ -596,18 +597,29 @@ describe('pull requests of another project (#216): Datinel, no CI job', () => {
     await idle(d.id);
   });
 
-  it('no review agent in the project: the review step says where to choose one; a non-member can never be chosen', async () => {
+  it('a new project: its Review workflow has no agent, one Inbox item says so; a non-member agent: the step says to add it', async () => {
     const gh = fakeGitHub('datinel/datinel');
     gh.pr.ci = 'success';
     const { e } = await setup({ gh });
     datinel(e, ['munih']);
-    expect(() => e.projects.update('datinel', { reviewAgent: 'zurich' })).toThrow(/review agent @zurich is not a member of Datinel/);
-    await eventually(() => reviewWorkflowOf(e.db, 'datinel'), { what: "Datinel's Review workflow" });
+    const wf = await eventually(() => reviewWorkflowOf(e.db, 'datinel'), { what: "Datinel's Review workflow" });
+    const item = await eventually(() => e.notifications.list().find((n) => n.kind === 'workflow.no_agent') ?? null, { what: 'the Inbox item' });
+    expect(item).toMatchObject({ title: "Choose who reviews Datinel's PRs", link: { label: 'Open the Review workflow', hash: `#/workflows/${wf.id}/step/review` } });
     const d = dcard(e);
     e.kanban.requestReview(d.id, [DURL], 'munih', 'x');
     await e.prs.poll();
     await eventually(() => lastRun(e, d.id)?.steps?.find((s) => s.nodeId === 'review' && s.couldntRun) ?? null, { what: 'the review step stuck' });
     expect(e.runner.runs(d.id)).toEqual([]);
-    expect(e.kanban.get(d.id).waiting).toContain('project Datinel has no review agent: choose one in Settings → Projects → Datinel');
+    expect(e.kanban.get(d.id).waiting).toContain('no agent chosen: choose one in « Review the PR » of workflow « Review »');
+    // zurich chosen but not a member of Datinel: still stuck, and the step says to add it.
+    const first = lastRun(e, d.id)!.id;
+    e.workflows.stopRun(first);
+    const g = e.workflows.get(wf.id);
+    e.workflows.saveGraph(wf.id, { revision: g.revision, nodes: g.nodes.map((n) => (n.id === 'review' && n.kind === 'agent' ? { ...n, config: { ...n.config, agentId: 'zurich' } } : n)), edges: g.edges });
+    e.kanban.requestReview(d.id, [DURL], 'munih', 'again');
+    await e.prs.poll();
+    await eventually(() => lastRun(e, d.id)?.id !== first, { what: 'a second Review run' });
+    const step = await eventually(() => lastRun(e, d.id)?.steps?.find((s) => s.nodeId === 'review' && s.couldntRun) ?? null, { what: 'the review step stuck again' });
+    expect(step.couldntRun!.reason).toBe('@zurich is not a member of Datinel: add it, or choose one in « Review the PR » of workflow « Review »');
   });
 });

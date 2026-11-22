@@ -43,7 +43,7 @@ export function WorkflowsView(props: {
         cards={props.cards}
         mode={mode === 'runs' ? 'runs' : 'edit'}
         runId={mode === 'runs' ? (runId ?? null) : null}
-        initialSelect={select}
+        initialSelect={mode === 'step' ? (runId ?? null) : select}
         stream={props.stream}
         go={props.go}
         onOpenCard={props.onOpenCard}

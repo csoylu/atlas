@@ -254,17 +254,28 @@ function FieldPicker({ of, q, setQ, onPick, onClose }: { of: FieldsOf; q: string
 }
 
 /**
- * An agent step (#262, mockup « Agent + fields »): a chosen agent or the project's review agent; in the task thread
- * (the run's task: its history and PR stay) or as a task of its own.
+ * An agent step (#262; #334 mockup): one agent picker (the project's members), in the task thread (the run's task: its
+ * history and PR stay) or as a task of its own, and « Verdict on the PR » (thread only): its agent gets pr_validate and
+ * the exits are approved / changes asked. Generic: nothing here knows the Review workflow.
  */
 function AgentFields({ n, g, w, agents, fields, set }: { n: Extract<WorkflowNode, { kind: 'agent' }>; g: Graph; w: Workflow; agents: Agent[]; fields: FieldsOf; set: SetConfig }) {
   const c = n.config;
   const { byId } = useProjects();
   const project = w.projectId ? byId(w.projectId) : undefined;
-  const review = project?.reviewAgent ?? null;
-  const lead = project?.lead ?? null;
   const thread = !!c.inThread;
   const canThread = hasRunTask(g);
+  // The project's members (a workflow of no project: every agent); the one chosen stays listed, marked, if it no longer fits.
+  const members = project ? agents.filter((a) => project.members.some((m) => m.agentId === a.id)) : agents;
+  const chosen = c.agentId ? agents.find((a) => a.id === c.agentId) : undefined;
+  const problem = !c.agentId
+    ? null
+    : !chosen
+      ? 'missing'
+      : !chosen.enabled
+        ? 'off'
+        : project && !members.some((a) => a.id === c.agentId)
+          ? `not in ${project.name}`
+          : null;
   return (
     <>
       <label className="field">
@@ -278,44 +289,24 @@ function AgentFields({ n, g, w, agents, fields, set }: { n: Extract<WorkflowNode
         placeholder="What the agent should do, e.g. « Check the dependencies and open a PR for the safe updates. »"
         onChange={(v) => set({ ...c, prompt: v }, 'prompt')}
       />
-      <div className="field">
+      <label className="field">
         Agent
-        <div className="wf-tks compact" role="radiogroup" aria-label="Agent">
-          <button
-            type="button"
-            role="radio"
-            aria-checked={!!c.reviewAgent}
-            className={'wf-tk' + (c.reviewAgent ? ' on' : '')}
-            disabled={!canThread && !c.reviewAgent}
-            title={!canThread ? "The review agent works in the thread of the run's task: start the workflow on a task or PR event" : undefined}
-            onClick={() => !c.reviewAgent && set({ ...c, reviewAgent: true, inThread: true })}
-          >
-            <span className="tkx">
-              <b>The project's review agent</b>
-              <span className="help">
-                {review ? `@${review}${project ? ` in ${project.name}` : ''}; on @${review}'s own PRs, the lead${lead ? ` @${lead}` : ''}` : `none set: Settings → Projects${project ? ` → ${project.name}` : ''} → Review agent`}
-              </span>
-            </span>
-          </button>
-          <button type="button" role="radio" aria-checked={!c.reviewAgent} className={'wf-tk' + (!c.reviewAgent ? ' on' : '')} onClick={() => c.reviewAgent && set({ ...c, reviewAgent: undefined })}>
-            <span className="tkx">
-              <b>A chosen agent</b>
-              <span className="help">always the same one</span>
-            </span>
-          </button>
-        </div>
-        {!c.reviewAgent && (
-          <select aria-label="Chosen agent" value={c.agentId ?? ''} onChange={(e) => set({ ...c, agentId: e.target.value || null })}>
-            {!c.agentId && <option value="">Pick an agent</option>}
-            {agents.map((a) => (
-              <option key={a.id} value={a.id}>
-                @{a.id}
-              </option>
-            ))}
-            {c.agentId && !agents.some((a) => a.id === c.agentId) && <option value={c.agentId}>@{c.agentId} (missing)</option>}
-          </select>
+        <select aria-label="Agent" className={c.agentId ? undefined : 'bad'} value={c.agentId ?? ''} onChange={(e) => set({ ...c, agentId: e.target.value || null })}>
+          {!c.agentId && <option value="">Pick an agent</option>}
+          {members.map((a) => (
+            <option key={a.id} value={a.id}>
+              @{a.id} · {a.rolePrompt.trim().split('\n')[0] || 'no role'}
+            </option>
+          ))}
+          {problem && c.agentId && <option value={c.agentId}>@{c.agentId} ({problem})</option>}
+        </select>
+        {!c.agentId && (
+          <span className="help bad">
+            <b>No agent.</b> A run stops here: « couldn't run: no agent chosen ».
+          </span>
         )}
-      </div>
+        {problem && <span className="help warn">{problem === 'off' ? `@${c.agentId} is off: runs stop here until you turn it on or choose another.` : problem === 'missing' ? `@${c.agentId} no longer exists: runs stop here until you choose another.` : `@${c.agentId} is not a member of ${project!.name}: runs stop here until you add it or choose another.`}</span>}
+      </label>
       <div className="field">
         Works
         <div className="segmented">
@@ -333,16 +324,14 @@ function AgentFields({ n, g, w, agents, fields, set }: { n: Extract<WorkflowNode
             type="button"
             className={!thread ? 'on' : ''}
             aria-pressed={!thread}
-            disabled={!!c.reviewAgent}
-            title={c.reviewAgent ? 'The review agent works in the task thread' : undefined}
-            onClick={() => thread && set({ ...c, inThread: undefined })}
+            onClick={() => thread && set({ ...c, inThread: undefined, verdict: undefined })}
           >
             As a new task
           </button>
         </div>
         <span className="help">
           {thread
-            ? `In the thread of the task that started the run: its history and PR stay, its assignee stays${c.reviewAgent ? ', the review agent shows as its reviewer' : ''}.`
+            ? 'In the thread of the task that started the run: its history and PR stay, its assignee stays.'
             : 'A task of its own, assigned to the agent.'}
         </span>
       </div>
@@ -359,22 +348,22 @@ function AgentFields({ n, g, w, agents, fields, set }: { n: Extract<WorkflowNode
           </div>
         </div>
       )}
-      {c.reviewAgent && (
-        <div className="field">
-          Exit from the verdict
-          <dl className="wf-kv wrap">
-            <div>
-              <dt className="mono">ok</dt>
-              <dd>→ exit « approved »</dd>
-            </div>
-            <div>
-              <dt className="mono">fail</dt>
-              <dd>→ exit « changes asked », its reason becomes the note</dd>
-            </div>
-          </dl>
-          <span className="help">The reviewer ends with pr_validate; its verdict picks the exit. No verdict when the agent stops: the step couldn't run.</span>
-        </div>
-      )}
+      <label className={'wf-switch-row' + (thread ? '' : ' off')}>
+        <span className="tkx">
+          <b>Verdict on the PR</b>
+          <span className="help">
+            {!thread
+              ? "Only in the task thread: the verdict goes on the PR of the run's task."
+              : c.verdict
+                ? `${c.agentId ? `@${c.agentId}` : 'Its agent'} gets pr_validate. Exits: approved / changes asked.`
+                : 'On: its agent gets pr_validate, and the exits become approved / changes asked.'}
+          </span>
+        </span>
+        <span className="switch">
+          <input type="checkbox" aria-label="Verdict on the PR" checked={thread && !!c.verdict} disabled={!thread} onChange={(e) => set({ ...c, verdict: e.target.checked || undefined })} />
+          <span />
+        </span>
+      </label>
     </>
   );
 }
@@ -481,7 +470,9 @@ function ConditionFields({ n, g, w, set, onError }: { n: Extract<WorkflowNode, {
               </button>
             )}
           </div>
-          <span className="help">Exact tests, no model: is, is not, contains, is empty, more / less than.</span>
+          <span className="help">
+            Exact tests, no model: is, is not, contains, is empty, more / less than. A value is the text typed here: it does not follow another step (change the agent of a step, change its name here too).
+          </span>
         </div>
       )}
       {c.test === 'ranFewer' && (
@@ -1105,7 +1096,16 @@ function Exits({ n, g, change }: { n: WorkflowNode; g: Graph; change: Change }) 
           </select>
         </label>
       ))}
+      {exitMeaning(n) && <p className="wf-sum">{exitMeaning(n)}</p>}
       <p className="wf-sum">Or drag from an exit's dot onto a step. Click a link to remove it.</p>
     </div>
   );
+}
+
+/** What each exit of an agent step means, one line under Exits (#334: it replaced the « Exit from the verdict » box). */
+function exitMeaning(n: WorkflowNode): string | null {
+  if (n.kind !== 'agent') return null;
+  if (!n.config.inThread) return 'done: its task reached Done. failed: the task was closed, or its run failed.';
+  if (n.config.verdict) return "approved: pr_validate ok on the PR's head. changes asked: fail; its reason becomes the note.";
+  return 'done: the agent finished the work. not done: it stopped or gave up.';
 }

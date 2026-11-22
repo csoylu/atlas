@@ -198,8 +198,9 @@ export function nodeMeta(n: WorkflowNode, nodes: WorkflowNode[] = []): string {
             ? ['Webhook', ...(n.config.filters.length ? n.config.filters.map((f) => `${f.field} ${OP_TEXT[f.op]} ${f.value}`.trim()) : ['any call'])].join(' · ')
             : 'Run now, from here or a chat';
     case 'agent':
-      if (n.config.reviewAgent) return 'The review agent · in the task thread';
-      return n.config.agentId ? `@${n.config.agentId} · ${n.config.inThread ? 'in the task thread' : n.config.newTaskEachRun ? 'new task' : 'one task'}` : 'Pick an agent and a prompt';
+      return [n.config.agentId ? `@${n.config.agentId}` : 'No agent', n.config.inThread ? 'in the task thread' : n.config.newTaskEachRun ? 'new task' : 'one task', n.config.inThread && n.config.verdict && 'verdict']
+        .filter(Boolean)
+        .join(' · ');
     case 'approval':
       return 'You, in the Inbox';
     case 'condition':
@@ -807,4 +808,17 @@ export function kindLine(n: WorkflowNode): string {
   if (n.kind === 'action') return n.config.do === 'command' ? `${KIND_LABEL.action} · Command` : KIND_LABEL.action;
   if (n.kind === 'trigger') return `${KIND_LABEL.trigger} · ${TRIGGER_SHORT[n.config.kind]}`;
   return KIND_LABEL[n.kind];
+}
+
+/**
+ * Who gives the verdict on PRs (#334), read from the steps: each agent step with « Verdict on the PR » on (in the task
+ * thread) and an agent chosen, in order, once per agent and workflow. Replaces the project's review agent.
+ */
+export function verdictSteps(workflows: Workflow[]): { agentId: string; workflowId: string; workflowName: string; projectId: string | null }[] {
+  const out: { agentId: string; workflowId: string; workflowName: string; projectId: string | null }[] = [];
+  for (const w of workflows)
+    for (const n of w.nodes)
+      if (n.kind === 'agent' && n.config.inThread && n.config.verdict && n.config.agentId && !out.some((x) => x.agentId === n.config.agentId && x.workflowId === w.id))
+        out.push({ agentId: n.config.agentId, workflowId: w.id, workflowName: w.name, projectId: w.projectId });
+  return out;
 }

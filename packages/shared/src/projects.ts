@@ -119,11 +119,6 @@ export interface Project {
   allowedHosts: string[];
   /** Gets the project's new tasks (triage); always a member. null = nobody triages. */
   lead: string | null;
-  /**
-   * Reviews the project's pull requests (#263): the agent of its Review workflow's « Review the PR » step; the lead
-   * reviews this agent's own PRs. A member; null = nobody: the step can't run and says so.
-   */
-  reviewAgent: string | null;
   /** Hue 0-359 of its mark. */
   colour: number;
   status: 'active' | 'archived';
@@ -149,7 +144,6 @@ export const CreateProject = z.object({
   repo: RepoName.nullable().default(null),
   ciJob: CiJob.default(null),
   lead: z.string().min(1).nullable().default(null),
-  reviewAgent: z.string().min(1).nullable().default(null),
   /** Agents; the lead is added if missing. */
   members: z.array(z.string().min(1)).default([]),
   /** omitted = the first unused hue of PROJECT_HUES. */
@@ -164,7 +158,6 @@ export const UpdateProject = z
     repo: RepoName.nullable(),
     ciJob: CiJob,
     lead: z.string().min(1).nullable(),
-    reviewAgent: z.string().min(1).nullable(),
     /** The whole member list (the lead is added if missing). */
     members: z.array(z.string().min(1)),
     colour: z.number().int().min(0).max(359),

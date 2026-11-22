@@ -6,6 +6,7 @@ import type { Card } from '@atlas/shared';
 import { startEngine, type Engine } from '../../src/index.ts';
 import { FakeProvider } from '../../src/providers/fake.ts';
 import { eventually } from './wait.ts';
+import { reviewGraph, reviewWorkflowOf } from '../../src/reviewFlow.ts';
 import type { Provider } from '../../src/providers/types.ts';
 
 type EngineOptions = Parameters<typeof startEngine>[0];
@@ -77,11 +78,19 @@ export async function launch(o: LaunchOptions = {}) {
 export type Launched = Awaited<ReturnType<typeof launch>>;
 
 /**
- * Make `agentId` the review agent of `projectId` (#263, Settings → Projects), adding it as a member if needed. In the
- * default project a new member works in its own workspace: no clone.
+ * Choose who reviews in `projectId`'s Review workflow (#334, as Master does in its steps): `reviewer` in « Review the PR »
+ * and in « Built by another agent? », `other` (default: the project's lead) in « Review the reviewer's PR ». Each is
+ * added as a member if needed (the default project: its own workspace, no clone). Makes the workflow if missing.
  */
-export function setReviewAgent(engine: Engine, projectId: string, agentId: string): void {
+export function setReviewers(engine: Engine, projectId: string, reviewer: string | null, other?: string | null): void {
   const p = engine.projects.get(projectId);
+  const second = other === undefined ? p.lead : other;
   const members = p.members.map((m) => m.agentId);
-  engine.projects.update(p.id, { ...(members.includes(agentId) ? {} : { members: [...members, agentId] }), reviewAgent: agentId });
+  const add = [reviewer, second].filter((a): a is string => !!a && !members.includes(a));
+  if (add.length) engine.projects.update(p.id, { members: [...members, ...new Set(add)] });
+  const id = reviewWorkflowOf(engine.db, p.id)?.id ?? engine.workflows.createReview(p.id);
+  engine.db.prepare('UPDATE projects SET review_seeded = 1 WHERE id = ?').run(p.id);
+  const w = engine.workflows.get(id);
+  const g = reviewGraph({ reviewer, other: second });
+  engine.workflows.saveGraph(id, { revision: w.revision, nodes: g.nodes, edges: g.edges }, 'user');
 }

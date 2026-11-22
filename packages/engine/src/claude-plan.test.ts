@@ -349,7 +349,7 @@ describe('Claude plan (Atlas’s own approved OAuth client)', () => {
     const auths = an.seen.filter((r) => r.url.includes('/v1/messages')).map((r) => r.headers.get('authorization'));
     expect(auths).toEqual(['Bearer at1', 'Bearer at2']);
 
-    expect(engine!.notifications.list()).toMatchObject([{ kind: 'plan.switched', title: 'Claude · Main reached its usage limit', body: expect.stringContaining('Work moved to Work') }]);
+    expect(engine!.notifications.list().filter((n) => n.kind !== 'workflow.no_agent')).toMatchObject([{ kind: 'plan.switched', title: 'Claude · Main reached its usage limit', body: expect.stringContaining('Work moved to Work') }]);
     const s1 = await status();
     expect(s1.accounts[0]).toMatchObject({ id: main.id, paused: true, pausedUntil: new Date(mainReset).toISOString(), quota: { fiveHour: { usedPct: 100 }, status: 'rejected' } });
     expect(s1.accounts[1]).toMatchObject({ paused: false, quota: { fiveHour: { usedPct: 62 }, week: { usedPct: 81 }, status: 'allowed' } });

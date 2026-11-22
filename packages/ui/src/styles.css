@@ -2588,6 +2588,12 @@ button.wfl-ghead:hover { color: var(--text); background: var(--hover); }
 .wf-ok-chip { padding: 0 6px; border-radius: 9px; background: var(--bk-bg); color: var(--bk-ink); font-size: var(--fs-small); font-weight: var(--fw-medium); line-height: var(--lh-normal); }
 .wf-sum.warn { color: var(--bk-ink); }
 .wf-node-ok { display: inline-block; margin: 4px 0 2px; }
+/* An agent step with no agent (#334): the bar over the canvas and the chip on the step. */
+.wf-noagent { display: flex; align-items: center; flex-wrap: wrap; gap: 8px 12px; }
+.wf-noagent span { flex: 1; min-width: 0; }
+.wf-noagent b { font-weight: var(--fw-medium); }
+.wf-fixacts { display: flex; gap: 8px; flex: none; align-items: center; }
+.wf-noagent-chip { background: var(--warn-bg); color: var(--warn-ink); }
 .wf-appr-acts button { justify-content: center; }
 .wf-from { display: grid; grid-template-columns: max-content 12px minmax(0, 1fr); gap: 4px 8px; align-items: center; font-size: var(--fs-small); line-height: var(--lh-normal); }
 .wf-from .row { display: contents; }
@@ -2677,11 +2683,23 @@ button.wfl-ghead:hover { color: var(--text); background: var(--hover); }
 .wf-var:hover code { background: var(--hover); }
 .wf-exits { display: flex; flex-direction: column; gap: 6px; font-size: var(--fs-small); color: var(--muted); }
 .wf-exits .lbl { color: var(--muted); }
-.wf-exits .row { display: grid; grid-template-columns: 64px 12px minmax(0, 1fr); gap: 8px; align-items: center; }
+.wf-exits .row { display: grid; grid-template-columns: 104px 12px minmax(0, 1fr); gap: 8px; align-items: center; }
 .wf-exits .name { color: var(--text); font-weight: var(--fw-medium); }
 .wf-exits .name.fail { color: var(--neg-ink); }
 .wf-exits .arr { color: var(--faint); }
 .wf-exits select { min-width: 0; }
+/* « Verdict on the PR » (#334): a switch row in the agent step panel; greyed out when the step works as a new task. */
+.wf-switch-row { display: flex; align-items: flex-start; gap: 12px; padding: 10px 12px; border: 1px solid var(--line); border-radius: 8px; background: var(--sheet); cursor: pointer; }
+.wf-switch-row .tkx { display: flex; flex-direction: column; gap: 2px; flex: 1; min-width: 0; }
+.wf-switch-row b { font-weight: var(--fw-medium); color: var(--text); }
+.wf-switch-row .switch { margin: 2px 0 0; }
+.wf-switch-row.off { cursor: default; }
+.wf-switch-row.off b { color: var(--muted); }
+.wf-switch-row.off .switch span { cursor: default; opacity: 0.5; }
+.field .help.warn { color: var(--warn-ink); }
+.field .help.bad { color: var(--neg-ink); }
+.field select.bad { border-color: var(--neg-ink); }
+.field .help.warn b { font-weight: var(--fw-medium); }
 .wf-side-foot { display: flex; justify-content: space-between; align-items: center; gap: 8px; padding: 10px 16px; border-top: 1px solid var(--rule); }
 .wf-side-open { position: absolute; right: 12px; top: 12px; z-index: 3; }
 /* Run list and the chosen run's steps. */

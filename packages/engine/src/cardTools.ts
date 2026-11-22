@@ -166,7 +166,7 @@ export const CARD_TOOLS = {
     terminal: 'review',
     run: ({ summary, prs }, { kanban, agentId, cardId }) => {
       const c = kanban.requestReview(cardId, prs, agentId, summary);
-      return `in review: ${c.prs.map((p) => `PR #${p.number}`).join(', ')} ${c.reviewer ? `waits for @${c.reviewer}` : 'has no reviewer (no review agent set: tell the user)'}`;
+      return `in review: ${c.prs.map((p) => `PR #${p.number}`).join(', ')} ${c.reviewer ? `waits for @${c.reviewer}` : 'has no reviewer yet (its Review workflow chooses one when its review step starts)'}`;
     },
   }),
   history_search: tool({

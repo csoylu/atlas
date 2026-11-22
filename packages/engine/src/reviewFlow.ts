@@ -12,9 +12,11 @@ import { validate, type Gh } from '../../../scripts/pr/validate.mjs';
  * a GitHub repo (workflows.origin = 'review', shown « default »). It replaced the hardcoded review of prs.ts: what
  * stays there is generic (reading PRs from GitHub, merged → Done when no Review run is open).
  *
- *   1 A task asks for review → 2 CI finished on the PR (at most 2 h) → 3 CI green, no conflict? → 4 Review the PR (the
- *   project's review agent, in the task thread) → 5 Validate + merge → 6 Task → Done. Timed out, no, changes asked
- *   and refused all go to 7 Back to the builder (Ready, the reason as a note).
+ *   1 A task asks for review → 2 CI finished on the PR (at most 2 h) → 3 CI green, no conflict? → 4 Built by another
+ *   agent? (task.assignee is not the reviewer) → yes: 5 Review the PR / no: 6 Review the reviewer's PR (another agent),
+ *   both in the task thread with « Verdict on the PR » → 7 Validate + merge → 8 Task → Done. Timed out, no, changes
+ *   asked and refused all go to 9 Back to the builder (Ready, the reason as a note). Ordinary steps (#334): no project
+ *   setting, nothing here a hand-built workflow couldn't do.
  */
 
 export const REVIEW_NAME = 'Review';
@@ -33,14 +35,27 @@ export const REVIEW_PROMPT =
 /** The note step 7 leaves in the task: the step that sent it back, and why (whichever of the four exits it was). */
 export const BACK_NOTE = '{{last.title}}: {{last.exit}} ({{last.summary}}). Back to Ready for @{{task.assignee}}: fix it, push, then task_request_review again.';
 
-/** Positions (Master's approved layout, design v47): three columns, « Back to the builder » alone on the bottom row. */
-const COLX = [40, 272, 504];
+/**
+ * Positions (#334, paris's approved layout): three rows of up to four steps. Row 2 is the review path, « Review the
+ * reviewer's PR » under the first review, « Back to the builder » bottom left.
+ */
+const COLX = [40, 272, 504, 736];
 // The first row at y 80, like a new workflow's: the canvas's « Add step » bar sits over the top 70 px.
 const ROWS = [80, 288, 496];
 const at = (c: number, r: number) => ({ x: COLX[c]!, y: ROWS[r]! });
 
-/** The seven steps and their links, as a fresh project gets them and « Reset to default » restores them. */
-export function reviewGraph(): { nodes: WorkflowNodeInput[]; edges: WorkflowEdge[] } {
+/** The agents of the two review steps (#334): null = not chosen (a new project), the step couldn't run until one is. */
+export interface Reviewers {
+  reviewer: string | null;
+  other: string | null;
+}
+
+/**
+ * The nine steps and their links, as a fresh project gets them (no agents) and « Reset to default » restores them (the
+ * agents chosen now). Nothing here is special to Review (#334, Master: steps are lego parts): the reviewer's own PRs
+ * go through an ordinary Condition on task.assignee and a second agent step with « Verdict on the PR » on.
+ */
+export function reviewGraph(agents: Reviewers = { reviewer: null, other: null }): { nodes: WorkflowNodeInput[]; edges: WorkflowEdge[] } {
   const nodes: WorkflowNodeInput[] = [
     { id: 'trigger', kind: 'trigger', ...at(0, 0), config: { kind: 'task', event: 'review_requested', maxRunsPerHour: REVIEW_LOOP_GUARD } },
     { id: 'ci', kind: 'wait', ...at(1, 0), config: { title: 'CI finished on the PR', for: 'ciFinished', limitMin: REVIEW_CI_LIMIT_MIN } },
@@ -60,23 +75,45 @@ export function reviewGraph(): { nodes: WorkflowNodeInput[]; edges: WorkflowEdge
         ],
       },
     },
-    { id: 'review', kind: 'agent', ...at(0, 1), config: { title: 'Review the PR', agentId: null, prompt: REVIEW_PROMPT, newTaskEachRun: false, inThread: true, reviewAgent: true } },
-    { id: 'merge', kind: 'action', ...at(1, 1), config: { do: 'mergePr', title: 'Validate + merge the PR' } },
-    { id: 'done', kind: 'action', ...at(2, 1), config: { do: 'setStatus', title: 'Task → Done', status: 'done', note: '' } },
+    {
+      id: 'own',
+      kind: 'condition',
+      ...at(0, 1),
+      // A typed name: it does not follow the agent of « Review the PR » (Master, #335 4a); its help line says so.
+      config: { test: 'fields', title: 'Built by another agent?', match: 'all', tests: [{ field: 'task.assignee', op: 'isNot', value: agents.reviewer ?? '' }] },
+    },
+    { id: 'review', kind: 'agent', ...at(1, 1), config: { title: 'Review the PR', agentId: agents.reviewer, prompt: REVIEW_PROMPT, newTaskEachRun: false, inThread: true, verdict: true } },
+    { id: 'review2', kind: 'agent', ...at(1, 2), config: { title: "Review the reviewer's PR", agentId: agents.other, prompt: REVIEW_PROMPT, newTaskEachRun: false, inThread: true, verdict: true } },
+    { id: 'merge', kind: 'action', ...at(2, 1), config: { do: 'mergePr', title: 'Validate + merge the PR' } },
+    { id: 'done', kind: 'action', ...at(3, 1), config: { do: 'setStatus', title: 'Task → Done', status: 'done', note: '' } },
     { id: 'back', kind: 'action', ...at(0, 2), config: { do: 'setStatus', title: 'Back to the builder', status: 'ready', note: BACK_NOTE } },
   ];
   const edges: WorkflowEdge[] = [
     { from: 'trigger', exit: 'start', to: 'ci' },
     { from: 'ci', exit: 'event', to: 'checks' },
     { from: 'ci', exit: 'timed out', to: 'back' },
-    { from: 'checks', exit: 'yes', to: 'review' },
+    { from: 'checks', exit: 'yes', to: 'own' },
     { from: 'checks', exit: 'no', to: 'back' },
+    { from: 'own', exit: 'yes', to: 'review' },
+    { from: 'own', exit: 'no', to: 'review2' },
     { from: 'review', exit: 'approved', to: 'merge' },
     { from: 'review', exit: 'changes asked', to: 'back' },
+    { from: 'review2', exit: 'approved', to: 'merge' },
+    { from: 'review2', exit: 'changes asked', to: 'back' },
     { from: 'merge', exit: 'merged', to: 'done' },
     { from: 'merge', exit: 'refused', to: 'back' },
   ];
   return { nodes, edges };
+}
+
+/** The Inbox item of a project whose Review workflow was just made, with no agent chosen yet (#334, mockup 4c). */
+export function noAgentItem(projectName: string, workflowId: string) {
+  return {
+    kind: 'workflow.no_agent' as const,
+    title: `Choose who reviews ${projectName}'s PRs`,
+    body: 'Its Review workflow has no agent in its two review steps. Nothing is reviewed or merged until you choose one.',
+    link: { label: 'Open the Review workflow', hash: `#/workflows/${workflowId}/step/review` },
+  };
 }
 
 /** The project's Review workflow: its id and whether it is on, or null (never made, or deleted). */
@@ -188,14 +225,19 @@ export class ReviewFlow {
   seed(): string[] {
     const todo = this.db.prepare("SELECT id FROM projects WHERE status = 'active' AND repo IS NOT NULL AND repo != '' AND review_seeded = 0 ORDER BY created_at").all() as { id: string }[];
     const made: string[] = [];
+    const told: Notification[] = [];
     for (const { id } of todo) {
       this.db.transaction(() => {
-        const wf = reviewWorkflowOf(this.db, id)?.id ?? this.workflows.createReview(id);
+        const had = reviewWorkflowOf(this.db, id)?.id;
+        const wf = had ?? this.workflows.createReview(id);
         this.db.prepare('UPDATE projects SET review_seeded = 1 WHERE id = ?').run(id);
+        // A new one has no agent in its two review steps (#334): Master chooses who reviews, from this item.
+        if (!had) told.push(insertNotification(this.db, noAgentItem(projectRow(this.db, id).name, wf), this.now()));
         for (const c of this.waiting(id)) this.workflows.startReview(wf, c, AT_UPDATE);
         made.push(wf);
       })();
     }
+    for (const n of told) this.bus.emit({ type: 'notification.created', notification: n });
     return made;
   }
 

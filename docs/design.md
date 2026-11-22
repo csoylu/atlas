@@ -262,8 +262,8 @@ Statuses: `triage → todo → ready → running → (blocked | review) → done
 ### 7.1 Tasks linked to their pull requests (#189, built 18 Nov 2026, `engine/src/prs.ts`; the review: §9.1, #263)
 - **Link.** The builder ends its run with `task_request_review({summary, prs: [url…]})`: rows in `card_prs` (repo,
   number, url, branch, head, state open / merged / closed, CI `test`, `qa/validated` + its description, when read, the
-  last read error), the card goes `review` and gets `cards.reviewer`: the project's review agent (`projects.review_agent`,
-  Settings → Projects), or the project's lead when the builder is the review agent (zurich's own PRs → atlas). The
+  last read error), the card goes `review`, with no reviewer yet (#334): `cards.reviewer` is set when a workflow step
+  with « Verdict on the PR » starts on it, to that step's agent. The
   request is the `review_requested` task event that starts the project's Review workflow (§9.1). Work with no PR ends with
   `task_complete`; `task_complete` is refused while a linked PR is open.
 - **Read.** `Prs` polls every 60 s (and right after a link or a reviewer run ends) with `gh api`, the user's own gh
@@ -536,9 +536,10 @@ A workflow is a small graph: one **trigger** wired to **steps**. Mockup: paris's
   its own (a run on no task fails, saying why). Its run is woken there like a reviewer's (#221: `kickAlways`), the prompt
   is posted in the thread by `workflow`, and it reads every earlier turn with who wrote it: another agent's turns come
   as « [@x, another agent, wrote this in the thread (not you):] » (`context.ts`). Exits `done` (its run ended done; the
-  summary is what it last wrote) / `not done` (failed or stopped, with why). `reviewAgent: true` (thread only) picks the
-  project's review agent: the task's reviewer when it is In review, else Settings → review agent, or the project's lead
-  on the review agent's own task (today's rule). For a review the verdict is the exit: the reviewer's `pr_validate`
+  summary is what it last wrote) / `not done` (failed or stopped, with why). Its agent is the one chosen in the step,
+  never another (#334); none, missing, off or not a member of the task's project: « couldn't run », saying to choose
+  one in the step. **« Verdict on the PR »** (`verdict: true`, thread only, any agent step, #334 replaced the
+  `reviewAgent` flag): the step's agent becomes the task's reviewer as the step starts, and the verdict is the exit: the reviewer's `pr_validate`
   (it records a `pr_verdict` task event) ok → `approved`, fail → `changes asked` with the reason as the summary. A
   review run that ends with no verdict is couldn't run, not retried by itself (each try is a model run), Master told.
   `pr_validate` is offered only on a task In review whose reviewer is that agent (#216): a review step on another task
@@ -582,34 +583,42 @@ A workflow is a small graph: one **trigger** wired to **steps**. Mockup: paris's
   `commandSteps` (per command node: checkout, secrets, limit, approved, by, at).
 
 ### 9.1 The default Review workflow (#263, 19 Nov 2026, `engine/src/reviewFlow.ts`, migration 0063)
-Review is a workflow like any other: what was hardcoded in `prs.ts` (§7.1, #189) became seven steps Master can see,
+Review is a workflow like any other: what was hardcoded in `prs.ts` (§7.1, #189) became nine steps Master can see,
 edit, turn off and reset. One per project with a GitHub repo, `workflows.origin = 'review'`, shown « default ».
-- **Steps** (approved layout, design v47: three columns, « Back to the builder » alone on the bottom row):
+- **Steps** (#334 layout: three rows of up to four, « Back to the builder » at the bottom left; ordinary steps, no
+  project setting and nothing a hand-built workflow couldn't do):
   1. *A task asks for review*: task event `review_requested` of the project, loop guard 10 runs per task per hour.
   2. *CI finished on the PR*: Wait `ciFinished`, at most 2 h. It also ends on a conflict (GitHub runs no CI on it) and,
      in a project with no CI job, on a PR with no check at all (Datinel: no 2 h wait for nothing).
   3. *CI green, no conflict?*: Condition `pr.ci` is not failure and `pr.conflict` is not yes.
-  4. *Review the PR*: Agent step in the task thread (`inThread`, `reviewAgent`): the project's review agent
-     (`projects.review_agent`, Settings → Projects; it replaced Settings → Board & triage → Review agent), or the
-     project's lead on that agent's own PRs (`reviewerFor`). Unset, disabled or not a member: the step « couldn't
-     run » and says where to fix it, never another agent. Exits from the `pr_validate` verdict: approved / changes
-     asked. A run that ends without a verdict is woken once more (`REVIEW_TRIES` = 2, #221), then « couldn't run ».
+  4. *Built by another agent?*: Condition `task.assignee` is not <the reviewer>, a typed name: it does not follow the
+     agent of step 5 (change both). yes → 5, no → 6.
+  5. *Review the PR* and 6. *Review the reviewer's PR*: Agent steps in the task thread (`inThread`, `verdict`), each
+     with its chosen agent (Atlas: zurich, and atlas for zurich's own PRs). None, disabled or not a member: the step
+     « couldn't run » and says where to fix it, never another agent. Exits from the `pr_validate` verdict: approved /
+     changes asked. A run that ends without a verdict is woken once more (`REVIEW_TRIES` = 2, #221), then « couldn't run ».
      A reviewer run from before the update (`review_started` on the current request) is adopted, not started again.
      A reviewer run cut by a restart is followed into the run that resumes it (#325: the next run of that agent on the
      task); one that never resumes « couldn't run » after 15 min of engine time, Master told, Retry wakes it again.
-  5. *Validate + merge the PR*: action `mergePr` with the gate of §7.1 at the sha of the ok verdict (#325): a commit
+  7. *Validate + merge the PR*: action `mergePr` with the gate of §7.1 at the sha of the ok verdict (#325): a commit
      pushed after the review is refused (« a commit was pushed after your review ») and goes back to the builder.
      merged / refused.
 - **Asking again while In review** (#325): only the builder may (a fix pushed during the review). The new
   `review_requested` stops the open Review run (« stopped by a new review request ») and starts one on the new head.
-  6. *Task → Done*. 7. *Back to the builder*: Ready, the note « <step>: <exit> (<why>). Back to Ready for @builder… ».
+  8. *Task → Done*. 9. *Back to the builder*: Ready, the note « <step>: <exit> (<why>). Back to Ready for @builder… ».
 - **Seeded** at the engine start (`ReviewFlow.seed`) for every active project with a repo and `review_seeded = 0`, and
   when a project gets a repo; in the same transaction, each task of that project already In review gets a run whose
   trigger step says « started at the update ». Once per project: one Master deletes is not made again by itself.
 - **Migration 0063**: `projects.review_agent` (the old global setting copied into each project the agent is a member
   of; the setting is deleted) and `projects.review_seeded`.
-- **Reset to default** (`POST /api/workflows/:id/reset`): steps, links and layout back, as a new revision; on/off and
-  runs stay.
+- **Migration 0069** (#334): every step with `reviewAgent` gets the project's review agent of the day as its agent and
+  `verdict`; each Review workflow gets steps 4 and 6 (the lead in 6, who reviewed the reviewer's PRs until then);
+  `projects.review_agent` is dropped. Nobody's review changes on the day of the update.
+- **A new project** gets the nine steps with no agent in 5 and 6: its PRs stop at « couldn't run: no agent chosen »;
+  an Inbox item (« Choose who reviews <project>'s PRs », its button opens the step), a bar on the workflow and a « no
+  agent » chip on the step say so.
+- **Reset to default** (`POST /api/workflows/:id/reset`): steps, links and layout back, as a new revision; the agents
+  chosen in 5 and 6 stay (and 4 keeps testing for 5's); on/off and runs stay.
 - **Off or deleted**: a task In review with no Review run open and its project's Review not on shows « No Review
   workflow is on in <project> » (`Card.reviewOff`) with **Turn it on** (`POST /api/projects/:id/review-workflow`: on
   again, or made again from the default) and **Validate by hand** (`POST /api/cards/:id/validate {sha}`: the gate of
@@ -1105,7 +1114,7 @@ A project is a repo the team works on: a name, a GitHub repo `owner/name` (fixed
   member. Agent tools (task_list/show/update, schedule_*, artifact_*) act on the run's project; `project` may name
   another one only for a lead (of either project), anyone else gets « only a project's lead can act on another
   project ». agent_message / task_message: members of the same project; crossing is for a lead.
-- **Triage**: a project's new tasks go to its lead. The review agent stays one global setting (workflows v2).
+- **Triage**: a project's new tasks go to its lead. Who reviews is the agent of the Review workflow's steps (§9.1, #334).
 - **System prompt**: « # This conversation » names the project, its repo and lead; « # Team (project X) » lists its
   members only.
 - **API**: `GET/POST /api/projects`, `GET/PATCH /api/projects/:id` (name, lead, members, colour; repo only while

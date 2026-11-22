@@ -124,10 +124,12 @@ describe('inbox', () => {
     const work = e.kanban.create({ title: 'Backfill funding rates', status: 'ready', assignee: 'atlas' }, 'user');
     const idea = e.kanban.create({ title: 'Raw idea' }, 'user');
     await until(() => e.kanban.get(work.id).status === 'blocked', 'work blocked');
-    await until(() => e.notifications.inbox().updates.length > 0, 'triage failure noted');
+    // The kit's Atlas has a Review workflow with no agent yet: its « Choose who reviews » item (#334) is not this test's.
+    const updates = () => e.notifications.inbox().updates.filter((u) => u.kind !== 'workflow.no_agent');
+    await until(() => updates().length > 0, 'triage failure noted');
     const inbox = e.notifications.inbox();
     expect(inbox.needsYou).toMatchObject([{ card: { id: work.id }, failed: true, unread: true }]);
-    expect(inbox.updates).toMatchObject([{ kind: 'run.failed', title: 'Raw idea', cardId: idea.id, body: expect.stringContaining('429 rate limit') }]);
+    expect(updates()).toMatchObject([{ kind: 'run.failed', title: 'Raw idea', cardId: idea.id, body: expect.stringContaining('429 rate limit') }]);
   });
 
   it('serves the inbox over the API: list, read, archive, archive all read', async () => {

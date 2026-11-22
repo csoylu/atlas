@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useState } from 'react';
-import { type Agent, type Card, type Memory, type Model, type Settings } from '@atlas/shared';
+import { type Agent, type Card, type Memory, type Model, type Settings, type Workflow } from '@atlas/shared';
 import { api, ApiError } from './api.ts';
 import { AgentFace } from './AgentFace.tsx';
 import { HeaderActions, Icon } from './ScreenHeader.tsx';
@@ -8,6 +8,7 @@ import { EmptyState, ErrorState, Skeleton } from './Kit.tsx';
 import { memoryHref } from './memoryView.ts';
 import { friendlyModel, friendlyModelOf } from './modelNames.ts';
 import { useProjects } from './projects.tsx';
+import { verdictSteps } from './workflowView.ts';
 
 /**
  * Settings → Agents (redesign #272, mockup « Agents »): one row per agent (face, role and projects, friendly model
@@ -89,7 +90,7 @@ function AgentList(props: {
       ) : (
         <div className="set-list agl" role="list" aria-label="Agents">
           {props.agents.map((a) => {
-            const roles = [a.rolePrompt.split('\n')[0]?.trim() || 'no role', props.settings?.triageAgent === a.id && 'triage', pinfo.active.some((p) => p.reviewAgent === a.id) && 'reviewer'].filter(Boolean).join(' · ');
+            const roles = [a.rolePrompt.split('\n')[0]?.trim() || 'no role', props.settings?.triageAgent === a.id && 'triage'].filter(Boolean).join(' · ');
             const projects = pinfo.active.filter((p) => p.members.some((m) => m.agentId === a.id)).map((p) => p.name);
             const mem = props.memories?.filter((m) => m.scope === 'agent:' + a.id).length;
             const model = props.models.find((m) => m.id === a.modelId);
@@ -133,6 +134,11 @@ function AgentPage(props: { agent: Agent; models: Model[]; settings: Settings | 
     api.memories({ scope: `agent:${a.id}`, status: 'active' }).then(setMemory, onError);
     api.memoryBudget(a.id).then(setBudget, onError);
   }, [a.id, onError]);
+  // Where it gives the verdict on PRs (#334): the agent steps with « Verdict on the PR » on that chose it.
+  const [workflows, setWorkflows] = useState<Workflow[] | null>(null);
+  useEffect(() => {
+    api.workflows().then(setWorkflows, onError);
+  }, [onError]);
   const [confirming, setConfirming] = useState(false);
   /** Why the engine refused to delete (open cards, triage agent): shown on the page, not a far-away banner. */
   const [refusal, setRefusal] = useState<string | null>(null);
@@ -152,7 +158,7 @@ function AgentPage(props: { agent: Agent; models: Model[]; settings: Settings | 
   const model = props.models.find((m) => m.id === draft.modelId);
   const projects = pinfo.active.filter((p) => p.members.some((m) => m.agentId === a.id));
   const triage = props.settings?.triageAgent === a.id;
-  const reviewer = pinfo.active.filter((p) => p.reviewAgent === a.id).map((p) => p.name);
+  const verdicts = verdictSteps(workflows ?? []).filter((v) => v.agentId === a.id);
   const modelBadge = model?.lastError
     ? 'model failing'
     : model?.provider === 'chatgpt' && !model.credentialPresent
@@ -164,17 +170,28 @@ function AgentPage(props: { agent: Agent; models: Model[]; settings: Settings | 
           : null;
   return (
     <section className={'set-page agent-page' + (a.enabled ? '' : ' off')}>
-      {(triage || reviewer.length > 0 || modelBadge) && (
+      {(triage || modelBadge) && (
         <div className="set-tools">
           {triage && <span className="badge">triage</span>}
-          {reviewer.length > 0 && <span className="badge">reviewer</span>}
           {modelBadge && <span className="badge bad">{modelBadge}</span>}
         </div>
       )}
       <p className="set-lead">
         {projects.length ? <>Member of {projects.map((p) => p.name).join(', ')}. </> : 'Member of no project. '}
-        {reviewer.length ? <>Reviews the pull requests of {reviewer.join(', ')}. </> : null}
-        The triage role is set in <a href="#/settings/board">Board &amp; triage</a>, each project's review agent in <a href="#/settings/projects">Projects</a>.
+        {verdicts.length > 0 && (
+          <>
+            Gives the verdict on PRs in{' '}
+            {verdicts.map((v, i) => (
+              <span key={v.workflowId}>
+                {i > 0 && (i === verdicts.length - 1 ? ' and ' : ', ')}
+                <a href={`#/workflows/${encodeURIComponent(v.workflowId)}`}>{v.workflowName}</a>
+                {v.projectId && ` (${pinfo.byId(v.projectId)?.name ?? v.projectId})`}
+              </span>
+            ))}
+            .{' '}
+          </>
+        )}
+        The triage role is set in <a href="#/settings/board">Board &amp; triage</a>.
       </p>
       <SetSec first>
         <SetRows>

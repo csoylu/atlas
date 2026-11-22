@@ -38,11 +38,11 @@ import {
 import type { Db } from './store/db.ts';
 import type { Bus } from './events.ts';
 import { ConflictError, InvalidError, NotFoundError, type Kanban } from './kanban.ts';
-import { assertActive, defaultProjectId, projectRow, resolveProject, reviewerFor } from './projects.ts';
+import { assertActive, defaultProjectId, isMember, projectRow, resolveProject } from './projects.ts';
 import { insertNotification, type NewNotification } from './notifications.ts';
 import { parsePrUrl } from './prs.ts';
 import type { EventData } from './workflowEvents.ts';
-import { REVIEW_NAME, reviewGraph } from './reviewFlow.ts';
+import { REVIEW_NAME, reviewGraph, type Reviewers } from './reviewFlow.ts';
 import { payloadFields, type HookBody, type HookTokens } from './webhooks.ts';
 import { validate, type Gh } from '../../../scripts/pr/validate.mjs';
 import { SecretsUnavailable, type Secrets } from './secrets.ts';
@@ -674,14 +674,27 @@ export class Workflows {
     return id;
   }
 
-  /** « Reset to default »: the seven steps, their links and the layout come back (a new revision; on/off and runs stay). */
+  /**
+   * « Reset to default »: the nine steps, their links and the layout come back (a new revision; on/off and runs stay).
+   * The agents chosen now stay (Master, #335 2a): the review steps' agents, else the first two verdict steps', in order.
+   */
   resetReview(id: string, by = 'user'): Workflow {
     this.tx(() => {
       const w = this.row(id);
       if (w.origin !== 'review') throw new InvalidError(`workflow « ${w.name} » is not a default Review workflow: nothing to reset it to`);
-      this.saveGraph(id, { revision: w.revision, ...reviewGraph() }, by);
+      this.saveGraph(id, { revision: w.revision, ...reviewGraph(this.reviewersOf(id)) }, by);
     });
     return this.get(id);
+  }
+
+  /** The agents of a Review workflow's two review steps, read from its agent steps with « Verdict on the PR » on. */
+  private reviewersOf(id: string): Reviewers {
+    const steps = this.get(id).nodes.filter((n): n is AgentNode => n.kind === 'agent' && !!n.config.verdict);
+    const byId = (nid: string) => steps.find((n) => n.id === nid)?.config.agentId;
+    const rest = steps.filter((n) => n.id !== 'review' && n.id !== 'review2').map((n) => n.config.agentId);
+    const reviewer = byId('review') ?? rest.shift() ?? null;
+    const other = byId('review2') ?? rest.shift() ?? null;
+    return { reviewer, other };
   }
 
   /**
@@ -1284,11 +1297,11 @@ export class Workflows {
           this.insertStep(runId, node.id, 'agent', 'failed', { exit: negativeExit(node)!, summary: 'no task thread', ended: true });
           return this.endRun(runId, 'failed', `${name} works in the run's task thread, and ${run.subject_card ? `task ${run.subject_card} was deleted` : `this run has none (started ${this.startedHow(run)})`}`);
         }
-        if (!c.reviewAgent && !c.agentId) return this.endRun(runId, 'failed', `${name} has no agent chosen`);
+        // No agent chosen (#334): the step couldn't run, in the thread wake below, so Master chooses one and retries.
         const id = this.insertStep(runId, node.id, 'agent', 'running', { card: card.id });
         const data: ThreadData = { thread: true, prompt: fill(c.prompt) + why, posted: false, runsBefore: 0, agent: null, runId: null, eventsBefore: 0, seqBefore: 0 };
         // A review the hardcoded flow started before the update (#263): adopted, not started a second time.
-        const old = c.reviewAgent ? this.oldReview(card.id) : null;
+        const old = c.verdict ? this.oldReview(card.id) : null;
         if (old) Object.assign(data, { posted: true, agent: old.by, runId: old.runId, eventsBefore: old.eventId });
         this.db.prepare('UPDATE workflow_run_steps SET data = ? WHERE id = ?').run(JSON.stringify(data), id);
         this.setRunState(runId, 'running');
@@ -2009,19 +2022,24 @@ export class Workflows {
 
   /* ── Agent steps in the task thread (#273) ── */
 
-  /** The agent of a thread step: the chosen one, or the task's reviewer (the project's review agent, the lead on its own PRs). */
-  private threadAgent(node: AgentNode, card: Card): { id: string } | { couldnt: string } {
-    if (!node.config.reviewAgent) return node.config.agentId ? { id: node.config.agentId } : { couldnt: 'no agent chosen' };
-    // The project's review agent; on its own task, the project's lead (#213, #263). Never another agent: unset,
-    // disabled or no longer a member is the reason the step couldn't run, with where to fix it.
-    const who = reviewerFor(this.db, card.projectId, card.assignee);
-    if ('problem' in who) return { couldnt: who.problem };
-    // pr_validate answers only the task's reviewer: it follows the project's choice made since the request.
-    if (card.reviewer !== who.id) {
-      this.db.prepare('UPDATE cards SET reviewer = ? WHERE id = ?').run(who.id, card.id);
+  /**
+   * The agent of a thread step: the one chosen in the step, never another (#334). Missing, disabled or not a member of
+   * the task's project is the reason the step couldn't run, with where to fix it. With « Verdict on the PR » it becomes
+   * the task's reviewer as the step starts: pr_validate is offered to it alone.
+   */
+  private threadAgent(node: AgentNode, card: Card, workflow: string): { id: string } | { couldnt: string } {
+    const id = node.config.agentId;
+    const where = `choose one in « ${stepTitle(node)} » of workflow « ${workflow} »`;
+    if (!id) return { couldnt: `no agent chosen: ${where}` };
+    const a = this.db.prepare('SELECT enabled FROM agents WHERE id = ?').get(id) as { enabled: number } | undefined;
+    if (!a) return { couldnt: `agent @${id} does not exist: ${where}` };
+    if (!a.enabled) return { couldnt: `@${id} is off: turn it on, or ${where}` };
+    if (!isMember(this.db, card.projectId, id)) return { couldnt: `@${id} is not a member of ${projectRow(this.db, card.projectId).name}: add it, or ${where}` };
+    if (node.config.verdict && card.reviewer !== id) {
+      this.db.prepare('UPDATE cards SET reviewer = ? WHERE id = ?').run(id, card.id);
       this.kanban.emit(card.id);
     }
-    return who;
+    return { id };
   }
 
   /** Thread steps whose agent is not woken yet: the prompt goes in the thread and the agent starts there, once the thread is free. */
@@ -2068,9 +2086,8 @@ export class Workflows {
       if (adopted) return this.tx(() => this.storeThreadRun(step.id, { ...d, runId: adopted.id }));
     }
     if (this.db.prepare("SELECT 1 FROM runs WHERE card_id = ? AND status = 'running'").get(card.id)) return; // the thread is busy: after that run
-    const who = this.threadAgent(node, card);
+    const who = this.threadAgent(node, card, this.row(run.workflow_id).name);
     if ('couldnt' in who) return this.tx(() => this.markCouldnt(run.id, step.id, who.couldnt));
-    if (!this.db.prepare('SELECT 1 FROM agents WHERE id = ?').get(who.id)) return this.tx(() => this.markCouldnt(run.id, step.id, `agent @${who.id} does not exist`));
     const events = (this.db.prepare('SELECT COALESCE(MAX(id), 0) AS n FROM card_events WHERE card_id = ?').get(card.id) as { n: number }).n;
     const seqBefore = this.kanban.messages(card.id).at(-1)?.seq ?? 0;
     const next: ThreadData = { ...d, posted: true, agent: who.id, runsBefore: runs().length, runId: null, eventsBefore: events, seqBefore };
@@ -2138,7 +2155,7 @@ export class Workflows {
     }
     const node = this.node(run.workflow_id, step.node_id);
     const said = this.lastAgentText(step.card_id!, d.agent!, d.seqBefore);
-    if (node?.kind === 'agent' && node.config.reviewAgent) {
+    if (node?.kind === 'agent' && node.config.verdict) {
       const v = this.db
         .prepare("SELECT payload FROM card_events WHERE card_id = ? AND kind = 'pr_verdict' AND id > ? ORDER BY id DESC LIMIT 1")
         .get(step.card_id, d.eventsBefore ?? 0) as { payload: string } | undefined;
@@ -2347,7 +2364,7 @@ export class Workflows {
         }
       if (n.kind === 'action' && n.config.do === 'setAssignee' && n.config.assignee && !this.db.prepare('SELECT 1 FROM agents WHERE id = ?').get(n.config.assignee))
         throw new InvalidError(`« ${stepTitle(n)} »: agent @${n.config.assignee} does not exist`);
-      if (n.kind === 'agent' && n.config.reviewAgent && !n.config.inThread) throw new InvalidError(`« ${stepTitle(n)} »: the review agent works in the task thread`);
+      if (n.kind === 'agent' && n.config.verdict && !n.config.inThread) throw new InvalidError(`« ${stepTitle(n)} »: a verdict on the PR is given in the task thread`);
       if (isCommand(n)) {
         const name = `« ${stepTitle(n)} »`;
         if (!projectId) throw new InvalidError(`${name}: a command step needs a workflow of a project (a global workflow has no repo to check out)`);

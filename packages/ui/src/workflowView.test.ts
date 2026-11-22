@@ -1,6 +1,8 @@
 import { describe, expect, it } from 'vitest';
 import type { TriggerConfig, Workflow, WorkflowEdge, WorkflowNode, WorkflowRun, WorkflowRunStep } from '@atlas/shared';
 import {
+  nodeMeta,
+  verdictSteps,
   chainOf,
   groupCount,
   listGroup,
@@ -345,5 +347,22 @@ describe('Workflows v2 stage 2 (#262)', () => {
     expect(stepState(step)).toBe('couldnt');
     expect(nodeClass('couldnt')).toBe('bad');
     expect(STATE_LABEL.couldnt).toBe("Couldn't run");
+  });
+});
+
+describe('verdict steps (#334)', () => {
+  const step = (id: string, agentId: string | null, inThread: boolean, verdict?: boolean): WorkflowNode => ({ id, kind: 'agent', x: 0, y: 0, config: { title: id, agentId, prompt: 'p', newTaskEachRun: false, inThread, verdict } });
+  it('reads who gives the verdict from the steps: thread steps with the switch on and an agent, once per agent and workflow', () => {
+    const w = (id: string, nodes: WorkflowNode[]) => ({ id, name: id === 'a' ? 'Review' : 'Other', projectId: 'atlas', nodes, edges: [] }) as unknown as Workflow;
+    const out = verdictSteps([
+      w('a', [step('review', 'zurich', true, true), step('review2', 'atlas', true, true), step('x', 'zurich', true, true), step('empty', null, true, true)]),
+      w('b', [step('off', 'munih', true), step('task', 'paris', false, true)]),
+    ]);
+    expect(out.map((v) => `${v.agentId}@${v.workflowName}`)).toEqual(['zurich@Review', 'atlas@Review']);
+  });
+  it("an agent step's line names its agent, how it works and the verdict, or says it has none", () => {
+    expect(nodeMeta(step('r', 'zurich', true, true))).toBe('@zurich · in the task thread · verdict');
+    expect(nodeMeta(step('r', null, true, true))).toBe('No agent · in the task thread · verdict');
+    expect(nodeMeta(step('r', 'zurich', false, true))).toBe('@zurich · one task');
   });
 });
