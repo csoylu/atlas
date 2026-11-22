@@ -142,6 +142,19 @@ export class Models {
     }
   }
 
+  /**
+   * Re-read a local model's context window from its server (#336): the server's setting changes without Atlas knowing
+   * (Ollama restarted with another OLLAMA_CONTEXT_LENGTH). Called after the first successful call of a run, when the
+   * model is loaded. Returns the model, updated when the server reports another number; null from the server keeps it.
+   */
+  async refreshContextWindow(model: Model): Promise<Model> {
+    if (model.provider !== 'openai_compat' || !model.baseUrl) return model;
+    const detected = await detectContextWindow(model.baseUrl, model.name);
+    if (!detected || detected === model.contextWindow) return model;
+    this.db.transaction(() => this.db.prepare('UPDATE models SET context_window = ? WHERE id = ?').run(detected, model.id))();
+    return { ...model, contextWindow: detected };
+  }
+
   /** Hook run before each call to a model it claims (the managed local server starts on demand). */
   private before: { serves(baseUrl: string | null): boolean; ensure(): Promise<void> } | null = null;
   setLocal(local: { serves(baseUrl: string | null): boolean; ensure(): Promise<void> }) {
