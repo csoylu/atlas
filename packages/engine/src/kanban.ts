@@ -216,6 +216,7 @@ export class Kanban {
       effort: r.effort,
       naming: this.naming.has(r.id),
       working: r.board === 'direct' && !!this.db.prepare("SELECT 1 FROM runs WHERE card_id = ? AND status = 'running'").get(r.id),
+      ...this.readState(r),
       originCard: r.origin_card,
       images: JSON.parse(r.images || '[]') as ImageBlock[],
       reviewer: r.reviewer,
@@ -227,6 +228,13 @@ export class Kanban {
     };
     card.waiting = this.waitingReason(card);
     return card;
+  }
+
+  /** A direct chat's read state (#338, chatReads.ts): unread while its last final reply is after what Master has seen. */
+  private readState(r: CardRow): { unread: boolean; readSeq: number } {
+    if (r.board !== 'direct') return { unread: false, readSeq: 0 };
+    const row = this.db.prepare('SELECT reply_seq, read_seq FROM chat_reads WHERE card_id = ?').get(r.id) as { reply_seq: number; read_seq: number } | undefined;
+    return { unread: !!row && row.reply_seq > row.read_seq, readSeq: row?.read_seq ?? 0 };
   }
 
   private parentsOf(id: string): string[] {

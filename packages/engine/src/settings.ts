@@ -36,6 +36,9 @@ export class Settings {
       userName: map.get('user_name') || null,
       userAbout: map.get('user_about') || null,
       memoryReviewModel: map.get('memory_review_model') || null,
+      // Settings → Appearance (#338): on until switched off.
+      notifyReplies: map.get('notify_replies') !== '0',
+      countBadge: map.get('count_badge') !== '0',
     };
   }
 
@@ -63,6 +66,8 @@ export class Settings {
             .run(project, p.triageAgent, new Date().toISOString(), p.triageAgent);
       })();
     }
+    if (p.notifyReplies !== undefined) this.set('notify_replies', p.notifyReplies ? '1' : '0');
+    if (p.countBadge !== undefined) this.set('count_badge', p.countBadge ? '1' : '0');
     if (p.userName !== undefined) this.set('user_name', p.userName);
     if (p.userAbout !== undefined) this.set('user_about', p.userAbout);
     if (p.memoryReviewModel !== undefined) {

@@ -146,6 +146,8 @@ export function CardPanel(props: {
   comments?: Comments;
   /** Tabs open in a hidden side panel (overlay mode): a button brings it back. */
   hiddenDocs?: number;
+  /** A direct chat opened with an unread reply (#338): the « New » line goes above the first message after this seq. */
+  newAfter?: number | null;
   /** The hidden pane holds the browser the agent is driving (#306): a dot on the button, this as its tooltip. */
   hiddenLive?: string;
   onShowDocs?(): void;
@@ -221,6 +223,7 @@ export function CardPanel(props: {
           onRewind={rw.ask}
           onUndo={rw.undoById}
           onError={onError}
+          newAfter={props.newAfter}
           empty={`Ask @${card.assignee} anything. For work to track, it creates tasks.`}
         />
       </div>
@@ -327,6 +330,8 @@ export function Activity(props: {
    * and opens scrolled to that box instead of the end.
    */
   askAt?: RefObject<HTMLElement | null>;
+  /** The « New » line (#338) above the first message group after this seq; null or undefined: none. */
+  newAfter?: number | null;
 }) {
   const { messages, results, timings, run, timeline } = props.convo;
   // The streaming reply, re-rendered as markdown at most every few dozen ms (#79): its thinking rows above its text (#80).
@@ -360,9 +365,15 @@ export function Activity(props: {
   const list = inline ? shown.slice(0, -1) : shown;
   // Opens at the question's start (a long one is read from its top), else at the end of the conversation.
   // Block body on purpose: scrollIntoView returns a Promise in recent Chromium, which must not become the cleanup.
+  const newRef = useRef<HTMLDivElement>(null);
+  const newShown = useRef(false);
   useEffect(() => {
     const box = card.block ? props.askAt?.current : null;
-    if (askRef.current) askRef.current.scrollIntoView({ block: 'start' });
+    // An unread reply (#338): opens at the « New » line once; then as before (new messages scroll to the end).
+    if (newRef.current && !newShown.current) {
+      newShown.current = true;
+      newRef.current.scrollIntoView({ block: 'start' });
+    } else if (askRef.current) askRef.current.scrollIntoView({ block: 'start' });
     else if (box) box.scrollIntoView({ block: 'nearest' }); // the sheet's top: title, then the question
     else end.current?.scrollIntoView({ block: 'end' });
   }, [messages.length, shownDraft, asking, card.block?.reason]);
@@ -390,6 +401,8 @@ export function Activity(props: {
   );
   const isAgent = (m: Message) => m.role === 'assistant';
   const groups = turns(list, isAgent);
+  // The first group with a message Master hadn't seen gets the « New » line above it.
+  const newAt = props.newAfter == null ? -1 : groups.findIndex((g) => g.some((m) => m.seq > props.newAfter!));
   const running = run?.status === 'running';
   // System events between turns (#66): ended runs, rewinds, the summary point, each after the group it follows.
   const placed = distribute(
@@ -450,6 +463,11 @@ export function Activity(props: {
               {after}
             </Fragment>
           );
+        const newLine = i === newAt && (
+          <div ref={newRef} className="new-line" role="separator" aria-label="New messages">
+            New
+          </div>
+        );
         const last = i === groups.length - 1 && !inline;
         // The reply streaming after this agent turn joins it, as the final message will (no jump when it lands).
         const draftHere = draftJoined && i === groups.length - 1;
@@ -457,8 +475,9 @@ export function Activity(props: {
         const cont = prev?.author === m.author && !placed.after[i - 1]?.length;
         return (
           <Fragment key={m.id}>
-          <div className={'msg ' + m.role + (cont ? ' cont' : '')} data-seq={m.seq}>
-            {!cont && <div className="who">{m.author === USER ? (props.userName ?? 'You') : <><AgentFace id={m.author} />{m.author}</>}</div>}
+          {newLine}
+          <div className={'msg ' + m.role + (cont && !newLine ? ' cont' : '')} data-seq={m.seq}>
+            {(!cont || newLine) && <div className="who">{m.author === USER ? (props.userName ?? 'You') : <><AgentFace id={m.author} />{m.author}</>}</div>}
             <div className="msg-body">
               {isAgent(m) ? (
                 renderTurn(ms, running && last, last)

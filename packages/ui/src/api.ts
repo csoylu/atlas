@@ -1,4 +1,4 @@
-import type { PaneSees, About, Account, Agent, Card, CardStatus, ChatGptModel, ChatGptStatus, ChatUsage, ClaudePlanModel, ClaudePlanStatus, ClearEvent, CompactResult, CreateAccount, CreateAgent, CreateCard, CreateModelRequest, CreatePlanAccount, CreateWorkflow, Doc, DocContent, DocHit, PostComment, DocVersion, FileChange, Folder, Inbox, LocalModel, LocalPull, LocalStatus, Memory, MemoryBudget, MemoryChange, MemoryProposal, MemoryQuery, Message, Model, ModelTest, Notification, PanelTab, PlanProvider, WsListing, WsFile, WsStat, WsSaveResult, SaveWsFile, RewindPreview, RewindResult, Run, CreateSecret, SecretInfo, SecretList, SecretStoreStatus, UpdateSecret, SaveWorkflowGraph, ServerEvent, Settings, Timeline, ToolCallTiming, UpdateAccount, UpdateAgent, UpdateChatGpt, UpdateClaudePlan, UpdateLocal, UpdateMemory, UpdateModelRequest, UpdatePlanAccount, UpdateStatus, UpdateVoice, Upload, UsageSummary, VoiceName, VoiceStatus, TriggerPreview, UpdateWorkflow, Workflow, WorkflowRun, WorkflowField, WorkflowRunContext, TaskWorkflow, RunWorkflow, Project, CreateProject, UpdateProject, UpdateMember, NetworkRefusal, NetworkPending, SandboxStatus, RepoCheck, WebhookInfo, TryCondition, ConditionTryResult, BrowserTab, BrowserStatus, BrowserShot, BrowserInspected, BrowserBounds } from '@atlas/shared';
+import type { ClientEvent, PaneSees, About, Account, Agent, Card, CardStatus, ChatGptModel, ChatGptStatus, ChatUsage, ClaudePlanModel, ClaudePlanStatus, ClearEvent, CompactResult, CreateAccount, CreateAgent, CreateCard, CreateModelRequest, CreatePlanAccount, CreateWorkflow, Doc, DocContent, DocHit, PostComment, DocVersion, FileChange, Folder, Inbox, LocalModel, LocalPull, LocalStatus, Memory, MemoryBudget, MemoryChange, MemoryProposal, MemoryQuery, Message, Model, ModelTest, Notification, PanelTab, PlanProvider, WsListing, WsFile, WsStat, WsSaveResult, SaveWsFile, RewindPreview, RewindResult, Run, CreateSecret, SecretInfo, SecretList, SecretStoreStatus, UpdateSecret, SaveWorkflowGraph, ServerEvent, Settings, Timeline, ToolCallTiming, UpdateAccount, UpdateAgent, UpdateChatGpt, UpdateClaudePlan, UpdateLocal, UpdateMemory, UpdateModelRequest, UpdatePlanAccount, UpdateStatus, UpdateVoice, Upload, UsageSummary, VoiceName, VoiceStatus, TriggerPreview, UpdateWorkflow, Workflow, WorkflowRun, WorkflowField, WorkflowRunContext, TaskWorkflow, RunWorkflow, Project, CreateProject, UpdateProject, UpdateMember, NetworkRefusal, NetworkPending, SandboxStatus, RepoCheck, WebhookInfo, TryCondition, ConditionTryResult, BrowserTab, BrowserStatus, BrowserShot, BrowserInspected, BrowserBounds } from '@atlas/shared';
 
 /** HTTP error with the parsed body (e.g. a 409's details). */
 export class ApiError extends Error {
@@ -130,6 +130,9 @@ export const api = {
   saveCardSecret: (id: string, value: string) => call<void>('POST', `/cards/${id}/secret`, { value }),
   agents: () => call<Agent[]>('GET', '/agents'),
   chats: () => call<Card[]>('GET', '/chats'),
+  /** « Mark as read » and « Mark all as read » (#338). */
+  readChat: (id: string) => call<{ ok: true }>('POST', `/chats/${id}/read`),
+  readAllChats: () => call<{ ok: true }>('POST', '/chats/read'),
   newChat: (agentId: string) => call<Card>('POST', `/agents/${agentId}/chats`),
   /** `project`: its main chat in that project (#214); omitted = the default project. */
   mainChat: (agentId: string, project?: string) => call<Card>('POST', `/agents/${agentId}/main-chat` + (project ? `?project=${encodeURIComponent(project)}` : '')),
@@ -284,6 +287,7 @@ export const api = {
 /** One WebSocket to the engine; reconnects with backoff. Returns an unsubscribe function. */
 export function subscribe(onEvent: (e: ServerEvent) => void, onStatus: (up: boolean) => void): () => void {
   let ws: WebSocket | undefined;
+  socket = { send: (e) => ws?.readyState === WebSocket.OPEN && ws.send(JSON.stringify(e)) };
   let closed = false;
   let delay = 500;
   const connect = () => {
@@ -291,6 +295,8 @@ export function subscribe(onEvent: (e: ServerEvent) => void, onStatus: (up: bool
     ws = new WebSocket(`${proto}://${location.host}/api/events`);
     ws.onopen = () => {
       delay = 500;
+      // A new socket is a new viewer for the engine: say again which chat this window shows.
+      if (viewingNow !== undefined) socket?.send({ type: 'viewing', chatId: viewingNow });
       onStatus(true);
     };
     ws.onmessage = (m) => onEvent(JSON.parse(m.data as string) as ServerEvent);
@@ -302,6 +308,19 @@ export function subscribe(onEvent: (e: ServerEvent) => void, onStatus: (up: bool
   connect();
   return () => {
     closed = true;
+    socket = null;
     ws?.close();
   };
+}
+
+let socket: { send(e: ClientEvent): void } | null = null;
+let viewingNow: string | null | undefined;
+/**
+ * The chat this window has on screen while Atlas is focused (#338), null for none: the engine marks it read and never
+ * turns it unread while it stays there. Sent again on every reconnect.
+ */
+export function setViewing(chatId: string | null): void {
+  if (viewingNow === chatId) return;
+  viewingNow = chatId;
+  socket?.send({ type: 'viewing', chatId });
 }

@@ -13,6 +13,7 @@ import { FileLog } from './fileLog.ts';
 import { Snapshots } from './snapshots.ts';
 import { Dispatcher } from './dispatcher.ts';
 import { Settings } from './settings.ts';
+import { ChatReads } from './chatReads.ts';
 import { Documents } from './documents.ts';
 import { WorkspaceFiles } from './workspaceFiles.ts';
 import { Memories } from './memory.ts';
@@ -147,6 +148,7 @@ export interface Engine {
   claude: ClaudePlan;
   plans: PlanAccounts;
   notifications: Notifications;
+  reads: ChatReads;
   usage: Usage;
   voice: Voice | null;
   /** The « Voice » chat the desktop voice loop talks through (desktop on a Mac only). */
@@ -182,6 +184,7 @@ export async function startEngine(opts: EngineOptions): Promise<Engine> {
   const accounts = new Accounts(db, env, opts.secrets);
   models.setAccounts(accounts);
   const notifications = new Notifications(db, bus, kanban);
+  const reads = new ChatReads(db, bus, kanban);
   // Plan sign-ins (ChatGPT, Claude) need the keychain: a server's password store doesn't take them (#208).
   const planStore = opts.secrets?.lock ? undefined : opts.secrets;
   const plans = new PlanAccounts(db, bus, planStore, notifications, opts.claude?.now ?? opts.chatgpt?.now);
@@ -252,7 +255,7 @@ export async function startEngine(opts: EngineOptions): Promise<Engine> {
   const review = new MemoryReview(db, kanban, memories, models, agents, settings, usage);
   if (opts.memoryReview === false) review.after = () => {};
   const effects = new SideEffects(db, kanban, memories, workflows);
-  const runner = new Runner(db, bus, kanban, agents, models, memories, workflows, { fileLog, effects, sandbox, dataDir: opts.dataDir, leaseMs: opts.leaseMs, maxTurns: opts.maxTurns, usage, user: () => settings.user(), documents, cleanup, review, isVoiceChat: voiceChat ? (id) => voiceChat.isVoiceChat(id) : undefined, engine: () => ({ url, cookie: () => (auth.enabled ? auth.issue().token : null), answer: (method, path) => screenshotAnswer(kanban, method, path) }), shellEnv, secrets, prTool: opts.prs?.validate, browser });
+  const runner = new Runner(db, bus, kanban, agents, models, memories, workflows, { fileLog, effects, sandbox, dataDir: opts.dataDir, leaseMs: opts.leaseMs, maxTurns: opts.maxTurns, usage, user: () => settings.user(), documents, cleanup, review, isVoiceChat: voiceChat ? (id) => voiceChat.isVoiceChat(id) : undefined, engine: () => ({ url, cookie: () => (auth.enabled ? auth.issue().token : null), answer: (method, path) => screenshotAnswer(kanban, method, path) }), shellEnv, secrets, prTool: opts.prs?.validate, browser, reads });
   // Agent steps in the task thread (#273): the agent starts on the run's task, the prompt posted as its kick (#221).
   workflows.threads = { wake: (cardId, agentId, prompt) => runner.wake(cardId, { agentId, kind: 'work', kick: prompt, kickAlways: true }) };
   const rewinds = new Rewinds(db, bus, kanban, agents, runner, opts.dataDir, fileLog, effects);
@@ -322,6 +325,7 @@ export async function startEngine(opts: EngineOptions): Promise<Engine> {
     claude,
     plans,
     notifications,
+    reads,
     usage,
     voice,
     updater,
@@ -404,6 +408,7 @@ export async function startEngine(opts: EngineOptions): Promise<Engine> {
     claude,
     plans,
     notifications,
+    reads,
     usage,
     voice,
     voiceChat,

@@ -72,6 +72,12 @@ function ChatWithPanel(props: Parameters<typeof ChatView>[0] & { chat: Card }) {
   const comments = useComments(chat.id);
   const [hidden, setHidden] = useState(false);
   const [want, setWant] = useState<{ docId: string; version: number; key: string } | null>(null);
+  // « New » (#338): above the first message after what Master had seen when an unread reply was here (on opening, or
+  // arriving while Atlas was in the background); it stays until Master leaves the chat (this component is keyed by it).
+  const [newAfter, setNewAfter] = useState<number | null>(chat.unread ? chat.readSeq : null);
+  useEffect(() => {
+    if (chat.unread) setNewAfter((n) => n ?? chat.readSeq);
+  }, [chat.unread, chat.readSeq]);
   // An agent opening or focusing a tab shows the panel again.
   const lastFocus = tabs.reduce((m, t) => (t.focusedAt > m ? t.focusedAt : m), '');
   useEffect(() => setHidden(false), [lastFocus]);
@@ -174,6 +180,7 @@ function ChatWithPanel(props: Parameters<typeof ChatView>[0] & { chat: Card }) {
           cards={props.cards}
           sees={sees}
           comments={comments}
+          newAfter={newAfter}
           hiddenDocs={hidden ? tabs.length : 0}
           hiddenLive={hidden && driving ? `${browserTab?.agentId ?? 'The agent'} is using the browser` : undefined}
           onShowDocs={() => setHidden(false)}

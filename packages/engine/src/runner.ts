@@ -1,3 +1,4 @@
+import type { ChatReads } from './chatReads.ts';
 import { randomUUID } from 'node:crypto';
 import { mkdirSync, readdirSync, readFileSync, rmSync, statSync } from 'node:fs';
 import { join } from 'node:path';
@@ -108,6 +109,8 @@ export interface RunnerOptions {
   cleanup?: MemoryCleanup;
   /** Background memory review after successful runs (v3). */
   review?: { after(cardId: string): void };
+  /** Unread replies (#338): a direct chat's run that ends with the agent's reply marks it, in the run's last transaction. */
+  reads?: Pick<ChatReads, 'replied' | 'emit'>;
   /** Logs the files each tool call changed (Rewind puts back only its own chat's changes); omitted in runner-only tests. */
   fileLog?: FileLog;
   /** What tool calls do outside the chat (tasks, messages, memories, schedules…), for rewinds (#138). */
@@ -867,7 +870,7 @@ export class Runner {
     }
     const ended = new Date().toISOString();
     const cut = (this.db.prepare("SELECT id FROM tool_calls WHERE run_id = ? AND status = 'running'").all(runId) as { id: number }[]).map((c) => c.id);
-    this.db.transaction(() => {
+    const replied = this.db.transaction(() => {
       // A row a member removal or an archive already stopped in its transaction stays stopped with that reason (#246).
       this.db
         .prepare("UPDATE runs SET status = ?, error = ?, ended_at = ? WHERE id = ? AND status != 'stopped'")
@@ -876,9 +879,12 @@ export class Runner {
       this.db
         .prepare("UPDATE tool_calls SET status = 'error', output = ?, ended_at = ? WHERE run_id = ? AND status = 'running'")
         .run(`interrupted: ${error ?? status}`, ended, runId);
+      // The message a chat's run ends with is its final reply (#338): unread unless a window has the chat on screen.
+      return status === 'done' && this.opts.reads ? this.opts.reads.replied(cardId, agentId) : null;
     })();
     this.emitCalls(cut);
     const run = this.emitRun(runId);
+    this.opts.reads?.emit(replied);
     try {
       this.onRunEnd({ run, terminal, transient, retryAt });
       // v3: a successful run may be due for the background memory review (it runs on its own, never blocks the card).

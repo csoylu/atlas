@@ -3,6 +3,7 @@ import { createServer, type IncomingMessage, type Server } from 'node:http';
 import { existsSync, readFileSync } from 'node:fs';
 import { extname, join, relative } from 'node:path';
 import { WebSocketServer } from 'ws';
+import type { ChatReads } from './chatReads.ts';
 import { ZodError } from 'zod';
 import { AddCardImages, CreateCard, SaveWsFile, CreateModelRequest, CreateSecret, SaveCardSecret, SecretsPassword, UnlockSecrets, UpdateSecret, IMAGE_MAX_BYTES, IMAGE_MAX_PER_TASK, isTimeZone, PostMessage, RewindRequest, SlashCommand, TriggerPreview, UpdateModelRequest, UpdateVoice } from '@atlas/shared';
 import type { Agents } from './agents.ts';
@@ -22,7 +23,7 @@ import type { Documents } from './documents.ts';
 import type { WorkspaceFiles } from './workspaceFiles.ts';
 import type { Projects } from './projects.ts';
 import type { ReviewFlow } from './reviewFlow.ts';
-import { PaneSees, servedFile, withPaneHelper } from '@atlas/shared';
+import { ClientEvent, PaneSees, servedFile, withPaneHelper } from '@atlas/shared';
 import type { SandboxStatus } from '@atlas/shared';
 import { PanePresence, paneNote } from './pane.ts';
 import { commentBlocks, type PageShot } from './comments.ts';
@@ -75,6 +76,8 @@ export function createApi(deps: {
   claude: ClaudePlan;
   plans: PlanAccounts;
   notifications: Notifications;
+  /** Unread replies in chats (#338). */
+  reads: ChatReads;
   usage: Usage;
   /** Desktop only; null elsewhere (the /api/voice routes answer 404). */
   voice: Voice | null;
@@ -101,7 +104,7 @@ export function createApi(deps: {
   /** Pictures of commented page areas (#304); null: none. */
   pageShot?: PageShot | null;
 }): Server {
-  const { kanban, agents, models, runner, rewinds, slash, dispatcher, settings, documents, memories, cleanup, workflows, local, accounts, chatgpt, claude, plans, notifications, usage, bus, auth, projects, reviewFlow } = deps;
+  const { kanban, agents, models, runner, rewinds, slash, dispatcher, settings, documents, memories, cleanup, workflows, local, accounts, chatgpt, claude, plans, notifications, reads, usage, bus, auth, projects, reviewFlow } = deps;
   const app = express();
   const uploads = new Uploads(deps.dataDir);
   const taskImages = new TaskImages(deps.dataDir, uploads);
@@ -458,6 +461,16 @@ export function createApi(deps: {
     const { project, archived } = projectQuery(req);
     res.json(kanban.directs({ project, archivedProjects: archived }));
   });
+  /** « Mark as read » (#338): read up to the chat's last message, in every window. */
+  app.post('/api/chats/:id/read', (req, res) => {
+    reads.read(req.params.id);
+    res.json({ ok: true });
+  });
+  /** « Mark all as read » (#338). */
+  app.post('/api/chats/read', (_req, res) => {
+    reads.readAll();
+    res.json({ ok: true });
+  });
   app.post('/api/agents/:id/chats', (req, res) => {
     if (!agents.list().some((a) => a.id === req.params.id)) throw new NotFoundError(`agent ${req.params.id} not found`);
     res.status(201).json(kanban.newChat(req.params.id));
@@ -798,7 +811,9 @@ export function createApi(deps: {
     res.json(settings.get());
   });
   app.patch('/api/settings', (req, res) => {
-    res.json(settings.update(req.body));
+    const next = settings.update(req.body);
+    bus.emit({ type: 'settings.updated', settings: next });
+    res.json(next);
     projects.resume(); // a new lead joins the project: its workspace there, if it needs a clone
     dispatcher.tick();
   });
@@ -1208,6 +1223,19 @@ export function createApi(deps: {
     const data = JSON.stringify(e);
     for (const client of wss.clients) if (client.readyState === client.OPEN) client.send(data);
   });
+  // Each window says which chat it has on screen and focused (#338): read on arrival, never turned unread by a reply.
+  wss.on('connection', (ws) => {
+    ws.on('message', (raw) => {
+      const m = ClientEvent.safeParse(parseJson(String(raw)));
+      if (!m.success) return void console.error(`events socket: ignored a message that is not a ClientEvent: ${String(raw).slice(0, 200)}`);
+      try {
+        reads.view(ws, m.data.chatId);
+      } catch (e) {
+        console.error('events socket: viewing failed', e);
+      }
+    });
+    ws.on('close', () => reads.view(ws, null));
+  });
   // http.Server.close() waits for upgraded WebSocket sockets, so end them explicitly or shutdown hangs.
   const close = server.close.bind(server);
   server.close = (cb?: (err?: Error) => void) => {
@@ -1217,6 +1245,15 @@ export function createApi(deps: {
   };
   return server;
 }
+/** JSON from a socket; undefined when it is not JSON (then refused by the schema). */
+function parseJson(text: string): unknown {
+  try {
+    return JSON.parse(text);
+  } catch {
+    return undefined;
+  }
+}
+
 /** « running » means a run holds the card: only the dispatcher sets it, when a run starts (design §7). By hand it would strand the card. */
 function refuseRunning(body: unknown): void {
   if ((body as { status?: unknown } | null)?.status === 'running')

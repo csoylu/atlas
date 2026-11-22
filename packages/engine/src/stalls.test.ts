@@ -31,6 +31,8 @@ const card = (over: Partial<Card> = {}): Card => ({
   effort: null,
   naming: false,
   working: false,
+  unread: false,
+  readSeq: 0,
   originCard: null,
   images: [],
   reviewer: 'zurich',
