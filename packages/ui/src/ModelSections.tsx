@@ -191,7 +191,7 @@ function ModelRow(props: { model: Model; keyStore: string | null; stored: boolea
       <span className="dot-status" title={m.lastError ?? (m.verifiedAt ? 'answered ' + ago(m.verifiedAt) : 'not tested yet')} />
       <div className="model-main">
         <div className="model-title">
-          <b>{m.id}</b> <span className="muted">{m.provider === 'claude_code' ? 'Claude subscription (removed — select another model)' : m.provider === 'anthropic' ? 'Anthropic API' : m.provider === 'chatgpt' ? 'ChatGPT plan' : m.provider === 'claude_plan' ? 'Claude plan' : 'OpenAI-compatible'}</span>
+          <b>{m.id}</b> <span className="muted">{m.provider === 'anthropic' ? 'Anthropic API' : m.provider === 'chatgpt' ? 'ChatGPT plan' : m.provider === 'claude_plan' ? 'Claude plan' : 'OpenAI-compatible'}</span>
           {props.usedBy.map((a) => (
             <span key={a} className="badge">
               @{a}
@@ -202,7 +202,7 @@ function ModelRow(props: { model: Model; keyStore: string | null; stored: boolea
           <div className="model-edit">
             <input value={draft.name} onChange={(e) => setDraft({ ...draft, name: e.target.value })} placeholder="model name" />
             {m.provider === 'openai_compat' && <input value={draft.baseUrl} onChange={(e) => setDraft({ ...draft, baseUrl: e.target.value })} placeholder="http://127.0.0.1:11434/v1" />}
-            {m.provider !== 'claude_code' && m.provider !== 'claude_plan' && m.provider !== 'chatgpt' && <input value={draft.credentialEnv} onChange={(e) => setDraft({ ...draft, credentialEnv: e.target.value.toUpperCase() })} placeholder="KEY_ENV_VAR (optional)" />}
+            {m.provider !== 'claude_plan' && m.provider !== 'chatgpt' && <input value={draft.credentialEnv} onChange={(e) => setDraft({ ...draft, credentialEnv: e.target.value.toUpperCase() })} placeholder="KEY_ENV_VAR (optional)" />}
             <label className="ctx-input" title="Tokens the model can read at once. Atlas summarizes older messages past 70 % of it. Test detects it for Ollama and llama.cpp.">
               <input type="number" min={2048} step={1024} value={draft.contextWindow} onChange={(e) => setDraft({ ...draft, contextWindow: e.target.value })} aria-invalid={!ctxValid} />
               <span className="muted">context tokens</span>

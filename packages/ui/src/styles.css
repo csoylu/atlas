@@ -49,10 +49,9 @@
   --scrim: rgba(0, 0, 0, 0.5);
   --siwc-bg: #ffffff;
   --siwc-ink: #0d0d0d;
-  /* Usage by source (Usage page chart): Claude API clay, Claude plan violet, removed integration sand, ChatGPT green, local/other slate. */
+  /* Usage by source (Usage page chart): Claude API clay, Claude plan violet, ChatGPT green, local/other slate. */
   --src-anthropic: #d9825c;
   --src-claude-plan: #a78bfa;
-  --src-claude-code: #c9a27e;
   --src-chatgpt: #34b088;
   --src-local: #8b939c;
 }
@@ -93,7 +92,6 @@
   --siwc-ink: #ffffff;
   --src-anthropic: #c8693f;
   --src-claude-plan: #7c5cd6;
-  --src-claude-code: #a07a55;
   --src-chatgpt: #12936f;
   --src-local: #7d8691;
 }
@@ -1027,7 +1025,6 @@ button.artifact:hover .art-open { color: var(--accent); }
 .usage-stack > span { display: block; flex-basis: 0; min-height: 2px; }
 .src-anthropic { background: var(--src-anthropic); }
 .src-claude_plan { background: var(--src-claude-plan); }
-.src-claude_code { background: var(--src-claude-code); }
 .src-chatgpt { background: var(--src-chatgpt); }
 .src-openai_compat { background: var(--src-local); }
 .usage-axis { position: relative; height: calc(var(--fs-small) * 1.3); font-size: var(--fs-small); line-height: var(--lh-tight); color: var(--faint); margin-top: -8px; }

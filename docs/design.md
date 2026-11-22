@@ -135,7 +135,8 @@ Thinking (12 Nov 2026): Claude 4.6+ models get `thinking: { type: 'adaptive', di
 (their default display is « omitted »: empty thinking text, signature only); older names get no thinking parameter.
 The chat hides thinking blocks with no text.
 
-The legacy `claude_code` CLI provider (migration 0017) stays removed (0018): rows readable, never runnable.
+The legacy Claude Code CLI provider (migration 0017) was removed (0018); 0071 turned its remaining rows into Claude plan
+models (same ids, so agents keep them) and its usage history into Claude plan usage (#341).
 
 ### ChatGPT plan (built 10 Nov 2026, `engine/src/chatgpt.ts` + `providers/chatgpt.ts`, Agents page « ChatGPT plan »)
 The user asked for OpenAI usage by subscription login. OpenAI's **Sign in with ChatGPT**

@@ -2,13 +2,13 @@ import { describe, expect, it } from 'vitest';
 import type { UsageSummary } from '@atlas/shared';
 import { axisTicks, dayTotal, tok, usageHeadline } from './usageStats.ts';
 
-const day = (d: string, p: Partial<Omit<UsageSummary['perDay'][number], 'day'>> = {}) => ({ day: d, anthropic: 0, chatgpt: 0, claude_plan: 0, claude_code: 0, openai_compat: 0, ...p });
+const day = (d: string, p: Partial<Omit<UsageSummary['perDay'][number], 'day'>> = {}) => ({ day: d, anthropic: 0, chatgpt: 0, claude_plan: 0, openai_compat: 0, ...p });
 const count = (calls: number, input: number, output: number) => ({ calls, input, output });
 
 // The shape seen on 19 Nov 2026 (#228): today all on the Claude plan, the headline said « 0 · 43 calls ».
 const summary: UsageSummary = {
   days: 3,
-  perDay: [day('2026-11-17', { anthropic: 500 }), day('2026-11-18', { claude_code: 40 }), day('2026-11-19', { claude_plan: 2_400_000 + 677_000, chatgpt: 30 })],
+  perDay: [day('2026-11-17', { anthropic: 500 }), day('2026-11-18', { openai_compat: 40 }), day('2026-11-19', { claude_plan: 2_400_000 + 677_000, chatgpt: 30 })],
   models: [
     { modelId: 'claude-opus', provider: 'claude_plan', today: count(30, 2_300_000, 100_000), week: count(30, 2_300_000, 100_000), month: count(30, 2_300_000, 100_000) },
     { modelId: 'claude-sonnet', provider: 'claude_plan', today: count(12, 600_000, 77_000), week: count(12, 600_000, 77_000), month: count(12, 600_000, 77_000) },
@@ -26,7 +26,7 @@ describe('usageHeadline', () => {
     expect(h.today).toBe(3_077_030);
     expect(h.todayCalls).toBe(43);
   });
-  it('peak, active days and the chart scale count the plan and the removed integration too', () => {
+  it('peak, active days and the chart scale count the plan and local servers too', () => {
     const h = usageHeadline(summary);
     expect(h).toMatchObject({ peak: 3_077_030, max: 3_077_030, active: 3 });
     expect(dayTotal(summary.perDay[1]!)).toBe(40);

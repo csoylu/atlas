@@ -80,8 +80,8 @@ test.describe('A · agents, chats, models, settings (API)', () => {
     expect((await call(atlas, 'POST', '/models/ghost/test')).body.ok).toBe(false);
   });
 
-  test('[M02] provider claude_code cannot be created (design §5: removed in 0018, rows readable, never runnable)', async ({ atlas }) => {
-    const r = await call(atlas, 'POST', '/models', { id: 'cc', provider: 'claude_code', name: 'x' });
+  test('[M02] an unknown provider cannot be created (design §5: only anthropic, openai_compat, chatgpt, claude_plan)', async ({ atlas }) => {
+    const r = await call(atlas, 'POST', '/models', { id: 'cc', provider: 'cli_subscription', name: 'x' });
     expect(r.status).toBeGreaterThanOrEqual(400);
   });
 
