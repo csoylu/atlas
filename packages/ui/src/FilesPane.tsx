@@ -1,3 +1,4 @@
+import { createPortal } from 'react-dom';
 import { Fragment, lazy, Suspense, useCallback, useEffect, useLayoutEffect, useRef, useState, type ReactNode } from 'react';
 import type { FileTab, WsEntry, WsFile, WsListing } from '@atlas/shared';
 import { api, ApiError } from './api.ts';
@@ -61,9 +62,10 @@ function useTreeOn(): [boolean, (on: boolean) => void] {
 }
 
 /**
- * The Files tab's bar and body (#303, mockup « the right pane as a workbench », Files): the tree of the chat's agent
+ * The Files tab's body (#303, mockup « the right pane as a workbench », Files): the tree of the chat's agent
  * workspace (⌘B hides it, ⌘P finds a file, A / M git letters), the editor (⌘S saves) and the banners when the agent
- * writes or deletes the file being edited. The head row (tabs, +, ⋯, ×) is DocPanel's.
+ * writes or deletes the file being edited. The head row (tabs, +, ⋯, ×) is DocPanel's; the save state and the tree
+ * toggle go into its slot (#346).
  */
 export function FilesPane(props: {
   chatId: string;
@@ -76,6 +78,8 @@ export function FilesPane(props: {
   /** Comment mode on the file's lines (#304); `commenting`: the mode is on (the tree steps aside, as in the mockup). */
   comment?: PaneComment;
   commenting?: boolean;
+  /** The head row's slot for the file kind (#346): the save state and the tree toggle go there, not in a second row. */
+  slot: HTMLElement | null;
   onError(e: unknown): void;
 }) {
   const { chatId, tab, onError } = props;
@@ -145,6 +149,7 @@ export function FilesPane(props: {
         onLines={props.onLines}
         comment={props.comment}
         boxRef={setBox}
+        slot={props.slot}
         tree={
           showTree && (
             <FileTree
@@ -172,6 +177,7 @@ function FileBarAndBody(props: {
   treeOnly: boolean;
   tree: ReactNode;
   boxRef: (el: HTMLDivElement | null) => void;
+  slot: HTMLElement | null;
   onToggleTree?(): void;
   onLines?(path: string, from: number, to: number): void;
   comment?: PaneComment;
@@ -329,47 +335,35 @@ function FileBarAndBody(props: {
   };
 
   const st = fileState(file, dirty, saving, image);
-  const { dir, name } = splitPath(path);
-  const toggle = props.onToggleTree && (
-    <button
-      type="button"
-      className={'sd-btn icon-only' + (props.treeShown ? ' on' : '')}
-      title={`${props.treeShown ? 'Hide' : 'Show'} the files (⌘B)`}
-      aria-label={`${props.treeShown ? 'Hide' : 'Show'} the files`}
-      aria-pressed={props.treeShown}
-      onClick={props.onToggleTree}
-    >
-      <FileIcon.tree />
-    </button>
-  );
-  const bar = !path ? (
-    <div className="wb-bar">
-      <span className="wb-path wb-ws">
-        <bdi>@{agentId}’s workspace</bdi>
-      </span>
-    </div>
-  ) : (
-    <div className="wb-bar">
-      {toggle}
-      <span className="wb-path" title={path}>
-        <bdi>
-          {dir}
-          <b>{name}</b>
-        </bdi>
-      </span>
-      {st.kind === 'saved' && file && <span className="wb-state">Saved</span>}
+  const { name } = splitPath(path);
+  // In the head row, after + (#346, mockup #345): the save state, then the tree toggle. The workspace view has neither.
+  const head = path ? (
+    <>
+      {st.kind === 'saved' && file && <span className="wb-state quiet">Saved</span>}
       {st.kind === 'saving' && <span className="wb-state">Saving…</span>}
       {st.kind === 'unsaved' && (
         <>
           <span className="wb-state warn">Unsaved</span>
-          <button type="button" className="btn small primary" title="Save (⌘S)" onClick={onSaveKey}>
+          <button type="button" className="btn small primary wb-save" title="Save (⌘S)" onClick={onSaveKey}>
             Save
           </button>
         </>
       )}
       {st.kind === 'ro' && <span className="wb-ro">{st.label}</span>}
-    </div>
-  );
+      {props.onToggleTree && (
+        <button
+          type="button"
+          className={'sd-btn icon-only' + (props.treeShown ? ' on' : '')}
+          title={`${props.treeShown ? 'Hide' : 'Show'} the files (⌘B)`}
+          aria-label={`${props.treeShown ? 'Hide' : 'Show'} the files`}
+          aria-pressed={props.treeShown}
+          onClick={props.onToggleTree}
+        >
+          <FileIcon.tree />
+        </button>
+      )}
+    </>
+  ) : null;
 
   let banner: ReactNode = null;
   if (conflict?.kind === 'changed')
@@ -512,7 +506,7 @@ function FileBarAndBody(props: {
 
   return (
     <>
-      {bar}
+      {head && props.slot && createPortal(head, props.slot)}
       <div ref={props.boxRef} className="wb-files">
         {props.tree}
         {!props.treeOnly && (

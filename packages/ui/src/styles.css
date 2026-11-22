@@ -2093,12 +2093,26 @@ button.msg-quote:hover { color: var(--text); }
 .sd-tab-x.unsaved:hover .wb-udot, .sd-tab-x.unsaved:focus-visible .wb-udot { display: none; }
 .sd-tab-x.unsaved:hover::after, .sd-tab-x.unsaved:focus-visible::after { content: '×'; }
 .wb-bar { height: 40px; flex: none; display: flex; align-items: center; gap: 4px; padding: 0 8px; border-bottom: 1px solid var(--rule); min-width: 0; }
-.wb-path { flex: 1; min-width: 0; font-family: var(--mono); font-size: var(--fs-small); color: var(--muted); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; direction: rtl; text-align: left; }
-.wb-path b { color: var(--text); font-weight: var(--fw-medium); }
-.wb-path.wb-ws { font-family: var(--font); padding-left: 4px; }
 .wb-state { flex: none; font-size: var(--fs-small); color: var(--faint); white-space: nowrap; display: flex; align-items: center; gap: 6px; }
 .wb-state.warn { color: var(--warn-ink); }
 .wb-ro { flex: none; font-size: var(--fs-small); color: var(--muted); border: 1px solid var(--line-2); border-radius: 6px; padding: 1px 7px; white-space: nowrap; }
+/* One head row for a file (#346, mockup #345): the active file tab shows its folder faint after its name (cut from the
+   left); the kind's slot after + holds the save state and the tree toggle, as an artifact's holds its version picker. */
+.side-doc:not(.thread-panel) { container-type: inline-size; }
+.sd-slot { display: contents; }
+.sd-tab .icon { flex: none; }
+.sd-tab.on[data-kind='file'] { max-width: min(380px, 100%); }
+.sd-tab.on[data-kind='file'] .sd-tab-t { flex: none; max-width: 180px; }
+.sd-tab-dir { flex: 0 1 auto; min-width: 0; max-width: 170px; color: var(--faint); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; direction: rtl; text-align: left; }
+.sd-tab:not(.on) .sd-tab-dir { display: none; }
+.sd-head .wb-state, .sd-head .wb-ro { margin: 0 4px; }
+.sd-head .wb-save { flex: none; margin-right: 2px; }
+/* A narrow panel or a phone: the folder, « Saved » and the word « Unsaved » go; Save and « Saving… » stay. */
+@container (max-width: 520px) {
+  .sd-tab-dir { display: none; }
+  .sd-head .wb-state.quiet, .sd-head .wb-state.warn { display: none; }
+}
+.side-doc.phone .sd-head .wb-state.quiet, .side-doc.phone .sd-head .wb-state.warn { display: none; }
 .wb-files { flex: 1; position: relative; display: flex; min-width: 0; min-height: 0; }
 .wb-tree { width: 190px; flex: none; display: flex; flex-direction: column; border-right: 1px solid var(--rule); min-height: 0; background: var(--sheet); }
 .wb-tree.full { width: 100%; border-right: 0; }

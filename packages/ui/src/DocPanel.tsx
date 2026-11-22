@@ -9,7 +9,7 @@ import { PopButton, PopItem } from './HeadMenu.tsx';
 import { libraryHref } from './library.ts';
 import { closeFileTab, FileIcon, FileKindIcon, FilesPane } from './FilesPane.tsx';
 import { fileDrafts, useDrafts } from './fileDrafts.ts';
-import { fileTitle } from './files.ts';
+import { fileTitle, splitPath } from './files.ts';
 import type { PanelResize } from './PanelResizer.tsx';
 import { CommentBox, CommentHint, CommentIcon, type PaneComment } from './CommentLayer.tsx';
 import { boxOf, draftKey, hintFor, isTyping, type Comments, type PanePick } from './comments.ts';
@@ -97,6 +97,8 @@ export function DocPanel(props: {
   const [commenting, setCommenting] = useState(false);
   const [pending, setPending] = useState<{ pick: PanePick; version: number } | null>(null);
   const aside = useRef<HTMLElement>(null);
+  // The file kind's slot in the head row (#346): FilesPane puts its save state and tree toggle there.
+  const [slot, setSlot] = useState<HTMLSpanElement | null>(null);
   // The open file, when it is text (comments are on its lines); images and binaries take none yet.
   const fileText = tab?.kind === 'file' && !!tab.path && fileDrafts.get(chatId, tab.path)?.file.kind === 'text';
   // A page takes comments when it shows (not an empty tab, an error or a blocked host).
@@ -194,6 +196,7 @@ export function DocPanel(props: {
           kind: t.kind,
           icon: <FileKindIcon path={t.path} />,
           title: fileTitle(t.path),
+          dir: splitPath(t.path).dir,
           tip: t.path || `${props.agentId}’s workspace`,
           on: t === tab,
           dot: false,
@@ -330,12 +333,13 @@ export function DocPanel(props: {
     );
   if (tab.kind === 'file')
     return (
-      <aside ref={aside} className={'side-doc ' + mode} aria-label="Panel" style={style}>
+      <aside ref={aside} className={'side-doc ' + mode + (phone ? ' phone' : '')} aria-label="Panel" style={style}>
         {mode !== 'full' && props.resize?.handle}
         <div className="viewer panel">
           <div className="sd-head">
             {lead}
             {strip}
+            <span ref={setSlot} className="sd-slot" />
             {tools}
             <PopButton className="sd-btn icon-only" title="More" ariaLabel="More" label={<Icon.dots />}>
               {(close) => (
@@ -372,6 +376,7 @@ export function DocPanel(props: {
               agentId={props.agentId}
               comment={fileText ? comment : undefined}
               commenting={commenting}
+              slot={slot}
               onLines={props.onFileLines}
               onError={onError}
             />
@@ -448,6 +453,8 @@ export interface PaneTabItem {
   kind: PaneKind;
   icon: ReactNode;
   title: string;
+  /** A file's folder (#346): shown faint after the name on the active tab, cut from the left. */
+  dir?: string;
   /** Tooltip: the artifact's path (a file's path, a page's address). */
   tip: string;
   on: boolean;
@@ -469,6 +476,21 @@ function PaneTabs({ items }: { items: PaneTabItem[] }) {
   useEffect(() => {
     strip.current?.querySelector('.sd-tab.on')?.scrollIntoView({ block: 'nearest', inline: 'nearest' });
   }, [on, items.length]);
+  // The strip narrows when the file kind's slot fills once the file loads (#346: save state, tree toggle): keep the
+  // active tab in view then too.
+  useEffect(() => {
+    const el = strip.current;
+    if (!el) return;
+    const ro = new ResizeObserver(() => {
+      const t = el.querySelector('.sd-tab.on')?.getBoundingClientRect();
+      if (!t) return;
+      const box = el.getBoundingClientRect();
+      if (t.right > box.right) el.scrollLeft += Math.min(t.right - box.right, t.left - box.left);
+      else if (t.left < box.left) el.scrollLeft -= box.left - t.left;
+    });
+    ro.observe(el);
+    return () => ro.disconnect();
+  }, []);
   return (
     <div ref={strip} className="sd-tabs" role="tablist" aria-label="Panel tabs">
       {items.map((t) => (
@@ -476,6 +498,11 @@ function PaneTabs({ items }: { items: PaneTabItem[] }) {
           <button role="tab" aria-selected={t.on} title={t.tip} onClick={() => !t.on && t.onSelect()}>
             {t.icon}
             <span className="sd-tab-t">{t.title}</span>
+            {t.on && t.dir && (
+              <span className="sd-tab-dir">
+                <bdi>{t.dir}</bdi>
+              </span>
+            )}
             {t.dot && <span className="sd-dot" title="Changed since you looked" />}
             {t.live && <span className="wb-live" title={t.live} aria-label={t.live} />}
           </button>
