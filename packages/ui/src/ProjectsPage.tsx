@@ -5,6 +5,7 @@ import { AgentFace } from './AgentFace.tsx';
 import { HeaderActions, Icon } from './ScreenHeader.tsx';
 import { SetRow, SetRows, SetSec } from './SettingsKit.tsx';
 import { ProjDot, useProjectFilter, useProjects } from './projects.tsx';
+import { verdictSteps } from './workflowView.ts';
 
 /**
  * Settings → Projects (#217, mockup #212): the list, New project with the live repo check, cloning per member, a
@@ -554,21 +555,6 @@ function ProjectDetail({ project: p, agents, cards, workflows, focusRepo, onErro
               ))}
             </select>
           </SetRow>
-          {p.repo && (
-            <SetRow label="Review agent" help="Checks and merges the pull requests of tasks In review.">
-              <select aria-label="Review agent" value={p.reviewAgent ?? ''} disabled={archived || saving} onChange={(e) => void save({ reviewAgent: e.target.value || null })}>
-                {!p.reviewAgent && <option value="">Nobody (nothing is reviewed)</option>}
-                {p.members.map((m) => (
-                  <option key={m.agentId} value={m.agentId}>
-                    {(() => {
-                      const a = agents.find((x) => x.id === m.agentId);
-                      return a ? agentLabel(a) : '@' + m.agentId;
-                    })()}
-                  </option>
-                ))}
-              </select>
-            </SetRow>
-          )}
         </SetRows>
         {formError && (
           <p className="state-err pj-err" role="alert">
@@ -603,7 +589,6 @@ function ProjectDetail({ project: p, agents, cards, workflows, focusRepo, onErro
                 <div className="model-title">
                   <b>{m.agentId}</b>
                   {isLead && <span className="badge">lead</span>}
-                  {m.agentId === p.reviewAgent && <span className="badge">reviewer</span>}
                   {m.cloneState === 'failed' && <span className="badge bad">Clone failed</span>}
                 </div>
                 <div className="model-detail">
@@ -776,7 +761,18 @@ function ProjectDetail({ project: p, agents, cards, workflows, focusRepo, onErro
         </button>
         <button className="pj-link" type="button" onClick={() => go(p.id, '#/workflows')}>
           Workflows · {wfs.length}
-          <span>{p.name}'s scheduled and triggered work. Opens Workflows on {p.name}.</span>
+          <span>
+            {p.name}'s scheduled and triggered work.
+            {(() => {
+              // Who gives the verdict on PRs (#334): read from the agent steps with « Verdict on the PR » on.
+              const v = verdictSteps(wfs);
+              if (!v.length) return null;
+              const agents = [...new Set(v.map((x) => '@' + x.agentId))].join(', ');
+              const names = [...new Set(v.map((x) => x.workflowName))].join(', ');
+              return ` PR verdicts: ${agents} (${names}).`;
+            })()}{' '}
+            Opens Workflows on {p.name}.
+          </span>
         </button>
       </div>
       </SetSec>

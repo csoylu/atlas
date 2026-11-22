@@ -170,6 +170,9 @@ export function RunOnPicker(props: { kind: 'task' | 'pr'; w: Workflow; cards: Ca
   );
 }
 
+/** A thread step that couldn't run because of its agent (#334: none chosen, missing, off, not a member): the fix is in the step. */
+const agentFix = (why: string) => /choose one in «/.test(why);
+
 /** The task view's « Workflows on this task » (#259): each workflow acting on it now, its current step, a link to the run. */
 export function TaskWorkflows({ cardId, cards, stream, onOpenCard, onError }: { cardId: string; cards: Card[]; stream: MessageStream; onOpenCard(id: string): void; onError(e: unknown): void }) {
   const [list, setList] = useState<TaskWorkflow[]>([]);
@@ -197,7 +200,7 @@ export function TaskWorkflows({ cardId, cards, stream, onOpenCard, onError }: { 
                 <span className={'st-chip ' + chipClass(x.state)}>{x.step?.state === 'waiting' ? STATE_LABEL.waiting : RUN_LABEL[x.state]}</span>
               )}
               {x.step && <span>{x.step.title}</span>}
-              {x.step?.couldntRun && <span className="wf-couldnt-why">{x.step.couldntRun} · Retry now or follow its negative exit in the run</span>}
+              {x.step?.couldntRun && <span className="wf-couldnt-why">{x.step.couldntRun} · {agentFix(x.step.couldntRun) ? 'Choose one in the workflow, then Retry' : 'Retry now or follow its negative exit in the run'}</span>}
               {x.step?.cardId && x.step.cardId !== cardId && (
                 <button className="linklike" onClick={() => onOpenCard(x.step!.cardId!)}>
                   {refOf(x.step.cardId, cards)}
@@ -205,9 +208,21 @@ export function TaskWorkflows({ cardId, cards, stream, onOpenCard, onError }: { 
               )}
             </div>
           </div>
-          <a className="wf-openrun" href={`#/workflows/${encodeURIComponent(x.workflowId)}/runs/${encodeURIComponent(x.runId)}`}>
-            Open the run
-          </a>
+          {x.step?.couldntRun && agentFix(x.step.couldntRun) ? (
+            // The step's agent is missing, off or not a member (#334): its button opens the workflow on that step.
+            <span className="wf-fixacts">
+              <a className="btn small primary" href={`#/workflows/${encodeURIComponent(x.workflowId)}/step/${encodeURIComponent(x.step.nodeId)}`}>
+                Choose the agent
+              </a>
+              <button className="btn small" onClick={() => api.retryWorkflowRun(x.runId).catch(onError)}>
+                Retry
+              </button>
+            </span>
+          ) : (
+            <a className="wf-openrun" href={`#/workflows/${encodeURIComponent(x.workflowId)}/runs/${encodeURIComponent(x.runId)}`}>
+              Open the run
+            </a>
+          )}
         </div>
       ))}
     </section>

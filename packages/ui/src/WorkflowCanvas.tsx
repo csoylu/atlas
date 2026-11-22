@@ -160,6 +160,13 @@ export function WorkflowCanvas(props: {
 
   /* ── Selection, zoom, add menu ── */
   const [sel, setSel] = useState<string | null>(props.initialSelect);
+  // A link to a step (#/workflows/<id>/step/<node>, e.g. from the Inbox or a task) selects it, also once open.
+  useEffect(() => {
+    if (props.initialSelect) {
+      setSel(props.initialSelect);
+      setSideOpen(true);
+    }
+  }, [props.initialSelect]);
   const selected = g.nodes.find((n) => n.id === sel) ?? null;
   const [zoom, setZoom] = useState(1);
   const [menu, setMenu] = useState(false);
@@ -215,18 +222,52 @@ export function WorkflowCanvas(props: {
   const pastOnce = trigger?.kind === 'trigger' && trigger.config.kind === 'time' && trigger.config.repeat === 'at' && !!trigger.config.at && new Date(trigger.config.at) < new Date();
   const runCount = runs?.[0]?.number ?? w.lastRun?.number ?? 0;
   // « Reset to default » (#263): in the header; on a phone, under the steps (the header has no room for it).
+  // « Reset to default » keeps the agents chosen now (#335 2a): its confirm says which.
+  const agentOf = (id: string) => {
+    const n = w.nodes.find((x) => x.id === id);
+    return n?.kind === 'agent' && n.config.agentId ? `@${n.config.agentId}` : null;
+  };
+  const resetText = () => {
+    const [a, b] = [agentOf('review'), agentOf('review2')];
+    const kept =
+      a || b
+        ? ` The agents chosen now stay: ${[a && `${a} in « Review the PR »`, b && `${b} in « Review the reviewer's PR »`].filter(Boolean).join(' and ')}${a ? `, and « Built by another agent? » keeps testing for ${a}` : ''}.`
+        : ' No agent is chosen in its review steps yet: choose them after.';
+    return `Reset « ${w.name} » to the default? Its nine steps, their links and their layout come back, and your changes to them are lost.${kept} On/off and its runs stay.`;
+  };
   const resetButton = (
     <button
       className="btn ghost"
-      title="Bring back the default Review workflow's seven steps, their links and layout"
+      title="Bring back the default Review workflow's nine steps, their links and layout"
       onClick={() => {
-        if (!window.confirm(`Reset « ${w.name} » to the default? Its seven steps, their links and layout come back; your changes to them are lost. On/off and its runs stay.`)) return;
+        if (!window.confirm(resetText())) return;
         api.resetWorkflow(w.id).catch(onError);
       }}
     >
       Reset to default
     </button>
   );
+  /** Agent steps with no agent (#334): a run stops there; the bar's button selects the first one. */
+  const empty = g.nodes.filter((n) => n.kind === 'agent' && !n.config.agentId);
+  const noAgent = empty.length ? (
+    <div className="wf-off wf-noagent" role="status">
+      <span>
+        <b>No agent in {empty.map((n) => `« ${nodeTitle(n, g.nodes)} »`).join(' and ')}.</b> {empty.every((n) => n.kind === 'agent' && n.config.verdict) ? 'Pull requests' : 'Runs'} stop there
+        until you choose one.
+      </span>
+      {mode === 'edit' && !phone && (
+        <button
+          className="btn small"
+          onClick={() => {
+            setSel(empty[0]!.id);
+            setSideOpen(true);
+          }}
+        >
+          Choose the agent
+        </button>
+      )}
+    </div>
+  ) : null;
   const header = (
     <HeaderActions>
       {!phone && mode === 'edit' && (
@@ -295,6 +336,7 @@ export function WorkflowCanvas(props: {
         <div className="wf-phone">
           <ApprovalBanner w={w} onError={onError} />
           {off}
+          {noAgent}
           {mode === 'runs' && (
             <>
               <RunsPanel w={w} g={g} runs={runs} run={shown} cards={props.cards} pick={(id) => props.go(`${base}/runs/${id}`)} onOpenCard={props.onOpenCard} onError={onError} />
@@ -339,6 +381,7 @@ export function WorkflowCanvas(props: {
           <>
             <ApprovalBanner w={w} onError={onError} />
             {off}
+            {noAgent}
             {save.state === 'error' && (
               <div className="state-err bar wf-refused" role="alert">
                 <span>Not saved: {save.message}</span>
@@ -732,6 +775,7 @@ function NodeCard(props: {
         <span className="wf-kl">{kindLine(n)}</span>
       </div>
       {props.needsOk && <span className="wf-ok-chip wf-node-ok">needs your OK</span>}
+      {n.kind === 'agent' && !n.config.agentId && <span className="wf-ok-chip wf-node-ok wf-noagent-chip">no agent</span>}
       <div className="wf-title">{nodeTitle(n, g.nodes)}</div>
       <div className="wf-meta">
         {n.kind === 'agent' && n.config.agentId && <AgentFace id={n.config.agentId} />}

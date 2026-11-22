@@ -1,4 +1,4 @@
-import type { Inbox, InboxNeed, Notification, NotificationKind } from '@atlas/shared';
+import type { Inbox, InboxNeed, Notification, NotificationKind, NotificationLink } from '@atlas/shared';
 import type { Db } from './store/db.ts';
 import type { Bus } from './events.ts';
 import { NotFoundError, type Kanban } from './kanban.ts';
@@ -12,6 +12,7 @@ interface Row {
   card_id: string | null;
   read_at: string | null;
   archived_at: string | null;
+  link: string | null;
   /** The card's project (#213), from ROW_SELECT. */
   project_id: string | null;
 }
@@ -27,6 +28,7 @@ const toNotification = (r: Row): Notification => ({
   readAt: r.read_at,
   archivedAt: r.archived_at,
   projectId: r.project_id,
+  link: r.link ? (JSON.parse(r.link) as NotificationLink) : null,
 });
 
 /** Rows the Inbox shows from the card's live state instead (« Needs you »), never as updates. */
@@ -38,13 +40,14 @@ export interface NewNotification {
   title: string;
   body: string;
   cardId?: string | null;
+  link?: NotificationLink | null;
 }
 
 /** Insert a row inside the caller's transaction; the caller emits `notification.created` with it after the commit. */
 export function insertNotification(db: Db, n: NewNotification, at = new Date()): Notification {
   const { lastInsertRowid } = db
-    .prepare('INSERT INTO notifications (at, kind, title, body, card_id) VALUES (?, ?, ?, ?, ?)')
-    .run(at.toISOString(), n.kind, n.title, n.body, n.cardId ?? null);
+    .prepare('INSERT INTO notifications (at, kind, title, body, card_id, link) VALUES (?, ?, ?, ?, ?, ?)')
+    .run(at.toISOString(), n.kind, n.title, n.body, n.cardId ?? null, n.link ? JSON.stringify(n.link) : null);
   return toNotification(db.prepare(`${ROW_SELECT} WHERE n.id = ?`).get(lastInsertRowid) as Row);
 }
 

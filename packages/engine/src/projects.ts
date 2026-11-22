@@ -18,7 +18,6 @@ interface ProjectRow {
   repo: string | null;
   ci_job: string | null;
   lead: string | null;
-  review_agent: string | null;
   review_seeded: number;
   colour: number;
   network: NetworkLevel;
@@ -140,25 +139,6 @@ export function projectRow(db: Db, id: string): ProjectRow {
   const r = db.prepare('SELECT * FROM projects WHERE id = ?').get(id) as ProjectRow | undefined;
   if (!r) throw new NotFoundError(`project ${id} not found`);
   return r;
-}
-
-/**
- * Who reviews a task's PR (#263): the project's review agent, or its lead when the review agent built the task. Never
- * another agent: unset, missing, disabled or no longer a member is a reason, with where to fix it (Settings → Projects).
- */
-export function reviewerFor(db: Db, projectId: string, builder: string | null): { id: string } | { problem: string } {
-  const p = projectRow(db, projectId);
-  const where = `Settings → Projects → ${p.name}`;
-  if (!p.review_agent) return { problem: `project ${p.name} has no review agent: choose one in ${where}` };
-  const own = p.review_agent === builder;
-  const id = own ? p.lead : p.review_agent;
-  if (!id) return { problem: `@${p.review_agent} built this task and project ${p.name} has no lead to review it: set one in ${where}` };
-  const who = own ? `the lead @${id} (reviews @${p.review_agent}'s own PRs)` : `review agent @${id}`;
-  const a = db.prepare('SELECT enabled FROM agents WHERE id = ?').get(id) as { enabled: number } | undefined;
-  if (!a) return { problem: `${who} does not exist: choose another in ${where}` };
-  if (!a.enabled) return { problem: `${who} is disabled: turn it on, or choose another in ${where}` };
-  if (!isMember(db, projectId, id)) return { problem: `${who} is not a member of project ${p.name}: add it, or choose another in ${where}` };
-  return { id };
 }
 
 /**
@@ -370,11 +350,6 @@ export class Projects {
           .prepare('INSERT INTO projects (id, name, repo, ci_job, lead, colour, created_at) VALUES (?, ?, ?, ?, ?, ?, ?)')
           .run(id, c.name, c.repo, c.ciJob, c.lead, colour, new Date().toISOString());
         for (const a of members) this.addMember(id, a);
-        if (c.reviewAgent) {
-          // The review agent works in the project's workspace (#263): a member.
-          if (!members.includes(c.reviewAgent)) throw new InvalidError(`review agent @${c.reviewAgent} is not a member of ${c.name}: add it to the members first`);
-          this.db.prepare('UPDATE projects SET review_agent = ? WHERE id = ?').run(c.reviewAgent, id);
-        }
         return id;
       })
       .immediate();
@@ -417,10 +392,6 @@ export class Projects {
           for (const m of before.members) if (!want.has(m.agentId)) this.removeMember(before.id, m.agentId);
           for (const a of want) if (!before.members.some((m) => m.agentId === a)) this.addMember(before.id, a);
         } else if (lead && !this.isMember(before.id, lead)) this.addMember(before.id, lead);
-        if (p.reviewAgent !== undefined && p.reviewAgent !== before.reviewAgent) {
-          if (p.reviewAgent && !this.isMember(before.id, p.reviewAgent)) throw new InvalidError(`review agent @${p.reviewAgent} is not a member of ${before.name}: add it to the members first`);
-          this.db.prepare('UPDATE projects SET review_agent = ? WHERE id = ?').run(p.reviewAgent, before.id);
-        }
       })
       .immediate();
     this.afterRelease();
@@ -783,7 +754,7 @@ export class Projects {
     const kept = (this.db.prepare('SELECT * FROM kept_workspaces WHERE project_id = ? ORDER BY kept_at').all(r.id) as KeptRow[]).map(
       (k): KeptWorkspace => ({ agentId: k.agent_id, path: k.path, home: k.home === 1, keptAt: k.kept_at }),
     );
-    return { id: r.id, name: r.name, repo: r.repo, ciJob: r.ci_job, network: r.network, allowedHosts: JSON.parse(r.allowed_hosts) as string[], lead: r.lead, reviewAgent: r.review_agent, colour: r.colour, status: r.status, createdAt: r.created_at, archivedAt: r.archived_at, members, kept, isDefault: r.id === def };
+    return { id: r.id, name: r.name, repo: r.repo, ciJob: r.ci_job, network: r.network, allowedHosts: JSON.parse(r.allowed_hosts) as string[], lead: r.lead, colour: r.colour, status: r.status, createdAt: r.created_at, archivedAt: r.archived_at, members, kept, isDefault: r.id === def };
   }
 
   private emit(id: string): Project {

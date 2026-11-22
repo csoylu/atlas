@@ -223,7 +223,7 @@ function BoardSettings(props: { settings: Settings | null; agents: Agent[]; onSe
   return (
     <>
       <p className="set-lead">
-        Choose who turns ideas in Triage into actionable tasks. Each project's review agent is set in <a href="#/settings/projects">Projects</a>.
+        Choose who turns ideas in Triage into actionable tasks. Who reviews a project's pull requests is the agent of its Review workflow's steps, in <a href="#/workflows">Workflows</a>.
       </p>
       <SetSec first>
         <SetRows>

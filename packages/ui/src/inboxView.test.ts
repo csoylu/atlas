@@ -5,7 +5,7 @@ import { dayLabel, groupsOf, rowTime, inboxKey, taskEntry, taskKey, itemsOf, kin
 const card = (p: Partial<Card>): Card =>
   ({ id: 'c', number: 1, title: 't', body: '', status: 'blocked', assignee: 'scout', priority: 0, board: 'main', parents: [], block: null, waiting: null, ...p }) as Card;
 const need = (p: Partial<InboxNeed> & { card: Card }): InboxNeed => ({ since: '2026-11-13T10:00:00Z', failed: false, notificationId: 1, unread: true, summary: null, ...p });
-const upd = (p: Partial<Notification>): Notification => ({ id: 9, at: '2026-11-13T09:00:00Z', kind: 'card.done', title: 'Palette', body: 'ok', cardId: null, readAt: null, archivedAt: null, projectId: null, ...p });
+const upd = (p: Partial<Notification>): Notification => ({ id: 9, at: '2026-11-13T09:00:00Z', kind: 'card.done', title: 'Palette', body: 'ok', cardId: null, readAt: null, archivedAt: null, projectId: null, link: null, ...p });
 const ask = card({ id: 'c_ask', number: 39, block: { kind: 'needs_input', reason: '**Kaiko** or CoinGecko?\nmore', options: ['Kaiko', 'CoinGecko'], until: null } });
 const inbox: Inbox = {
   needsYou: [need({ card: ask }), need({ card: card({ id: 'c_rev', number: 40, status: 'review' }), summary: '2 400 words', unread: false, notificationId: 2 })],

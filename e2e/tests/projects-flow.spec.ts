@@ -41,7 +41,6 @@ async function world(): Promise<World> {
     prs: { read: async () => ({ ...gh.pr }), intervalMs: false, validate: { gh: gate.gh } },
   });
   for (const id of ['munih', 'zurich']) atlas.engine.agents.create({ id, rolePrompt: `${id} role`, modelId: atlas.engine.agents.get('atlas').modelId });
-  atlas.engine.settings.update({ reviewAgent: 'zurich' });
   return { atlas, remotes, gh, gate };
 }
 const stop = async (w: World) => {

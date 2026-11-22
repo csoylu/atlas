@@ -86,8 +86,8 @@ describe('stuck tasks: the rules (#237)', () => {
     // Counted from the end of the last run (a review that just ended gets its time).
     expect(detectStall(facts({ ...review, statusSince: ago(90) }, { lastRunEnd: ago(20) }))).toBe(null);
     // Why the reviewer doesn't start is said when it says something.
-    expect(detectStall(facts({ ...review, statusSince: ago(90), waiting: 'review agent @zurich is not a member of project Datinel: add it in Settings → Projects' }))?.reason).toBe(
-      'CI is green, no Review run is going on it (review agent @zurich is not a member of project Datinel: add it in Settings → Projects)',
+    expect(detectStall(facts({ ...review, statusSince: ago(90), waiting: '@zurich is not a member of Datinel: add it, or choose one in « Review the PR » of workflow « Review »' }))?.reason).toBe(
+      'CI is green, no Review run is going on it (@zurich is not a member of Datinel: add it, or choose one in « Review the PR » of workflow « Review »)',
     );
     // A Review run open on it (#263): the run owns its stuck steps; « No Review workflow is on » has its own item.
     expect(detectStall(facts({ ...review, statusSince: ago(90) }, { reviewRun: true }))).toBe(null);

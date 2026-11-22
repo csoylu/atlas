@@ -27,7 +27,7 @@ import { cardPrs, parsePrUrl } from './prs.ts';
 import { stallOf } from './stalls.ts';
 import { reviewOffOf } from './reviewFlow.ts';
 import { recordPrEvent, recordTaskEvent } from './workflowEvents.ts';
-import { assertActive, defaultProjectId, defaultProjectOrNull, isMember, leadOf, projectForNewCard, projectRow, resolveProject, reviewerFor, scopeFor } from './projects.ts';
+import { assertActive, defaultProjectId, defaultProjectOrNull, isMember, leadOf, projectForNewCard, projectRow, resolveProject, scopeFor } from './projects.ts';
 
 interface CardRow {
   id: string;
@@ -558,8 +558,8 @@ export class Kanban {
   }
 
   /**
-   * task_request_review (#189): link the task's pull requests and hand it to QA (In review). The reviewer is the review
-   * agent (Settings), or the triage agent when the builder is the review agent itself. Asking again (after a fix)
+   * task_request_review (#189): link the task's pull requests and hand it to QA (In review). Nobody is its reviewer yet:
+   * the agent of the workflow step with « Verdict on the PR » becomes it when that step starts (#334). Asking again (after a fix)
    * clears what was decided on the previous head, so the reviewer checks again and a failure is read again.
    */
   requestReview(id: string, urls: string[], by: string, summary: string): Card {
@@ -587,9 +587,6 @@ export class Kanban {
     const all = new Set([...before.prs.map((p) => `${p.repo.toLowerCase()}#${p.number}`), ...prs.map((p) => `${p.repo.toLowerCase()}#${p.number}`)]);
     if (all.size > 1 && this.db.prepare("SELECT 1 FROM workflows WHERE project_id = ? AND origin = 'review'").get(before.projectId))
       throw new InvalidError(`one pull request per task in project ${project.name} (its Review workflow reviews one): ${cardRef(before)} would link ${all.size}. Split the task, one PR each`);
-    // The project's review agent; on its own PR, the project's lead (#213, #263). Unset: the Review step says so.
-    const who = reviewerFor(this.db, before.projectId, before.assignee);
-    const reviewer = 'id' in who ? who.id : null;
     const now = new Date().toISOString();
     this.tx(() => {
       assertActive(this.db, before.projectId, cardRef(before));
@@ -607,10 +604,10 @@ export class Kanban {
       this.db
         .prepare('UPDATE card_prs SET reviewed_sha = NULL, failed_sha = NULL, ci = NULL, ci_failed_name = NULL, ci_failed_url = NULL, mergeable = NULL, qa = NULL, qa_description = NULL, checked_at = NULL WHERE card_id = ?')
         .run(id);
-      this.db.prepare("UPDATE cards SET status = 'review', reviewer = ?, updated_at = ? WHERE id = ?").run(reviewer, now, id);
+      this.db.prepare("UPDATE cards SET status = 'review', reviewer = NULL, updated_at = ? WHERE id = ?").run(now, id);
       this.clearBlock(id);
       if (before.status !== 'review') this.event(id, 'status', { from: before.status, to: 'review', by });
-      this.event(id, 'review_requested', { by, summary, prs: prs.map((p) => p.url), reviewer });
+      this.event(id, 'review_requested', { by, summary, prs: prs.map((p) => p.url) });
       // « opened » for workflows (#258): a PR becomes known to Atlas when a task links it.
       for (const pr of linked) recordPrEvent(this.db, id, 'opened', { url: pr.url, repo: pr.repo, number: pr.number, branch: null, base: null, head: null, state: 'open', ci: null }, { by });
     });

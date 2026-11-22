@@ -70,5 +70,7 @@ npm run ui:check     # responsive check of the real UI on a throwaway engine (do
 - **Merge only after QA validation** (commit status `qa/validated`, plus green CI `test`). Push, open the PR, then end
   your run with `task_request_review` (not `task_complete`). Merged → Done; CI red, conflict or failed validation →
   back to you with the reason: fix, push, `task_request_review` again. One PR per task.
+- **Who reviews is the agent in the project's Review workflow** (#334; no project setting): « Review the PR » (Atlas:
+  zurich), and « Review the reviewer's PR » for the reviewer's own PRs (Atlas: atlas). Change it in Workflows.
 - **Agents never install the app** (no `install:mac`, it is Master's): Master installs updates.
 - Project how-tos go in `docs/howtos.md` (or the doc of their topic) through a PR, never in agent memory.

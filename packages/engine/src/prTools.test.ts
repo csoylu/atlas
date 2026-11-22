@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import { mkdirSync } from 'node:fs';
-import { launch, setReviewAgent, until } from '../test/kit/index.ts';
+import { launch, until } from '../test/kit/index.ts';
 import { prToolSpecs, runPrTool } from './prTools.ts';
 
 const SHA = 'a'.repeat(40);
@@ -27,11 +27,12 @@ async function setup() {
   const e = t.engine;
   for (const id of ['zurich', 'munih']) if (!e.agents.list().some((a) => a.id === id)) e.agents.create({ id, modelId: e.agents.get('atlas').modelId });
   e.settings.update({ triageAgent: 'atlas' });
-  e.projects.create({ name: 'Datinel', repo: 'datinel/datinel', lead: 'munih', members: ['zurich'], reviewAgent: 'zurich' });
-  setReviewAgent(e, 'atlas', 'zurich');
+  e.projects.create({ name: 'Datinel', repo: 'datinel/datinel', lead: 'munih', members: ['zurich'] });
+  // zurich is the agent of the review step that started on the task (#334: it sets the task's reviewer).
   const inReview = (projectId: string, url: string, assignee = 'munih') => {
     const c = e.kanban.create({ title: 'x', status: 'running', assignee, projectId }, 'user');
     e.kanban.requestReview(c.id, [url], assignee, 'built');
+    e.db.prepare('UPDATE cards SET reviewer = ? WHERE id = ?').run('zurich', c.id);
     return e.kanban.get(c.id);
   };
   const run = (cardId: string, input: unknown, gh: (args: string[]) => Promise<string>, o: { agentId?: string } = {}) =>
@@ -161,10 +162,11 @@ describe('pr_validate in a reviewer run (#216)', () => {
     const e = t.engine;
     for (const id of ['zurich', 'munih']) if (!e.agents.list().some((a) => a.id === id)) e.agents.create({ id, modelId: e.agents.get('atlas').modelId });
     e.settings.update({ triageAgent: 'atlas' });
-    e.projects.create({ name: 'Datinel', repo: 'datinel/datinel', lead: 'munih', members: ['zurich'], reviewAgent: 'zurich' });
+    e.projects.create({ name: 'Datinel', repo: 'datinel/datinel', lead: 'munih', members: ['zurich'] });
     await until(() => e.projects.get('datinel').members.every((m) => m.cloneState === 'ready'), 'Datinel workspaces ready');
     const c = e.kanban.create({ title: 'x', status: 'running', assignee: 'munih', projectId: 'datinel' }, 'user');
     e.kanban.requestReview(c.id, ['https://github.com/datinel/datinel/pull/3'], 'munih', 'built');
+    e.db.prepare('UPDATE cards SET reviewer = ? WHERE id = ?').run('zurich', c.id); // as its review step does
     e.runner.wake(c.id, { agentId: 'zurich', kind: 'work', kick: 'review it' });
     await t.idle(c.id);
     const result = e.kanban.messages(c.id).flatMap((m) => m.content).find((b) => b.type === 'tool_result');

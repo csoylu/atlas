@@ -784,8 +784,8 @@ export const WORKFLOW_FAILING_EXITS = ['failed', 'rejected', 'refused', 'timed o
  */
 export function negativeExit(n: { kind: WorkflowNodeKind; config: unknown }): string | null {
   if (n.kind === 'agent') {
-    const c = n.config as { inThread?: boolean; reviewAgent?: boolean };
-    return c.inThread ? (c.reviewAgent ? 'changes asked' : 'not done') : 'failed';
+    const c = n.config as { inThread?: boolean; verdict?: boolean };
+    return c.inThread ? (c.verdict ? 'changes asked' : 'not done') : 'failed';
   }
   if (n.kind === 'approval') return 'rejected';
   if (n.kind === 'condition') return 'no';
@@ -874,20 +874,23 @@ export const TriggerConfig = z.discriminatedUnion('kind', [TimeTrigger, z.object
 export type TriggerConfig = z.infer<typeof TriggerConfig>;
 /**
  * An agent gets the prompt as a task: a new task each run, or one task reopened each run that keeps the history; or
- * (#273) in the thread of the run's task, the way a review runs (exits done / not done; with the review agent:
- * approved / changes asked from its pr_validate verdict).
+ * (#273) in the thread of the run's task (exits done / not done; with « Verdict on the PR », #334: approved / changes
+ * asked from its agent's pr_validate verdict).
  */
 export const AgentStepConfig = z.object({
   title: z.string().trim().max(200).default(''),
-  /** null: not chosen yet (a run reaching it fails and says so). Unused with reviewAgent. */
+  /** null: not chosen yet (a run reaching it couldn't run and says so). */
   agentId: z.string().min(1).nullable().default(null),
   /** Fields: {{task.title}}, {{pr.url}}, {{steps.<id>.summary}}… (GET /api/workflows/:id/fields); an unknown one fails the step. */
   prompt: z.string().max(20_000).default(''),
   newTaskEachRun: z.boolean().default(false),
   /** Works in the thread of the run's task (#273): its history and PRs stay, the assignee stays; no task of its own. */
   inThread: z.boolean().optional(),
-  /** inThread only: the agent is the task's reviewer (the project's review agent; the lead on its own PRs, #252). */
-  reviewAgent: z.boolean().optional(),
+  /**
+   * inThread only (#334): « Verdict on the PR ». While the step runs its agent is the task's reviewer (pr_validate is
+   * offered to it) and the exits are approved / changes asked. Generic: any agent, any workflow.
+   */
+  verdict: z.boolean().optional(),
 });
 /** A task blocked on Master in the Inbox, with Approve / Reject. */
 export const ApprovalConfig = z.object({ title: z.string().trim().max(200).default(''), question: z.string().max(5_000).default('') });
@@ -963,8 +966,8 @@ export function workflowExits(n: WorkflowNode | { kind: WorkflowNodeKind; config
     return d === 'mergePr' ? ['merged', 'refused'] : d === 'command' ? ['exit 0', 'other exit'] : ['done'];
   }
   if (n.kind === 'agent') {
-    const c = n.config as { inThread?: boolean; reviewAgent?: boolean };
-    return c.inThread ? (c.reviewAgent ? ['approved', 'changes asked'] : ['done', 'not done']) : ['done', 'failed'];
+    const c = n.config as { inThread?: boolean; verdict?: boolean };
+    return c.inThread ? (c.verdict ? ['approved', 'changes asked'] : ['done', 'not done']) : ['done', 'failed'];
   }
   return WORKFLOW_EXITS[n.kind];
 }
@@ -1351,7 +1354,7 @@ export type UpdatePlanAccount = z.infer<typeof UpdatePlanAccount>;
  * Kinds of notification the engine writes. card.blocked / card.review rows are for the system notification and history;
  * the Inbox shows those cards from their live state (InboxNeed). plan.* rows are « system ».
  */
-export const NOTIFICATION_KINDS = ['card.blocked', 'card.review', 'card.done', 'run.failed', 'schedule.ran', 'memory.cleanup', 'plan.switched', 'plan.exhausted', 'github.unreadable', 'review.stalled', 'card.stalled', 'workflow.stopped', 'workflow.couldnt_run', 'workflow.notify', 'workflow.approval', 'review.off'] as const;
+export const NOTIFICATION_KINDS = ['card.blocked', 'card.review', 'card.done', 'run.failed', 'schedule.ran', 'memory.cleanup', 'plan.switched', 'plan.exhausted', 'github.unreadable', 'review.stalled', 'card.stalled', 'workflow.stopped', 'workflow.couldnt_run', 'workflow.notify', 'workflow.approval', 'review.off', 'workflow.no_agent'] as const;
 export type NotificationKind = (typeof NOTIFICATION_KINDS)[number];
 
 /** Something the user is told about (also shown as a system notification by the app). */
@@ -1367,6 +1370,13 @@ export interface Notification {
   archivedAt: string | null;
   /** Its task's project (#213); null = not about a task. */
   projectId: string | null;
+  /** One button into the app (#334), e.g. « Open the Review workflow »; null = none. */
+  link: NotificationLink | null;
+}
+/** A button of an Inbox item: its label and the in-app hash it opens (#/workflows/<id>/step/<node>). */
+export interface NotificationLink {
+  label: string;
+  hash: string;
 }
 
 /** A board card waiting on the user (blocked or in review): derived from the card's live state, so it leaves the Inbox by itself. */

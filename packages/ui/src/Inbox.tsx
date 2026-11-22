@@ -468,6 +468,13 @@ function UpdateBody(props: Parameters<typeof Detail>[0] & { update: Notification
               </button>
             </div>
           )}
+          {update.link && (
+            <div className="ibx-actions">
+              <a className="btn primary" href={update.link.hash}>
+                {update.link.label}
+              </a>
+            </div>
+          )}
         </div>
       ) : null}
       {update.kind === 'card.stalled' && update.cardId && <StallActions cardId={update.cardId} card={props.cards.find((c) => c.id === update.cardId)} onOpenCard={props.onOpenCard} onError={onError} />}

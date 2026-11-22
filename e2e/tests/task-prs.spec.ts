@@ -20,7 +20,6 @@ test('board flow: In review with its PR, failed → Ready with the reason, merge
   const atlas = await TestAtlas.start({ prs: { read: async () => ({ ...gh.pr }), intervalMs: false } });
   try {
     atlas.engine.agents.create({ id: 'zurich', modelId: atlas.engine.agents.get('atlas').modelId });
-    atlas.engine.settings.update({ reviewAgent: 'zurich' });
     atlas.model.next(use('task_request_review', { summary: 'engine + tests', prs: [URL] }));
     const task = await atlas.task('Workflows engine');
     await expect.poll(async () => (await atlas.card(task.id)).status).toBe('review');
