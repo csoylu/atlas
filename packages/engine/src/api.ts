@@ -22,12 +22,12 @@ import type { Documents } from './documents.ts';
 import type { WorkspaceFiles } from './workspaceFiles.ts';
 import type { Projects } from './projects.ts';
 import type { ReviewFlow } from './reviewFlow.ts';
-import { PaneSees, withPaneHelper } from '@atlas/shared';
+import { PaneSees, servedFile, withPaneHelper } from '@atlas/shared';
 import type { SandboxStatus } from '@atlas/shared';
 import { PanePresence, paneNote } from './pane.ts';
 import { commentBlocks, type PageShot } from './comments.ts';
 import { inside } from './tools.ts';
-import { statSync } from 'node:fs';
+import { realpathSync, statSync } from 'node:fs';
 import { ConflictError, InvalidError, NotFoundError, type Kanban } from './kanban.ts';
 import type { Bus } from './events.ts';
 import type { Local } from './local.ts';
@@ -668,6 +668,29 @@ export function createApi(deps: {
     const { rel } = deps.files.resolve(root, String(b.path ?? ''));
     const line = typeof b.line === 'number' && Number.isInteger(b.line) && b.line > 0 ? b.line : null;
     res.json(documents.openFile(req.params.id, rel, USER, line));
+  });
+  // A link in the chat to a file Atlas serves (#339, `/api/files/<root>/<path>`): its artifact, else the file in Files
+  // when it is in the chat's workspace. Anything else is 404: the UI opens it outside the window.
+  app.post('/api/chats/:id/panel/link', (req, res) => {
+    const url = (req.body as { url?: unknown }).url;
+    // Only its path matters: the UI's origin is whatever host Master reached the engine by.
+    const base = 'http://atlas.invalid';
+    const served = typeof url === 'string' && URL.canParse(url, base) ? servedFile(new URL(url, base).pathname, base) : null;
+    if (!served) throw new InvalidError('give the address of a file Atlas serves: /api/files/<agent>/<path>');
+    const doc = documents.byServed(served.root, served.path);
+    if (doc) return void res.json(documents.open(req.params.id, doc.id, USER));
+    const { root } = deps.files.where(req.params.id);
+    let dir: string;
+    try {
+      dir = realpathSync(projects.filesDir(served.root).dir);
+    } catch (e) {
+      if ((e as NodeJS.ErrnoException).code !== 'ENOENT') throw e;
+      throw new NotFoundError(`no workspace ${served.root}`);
+    }
+    if (dir !== root) throw new NotFoundError(`${served.root}/${served.path} is not in this chat's workspace`);
+    const { abs, rel } = deps.files.resolve(root, served.path);
+    if (!statSync(abs).isFile()) throw new NotFoundError(`${served.path} is not a file`);
+    res.json(documents.openFile(req.params.id, rel, USER));
   });
   app.post('/api/chats/:id/panel/file/close', (req, res) => {
     res.json(documents.closeFile(req.params.id, String((req.body as { path?: unknown }).path ?? '')));

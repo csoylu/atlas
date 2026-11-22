@@ -10,7 +10,8 @@
 // names and plan accounts, other projects, schedules, a real chat history; ui-check's own fixtures (pins, reports,
 // tool rows, the Datinel project, workflows, secrets) are added on top in both cases. Compare a run with live data
 // by running ui-check against it on Master's Mac (`--port N`, outside the sandbox); this file says what differs.
-import { mkdirSync, mkdtempSync, rmSync } from 'node:fs';
+import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
+import { deflateSync } from 'node:zlib';
 import { tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
 import { startEngine } from '../../packages/engine/src/index.ts';
@@ -61,6 +62,39 @@ const call = async (method: string, path: string, body?: unknown) => {
   return r.status === 204 ? null : ((await r.json()) as any);
 };
 const text = (t: string): ContentBlock[] => [{ type: 'text', text: t }];
+/** A `size`² PNG: a blue disc on a light square. */
+function png(size: number): Buffer {
+  const crcTable = Array.from({ length: 256 }, (_, n) => {
+    let c = n;
+    for (let k = 0; k < 8; k++) c = c & 1 ? 0xedb88320 ^ (c >>> 1) : c >>> 1;
+    return c >>> 0;
+  });
+  const crc = (b: Buffer) => {
+    let c = 0xffffffff;
+    for (const x of b) c = crcTable[(c ^ x) & 0xff]! ^ (c >>> 8);
+    return (c ^ 0xffffffff) >>> 0;
+  };
+  const chunk = (type: string, data: Buffer) => {
+    const t = Buffer.concat([Buffer.from(type, 'ascii'), data]);
+    const out = Buffer.alloc(t.length + 8);
+    out.writeUInt32BE(data.length, 0);
+    t.copy(out, 4);
+    out.writeUInt32BE(crc(t), t.length + 4);
+    return out;
+  };
+  const head = Buffer.alloc(13);
+  head.writeUInt32BE(size, 0);
+  head.writeUInt32BE(size, 4);
+  head[8] = 8; // 8 bits, RGB
+  head[9] = 2;
+  const rows = Buffer.alloc(size * (size * 3 + 1));
+  for (let y = 0; y < size; y++)
+    for (let x = 0; x < size; x++) {
+      const inDisc = (x - size / 2) ** 2 + (y - size / 2) ** 2 < (size * 0.35) ** 2;
+      rows.set(inDisc ? [0x55, 0x66, 0xcc] : [0xee, 0xee, 0xff], y * (size * 3 + 1) + 1 + x * 3);
+    }
+  return Buffer.concat([Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]), chunk('IHDR', head), chunk('IDAT', deflateSync(rows)), chunk('IEND', Buffer.alloc(0))]);
+}
 
 // Past the first-run welcome sheet (it would cover the UI).
 await call('PATCH', '/settings', { userName: 'Master', userAbout: 'Software engineer at a crypto data company.' });
@@ -82,6 +116,9 @@ const turns: [string, string][] = [
   ['The log shows a long identifier, how does it look?', `The identifier is \`${LONG_WORD}\` and it has to stay inside the message.`],
   ...Array.from({ length: 10 }, (_, i): [string, string] => [`Question ${i + 1}: what changed in step ${i + 1}?`, `Step ${i + 1} changed the ${['board', 'inbox', 'library', 'settings', 'chat'][i % 5]} layout and its tests. Nothing else moved, and the check at four widths passed.`]),
 ];
+// A picture in atlas's workspace and a reply linking to it (#339: the link opens it in the side panel).
+writeFileSync(join(dataDir, 'workspaces', 'atlas', 'avatar.png'), png(160));
+turns.push(['Show me the avatar.', 'Here it is: [avatar.png](/api/files/atlas/avatar.png).']);
 for (const [q, a] of turns) {
   engine.kanban.appendMessage(chat.id, 'user', 'user', text(q));
   engine.kanban.appendMessage(chat.id, 'assistant', 'atlas', text(a));

@@ -9,6 +9,7 @@ import { AtlasTray } from './tray/tray.ts';
 import { ElectronBrowser } from './browser.ts';
 import { dockBadge, type TrayAction, type TrayInput } from './tray/model.ts';
 import { closeForQuit, openDecision, type WindowState } from './window.ts';
+import { appNavigation } from '@atlas/shared';
 
 /**
  * Atlas desktop. Default: runs the engine in this process (design §2) with data in the app's user-data folder, and
@@ -105,6 +106,15 @@ function createWindow(url: string) {
   win.webContents.setWindowOpenHandler(({ url: target }) => {
     void shell.openExternal(target);
     return { action: 'deny' };
+  });
+  // Nothing replaces the app in its window (#339): a link that would navigate it (a served file, any page) goes to the
+  // system browser instead; other schemes are refused. In-page (#/route) changes don't come here.
+  win.webContents.on('will-navigate', (e) => {
+    const where = appNavigation(e.url, url);
+    if (where === 'stay') return;
+    e.preventDefault();
+    if (where === 'external') void shell.openExternal(e.url);
+    else console.error(`Atlas window: refused to navigate to ${e.url.slice(0, 200)}`);
   });
   void win.loadURL(url);
   browser?.reattach();

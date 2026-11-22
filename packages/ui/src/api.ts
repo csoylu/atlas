@@ -101,6 +101,8 @@ export const api = {
   browserView: (chatId: string | null, bounds: BrowserBounds | null) => call<void>('PUT', '/browser/view', { chatId, bounds }),
   // ── Files of the chat's agent workspace (#303) ──
   panelOpenFile: (chatId: string, path: string, line: number | null = null) => call<PanelTab[]>('POST', `/chats/${chatId}/panel/file/open`, { path, line }),
+  /** A link to a file Atlas serves (#339): its artifact or (in the chat's workspace) its file, in the panel; else 404. */
+  panelOpenLink: (chatId: string, url: string) => call<PanelTab[]>('POST', `/chats/${chatId}/panel/link`, { url }),
   panelCloseFile: (chatId: string, path: string) => call<PanelTab[]>('POST', `/chats/${chatId}/panel/file/close`, { path }),
   panelFocusFile: (chatId: string, path: string) => call<PanelTab[]>('POST', `/chats/${chatId}/panel/file/focus`, { path }),
   filesList: (chatId: string, dir: string) => call<WsListing>('GET', `/chats/${chatId}/files/list?dir=${encodeURIComponent(dir)}`),
