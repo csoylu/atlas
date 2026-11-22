@@ -172,3 +172,4 @@ export const CheckIcon = () => (
     <path d="M4.5 10.5l3.5 3.5 7.5-8" />
   </svg>
 );
+

@@ -181,11 +181,13 @@ export function endedOnFailure(segments: Segment[]): Step | null {
 }
 
 /** Messages → turns: one per user/system message, consecutive messages of one agent merged into one. */
-export function turns(messages: Message[], isAgent: (m: Message) => boolean): Message[][] {
+export function turns(messages: Message[], isAgent: (m: Message) => boolean, breakAfter?: number | null): Message[][] {
   const out: Message[][] = [];
   for (const m of messages) {
     const prev = out.at(-1);
-    if (prev && isAgent(m) && isAgent(prev[0]!) && prev[0]!.author === m.author) prev.push(m);
+    // The « New » line (#338): the first message after `breakAfter` starts its own group, so the line sits right above it.
+    const fresh = breakAfter != null && m.seq > breakAfter && !!prev && prev.at(-1)!.seq <= breakAfter;
+    if (prev && !fresh && isAgent(m) && isAgent(prev[0]!) && prev[0]!.author === m.author) prev.push(m);
     else out.push([m]);
   }
   return out;

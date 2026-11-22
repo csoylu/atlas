@@ -136,9 +136,10 @@ describe('tray: menu', () => {
     expect(find(m, '#54 Card 54 — your answer')).toMatchObject({ dot: 'blocked', action: { type: 'go', hash: '#/inbox/c_54' } });
     expect(find(m, '#51 Card 51 — review').dot).toBe('review');
     expect(badgeCount({ needs })).toBe(3);
-    // the Dock badge (#310): the same count, cleared at zero
-    expect(dockBadge({ needs })).toBe('3');
-    expect(dockBadge({ needs: [] })).toBe('');
+    // the Dock badge (#310, #338): unread chats + the Inbox count, cleared at zero or with the switch off
+    expect(dockBadge({ on: true, unreadChats: 2, inbox: 1 })).toBe('3');
+    expect(dockBadge({ on: true, unreadChats: 0, inbox: 0 })).toBe('');
+    expect(dockBadge({ on: false, unreadChats: 2, inbox: 1 })).toBe('');
     const many = Array.from({ length: 8 }, (_, i) => need(card(i + 1, { status: 'review' })));
     const big = trayMenu(input({ needs: many }));
     expect(big.filter((i) => i.action?.type === 'go' && i.action.hash.startsWith('#/inbox/'))).toHaveLength(MAX_ROWS);

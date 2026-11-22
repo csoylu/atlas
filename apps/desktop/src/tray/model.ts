@@ -91,8 +91,14 @@ export const isAwake = (v: TrayVoice) => v === 'wake' || v === 'listening' || v 
 /** The count on the icon: cards that need Master (blocked on them, or in review). */
 export const badgeCount = (i: Pick<TrayInput, 'needs'>) => i.needs.length;
 
-/** The Dock icon's badge (#310): the count of tasks needing Master, nothing (badge cleared) at zero. */
-export const dockBadge = (i: Pick<TrayInput, 'needs'>) => (i.needs.length > 0 ? String(i.needs.length) : '');
+/**
+ * The Dock icon's badge (#310, #338): chats with an unread reply plus the Inbox count, as in the window title
+ * « (3) Atlas »; nothing (badge cleared) at zero or with Settings → Appearance's switch off.
+ */
+export const dockBadge = (i: { on: boolean; unreadChats: number; inbox: number }) => {
+  const n = i.unreadChats + i.inbox;
+  return i.on && n > 0 ? String(n) : '';
+};
 
 /** « 18:30 », « tomorrow 08:00 », « Mon 08:00 ». */
 export function whenLabel(iso: string, now: Date): string {

@@ -140,6 +140,12 @@ describe('turns', () => {
     const ms = [msg([text('hi')], 'user'), msg([text('a')]), msg([text('b')]), msg([text('sys')], 'system'), msg([text('c')])];
     expect(turns(ms, (m) => m.role === 'assistant').map((t) => t.length)).toEqual([1, 2, 1, 1]);
   });
+  it('the first message after the « New » line starts its own group (#338)', () => {
+    const ms = [msg([text('hi')], 'user'), msg([text('a')]), msg([text('b')]), msg([text('c')])];
+    const after = ms[1]!.seq;
+    expect(turns(ms, (m) => m.role === 'assistant', after).map((t) => t.map((m) => m.seq - after))).toEqual([[-1], [0], [1, 2]]);
+    expect(turns(ms, (m) => m.role === 'assistant', null).map((t) => t.length)).toEqual([1, 3]);
+  });
 });
 
 describe('draftSegments (#80)', () => {

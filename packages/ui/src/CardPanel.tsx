@@ -400,7 +400,7 @@ export function Activity(props: {
     <Turn messages={ms} results={results} timings={timings} live={live} last={last} stream={props.stream} renderText={renderText} onOpenArtifact={props.onOpenRef} cards={cardLinks} cardId={card.id} />
   );
   const isAgent = (m: Message) => m.role === 'assistant';
-  const groups = turns(list, isAgent);
+  const groups = turns(list, isAgent, props.newAfter);
   // The first group with a message Master hadn't seen gets the « New » line above it.
   const newAt = props.newAfter == null ? -1 : groups.findIndex((g) => g.some((m) => m.seq > props.newAfter!));
   const running = run?.status === 'running';
