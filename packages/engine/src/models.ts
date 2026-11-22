@@ -31,6 +31,7 @@ export const realProviders: ProviderFactory = (m, env) => {
   }
   if (m.provider === 'chatgpt') throw new ModelError(`model ${m.id} uses the ChatGPT plan, which this engine has no sign-in for`);
   if (m.provider === 'claude_plan') throw new ModelError(`model ${m.id} uses the Claude plan, which this engine has no sign-in for`);
+  if (m.provider === 'gemini_plan') throw new ModelError(`model ${m.id} uses the Gemini plan, which this engine has no sign-in for`);
   const key = m.credentialEnv ? env[m.credentialEnv] : undefined;
   if (m.provider === 'anthropic') {
     if (!key)
@@ -59,12 +60,14 @@ export class Models {
         r.provider === 'claude_code'
           ? !!(this.env['CLAUDE_CODE_OAUTH_TOKEN'] || this.env['ANTHROPIC_API_KEY'])
           : r.provider === 'chatgpt'
-          ? !!this.chatgpt?.status().planUsage
-          : r.provider === 'claude_plan'
-            ? !!this.claude?.status().signedIn
-          : this.pooled({ provider: r.provider, credentialEnv: r.credential_env })
-            ? this.accounts!.list().some((a) => a.enabled && a.keyPresent)
-            : !!(r.credential_env && this.env[r.credential_env]),
+            ? !!this.chatgpt?.status().planUsage
+            : r.provider === 'claude_plan'
+              ? !!this.claude?.status().signedIn
+              : r.provider === 'gemini_plan'
+                ? !!this.gemini?.status().signedIn
+                : this.pooled({ provider: r.provider, credentialEnv: r.credential_env })
+                  ? this.accounts!.list().some((a) => a.enabled && a.keyPresent)
+                  : !!(r.credential_env && this.env[r.credential_env]),
       maxTokens: r.max_tokens,
       contextWindow: r.context_window,
       verifiedAt: r.verified_at,
@@ -165,17 +168,26 @@ export class Models {
     this.claude = c;
   }
 
+  /** The signed-in Gemini plan (gemini-plan.ts) serves 'gemini_plan' models with real providers. */
+  private gemini: { provider(): Provider; status(): { signedIn: boolean } } | null = null;
+  setGemini(g: { provider(): Provider; status(): { signedIn: boolean } }) {
+    this.gemini = g;
+  }
+
   /** The provider for a model, with the same account protections for every request. */
   provider(id: string): { model: Model; provider: Provider } {
     const model = this.get(id);
+    const real = this.factory === realProviders;
     const provider =
-      model.provider === 'chatgpt' && this.chatgpt && this.factory === realProviders
+      real && model.provider === 'chatgpt' && this.chatgpt
         ? this.chatgpt.provider()
-        : model.provider === 'claude_plan' && this.claude && this.factory === realProviders
+        : real && model.provider === 'claude_plan' && this.claude
           ? this.claude.provider()
-        : this.pooled(model)
-          ? this.accounts!.provider()
-          : this.factory(model, this.env);
+          : real && model.provider === 'gemini_plan' && this.gemini
+            ? this.gemini.provider()
+            : this.pooled(model)
+              ? this.accounts!.provider()
+              : this.factory(model, this.env);
     const local = this.before;
     if (!local || !local.serves(model.baseUrl)) return { model, provider };
     return {

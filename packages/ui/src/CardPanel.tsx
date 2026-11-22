@@ -335,6 +335,8 @@ function Block({ block: b, results }: { block: ContentBlock; results: Map<string
         </div>
       );
     case 'thinking':
+      // A thinking block with no text only carries the provider's signature for a later call: nothing to show.
+      if (!b.thinking) return null;
       return (
         <details className="tool thinking">
           <summary>thinking</summary>

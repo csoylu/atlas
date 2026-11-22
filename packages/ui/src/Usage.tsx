@@ -82,6 +82,7 @@ const EFFORTS: { value: Effort; label: string }[] = [
 const GROUPS = [
   { provider: 'anthropic', label: 'Anthropic API' },
   { provider: 'claude_plan', label: 'Claude plan' },
+  { provider: 'gemini_plan', label: 'Gemini plan' },
   { provider: 'chatgpt', label: 'ChatGPT plan' },
   { provider: 'openai_compat', label: 'Local and other servers' },
 ] as const;
@@ -162,6 +163,7 @@ function Chevron() {
 const SOURCES = [
   { key: 'anthropic', label: 'Anthropic API' },
   { key: 'claude_plan', label: 'Claude plan' },
+  { key: 'gemini_plan', label: 'Gemini plan' },
   { key: 'claude_code', label: 'Removed Claude integration (history)' },
   { key: 'chatgpt', label: 'ChatGPT plan' },
   { key: 'openai_compat', label: 'Local and other servers' },
@@ -169,6 +171,7 @@ const SOURCES = [
 const SOURCE_LABEL: Record<string, string> = {
   anthropic: 'Anthropic API',
   claude_plan: 'Claude plan',
+  gemini_plan: 'Gemini plan',
   claude_code: 'Removed Claude integration',
   chatgpt: 'ChatGPT plan',
   openai_compat: 'Local / server',

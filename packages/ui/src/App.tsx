@@ -155,6 +155,9 @@ export function App() {
           stream.push('claude', { type: 'claude', status: e.status });
           setClaudeWelcome(e.status.showWelcome);
           api.models().then(setModels, (err: Error) => setError(err.message));
+        } else if (e.type === 'gemini.updated') {
+          stream.push('gemini', { type: 'gemini', status: e.status });
+          api.models().then(setModels, (err: Error) => setError(err.message));
         }
       },
       (up) => {

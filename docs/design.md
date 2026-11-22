@@ -120,6 +120,39 @@ for an **approved, registered Atlas client** and nothing else:
   with Resume. One account, no rotation around limits. Usage is counted like every other source (Usage: « Claude plan »).
 - Server engines: unavailable (no keychain for tokens), like the ChatGPT plan.
 
+### Gemini plan (built 20 Nov 2026, `engine/src/gemini-plan.ts` + `providers/gemini.ts`, Models page « Gemini subscription (Antigravity) »)
+Can asked to run agents on his Google subscription (Gemini) instead of a per-token API key. There is no official
+subscription-quota API: Google's DevRel said so on 16 Nov 2026, and the Gemini API key is billed per token. The only
+thing that spends the subscription is Google's own clients' Cloud Code backend, so Atlas speaks to it directly:
+- **Sign-in**: the Google account behind the subscription, authorization code + PKCE (S256), scopes `cloud-platform`,
+  `userinfo.email`, `userinfo.profile`, `cclog`, `experimentsandconfigs`, `access_type=offline` + `prompt=consent` so a
+  refresh token comes back. The OAuth client (id + secret) is the one inside Google's Antigravity app and is **not in
+  the repo** — GitHub push protection blocks it and rule 5 keeps secrets out of source: Can enters both once on the
+  Models page (keychain) or a server sets `ATLAS_GEMINI_CLIENT_ID`/`_CLIENT_SECRET` in `.env`. The callback listens on
+  the loopback port that client registers (`http://localhost:51121/oauth-callback`, both loopback families) while a
+  sign-in is pending; `_ENDPOINT` picks the Cloud Code host (default `daily-cloudcode-pa.googleapis.com`; the
+  production host 429s consumer accounts). Tokens in the keychain (`GEMINI_TOKENS`, never in SQLite, env, the secret
+  list or the API); refreshed 5 min before expiry, one at a time; a dead refresh or a 401 signs out with the reason.
+- **Project**: `v1internal:loadCodeAssist` (`ideType: ANTIGRAVITY`) returns `cloudaicompanionProject`; when it doesn't,
+  `v1internal:onboardUser` provisions the free tier and is polled to `done`. Saved in `gemini_account` (migration 0021
+  rebuilt `models` for the new CHECK value); `ATLAS_GEMINI_PROJECT` overrides it for testing.
+- **Requests**: `POST /v1internal:streamGenerateContent?alt=sse` with `Authorization: Bearer`, the Antigravity user
+  agent, and a body of `{project, model, requestType: 'agent', userAgent: 'antigravity', requestId, request: {contents,
+  systemInstruction, tools, generationConfig, sessionId}}`. Atlas's system prompt and tools go as they are (no
+  Antigravity identity prompt). Gemini's `functionResponse` needs the call's **name**, taken from the transcript, and
+  Gemini 3 rejects a function call without a thought signature: the signature from the model's thinking rides the first
+  call of the turn, the rest get `skip_thought_signature_validator`; a call Atlas never saw signed (old rows, another
+  provider) gets the sentinel too. Effort maps to `thinkingConfig` (`thinkingLevel` on 3+/4, `thinkingBudget` below,
+  `none` = no thinking). Text streams live, thinking is kept for the transcript, `usageMetadata` → usage
+  (`thoughtsTokenCount` counts as output).
+- **Models**: `v1internal:fetchAvailableModels` lists what the account may use; only `gemini*` ids (Atlas speaks their
+  schema), added with « Give to agents » as provider `gemini_plan`, never exposed as an API key. Usage is counted like
+  every other source (Usage: « Gemini plan »).
+- **Limits**: a 429 pauses the plan until `retry-after` / Google's `RetryInfo` (else 1 min), ended by time or Resume.
+  One account, no rotation and no fallback to API billing. A 403 `TOS_VIOLATION` stops the run with that message: Google
+  prohibits third-party clients using subscription quota (§6 of its terms), and Can chose to build it anyway
+  (20 Nov 2026). The supported route is a `GEMINI_API_KEY` through the OpenAI-compatible endpoint.
+
 The legacy `claude_code` CLI provider (migration 0017) stays removed (0018): rows readable, never runnable.
 
 ### ChatGPT plan (built 10 Nov 2026, `engine/src/chatgpt.ts` + `providers/chatgpt.ts`, Agents page « ChatGPT plan »)

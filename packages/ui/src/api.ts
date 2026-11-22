@@ -1,4 +1,4 @@
-import type { ChatUsage, UsageSummary, ChatGptModel, ChatGptStatus, UpdateChatGpt, ClaudePlanModel, ClaudePlanStatus, UpdateClaudePlan, Account, CreateAccount, UpdateAccount, LocalModel, LocalPull, LocalStatus, UpdateLocal, Agent, Canvas, CanvasNode, Card, CardStatus, CreateAgent, CreateModel, CreateSchedule, Memory, Message, Model, ModelTest, Run, Schedule, ServerEvent, Settings, UpdateAgent, UpdateModel, UpdateSchedule } from '@atlas/shared';
+import type { ChatUsage, UsageSummary, ChatGptModel, ChatGptStatus, UpdateChatGpt, ClaudePlanModel, ClaudePlanStatus, UpdateClaudePlan, GeminiPlanModel, GeminiPlanStatus, UpdateGeminiPlan, Account, CreateAccount, UpdateAccount, LocalModel, LocalPull, LocalStatus, UpdateLocal, Agent, Canvas, CanvasNode, Card, CardStatus, CreateAgent, CreateModel, CreateSchedule, Memory, Message, Model, ModelTest, Run, Schedule, ServerEvent, Settings, UpdateAgent, UpdateModel, UpdateSchedule } from '@atlas/shared';
 
 /** HTTP error with the parsed body (e.g. 409 carries the current canvas). */
 export class ApiError extends Error {
@@ -66,6 +66,12 @@ export const api = {
   claudeLogout: () => call<ClaudePlanStatus>('POST', '/claude/logout'),
   updateClaude: (patch: UpdateClaudePlan) => call<ClaudePlanStatus>('PATCH', '/claude', patch),
   claudeModels: () => call<ClaudePlanModel[]>('GET', '/claude/models'),
+  gemini: () => call<GeminiPlanStatus>('GET', '/gemini'),
+  geminiLogin: () => call<{ url: string }>('POST', '/gemini/login'),
+  geminiCancel: () => call<GeminiPlanStatus>('POST', '/gemini/cancel'),
+  geminiLogout: () => call<GeminiPlanStatus>('POST', '/gemini/logout'),
+  updateGemini: (patch: UpdateGeminiPlan) => call<GeminiPlanStatus>('PATCH', '/gemini', patch),
+  geminiModels: () => call<GeminiPlanModel[]>('GET', '/gemini/models'),
   createAgent: (a: CreateAgent) => call<Agent>('POST', '/agents', a),
   updateAgent: (id: string, patch: UpdateAgent) => call<Agent>('PATCH', `/agents/${id}`, patch),
   deleteAgent: (id: string) => call<void>('DELETE', `/agents/${id}`),

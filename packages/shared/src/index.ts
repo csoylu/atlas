@@ -228,7 +228,8 @@ export interface Model {
   /** 'chatgpt': OpenAI models on Can's ChatGPT plan (Sign in with ChatGPT, design §5); name is the model slug. */
   /** 'anthropic': OAuth-based via the claude-code provider (Hermes CLI integration, design §5). */
   /** 'claude_plan': Claude models on Can's Claude plan, through Atlas's own Anthropic-approved sign-in (design §5). */
-  provider: 'anthropic' | 'openai_compat' | 'chatgpt' | 'claude_plan' | 'claude_code';
+  /** 'gemini_plan': Gemini models on Can's Google subscription (Antigravity quota), design §5. */
+  provider: 'anthropic' | 'openai_compat' | 'chatgpt' | 'claude_plan' | 'gemini_plan' | 'claude_code';
   name: string;
   baseUrl: string | null;
   /** Name of the env var holding the key; never the key itself (CLAUDE.md rule 5). */
@@ -252,7 +253,7 @@ export interface Memory {
 }
 
 // claude_code remains readable only for historical records; new/updated models cannot select it.
-export const ModelProvider = z.enum(['anthropic', 'openai_compat', 'chatgpt', 'claude_plan', 'claude_code']);
+export const ModelProvider = z.enum(['anthropic', 'openai_compat', 'chatgpt', 'claude_plan', 'gemini_plan', 'claude_code']);
 export const CreateModel = z.object({
   id: z.string().regex(/^[a-z][a-z0-9_-]{1,30}$/, 'lowercase letters, digits, - or _'),
   provider: ModelProvider,
@@ -264,7 +265,7 @@ export const CreateModel = z.object({
   contextWindow: z.number().int().min(2048).optional(),
 });
 export type CreateModel = z.input<typeof CreateModel>;
-export const DEFAULT_CONTEXT_WINDOW = { anthropic: 200_000, openai_compat: 32_768, chatgpt: 200_000, claude_plan: 200_000, claude_code: 200_000 } as const;
+export const DEFAULT_CONTEXT_WINDOW = { anthropic: 200_000, openai_compat: 32_768, chatgpt: 200_000, claude_plan: 200_000, gemini_plan: 1_000_000, claude_code: 200_000 } as const;
 /** Edits: only the fields sent change (no defaults, unlike CreateModel). */
 export const UpdateModel = z
   .object({
@@ -378,6 +379,7 @@ export type ServerEvent =
   | { type: 'local.pull'; pull: LocalPull }
   | { type: 'chatgpt.updated'; status: ChatGptStatus }
   | { type: 'claude.updated'; status: ClaudePlanStatus }
+  | { type: 'gemini.updated'; status: GeminiPlanStatus }
   | { type: 'usage.recorded'; conversationId: string | null; cardId: string | null };
 
 /* ── Token usage (engine usage.ts: every model call, from what the provider reports) ──────────────────── */
@@ -399,7 +401,7 @@ export interface ChatUsage extends UsageCount {
 export interface UsageSummary {
   days: number;
   /** Oldest first, one entry per local day; tokens (in + out) per source. */
-  perDay: { day: string; anthropic: number; chatgpt: number; claude_plan: number; claude_code: number; openai_compat: number }[];
+  perDay: { day: string; anthropic: number; chatgpt: number; claude_plan: number; gemini_plan: number; claude_code: number; openai_compat: number }[];
   /** Most used first. week = the last 7 days, month = the whole range. */
   models: { modelId: string; provider: Model['provider']; today: UsageCount; week: UsageCount; month: UsageCount }[];
   total: UsageCount & { cached: number };
@@ -490,6 +492,51 @@ export interface ClaudePlanModel {
   id: string;
   displayName: string;
 }
+
+/* ── Gemini plan (Google subscription / Antigravity quota, design §5) ─────────────────────────────────────────── */
+
+/**
+ * The Antigravity OAuth client (id + secret) is user data, not source: GitHub blocks commits that contain it, and
+ * rule 5 keeps secrets out of the repo. Enter it on the Models page (keychain) or in `.env` on a server.
+ */
+export const GEMINI_PLAN_SETTINGS = [
+  { name: 'ATLAS_GEMINI_CLIENT_ID', label: 'OAuth client ID', secret: false },
+  { name: 'ATLAS_GEMINI_CLIENT_SECRET', label: 'OAuth client secret', secret: true },
+] as const;
+export type GeminiPlanSetting = (typeof GEMINI_PLAN_SETTINGS)[number]['name'];
+
+/** A Gemini model the signed-in Google account can use (v1internal:fetchAvailableModels). */
+export interface GeminiPlanModel {
+  id: string;
+  displayName: string;
+  /** Prompt window the catalog reports, used when the model is given to agents. */
+  contextWindow: number;
+}
+
+/** The Google account signed in on this machine, as the UI may see it (never a token or the client secret). */
+export interface GeminiPlanStatus {
+  /** Sign-in can work here: the desktop app (tokens in the keychain). */
+  available: boolean;
+  /** Why not, when unavailable. */
+  unavailableReason: string | null;
+  /** The OAuth client is filled in (Atlas ships none: the Antigravity app's values are not in the repo). */
+  configured: boolean;
+  /** What's missing in the settings. */
+  configProblems: string[];
+  /** Non-secret setting values; secrets only say whether they're set. */
+  settings: Record<GeminiPlanSetting, string | null>;
+  signedIn: boolean;
+  /** A sign-in is open in the browser, waiting for the callback. */
+  pending: boolean;
+  email: string | null;
+  /** Cloud Code project the quota is billed to; null until Google returned one. */
+  project: string | null;
+  /** Rate or usage limit: no requests until this time (or Resume). */
+  pausedUntil: string | null;
+  lastError: string | null;
+}
+export const UpdateGeminiPlan = z.object({ resume: z.literal(true) }).partial().strict();
+export type UpdateGeminiPlan = z.infer<typeof UpdateGeminiPlan>;
 
 /* ── Local models (design §5: the engine manages an Ollama server on its own machine) ─────────────────────── */
 

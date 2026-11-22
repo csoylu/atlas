@@ -66,7 +66,7 @@ function AgentCard(props: { agent: Agent; models: Model[]; triage: boolean; onCh
           <div className="agent-name">@{a.id}</div>
           <div className="agent-sub">
             {props.triage && <span className="badge">triage</span>}
-            {model?.lastError ? <span className="badge bad">model failing</span> : model?.provider === 'chatgpt' && !model.credentialPresent ? <span className="badge bad">ChatGPT not signed in</span> : model?.provider === 'claude_plan' && !model.credentialPresent ? <span className="badge bad">Claude not signed in</span> : model && !model.credentialPresent && (model.credentialEnv || model.provider === 'anthropic') ? <span className="badge bad">key missing</span> : null}
+            {model?.lastError ? <span className="badge bad">model failing</span> : model?.provider === 'chatgpt' && !model.credentialPresent ? <span className="badge bad">ChatGPT not signed in</span> : model?.provider === 'claude_plan' && !model.credentialPresent ? <span className="badge bad">Claude not signed in</span> : model?.provider === 'gemini_plan' && !model.credentialPresent ? <span className="badge bad">Gemini not signed in</span> : model && !model.credentialPresent && (model.credentialEnv || model.provider === 'anthropic') ? <span className="badge bad">key missing</span> : null}
           </div>
         </div>
         <label className="switch" title="Enabled">

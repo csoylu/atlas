@@ -17,8 +17,10 @@ export const SECRET_NAME = /^[A-Z][A-Z0-9_]{1,63}$/;
 export const CHATGPT_TOKENS = 'CHATGPT_TOKENS';
 /** The Claude plan sign-in's tokens (claude-plan.ts): same rules as CHATGPT_TOKENS. */
 export const CLAUDE_TOKENS = 'CLAUDE_TOKENS';
+/** The Gemini plan sign-in's tokens (gemini-plan.ts): same rules as CHATGPT_TOKENS. */
+export const GEMINI_TOKENS = 'GEMINI_TOKENS';
 /** Token entries: never in the engine env, the key list or the API. */
-export const TOKEN_ENTRIES = new Set([CHATGPT_TOKENS, CLAUDE_TOKENS]);
+export const TOKEN_ENTRIES = new Set([CHATGPT_TOKENS, CLAUDE_TOKENS, GEMINI_TOKENS]);
 
 /** Engine env = process env + stored secrets; setting a secret updates it live (models read it at each call). */
 export function envWithSecrets(base: NodeJS.ProcessEnv, store?: SecretStore): NodeJS.ProcessEnv {

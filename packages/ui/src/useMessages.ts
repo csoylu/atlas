@@ -1,5 +1,5 @@
 import { useMemo } from 'react';
-import type { Canvas, ClaudePlanStatus, LocalPull, LocalStatus, Message, Run } from '@atlas/shared';
+import type { Canvas, ClaudePlanStatus, GeminiPlanStatus, LocalPull, LocalStatus, Message, Run } from '@atlas/shared';
 
 /** Fan-out of live chat events to whichever card panel is listening. */
 export type LiveEvent =
@@ -11,7 +11,8 @@ export type LiveEvent =
   | { type: 'local'; status: LocalStatus }
   | { type: 'pull'; pull: LocalPull }
   | { type: 'usage' }
-  | { type: 'claude'; status: ClaudePlanStatus };
+  | { type: 'claude'; status: ClaudePlanStatus }
+  | { type: 'gemini'; status: GeminiPlanStatus };
 
 export interface MessageStream {
   push(conversationOrCard: string, e: LiveEvent): void;

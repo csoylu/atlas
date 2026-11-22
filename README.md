@@ -4,7 +4,8 @@ A personal agent harness: named agents, each with its own model, tools and memor
 on a schedule, with a shared canvas. TypeScript engine (SQLite), React UI, Electron desktop app.
 
 Models: Anthropic API keys, the Claude plan (Atlas's own approved sign-in), the ChatGPT plan (Sign in with ChatGPT),
-and local models through Ollama or any OpenAI-compatible server.
+the Gemini plan (Google subscription through Antigravity), and local models through Ollama or any OpenAI-compatible
+server.
 
 ```
 cp .env.example .env

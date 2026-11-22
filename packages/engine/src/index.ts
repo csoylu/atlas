@@ -17,6 +17,7 @@ import { Local } from './local.ts';
 import { Accounts } from './accounts.ts';
 import { ChatGpt, type ChatGptOptions } from './chatgpt.ts';
 import { ClaudePlan, type ClaudePlanOptions } from './claude-plan.ts';
+import { GeminiPlan, type GeminiPlanOptions } from './gemini-plan.ts';
 import { Usage } from './usage.ts';
 
 export interface EngineOptions {
@@ -43,6 +44,8 @@ export interface EngineOptions {
   /** ChatGPT sign-in endpoints and callback port (tests point them at a fake OpenAI). */
   chatgpt?: ChatGptOptions;
   claude?: ClaudePlanOptions;
+  /** Gemini plan (Antigravity quota) endpoints and callback port (tests point them at a fake Google). */
+  gemini?: GeminiPlanOptions;
   /**
    * Server mode (design §12): the login password (env ATLAS_PASSWORD). Without it the engine has no login and only
    * answers on a loopback host; it refuses to listen elsewhere.
@@ -66,6 +69,7 @@ export interface Engine {
   accounts: Accounts;
   chatgpt: ChatGpt;
   claude: ClaudePlan;
+  gemini: GeminiPlan;
   usage: Usage;
   url: string;
   stop(): Promise<void>;
@@ -90,6 +94,8 @@ export async function startEngine(opts: EngineOptions): Promise<Engine> {
   models.setChatGpt(chatgpt);
   const claude = new ClaudePlan(db, bus, opts.secrets, env, opts.claude);
   models.setClaude(claude);
+  const gemini = new GeminiPlan(db, bus, opts.secrets, env, opts.gemini);
+  models.setGemini(gemini);
   const usage = new Usage(db, bus);
   const canvases = new Canvases(db, bus);
   const memories = new Memories(db);
@@ -111,6 +117,7 @@ export async function startEngine(opts: EngineOptions): Promise<Engine> {
     accounts,
     chatgpt,
     claude,
+    gemini,
     usage,
     bus,
     dataDir: opts.dataDir,
@@ -147,6 +154,7 @@ export async function startEngine(opts: EngineOptions): Promise<Engine> {
     accounts,
     chatgpt,
     claude,
+    gemini,
     usage,
     url: `http://127.0.0.1:${port}`,
     stop: async () => {
@@ -156,6 +164,7 @@ export async function startEngine(opts: EngineOptions): Promise<Engine> {
       await local.shutdown();
       chatgpt.stop();
       claude.stop();
+      gemini.stop();
       await new Promise<void>((resolve, reject) => {
         server.closeAllConnections();
         server.close((err) => (err ? reject(err) : resolve()));

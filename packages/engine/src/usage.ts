@@ -54,14 +54,14 @@ export class Usage {
       .all(from) as { day: string; model_id: string; provider: string; calls: number; input: number; output: number; cached: number }[];
     const dayList: string[] = [];
     for (let i = days - 1; i >= 0; i--) dayList.push(this.day(new Date(this.now().getTime() - i * 86_400_000)));
-    const byDay = new Map(dayList.map((d) => [d, { day: d, anthropic: 0, chatgpt: 0, claude_plan: 0, claude_code: 0, openai_compat: 0 }]));
+    const byDay = new Map(dayList.map((d) => [d, { day: d, anthropic: 0, chatgpt: 0, claude_plan: 0, gemini_plan: 0, claude_code: 0, openai_compat: 0 }]));
     const models = new Map<string, UsageSummary['models'][number]>();
     const zero = () => ({ calls: 0, input: 0, output: 0 });
     const total = { ...zero(), cached: 0 };
     const weekFrom = this.day(new Date(this.now().getTime() - 6 * 86_400_000));
     for (const r of rows) {
       const d = byDay.get(r.day);
-      if (d && (r.provider === 'claude_plan' || r.provider === 'claude_code' || r.provider === 'anthropic' || r.provider === 'chatgpt' || r.provider === 'openai_compat')) d[r.provider] += r.input + r.output;
+      if (d && (r.provider === 'claude_plan' || r.provider === 'gemini_plan' || r.provider === 'claude_code' || r.provider === 'anthropic' || r.provider === 'chatgpt' || r.provider === 'openai_compat')) d[r.provider] += r.input + r.output;
       const m = models.get(r.model_id) ?? { modelId: r.model_id, provider: r.provider as Model['provider'], today: zero(), week: zero(), month: zero() };
       const add = (k: 'today' | 'week' | 'month') => {
         m[k].calls += r.calls;

@@ -23,6 +23,7 @@ import type { Local } from './local.ts';
 import type { Accounts } from './accounts.ts';
 import type { ChatGpt } from './chatgpt.ts';
 import type { ClaudePlan } from './claude-plan.ts';
+import type { GeminiPlan } from './gemini-plan.ts';
 import type { Usage } from './usage.ts';
 import { DEFAULT_CONTEXT_WINDOW } from '@atlas/shared';
 
@@ -45,6 +46,7 @@ export function createApi(deps: {
   accounts: Accounts;
   chatgpt: ChatGpt;
   claude: ClaudePlan;
+  gemini: GeminiPlan;
   usage: Usage;
   bus: Bus;
   dataDir: string;
@@ -54,7 +56,7 @@ export function createApi(deps: {
   /** Login and cross-site checks (auth.ts). */
   auth: Auth;
 }): Server {
-  const { kanban, agents, models, runner, dispatcher, settings, canvases, memories, schedules, local, accounts, chatgpt, claude, usage, bus, auth } = deps;
+  const { kanban, agents, models, runner, dispatcher, settings, canvases, memories, schedules, local, accounts, chatgpt, claude, gemini, usage, bus, auth } = deps;
   const app = express();
   // Behind Caddy on the same machine: trust its X-Forwarded-Proto so session cookies get the Secure flag over HTTPS.
   app.set('trust proxy', 'loopback');
@@ -233,7 +235,7 @@ export function createApi(deps: {
     const name = req.params.name;
     if (!deps.secrets) throw new ConflictError(`this engine reads keys from its environment: set ${name} there and restart it`);
     if (!SECRET_NAME.test(name)) throw new ConflictError(`${name} is not a valid variable name (A-Z, 0-9, _)`);
-    if (TOKEN_ENTRIES.has(name)) throw new ConflictError(`${name} belongs to a sign-in (ChatGPT or Claude plan)`);
+    if (TOKEN_ENTRIES.has(name)) throw new ConflictError(`${name} belongs to a sign-in (ChatGPT, Claude or Gemini plan)`);
     const value = String((req.body as { value?: unknown }).value ?? '').trim();
     if (!value) throw new ConflictError('the value is empty');
     deps.secrets.set(name, value);
@@ -321,6 +323,26 @@ export function createApi(deps: {
   });
   app.get('/api/chatgpt/models', async (_req, res) => {
     res.json(await chatgpt.models());
+  });
+  // ── Gemini plan (gemini-plan.ts): Google subscription via the Antigravity quota, never a token ──
+  app.get('/api/gemini', (_req, res) => {
+    res.json(gemini.status());
+  });
+  app.post('/api/gemini/login', async (_req, res) => {
+    res.json(await gemini.login());
+  });
+  app.post('/api/gemini/cancel', (_req, res) => {
+    gemini.cancel();
+    res.json(gemini.status());
+  });
+  app.post('/api/gemini/logout', async (_req, res) => {
+    res.json(await gemini.logout());
+  });
+  app.patch('/api/gemini', (req, res) => {
+    res.json(gemini.update(req.body));
+  });
+  app.get('/api/gemini/models', async (_req, res) => {
+    res.json(await gemini.models());
   });
 
   // ── Anthropic accounts (accounts.ts): keys go in, never out ──────────
