@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState, type DragEvent } from 'react';
 import { AgentFace } from './AgentFace.tsx';
-import { pastedImages, TASK, TaskImages, useAttachments, useFileDrop } from './Images.tsx';
+import { FAILED, pastedFiles, TASK, TaskImages, useAttachments, useFileDrop, WAITING } from './Images.tsx';
 import { cardRef, type Agent, type Card, type CardStatus, type CreateCard } from '@atlas/shared';
 import { HeaderActions, Icon } from './ScreenHeader.tsx';
 import { api } from './api.ts';
@@ -415,8 +415,8 @@ function NewCard(props: { status: CardStatus; agents: Agent[]; filterAgent: stri
     return () => window.removeEventListener('keydown', key);
   }, [onClose]);
   const submit = () => {
-    if (!title.trim() || busy) return;
-    if (att.items.some((a) => a.error)) return void att.setNotice('Remove the images that failed (marked !) first');
+    if (!title.trim() || busy || att.uploading) return; // Create task waits for the uploads
+    if (att.failed) return void att.setNotice(FAILED.replace('before sending', 'first'));
     setBusy(true);
     void att
       .take()
@@ -455,12 +455,12 @@ function NewCard(props: { status: CardStatus; agents: Agent[]; filterAgent: stri
           value={body}
           onChange={(e) => setBody(e.target.value)}
           onPaste={(e) => {
-            const files = pastedImages(e.clipboardData);
+            const files = pastedFiles(e.clipboardData);
             if (!files.length) return;
-            e.preventDefault(); // an image, not its file name as text
+            e.preventDefault(); // a file, not its name as text
             att.add(files);
           }}
-          placeholder="Description, acceptance criteria… (paste or drop images)"
+          placeholder="Description, acceptance criteria… (paste or drop files)"
           aria-label="Description"
         />
         <div className="nc-images">
@@ -504,7 +504,7 @@ function NewCard(props: { status: CardStatus; agents: Agent[]; filterAgent: stri
         </div>
         <div className="nc-foot">
           <span className="nc-note">{status === 'triage' ? (pinfo.multi && project ? (project.lead ? `${project.name}'s lead (${project.lead}) shapes it.` : `${project.name} has no lead: assign an agent so it runs.`) : 'The triage agent shapes it.') : assignee ? `@${assignee} picks it up when it is ready.` : 'Assign an agent so it runs.'}</span>
-          <button type="submit" className="btn primary small" disabled={!title.trim() || busy}>
+          <button type="submit" className="btn primary small" disabled={!title.trim() || busy || att.uploading} title={att.uploading ? WAITING : undefined}>
             Create task <span className="kbd">⌘↵</span>
           </button>
         </div>

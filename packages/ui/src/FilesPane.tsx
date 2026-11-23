@@ -1,6 +1,6 @@
 import { createPortal } from 'react-dom';
 import { Fragment, lazy, Suspense, useCallback, useEffect, useLayoutEffect, useRef, useState, type ReactNode } from 'react';
-import type { FileTab, WsEntry, WsFile, WsListing } from '@atlas/shared';
+import { opensInTab, type FileTab, type WsEntry, type WsFile, type WsListing } from '@atlas/shared';
 import { api, ApiError } from './api.ts';
 import { ancestors, binaryWhat, fileState, gitTitle, langOf, rowIcon, splitPath, treeBeside } from './files.ts';
 import { fileDrafts, useDrafts, type Draft } from './fileDrafts.ts';
@@ -460,6 +460,18 @@ function FileBarAndBody(props: {
         </span>
         <b>{name} can’t be shown</b>
         <p>A binary file ({binaryWhat(path, file.size)}). Files shows and edits text, and shows images.</p>
+        {/* #348: what a browser shows opens in a tab (pdf, audio, video); the rest is downloaded. */}
+        <div className="row">
+          {opensInTab(path) ? (
+            <a className="btn small" href={api.fileRawUrl(chatId, path)} target="_blank" rel="noreferrer">
+              Open in a tab
+            </a>
+          ) : (
+            <a className="btn small" href={api.fileRawUrl(chatId, path, true)} download={name}>
+              Download
+            </a>
+          )}
+        </div>
       </div>
     );
   else if (file.kind === 'image')

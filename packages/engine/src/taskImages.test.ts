@@ -4,7 +4,7 @@ import { existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, writeFil
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import sharp from 'sharp';
-import { WORK_KICK, type Card, type ImageBlock, type Upload } from '@atlas/shared';
+import { fileLine, WORK_KICK, type Card, type ImageBlock, type Upload } from '@atlas/shared';
 import { startEngine, type Engine } from './index.ts';
 import { FakeProvider } from './providers/fake.ts';
 
@@ -101,12 +101,13 @@ describe('task images (#119)', () => {
     const card = e.kanban.create({ title: 'x', status: 'todo', assignee: 'atlas' }, 'user');
     const ids: string[] = [];
     for (let i = 0; i < 6; i++) ids.push((await stage(e, `s${i}.png`, await png(10 + i, 10))).body.id);
-    // Wrong type and too big: refused at staging, with the reason; nothing staged.
+    // Not a picture by its bytes, or a picture over 10 MB: staged as a plain file (#348), not refused.
     const bad = await stage(e, 'evil.png', Buffer.from('<script>'));
-    expect(bad.status).toBe(400);
-    expect(bad.body.error).toMatch(/evil\.png is not a png, jpeg, gif or webp image/);
+    expect(bad.status).toBe(201);
+    expect(bad.body).toMatchObject({ kind: 'file', name: 'evil.png' });
     const big = await stage(e, 'big.png', Buffer.concat([await png(), Buffer.alloc(10 * 1024 * 1024)]));
-    expect(big.body.error).toMatch(/images over 10\.0 MB are refused/);
+    expect(big.body).toMatchObject({ kind: 'file' });
+    for (const x of [bad, big]) expect((await fetch(`${e.url}/api/uploads/${x.body.id}`, { method: 'DELETE' })).status).toBe(204);
     expect(files(join(dataDir, 'uploads'))).toHaveLength(6);
     // Six on a new task: refused, nothing created.
     const six = await createCard(e, { title: 'six', uploads: ids });
@@ -118,7 +119,7 @@ describe('task images (#119)', () => {
     expect((await add(ids.slice(3, 5))).status).toBe(201);
     const sixth = await add(ids.slice(5));
     expect(sixth.status).toBe(400);
-    expect(((await sixth.json()) as { error: string }).error).toBe('5 images per task at most (it has 5)');
+    expect(((await sixth.json()) as { error: string }).error).toBe('5 pictures per task at most (it has 5)');
     expect(files(taskDir(dataDir))).toHaveLength(5); // the 6th wasn't copied
     expect(files(join(dataDir, 'uploads'))).toHaveLength(1); // and stays staged, until the user removes it…
     expect((await fetch(`${e.url}/api/uploads/${ids[5]}`, { method: 'DELETE' })).status).toBe(204);
@@ -146,6 +147,72 @@ describe('task images (#119)', () => {
     // Deleting the task deletes its files.
     expect((await fetch(`${e.url}/api/cards/${card.id}`, { method: 'DELETE' })).status).toBe(204);
     expect(files(taskDir(dataDir))).toEqual([]);
+  });
+
+  it('task files (#348): any file on a task, copied to the assignee, named in a line, limits 10 / 5 pictures, removed', async () => {
+    const dataDir = mkdtempSync(join(tmpdir(), 'atlas-'));
+    const db = join(dataDir, 'atlas.db');
+    const fake = new FakeProvider([[{ type: 'text', text: 'ok' }]]);
+    let e = await start(fake, db, dataDir);
+    const pdf = await stage(e, 'spec v2.pdf', Buffer.from('%PDF-1.7 the spec'));
+    const pic = await stage(e, 'mock.png', await png());
+    const bare = await stage(e, 'Dockerfile', Buffer.from('FROM node:24'));
+    expect([pdf.body.kind, pic.body.kind, bare.body.kind]).toEqual(['file', 'image', 'file']);
+    e = await restart(e, fake, db, dataDir); // between upload and Create
+    const created = await createCard(e, { title: 'Read the spec', status: 'ready', assignee: 'atlas', uploads: [pdf.body.id, pic.body.id, bare.body.id] });
+    expect(created.status).toBe(201);
+    const date = new Date().toISOString().slice(0, 10);
+    expect(created.body.images).toHaveLength(1);
+    expect(created.body.files).toEqual([
+      { path: join(taskDir(dataDir), `${date}-spec-v2.pdf`), bytes: 17, media_type: 'application/pdf' },
+      { path: join(taskDir(dataDir), `${date}-Dockerfile`), bytes: 12, media_type: 'application/octet-stream' },
+    ]);
+    e = await restart(e, fake, db, dataDir); // between Create and the run
+    const card = e.kanban.get(created.body.id);
+    expect(card.files).toHaveLength(2);
+    e.runner.wake(card.id, { kind: 'work', kick: WORK_KICK });
+    await e.runner.settled(card.id);
+    const n = card.number!;
+    expect(firstTexts(fake, 0)).toEqual(
+      expect.arrayContaining([
+        `Files attached to task #${n} (3):`,
+        `[attached: uploads/task-${n}-${date}-mock.png]`,
+        fileLine(`uploads/task-${n}-${date}-spec-v2.pdf`, 17, 'x.pdf'),
+        fileLine(`uploads/task-${n}-${date}-Dockerfile`, 12),
+      ]),
+    );
+    expect(JSON.stringify(fake.calls[0]!.messages)).not.toContain('the spec'); // no file bytes to the model
+    expect(readFileSync(join(dataDir, 'workspaces/atlas/uploads', `task-${n}-${date}-spec-v2.pdf`), 'utf8')).toBe('%PDF-1.7 the spec');
+    expect(fake.calls[0]!.system).toContain(`Files attached to this task: uploads/task-${n}-${date}-spec-v2.pdf, uploads/task-${n}-${date}-Dockerfile`);
+
+    // A click on its chip: the pdf opens in the tab, the rest is downloaded.
+    const open = await fetch(`${e.url}/api/cards/${card.id}/file?path=${encodeURIComponent(card.files[0]!.path)}`);
+    expect(open.headers.get('content-type')).toBe('application/pdf');
+    expect(open.headers.get('content-disposition')).toMatch(/^inline/);
+    const dl = await fetch(`${e.url}/api/cards/${card.id}/file?path=${encodeURIComponent(card.files[1]!.path)}`);
+    expect(dl.headers.get('content-disposition')).toMatch(/^attachment/);
+    expect(await dl.text()).toBe('FROM node:24');
+
+    // Limits: 10 attachments per task, 5 pictures.
+    const add = (uploads: string[]) => fetch(`${e.url}/api/cards/${card.id}/images`, json('POST', { uploads }));
+    const more: string[] = [];
+    for (let i = 0; i < 8; i++) more.push((await stage(e, `n${i}.txt`, Buffer.from(String(i)))).body.id);
+    const eleven = await add(more);
+    expect(eleven.status).toBe(400);
+    expect(((await eleven.json()) as { error: string }).error).toBe('10 attachments per task at most (it has 3)');
+    expect((await add(more.slice(0, 7))).status).toBe(201);
+    const pics: string[] = [];
+    for (let i = 0; i < 6; i++) pics.push((await stage(e, `p${i}.png`, await png(10 + i, 10))).body.id);
+    const sixthPicture = await createCard(e, { title: 'six pics', uploads: pics });
+    expect(sixthPicture.status).toBe(400);
+    expect(sixthPicture.body.error).toBe('5 pictures per task at most');
+
+    // Remove a file: the row, then its file.
+    const gone = e.kanban.get(card.id).files[0]!;
+    expect((await fetch(`${e.url}/api/cards/${card.id}/images?path=${encodeURIComponent(gone.path)}`, { method: 'DELETE' })).status).toBe(200);
+    expect(existsSync(gone.path)).toBe(false);
+    expect(e.kanban.get(card.id).files.map((f) => f.path)).not.toContain(gone.path);
+    expect((await fetch(`${e.url}/api/cards/${card.id}/file?path=${encodeURIComponent(gone.path)}`)).status).toBe(404);
   });
 
   it('the task pictures always go, even behind more than 6 newer pictures in the conversation', async () => {

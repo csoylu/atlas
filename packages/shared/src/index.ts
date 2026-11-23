@@ -9,6 +9,8 @@ export * from './cardRefs.ts';
 export * from './projects.ts';
 export * from './pane.ts';
 export * from './browser.ts';
+export * from './files.ts';
+import { TaskFile } from './files.ts';
 import type { BrowserTab } from './browser.ts';
 import { PaneSees } from './pane.ts';
 import type { Project } from './projects.ts';
@@ -46,11 +48,15 @@ export const ImageMediaType = z.enum(IMAGE_TYPES);
 export type ImageMediaType = z.infer<typeof ImageMediaType>;
 /** An image file over this size is refused (upload, read_file, web_fetch). */
 export const IMAGE_MAX_BYTES = 10 * 1024 * 1024;
-/** Images per user message. */
+/** Images per user message (of its ATTACH_MAX attachments). */
 export const IMAGE_MAX_PER_MESSAGE = 5;
-/** Images attached to a task (its description, #119). */
+/** Images attached to a task (its description, #119), of its ATTACH_MAX attachments. */
 export const IMAGE_MAX_PER_TASK = 5;
-/** An id from POST /api/uploads (a staged image). */
+/** Any file attached to a message or a task (#348) over this size is refused. */
+export const FILE_MAX_BYTES = 100 * 1024 * 1024;
+/** Attachments (pictures and other files) per message, and per task (#348). */
+export const ATTACH_MAX = 10;
+/** An id from POST /api/uploads (a staged file). */
 export const UploadId = z.string().regex(/^up_[a-z0-9-]+$/);
 /** Only the newest this-many images of a conversation go to the model as pictures; older ones become a text line. */
 export const IMAGE_KEEP = 6;
@@ -180,6 +186,8 @@ export const Card = z.object({
   originCard: z.string().nullable().default(null),
   /** Pictures attached to the task itself (#119): files in <data>/task-images/, shown to its assignee at each run. */
   images: z.array(ImageBlock).default([]),
+  /** Other files attached to the task (#348), in <data>/task-images/ beside its pictures; the assignee gets a copy. */
+  files: z.array(TaskFile).default([]),
   /** The agent that checks this task's pull requests while it is In review (#189); null = none yet. */
   reviewer: z.string().nullable().default(null),
   /** Its pull requests (#189), oldest link first. */
@@ -206,13 +214,13 @@ export const CreateCard = z.object({
   priority: z.number().int().default(0),
   parents: z.array(z.string()).default([]),
   /** Staged images (POST /api/uploads) to attach to the new task (#119): the API moves them, the row lists them. */
-  uploads: z.array(UploadId).max(IMAGE_MAX_PER_TASK).default([]),
+  uploads: z.array(UploadId).max(ATTACH_MAX).default([]),
   /** Its project (#213), fixed for good; omitted = the default project (the oldest active one). */
   projectId: z.string().min(1).optional(),
 });
 export type CreateCard = z.input<typeof CreateCard>;
-/** POST /api/cards/:id/images: staged images added to an existing task. */
-export const AddCardImages = z.object({ uploads: z.array(UploadId).min(1).max(IMAGE_MAX_PER_TASK) });
+/** POST /api/cards/:id/images: staged files (pictures or others, #348) added to an existing task. */
+export const AddCardImages = z.object({ uploads: z.array(UploadId).min(1).max(ATTACH_MAX) });
 
 /** How hard the model thinks: Claude output_config.effort, OpenAI reasoning.effort; Ollama gets low/medium/high. */
 export const Effort = z.enum(['low', 'medium', 'high', 'xhigh', 'max']);
@@ -339,7 +347,7 @@ export const TODO_LIMIT = 50;
 export const PostMessage = z
   .object({
     text: z.string().trim().max(100_000).default(''),
-    uploads: z.array(UploadId).max(IMAGE_MAX_PER_MESSAGE).default([]),
+    uploads: z.array(UploadId).max(ATTACH_MAX).default([]),
     /**
      * What is open in the chat's right pane (#305), the eye on; null = closed, or left out of this message. Absent (a
      * voice message, #305): what the chat's pane last reported (PUT /api/cards/:id/pane).
@@ -347,16 +355,15 @@ export const PostMessage = z
     pane: PaneSees.nullable().optional(),
     comments: z.array(PostComment).max(COMMENTS_MAX).default([]),
   })
-  .refine((m) => m.text.length > 0 || m.uploads.length > 0 || m.comments.length > 0, { message: 'a message needs text, an image or a comment' });
-/** An image waiting to be sent (POST /api/cards/:id/uploads): the composer shows it, the message names its id. */
-export interface Upload {
-  id: string;
-  name: string;
-  media_type: ImageMediaType;
-  width: number;
-  height: number;
-  bytes: number;
-}
+  .refine((m) => m.text.length > 0 || m.uploads.length > 0 || m.comments.length > 0, { message: 'a message needs text, a file or a comment' });
+/**
+ * A file waiting to be sent (POST /api/cards/:id/uploads): the composer shows it, the message names its id. `kind`
+ * image: a picture the model sees (png, jpeg, gif, webp up to IMAGE_MAX_BYTES, read from its bytes, with its size);
+ * file: anything else (#348), placed in the workspace and named to the agent, never sent to the model.
+ */
+export type Upload =
+  | { id: string; name: string; kind: 'image'; media_type: ImageMediaType; width: number; height: number; bytes: number }
+  | { id: string; name: string; kind: 'file'; media_type: string; bytes: number };
 
 export const RUN_STATUSES = ['running', 'done', 'failed', 'stopped', 'interrupted'] as const;
 export type RunStatus = (typeof RUN_STATUSES)[number];

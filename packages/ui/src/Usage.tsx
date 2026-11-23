@@ -30,7 +30,7 @@ export function useChatUsage(cardId: string, stream: MessageStream, onError: (e:
  * toggle (desktop, the voice chat only), send. `sees`: the eye after the ring (#305), what the agent will see.
  */
 /** `send`: the composer's teal send button (a submit button of the form around it), at the right end. */
-export function ComposerMeta(props: { usage: ChatUsage | null; plan: boolean; models?: Model[]; pick?: PickProps; send?: { disabled: boolean }; attach?: ReactNode; voice?: ReactNode; sees?: ReactNode }) {
+export function ComposerMeta(props: { usage: ChatUsage | null; plan: boolean; models?: Model[]; pick?: PickProps; send?: { disabled: boolean; title?: string }; attach?: ReactNode; voice?: ReactNode; sees?: ReactNode }) {
   const u = props.usage;
   const pct = contextPct(u);
   const level = pct === null ? '' : pct >= 70 ? ' full' : pct >= 50 ? ' warm' : '';
@@ -82,7 +82,7 @@ export function ComposerMeta(props: { usage: ChatUsage | null; plan: boolean; mo
       {props.attach}
       {props.voice}
       {props.send && (
-        <button type="submit" className="send-btn" aria-label="Send" title="Send (Enter)" disabled={props.send.disabled}>
+        <button type="submit" className="send-btn" aria-label="Send" title={props.send.title ?? 'Send (Enter)'} disabled={props.send.disabled}>
           <svg viewBox="0 0 16 16" width="16" height="16" fill="none" stroke="currentColor" strokeWidth="1.7" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
             <path d="M8 13V3M4 7l4-4 4 4" />
           </svg>

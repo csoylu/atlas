@@ -93,6 +93,21 @@ describe('workspace files (#303)', () => {
     expect((await l.call('POST', files('save'), { path: 'big.json', content: 'x', base: big.hash })).status).toBe(409);
   });
 
+  it('serves a file as itself for « can\'t be shown » (#348): a pdf in a tab, the rest downloaded, inside only', async () => {
+    const { l, files, ws } = await setup();
+    put(ws, 'uploads/audit.pdf', '%PDF-1.7 audit');
+    put(ws, 'uploads/logs.zip', Buffer.from([0x50, 0x4b, 3, 4]));
+    const pdf = await fetch(`${l.api}${files('raw?path=uploads/audit.pdf')}`);
+    expect(pdf.headers.get('content-type')).toBe('application/pdf');
+    expect(pdf.headers.get('content-disposition')).toMatch(/^inline/);
+    expect(await pdf.text()).toBe('%PDF-1.7 audit');
+    const zip = await fetch(`${l.api}${files('raw?path=uploads/logs.zip')}`);
+    expect(zip.headers.get('content-disposition')).toBe("attachment; filename*=UTF-8''logs.zip");
+    expect(zip.headers.get('content-security-policy')).toBe('sandbox');
+    expect((await fetch(`${l.api}${files('raw?path=uploads/audit.pdf&download=1')}`)).headers.get('content-disposition')).toMatch(/^attachment/);
+    expect((await fetch(`${l.api}${files('raw?path=../outside.txt')}`)).status).toBeGreaterThanOrEqual(400);
+  });
+
   it('serves no secret value: a file holding one is redacted and read only (#226)', async () => {
     const store: SecretStore & { map: Map<string, string> } = {
       label: 'test',

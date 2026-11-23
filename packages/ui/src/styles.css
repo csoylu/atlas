@@ -695,6 +695,43 @@ button.artifact:hover .art-open { color: var(--accent); }
 .drop-zone { border-radius: 8px; outline: 1px dashed transparent; outline-offset: 2px; }
 .drop-zone.dropping { outline-color: var(--accent); background: var(--accent-soft); }
 .attach-note { flex: 1 1 160px; }
+/* Files that aren't pictures (#348): a chip as tall as the thumbnails beside it (56 px, 64 in a task) */
+.file-chip {
+  position: relative; display: inline-flex; align-items: center; gap: 8px; height: 56px; max-width: min(260px, 100%); min-width: 0;
+  padding: 0 28px 0 8px; border: 1px solid var(--line-2); border-radius: 6px; background: var(--sheet); color: var(--text);
+  font: inherit; text-align: left; flex: none; overflow: hidden;
+}
+.task-images .file-chip { height: 64px; }
+.file-chip.sent { padding-right: 12px; cursor: pointer; }
+.file-chip.saved { cursor: pointer; }
+.file-chip.sent:hover, .file-chip.saved:hover { background: var(--hover); border-color: var(--line-2); }
+.file-mark {
+  flex: none; min-width: 36px; height: 36px; padding: 0 4px; border-radius: 4px; border: 1px solid var(--line); background: var(--hover);
+  display: grid; place-items: center; font-size: var(--fs-small); font-weight: var(--fw-bold); line-height: var(--lh-tight); color: var(--muted);
+}
+.file-txt { display: flex; flex-direction: column; gap: 2px; min-width: 0; }
+.file-name { font-size: var(--fs-base); font-weight: var(--fw-medium); line-height: var(--lh-tight); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.file-sub { font-size: var(--fs-small); line-height: var(--lh-tight); color: var(--faint); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.file-x {
+  position: absolute; top: 4px; right: 4px; width: 20px; height: 20px; padding: 0; border: 0; border-radius: 50%;
+  background: none; color: var(--muted); font-size: var(--fs-base); line-height: var(--lh-tight); display: grid; place-items: center;
+}
+.file-x:hover { background: var(--hover); color: var(--text); }
+/* uploading: a bar along the bottom, « 18.4 of 84.0 MB » */
+.file-bar { position: absolute; left: 0; right: 0; bottom: 0; height: 3px; background: var(--line); }
+.file-bar i { display: block; height: 100%; background: var(--accent); }
+/* refused by the engine or the upload failed: red edge, « ! », the reason in the note line (as a picture's) */
+.file-chip.bad { border-color: var(--negative); }
+.file-chip.bad .file-sub { color: var(--neg-ink); }
+.file-chip .attach-err { position: absolute; right: 8px; bottom: 6px; font-weight: var(--fw-bold); color: var(--neg-ink); font-size: var(--fs-small); }
+/* in a sent message: under its pictures, above its text */
+.msg-files { display: flex; flex-wrap: wrap; gap: 6px; margin: 2px 0 4px; }
+/* phone: one chip a row, as wide as the box, so the name stays readable */
+@media (max-width: 600px) {
+  .attach-strip .file-chip, .msg-files .file-chip, .task-images .file-chip { flex: 1 1 100%; max-width: 100%; }
+}
+/* dragging files over the composer: the box says what a drop does */
+.drop-hint { padding: 2px 0; font-size: var(--fs-base); line-height: var(--lh-normal); color: var(--text); min-height: calc(1.5em + 4px); }
 .msg-images { display: flex; flex-wrap: wrap; gap: 6px; margin: 2px 0 4px; }
 .msg-image { padding: 0; border: 1px solid var(--line-2); border-radius: 8px; overflow: hidden; background: var(--sheet); cursor: zoom-in; max-width: 100%; }
 .msg-image img { display: block; max-width: min(240px, 100%); max-height: 180px; width: auto; height: auto; object-fit: contain; }

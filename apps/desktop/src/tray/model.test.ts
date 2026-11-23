@@ -29,6 +29,7 @@ const card = (n: number, over: Partial<Card> = {}): Card => ({
   readSeq: 0,
   originCard: null,
   images: [],
+  files: [],
   reviewer: null,
   prs: [],
   projectId: 'atlas',

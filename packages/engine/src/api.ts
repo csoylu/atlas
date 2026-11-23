@@ -1,11 +1,11 @@
 import express, { type ErrorRequestHandler, type Request } from 'express';
 import { createServer, type IncomingMessage, type Server } from 'node:http';
 import { existsSync, readFileSync } from 'node:fs';
-import { extname, join, relative } from 'node:path';
+import { basename, extname, isAbsolute, join, relative, sep } from 'node:path';
 import { WebSocketServer } from 'ws';
 import type { ChatReads } from './chatReads.ts';
 import { ZodError } from 'zod';
-import { AddCardImages, CreateCard, SaveWsFile, CreateModel, CreateSecret, SaveCardSecret, SecretsPassword, UnlockSecrets, UpdateSecret, IMAGE_MAX_BYTES, IMAGE_MAX_PER_TASK, isTimeZone, PostMessage, RewindRequest, SlashCommand, TriggerPreview, UpdateModel, UpdateVoice } from '@atlas/shared';
+import { AddCardImages, CreateCard, SaveWsFile, CreateModel, CreateSecret, SaveCardSecret, SecretsPassword, UnlockSecrets, UpdateSecret, fileInfo, fileLine, isTimeZone, opensInTab, parseFileLine, PostMessage, RewindRequest, SlashCommand, TriggerPreview, UpdateModel, UpdateVoice } from '@atlas/shared';
 import type { Agents } from './agents.ts';
 import type { Models } from './models.ts';
 import type { Runner } from './runner.ts';
@@ -50,6 +50,8 @@ import { DEFAULT_CONTEXT_WINDOW, MEMORY_BUDGET, MEMORY_BUDGET_GLOBAL, type About
 /** Who the UI acts as. One user (design §1). */
 const USER = 'user';
 /** Served files up to this size are checked for secret values (#226); bigger ones are sent as they are. */
+/** A path under `root` as the agent writes it (forward slashes on every OS). */
+const posixRel = (root: string, p: string) => relative(root, p).split(sep).join('/');
 export const MAX_SERVED_REDACT = 10 * 1024 * 1024;
 
 import { Auth, SESSION_COOKIE } from './auth.ts';
@@ -115,7 +117,7 @@ export function createApi(deps: {
     console.error('pruning staged uploads failed', e);
   }
   try {
-    taskImages.sweep(kanban.list({ includeArchived: true }).flatMap((c) => c.images.map((im) => im.path)));
+    taskImages.sweep(kanban.list({ includeArchived: true }).flatMap((c) => [...c.images, ...c.files].map((im) => im.path)));
   } catch (e) {
     console.error('sweeping task images failed', e);
   }
@@ -262,35 +264,36 @@ export function createApi(deps: {
     const { project, archived } = projectQuery(req);
     res.json(kanban.list({ project, archivedProjects: archived }));
   });
-  // `uploads`: staged images (POST /api/uploads) attached to the new task, placed and listed in its row (#119).
+  // `uploads`: staged files (POST /api/uploads) attached to the new task, placed and listed in its row (#119, #348).
   app.post('/api/cards', async (req, res) => {
     refuseRunning(req.body);
     const input = CreateCard.parse(req.body);
-    res.status(201).json(await taskImages.attach(input.uploads, (images) => kanban.create(input, USER, null, images)));
+    res.status(201).json(await taskImages.attach(input.uploads, ({ images, files }) => kanban.create(input, USER, null, images, files)));
   });
-  /** Add staged images to a task (#119): at most IMAGE_MAX_PER_TASK in all. */
+  /** Add staged files to a task (#119, #348): ATTACH_MAX in all, IMAGE_MAX_PER_TASK pictures (checked by attach). */
   app.post('/api/cards/:id/images', async (req, res) => {
     const { uploads: ids } = AddCardImages.parse(req.body);
     const card = kanban.get(req.params.id);
-    if (card.board === 'direct') throw new InvalidError('a direct chat has no description: send the image as a message');
-    if (card.images.length + ids.length > IMAGE_MAX_PER_TASK)
-      throw new InvalidError(`${IMAGE_MAX_PER_TASK} images per task at most (it has ${card.images.length})`);
-    // Read the list again inside the write: another add may have landed while the files were copied.
+    if (card.board === 'direct') throw new InvalidError('a direct chat has no description: send the file as a message');
+    // Read the lists again inside the write: another add may have landed while the files were copied (setImages checks).
     res.status(201).json(
-      await taskImages.attach(ids, (images) => {
-        const now = kanban.get(card.id).images;
-        if (now.length + images.length > IMAGE_MAX_PER_TASK) throw new InvalidError(`${IMAGE_MAX_PER_TASK} images per task at most (it has ${now.length})`);
-        return kanban.setImages(card.id, [...now, ...images], USER);
-      }),
+      await taskImages.attach(
+        ids,
+        ({ images, files }) => {
+          const now = kanban.get(card.id);
+          return kanban.setImages(card.id, [...now.images, ...images], USER, [...now.files, ...files]);
+        },
+        { images: card.images.length, all: card.images.length + card.files.length },
+      ),
     );
   });
-  /** Remove one of a task's images (?path=): the row first, then its file. */
+  /** Remove one of a task's pictures or files (?path=): the row first, then its file. */
   app.delete('/api/cards/:id/images', (req, res) => {
     const path = String(req.query.path ?? '');
     const card = kanban.get(req.params.id);
-    const gone = card.images.filter((im) => im.path === path);
-    if (!gone.length) throw new NotFoundError(`no image ${path} on this task`);
-    const updated = kanban.setImages(card.id, card.images.filter((im) => im.path !== path), USER);
+    const gone = [...card.images.filter((im) => im.path === path), ...card.files.filter((f) => f.path === path)];
+    if (!gone.length) throw new NotFoundError(`no file ${path} on this task`);
+    const updated = kanban.setImages(card.id, card.images.filter((im) => im.path !== path), USER, card.files.filter((f) => f.path !== path));
     taskImages.drop(gone);
     res.json(updated);
   });
@@ -302,9 +305,9 @@ export function createApi(deps: {
     res.json(kanban.update(req.params.id, req.body, USER)); // the dispatcher reacts to the change
   });
   app.delete('/api/cards/:id', (req, res) => {
-    const { images } = kanban.get(req.params.id);
+    const { images, files } = kanban.get(req.params.id);
     kanban.remove(req.params.id);
-    taskImages.drop(images);
+    taskImages.drop([...images, ...files]);
     res.status(204).end();
   });
   app.get('/api/cards/:id/messages', (req, res) => {
@@ -314,7 +317,7 @@ export function createApi(deps: {
     const { text, uploads: ids, comments, pane: sent } = PostMessage.parse(req.body);
     const card = kanban.get(req.params.id);
     projects.assertActive(card.projectId, 'its tasks and chats'); // archived (#213): read-only
-    if (ids.length && !card.assignee) throw new InvalidError('assign an agent before sending images: they go into its workspace');
+    if (ids.length && !card.assignee) throw new InvalidError('assign an agent before sending files: they go into its workspace');
     if (comments.length && !card.assignee) throw new InvalidError('assign an agent before sending comments: their pictures go into its workspace');
     // The agent's workspace in the chat's project (#214): pasted images and comment pictures go there.
     const workdir = card.assignee ? projects.workspace(card.assignee, card.projectId) : '';
@@ -341,12 +344,14 @@ export function createApi(deps: {
     // the chat's pane as its UI last reported it.
     const pane = sent === undefined ? panes.get(card.id) : sent;
     const seen = paneNote(kanban.messages(card.id), pane, runner.summaryOf(card.id)?.uptoSeq ?? null);
-    // Pasted/dropped images: copied into the agent's workspace, then the message row written with their blocks (uploads.ts).
-    const message = await uploads.send(ids, workdir, (images) =>
+    // Pasted/dropped files: copied into the agent's workspace, then the message row written with their blocks (uploads.ts).
+    // A picture goes to the model; any other file is one line, its path, size and kind (#348).
+    const message = await uploads.send(ids, workdir, ({ images, files }) =>
       kanban.appendMessage(req.params.id, 'user', USER, [
         ...(text ? [{ type: 'text' as const, text }] : []),
         ...commented,
         ...images.flatMap((im) => [im, { type: 'text' as const, text: `[attached: ${relative(workdir, im.path)}]` }]),
+        ...files.map((f) => ({ type: 'text' as const, text: fileLine(posixRel(workdir, f.path), f.bytes) })),
         ...(seen ? [{ type: 'text' as const, text: seen }] : []),
       ], null, pane),
     );
@@ -361,20 +366,75 @@ export function createApi(deps: {
     panes.set(req.params.id, PaneSees.nullable().parse(req.body?.pane ?? null));
     res.status(204).end();
   });
-  /** Stage a pasted/dropped image (raw body, the file name in ?name=): checked now, sent with the next message. */
+  /**
+   * Stage a pasted/dropped/picked file (raw body, streamed to disk, the file name in ?name=): checked now, sent with the
+   * next message. Over FILE_MAX_BYTES: refused, by its Content-Length before any byte is read.
+   */
   const stage = async (req: express.Request, res: express.Response) => {
-    const name = String(req.query.name ?? 'image');
-    if (!Buffer.isBuffer(req.body)) throw new InvalidError('send the image bytes as the request body');
-    res.status(201).json(await uploads.stage(name, req.body));
+    const name = String(req.query.name ?? 'file');
+    const length = Number(req.headers['content-length']);
+    res.status(201).json(await uploads.stage(name, req, Number.isFinite(length) ? length : undefined));
   };
-  const rawImage = express.raw({ type: () => true, limit: IMAGE_MAX_BYTES + 1024 });
-  app.post('/api/cards/:id/uploads', rawImage, async (req, res) => {
+  app.post('/api/cards/:id/uploads', async (req, res) => {
     kanban.get(req.params.id);
     await stage(req, res);
   });
   // No task yet (the New task dialog, #119): staged the same way, attached by POST /api/cards with `uploads`.
-  app.post('/api/uploads', rawImage, stage);
-  /** A staged image removed before it was sent (×, or the dialog cancelled): its file is deleted now. */
+  app.post('/api/uploads', stage);
+  /**
+   * A file of this conversation that isn't a picture (#348), for a click on its chip in a task: one of the task's files
+   * (absolute path) or a file a message names (its `[file attached: …]` line, a path in the assignee's workspace).
+   * ?download=1, or a file a browser can't show: downloaded.
+   */
+  app.get('/api/cards/:id/file', (req, res, next) => {
+    const path = String(req.query.path ?? '');
+    const card = kanban.get(req.params.id);
+    let abs: string | null = card.files.some((f) => f.path === path) ? path : null;
+    if (!abs && card.assignee && !isAbsolute(path)) {
+      const named = kanban.messages(card.id).some((m) => m.author === USER && m.content.some((b) => b.type === 'text' && parseFileLine(b.text)?.path === path));
+      const root = projects.workspace(card.assignee, card.projectId);
+      if (named) abs = inside(root, path);
+    }
+    if (!abs) throw new NotFoundError(`no file ${path} in this conversation`);
+    sendAttachment(res, next, abs, req.query.download === '1');
+  });
+  /** A file of the chat's workspace in a browser tab or downloaded (#348): Files' « can't be shown » card. */
+  app.get('/api/chats/:id/files/raw', (req, res, next) => {
+    const { root } = deps.files.where(req.params.id);
+    const { abs } = deps.files.resolve(root, String(req.query.path ?? ''));
+    sendAttachment(res, next, abs, req.query.download === '1');
+  });
+  /**
+   * Send a user's file: in the tab when a browser shows it (pdf, audio, video, pictures, plain text, never as a page),
+   * else as a download. Text has its secret values hidden, as every served file (#226).
+   */
+  const sendAttachment = (res: express.Response, next: express.NextFunction, abs: string, download: boolean) => {
+    const name = basename(abs);
+    let size: number;
+    try {
+      size = statSync(abs).size;
+    } catch {
+      return void res.status(404).json({ error: `the file ${name} no longer exists` });
+    }
+    const { mediaType } = fileInfo(name);
+    const inline = !download && opensInTab(name);
+    const media = /^(image|audio|video)\//.test(mediaType) && mediaType !== 'image/svg+xml';
+    const pdf = mediaType === 'application/pdf';
+    // A browser's own PDF and media viewers don't run inside a sandboxed document; everything else is sandboxed.
+    if (!media && !pdf) res.setHeader('Content-Security-Policy', 'sandbox');
+    res.setHeader('X-Content-Type-Options', 'nosniff');
+    res.setHeader('Cache-Control', 'no-store');
+    res.setHeader('Content-Disposition', `${inline ? 'inline' : 'attachment'}; filename*=UTF-8''${encodeURIComponent(name)}`);
+    res.type(inline && /^text\/|json$/.test(mediaType) ? 'text/plain; charset=utf-8' : media || pdf ? mediaType : 'application/octet-stream');
+    if (!media && !pdf && size <= MAX_SERVED_REDACT) {
+      const red = deps.secrets.redactBytes(readFileSync(abs));
+      if (red.hidden) return void res.send(red.buf);
+    }
+    res.sendFile(abs, { dotfiles: 'allow' }, (err) => {
+      if (err && !res.headersSent) next(err);
+    });
+  };
+  /** A staged file removed before it was sent (×, or the dialog cancelled): its file is deleted now. */
   app.delete('/api/uploads/:id', (req, res) => {
     uploads.discard(req.params.id);
     res.status(204).end();
@@ -1204,7 +1264,7 @@ export function createApi(deps: {
     else if (err instanceof ConflictError || err instanceof BrowserBusyError) res.status(409).json({ error: err.message });
     else if (err instanceof InvalidError) res.status(400).json({ error: err.message });
     else if ((err as { type?: string }).type === 'entity.too.large')
-      res.status(413).json({ error: `the request is over ${((err as { limit: number }).limit / 1024 / 1024).toFixed(1)} MB: images over 10.0 MB are refused` });
+      res.status(413).json({ error: `the request is over ${((err as { limit: number }).limit / 1024 / 1024).toFixed(1)} MB` });
     else {
       console.error(err);
       res.status(500).json({ error: err instanceof Error ? err.message : String(err) });

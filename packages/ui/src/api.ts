@@ -48,20 +48,35 @@ export const api = {
     call<Message>('POST', `/cards/${id}/messages`, { text, ...(uploads?.length ? { uploads } : {}), ...(comments?.length ? { comments } : {}), pane }),
   /** What the chat's pane shows now (#305): a voice message, which has no composer, is sent with it. */
   reportPane: (id: string, pane: PaneSees | null) => call<void>('PUT', `/cards/${id}/pane`, { pane }),
-  /** Stage a pasted/dropped image; its id goes with the next message. */
-  uploadImage: async (id: string | null, file: File): Promise<Upload> => {
-    // No task yet (the New task dialog): staged without one, attached by createCard({ uploads }).
-    const res = await fetch(`${id ? `/api/cards/${id}/uploads` : '/api/uploads'}?name=${encodeURIComponent(file.name || 'image')}`, {
-      method: 'POST',
-      headers: { 'content-type': 'application/octet-stream' },
-      body: file,
-      credentials: 'include',
+  /**
+   * Stage a pasted/dropped/picked file (#348: any kind); its id goes with the next message. An XHR, for its progress
+   * (`onProgress`: bytes sent) and `abort` (× on an uploading chip: `done` rejects with an AbortError).
+   */
+  uploadFile: (id: string | null, file: File, onProgress?: (loaded: number) => void): { done: Promise<Upload>; abort(): void } => {
+    const xhr = new XMLHttpRequest();
+    const done = new Promise<Upload>((resolve, reject) => {
+      // No task yet (the New task dialog): staged without one, attached by createCard({ uploads }).
+      xhr.open('POST', `${id ? `/api/cards/${id}/uploads` : '/api/uploads'}?name=${encodeURIComponent(file.name || 'file')}`);
+      xhr.withCredentials = true;
+      xhr.setRequestHeader('content-type', 'application/octet-stream');
+      xhr.upload.onprogress = (e) => onProgress?.(e.loaded);
+      xhr.onabort = () => reject(new DOMException('upload cancelled', 'AbortError'));
+      xhr.onerror = () => reject(new ApiError('the upload failed. Remove it (×) and attach it again', 0, {}));
+      xhr.onload = () => {
+        let body: Upload & { error?: string };
+        try {
+          body = JSON.parse(xhr.responseText) as Upload & { error?: string };
+        } catch {
+          body = {} as Upload & { error?: string };
+        }
+        if (xhr.status >= 200 && xhr.status < 300) resolve(body);
+        else reject(new ApiError(body.error || `the upload failed (HTTP ${xhr.status}). Remove it (×) and attach it again`, xhr.status, body as unknown as Record<string, unknown>));
+      };
+      xhr.send(file);
     });
-    const body = (await res.json().catch(() => ({}))) as Upload & { error?: string };
-    if (!res.ok) throw new ApiError(body.error || `upload failed: HTTP ${res.status}`, res.status, body as unknown as Record<string, unknown>);
-    return body;
+    return { done, abort: () => xhr.abort() };
   },
-  /** A staged image removed before it was sent: its file goes now (else pruned after a day). */
+  /** A staged file removed before it was sent: its file goes now (else pruned after a day). */
   discardUpload: (id: string) => call<void>('DELETE', `/uploads/${encodeURIComponent(id)}`),
   /** The task's own images (#119). */
   addCardImages: (id: string, uploads: string[]) => call<Card>('POST', `/cards/${id}/images`, { uploads }),
@@ -108,6 +123,8 @@ export const api = {
   filesList: (chatId: string, dir: string) => call<WsListing>('GET', `/chats/${chatId}/files/list?dir=${encodeURIComponent(dir)}`),
   fileRead: (chatId: string, path: string) => call<WsFile>('GET', `/chats/${chatId}/files/read?path=${encodeURIComponent(path)}`),
   fileStat: (chatId: string, path: string) => call<WsStat>('GET', `/chats/${chatId}/files/stat?path=${encodeURIComponent(path)}`),
+  /** A workspace file as itself (#348: Files' « can't be shown » card): in a browser tab, or downloaded. */
+  fileRawUrl: (chatId: string, path: string, download = false) => `/api/chats/${encodeURIComponent(chatId)}/files/raw?path=${encodeURIComponent(path)}${download ? '&download=1' : ''}`,
   fileImageUrl: (chatId: string, path: string, stamp: string) => `/api/chats/${chatId}/files/image?path=${encodeURIComponent(path)}&v=${encodeURIComponent(stamp)}`,
   filesFind: (chatId: string, q: string) => call<{ paths: string[]; truncated: boolean }>('GET', `/chats/${chatId}/files/find?q=${encodeURIComponent(q)}`),
   fileLinks: (chatId: string, paths: string[]) => call<Record<string, string | null>>('POST', `/chats/${chatId}/files/links`, { paths }),

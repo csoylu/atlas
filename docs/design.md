@@ -687,6 +687,15 @@ by path. Confining the shell (a sandbox profile per project) would be its own de
     into the running agent's workspace on first use. So a later assignee (or a reassigned one, or triage) sees them,
     and a removed image is gone from the next turn. They count in the 6 newest pictures and the token estimate; the
     system prompt's « # Current task » lists their workspace paths. A model without vision fails loudly, as above.
+- **Any file (#348).** Everywhere pictures go, any other file goes too: ≤100 MB (`FILE_MAX_BYTES`), ≤10 attachments
+  per message and per task (`ATTACH_MAX`), of which ≤5 pictures. A file is staged like a picture (streamed to
+  `<data>/uploads/up_<uuid>--<name>[.<ext>]`, the name sanitised: no path, no dots but the extension's) and placed by the
+  same two durable steps. Its bytes never reach the model: the message carries one text line
+  `[file attached: uploads/<date>-<name> (size, kind), not sent to you: open it with your tools]`, which the UI reads
+  back as a chip (click: Files tab in a chat, a browser tab or a download in a task). A task's files: `cards.files`
+  (migration 0072, `{path, bytes, media_type}`), in `<data>/task-images/`, copied to the assignee and named in the run
+  view the same way. Files' « can't be shown » card adds « Open in a tab » (pdf, audio, video) or « Download »
+  (`GET /api/chats/:id/files/raw`, sandboxed, secrets redacted in text).
 
 Project instructions: `AGENTS.md` and `CLAUDE.md` at the root of the agent's workdir go in the system prompt
 (« # Project instructions », each labelled with its path, capped at 20k chars with a note), before the card and the date.

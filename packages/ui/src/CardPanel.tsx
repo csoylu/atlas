@@ -4,7 +4,7 @@ import { MdCode, NoFileLinks } from './FileRefs.tsx';
 import { AgentFace } from './AgentFace.tsx';
 import Markdown from 'react-markdown';
 import remarkGfm from 'remark-gfm';
-import { USER, isPaneLine, paneLabel, parseDocRef, stallText, type Agent, type Card, type Message, type Model, type PaneSees, type Run, type Timeline, type ToolCallTiming } from '@atlas/shared';
+import { USER, isPaneLine, opensInTab, paneLabel, parseDocRef, stallText, type Agent, type Card, type Message, type Model, type PaneSees, type Run, type Timeline, type ToolCallTiming } from '@atlas/shared';
 import { EyeIcon, PaneEye } from './PaneEye.tsx';
 import { api } from './api.ts';
 import { useMinute } from './useMinute.ts';
@@ -15,7 +15,7 @@ import { ComposerMeta, useChatUsage } from './Usage.tsx';
 import { CARD_HREF, findCard, linkCardIds, linkCardRefsMd, proseRefLabel, withCard } from './cardModal.ts';
 import { StepRow, Turn } from './ChatActivity.tsx';
 import { draftSegments, turns, type Segment } from './chatTurn.ts';
-import { AttachButton, AttachmentStrip, ImageThumbs, imageFiles, isAttachedLine, pastedImages, useAttachments } from './Images.tsx';
+import { AttachButton, AttachmentStrip, DROP_HINT, FAILED, fileList, ImageThumbs, isAttachedLine, NO_AGENT, openTaskFile, pastedFiles, useAttachments, WAITING } from './Images.tsx';
 import type { ToolOutcome } from './toolRows.ts';
 import { sysLine } from './chatPins.ts';
 import { webSearchResult } from './webRows.ts';
@@ -486,6 +486,8 @@ export function Activity(props: {
                   <UserContent
                     message={m}
                     cardId={card.id}
+                    onOpenFile={card.board === 'direct' ? (path) => void api.panelOpenFile(card.id, path).catch(props.onError) : (path) => openTaskFile(card.id, path)}
+                    opens={card.board === 'direct' ? () => 'open in Files' : (name) => (opensInTab(name) ? 'open in a tab' : 'download')}
                     text={(t, k) => (isAttachedLine(t) || (m.author === USER && isPaneLine(t)) ? null : text(t, k, m.author === USER))}
                     onOpenRef={m.author === USER ? props.onOpenRef : undefined}
                   />
@@ -712,7 +714,7 @@ export const CardComposer = forwardRef<
     const canAttach = !!card.assignee;
     const addFiles = (files: File[]) => {
       if (!files.length) return;
-      if (!canAttach) return void att.setNotice('Assign an agent first: images go into its workspace');
+      if (!canAttach) return void att.setNotice(NO_AGENT);
       att.add(files);
     };
     return (
@@ -730,7 +732,7 @@ export const CardComposer = forwardRef<
           if (!e.dataTransfer.files.length) return;
           e.preventDefault();
           setDragging(false);
-          addFiles(imageFiles(e.dataTransfer.files));
+          addFiles(fileList(e.dataTransfer.files));
         }}
         onSubmit={(e) => {
           e.preventDefault();
@@ -741,7 +743,8 @@ export const CardComposer = forwardRef<
           // An exact command (« /clear », « /compact keep X ») runs; it is never sent as a message.
           const cmd = images.length || notes.length ? null : parseSlash(t);
           if (cmd) return runSlash(cmd.name, cmd.arg);
-          if (att.items.some((a) => a.error)) return void att.setNotice('Remove the images that failed (marked !) before sending');
+          if (att.uploading) return; // Send waits for the uploads (dimmed, « Waiting for the uploads »)
+          if (att.failed) return void att.setNotice(FAILED);
           setText('');
           comments?.clear();
           rewind?.sent();
@@ -753,6 +756,7 @@ export const CardComposer = forwardRef<
           // A failed send puts the text (and the images) back, unless the user already started a new message.
           void pending
             .then((ids) => api.postMessage(card.id, t, ids, notes.map(toPost), pane))
+            .then(() => att.release(sent))
             .catch((err: unknown) => {
               if (!readDraft(draftId).trim()) writeDraft(draftId, text); // the composer may be gone already
               setText((cur) => (cur.trim() ? cur : text));
@@ -793,7 +797,9 @@ export const CardComposer = forwardRef<
           </div>
         )}
         <AttachmentStrip a={att} />
+        {dragging && <div className="drop-hint">{canAttach ? DROP_HINT : NO_AGENT}</div>}
         <textarea
+          style={dragging ? { display: 'none' } : undefined}
           ref={(el) => {
             box.current = el;
             if (typeof ref === 'function') ref(el);
@@ -805,9 +811,9 @@ export const CardComposer = forwardRef<
           title="Enter to send · Shift+Enter for a new line"
           onChange={(e) => setText(e.target.value)}
           onPaste={(e) => {
-            const files = pastedImages(e.clipboardData);
+            const files = pastedFiles(e.clipboardData);
             if (!files.length) return;
-            e.preventDefault(); // an image, not its file name as text
+            e.preventDefault(); // a file, not its name as text
             addFiles(files);
           }}
           onKeyDown={(e) => {
@@ -829,7 +835,7 @@ export const CardComposer = forwardRef<
           plan={plan}
           attach={canAttach ? <AttachButton onFiles={addFiles} /> : undefined}
           voice={card.board === 'direct' ? <VoiceToggle chatId={card.id} agents={agents} stream={stream} onError={onError} /> : undefined}
-          send={{ disabled: !text.trim() && !att.sendable }}
+          send={att.uploading ? { disabled: true, title: WAITING } : { disabled: !text.trim() && !att.sendable }}
           sees={sees ? <PaneEye sees={sees} off={eyeOff} onToggle={() => setEyeOff(!eyeOff)} /> : undefined}
           pick={{
             models,

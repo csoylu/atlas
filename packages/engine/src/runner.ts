@@ -1352,6 +1352,9 @@ export class Runner {
             ...(card.images.length
               ? [`Images attached to this task: ${card.images.map((im) => workspaceName(card, im)).join(', ')} (shown as pictures at the start of the conversation; the files are in your workspace).`]
               : []),
+            ...(card.files.length
+              ? [`Files attached to this task: ${card.files.map((f) => workspaceName(card, f)).join(', ')} (copied into your workspace, not sent to you: open them with your tools).`]
+              : []),
             '',
           ]),
       `Today is ${today()}.`,

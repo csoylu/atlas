@@ -4,9 +4,11 @@ import {
   isPaneLine,
   parseCardRef,
   CreateCard,
+  ATTACH_MAX,
   IMAGE_MAX_PER_TASK,
   UpdateCard,
   type ImageBlock,
+  type TaskFile,
   type Block,
   type BlockKind,
   type Card,
@@ -50,6 +52,7 @@ interface CardRow {
   effort: Card['effort'];
   origin_card: string | null;
   images: string;
+  files: string;
   reviewer: string | null;
   project_id: string;
   status_since: string | null;
@@ -99,6 +102,12 @@ export class NotFoundError extends Error {}
 export class ConflictError extends Error {}
 /** A value that can't work (bad cron expression, a time in the past…): HTTP 400. */
 export class InvalidError extends Error {}
+
+/** A task's attachments within the limits (#348): ATTACH_MAX in all, IMAGE_MAX_PER_TASK pictures. */
+function checkAttachments(images: unknown[], files: unknown[]): void {
+  if (images.length > IMAGE_MAX_PER_TASK) throw new InvalidError(`${IMAGE_MAX_PER_TASK} pictures per task at most`);
+  if (images.length + files.length > ATTACH_MAX) throw new InvalidError(`${ATTACH_MAX} attachments per task at most`);
+}
 
 const toMessage = (r: MessageRow): Message => ({
   id: r.id,
@@ -219,6 +228,7 @@ export class Kanban {
       ...this.readState(r),
       originCard: r.origin_card,
       images: JSON.parse(r.images || '[]') as ImageBlock[],
+      files: JSON.parse(r.files || '[]') as TaskFile[],
       reviewer: r.reviewer,
       prs: r.board === 'main' ? cardPrs(this.db, r.id) : [],
       projectId: r.project_id,
@@ -325,27 +335,28 @@ export class Kanban {
   }
 
   /** `origin`: the direct chat the card is created from (card_create in a chat); it is told how the card ends. */
-  /** `images`: the task's pictures, already in <data>/task-images (taskImages.ts), written in the same row. */
-  create(input: CreateCard, by: string, origin: string | null = null, images: ImageBlock[] = []): Card {
-    return this.insert(input, by, origin, 'main', images);
+  /** `images`, `files`: the task's attachments, already in <data>/task-images (taskImages.ts), written in the same row. */
+  create(input: CreateCard, by: string, origin: string | null = null, images: ImageBlock[] = [], files: TaskFile[] = []): Card {
+    return this.insert(input, by, origin, 'main', images, files);
   }
 
-  /** Replace a task's pictures (#119): the files are placed or removed by taskImages.ts around this row write. */
-  setImages(id: string, images: ImageBlock[], by: string): Card {
-    if (images.length > IMAGE_MAX_PER_TASK) throw new InvalidError(`${IMAGE_MAX_PER_TASK} images per task at most`);
+  /** Replace a task's pictures (#119) and other files (#348): placed or removed by taskImages.ts around this row write. */
+  setImages(id: string, images: ImageBlock[], by: string, files?: TaskFile[]): Card {
     const before = this.get(id);
-    if (before.board === 'direct') throw new InvalidError(`${cardRef(before)} is a direct chat: send the image as a message`);
+    const list = files ?? before.files;
+    checkAttachments(images, list);
+    if (before.board === 'direct') throw new InvalidError(`${cardRef(before)} is a direct chat: send the file as a message`);
     this.tx(() => {
-      this.db.prepare('UPDATE cards SET images = ?, updated_at = ? WHERE id = ?').run(JSON.stringify(stripData(images)), new Date().toISOString(), id);
-      this.event(id, 'edited', { by, fields: ['images'] });
+      this.db.prepare('UPDATE cards SET images = ?, files = ?, updated_at = ? WHERE id = ?').run(JSON.stringify(stripData(images)), JSON.stringify(list), new Date().toISOString(), id);
+      this.event(id, 'edited', { by, fields: files ? ['images', 'files'] : ['images'] });
     });
     return this.emit(id);
   }
 
   /** A new card; board cards take the next number (card_counter, in the same transaction: never reused). */
-  private insert(input: CreateCard, by: string, origin: string | null, board: 'main' | 'direct', images: ImageBlock[] = []): Card {
+  private insert(input: CreateCard, by: string, origin: string | null, board: 'main' | 'direct', images: ImageBlock[] = [], files: TaskFile[] = []): Card {
     const c = CreateCard.parse(input);
-    if (images.length > IMAGE_MAX_PER_TASK) throw new InvalidError(`${IMAGE_MAX_PER_TASK} images per task at most`);
+    checkAttachments(images, files);
     const now = new Date().toISOString();
     const id = shortId();
     const conv = 'conv_' + id;
@@ -358,10 +369,10 @@ export class Kanban {
       this.db.prepare("INSERT INTO conversations (id, agent_id, kind) VALUES (?, ?, 'card')").run(conv, c.assignee);
       this.db
         .prepare(
-          `INSERT INTO cards (id, title, body, status, assignee, priority, conversation_id, created_by, created_at, updated_at, images, project_id)
-           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+          `INSERT INTO cards (id, title, body, status, assignee, priority, conversation_id, created_by, created_at, updated_at, images, files, project_id)
+           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
         )
-        .run(id, c.title, c.body, c.status, c.assignee, c.priority, conv, by, now, now, JSON.stringify(stripData(images)), project);
+        .run(id, c.title, c.body, c.status, c.assignee, c.priority, conv, by, now, now, JSON.stringify(stripData(images)), JSON.stringify(files), project);
       if (board === 'main') {
         const { last } = this.db.prepare('UPDATE card_counter SET last = last + 1 WHERE id = 1 RETURNING last').get() as { last: number };
         this.db.prepare('UPDATE cards SET number = ? WHERE id = ?').run(last, id);
