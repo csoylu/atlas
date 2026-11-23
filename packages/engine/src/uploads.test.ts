@@ -1,12 +1,13 @@
 import { afterEach, describe, expect, it } from 'vitest';
-import { existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, utimesSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, statSync, utimesSync, writeFileSync } from 'node:fs';
+import { Readable } from 'node:stream';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import sharp from 'sharp';
-import type { ImageBlock, Upload } from '@atlas/shared';
+import { fileLine, parseFileLine, type ImageBlock, type Upload } from '@atlas/shared';
 import { startEngine, type Engine } from './index.ts';
 import { FakeProvider } from './providers/fake.ts';
-import { safeName, Uploads } from './uploads.ts';
+import { safeExt, safeName, Uploads } from './uploads.ts';
 
 const png = (w = 64, h = 48) => sharp({ create: { width: w, height: h, channels: 3, background: '#3366ff' } }).png().toBuffer();
 let engines: Engine[] = [];
@@ -28,24 +29,153 @@ describe('uploads', () => {
   it('names files safely', () => {
     expect(safeName('Screenshot 2026-11-18 at 10.42.01.png')).toBe('Screenshot-2026-11-18-at-10-42-01');
     expect(safeName('../../etc/passwd')).toBe('passwd');
-    expect(safeName('.png')).toBe('image');
+    expect(safeName('..\\..\\Windows\\evil.dll')).toBe('evil');
+    expect(safeName('.png', 'image')).toBe('image');
+    expect(safeName('.env')).toBe('file');
+    expect(safeExt('report.PDF')).toBe('pdf');
+    expect(safeExt('archive.tar.gz')).toBe('gz');
+    expect(safeExt('Makefile')).toBe('');
+    expect(safeExt('x.p/../../y')).toBe('');
+    expect(safeExt('x.<script>')).toBe('');
   });
 
-  it('refuses what is not an image (by its bytes) and files over 10 MB, saying why', async () => {
+  it('takes any file up to 100 MB; a picture is read from its bytes, the rest is a file; over 100 MB is refused, nothing staged', async () => {
     const dataDir = mkdtempSync(join(tmpdir(), 'atlas-'));
     const e = await start(new FakeProvider([]), ':memory:', dataDir);
     const card = e.kanban.create({ title: 'x', assignee: 'atlas' }, 'user');
     const notImage = await upload(e, card.id, 'evil.png', Buffer.from('<script>alert(1)</script>'));
-    expect(notImage.status).toBe(400);
-    expect(((await notImage.json()) as { error: string }).error).toMatch(/evil\.png is not a png, jpeg, gif or webp image/);
-    const big = await upload(e, card.id, 'big.png', Buffer.concat([await png(), Buffer.alloc(10 * 1024 * 1024)]));
-    expect(big.status).toBe(400);
-    expect(((await big.json()) as { error: string }).error).toMatch(/big\.png is 10\.0 MB: images over 10\.0 MB are refused/);
-    const huge = await upload(e, card.id, 'huge.png', Buffer.alloc(11 * 1024 * 1024));
-    expect(huge.status).toBe(413);
-    expect(((await huge.json()) as { error: string }).error).toMatch(/over 10\.0 MB/);
-    expect((await send(e, card.id, { text: '' })).status).toBe(400); // neither text nor image
+    expect(notImage.status).toBe(201);
+    expect(await notImage.json()).toMatchObject({ kind: 'file', name: 'evil.png', bytes: 25 });
+    const pdf = await upload(e, card.id, 'Q3 report.pdf', Buffer.from('%PDF-1.7 test'));
+    expect(await pdf.json()).toMatchObject({ kind: 'file', media_type: 'application/pdf' });
+    const picture = await upload(e, card.id, 'shot', await png()); // no extension: its bytes say png
+    expect(await picture.json()).toMatchObject({ kind: 'image', media_type: 'image/png' });
+    const bigPicture = await upload(e, card.id, 'big.png', Buffer.concat([await png(), Buffer.alloc(10 * 1024 * 1024)]));
+    expect(await bigPicture.json()).toMatchObject({ kind: 'file' }); // over the picture limit: a file the agent opens
+    const before = readdirSync(join(dataDir, 'uploads')).length;
+    const huge = await upload(e, card.id, 'mainnet.parquet', Buffer.alloc(100 * 1024 * 1024 + 1));
+    expect(huge.status).toBe(400);
+    expect(((await huge.json()) as { error: string }).error).toBe('mainnet.parquet is 100.0 MB: files over 100 MB are refused');
+    expect(readdirSync(join(dataDir, 'uploads'))).toHaveLength(before); // nothing staged, no .part left
+    expect((await send(e, card.id, { text: '' })).status).toBe(400); // neither text nor file
     expect((await send(e, card.id, { text: 'x', uploads: ['up_missing'] })).status).toBe(404);
+  });
+
+  it('a stream past 100 MB (no length told) is cut off, its part file removed', async () => {
+    const dataDir = mkdtempSync(join(tmpdir(), 'atlas-'));
+    const u = new Uploads(dataDir);
+    const chunk = Buffer.alloc(8 * 1024 * 1024);
+    const body = Readable.from((function* () {
+      for (let i = 0; i < 13; i++) yield chunk;
+    })());
+    await expect(u.stage('dump.bin', body)).rejects.toThrow('dump.bin is over 100 MB: files over 100 MB are refused');
+    expect(readdirSync(u.dir)).toEqual([]);
+  });
+
+  it('exactly 100 MB is taken', async () => {
+    const dataDir = mkdtempSync(join(tmpdir(), 'atlas-'));
+    const e = await start(new FakeProvider([]), ':memory:', dataDir);
+    const card = e.kanban.create({ title: 'x', assignee: 'atlas' }, 'user');
+    const res = await upload(e, card.id, 'logs.zip', Buffer.alloc(100 * 1024 * 1024));
+    expect(res.status).toBe(201);
+    const up = (await res.json()) as Upload;
+    expect(up).toMatchObject({ kind: 'file', bytes: 100 * 1024 * 1024, media_type: 'application/zip' });
+    expect((await send(e, card.id, { uploads: [up.id] })).status).toBe(201);
+    const date = new Date().toISOString().slice(0, 10);
+    expect(statSync(join(dataDir, 'workspaces/atlas/uploads', `${date}-logs.zip`)).size).toBe(100 * 1024 * 1024);
+  });
+
+  it('files: placed in uploads/, named to the agent in one line (never sent as bytes), restart-safe between the two steps', async () => {
+    const dataDir = mkdtempSync(join(tmpdir(), 'atlas-'));
+    const db = join(dataDir, 'atlas.db');
+    const fake = new FakeProvider([[{ type: 'text', text: 'Got them.' }]]);
+    let e = await start(fake, db, dataDir);
+    const card = e.kanban.create({ title: 'Files', assignee: 'atlas' }, 'user');
+    const csv = (await (await upload(e, card.id, 'q3 volumes.csv', Buffer.from('date,chain\n2026-07-01,solana\n'))).json()) as Upload;
+    const bare = (await (await upload(e, card.id, 'README', Buffer.from('no extension here'))).json()) as Upload;
+    const zip = (await (await upload(e, card.id, '../../evil/../logs.zip', Buffer.from('PK\x03\x04 not really'))).json()) as Upload;
+    const pic = (await (await upload(e, card.id, 'board.png', await png())).json()) as Upload;
+    expect([csv.kind, bare.kind, zip.kind, pic.kind]).toEqual(['file', 'file', 'file', 'image']);
+
+    // Killed between staging and sending: everything is still there after a restart.
+    await e.stop();
+    engines = [];
+    e = await start(fake, db, dataDir);
+    const sent = await send(e, card.id, { text: 'the numbers', uploads: [csv.id, pic.id, bare.id, zip.id] });
+    expect(sent.status).toBe(201);
+    const date = new Date().toISOString().slice(0, 10);
+    const ws = join(dataDir, 'workspaces/atlas');
+    expect(readdirSync(join(ws, 'uploads')).sort()).toEqual([`${date}-README`, `${date}-board.png`, `${date}-logs.zip`, `${date}-q3-volumes.csv`].sort());
+    expect(readFileSync(join(ws, 'uploads', `${date}-q3-volumes.csv`), 'utf8')).toBe('date,chain\n2026-07-01,solana\n');
+    expect(readdirSync(join(dataDir, 'uploads'))).toEqual([]); // staged copies gone
+    const msg = e.kanban.messages(card.id).at(-1)!;
+    const texts = msg.content.flatMap((b) => (b.type === 'text' ? [b.text] : []));
+    // Pictures first (as today), then a line per file, in the order sent.
+    expect(msg.content.map((b) => b.type)).toEqual(['text', 'image', 'text', 'text', 'text', 'text']);
+    expect(texts.slice(2)).toEqual([
+      fileLine(`uploads/${date}-q3-volumes.csv`, 29),
+      fileLine(`uploads/${date}-README`, 17),
+      fileLine(`uploads/${date}-logs.zip`, 15),
+    ]);
+    expect(texts[2]).toBe(`[file attached: uploads/${date}-q3-volumes.csv (29 B, CSV), not sent to you: open it with your tools]`);
+    expect(parseFileLine(texts[4]!)).toEqual({ path: `uploads/${date}-logs.zip`, size: '15 B', label: 'zip archive' });
+
+    // The model reads the lines; no file bytes go to it.
+    e.runner.wake(card.id);
+    await e.runner.settled(card.id);
+    const seen = JSON.stringify(fake.calls[0]!.messages);
+    expect(seen).toContain(`uploads/${date}-q3-volumes.csv (29 B, CSV)`);
+    expect(seen).not.toContain('2026-07-01,solana');
+
+    // A click on a chip in the task: served from the workspace; only files the conversation names.
+    const get = (p: string, dl = false) => fetch(`${e.url}/api/cards/${card.id}/file?path=${encodeURIComponent(p)}${dl ? '&download=1' : ''}`);
+    const r = await get(`uploads/${date}-q3-volumes.csv`);
+    expect(r.status).toBe(200);
+    expect(r.headers.get('content-disposition')).toMatch(/^inline/);
+    expect(r.headers.get('content-type')).toMatch(/^text\/plain/);
+    expect(await r.text()).toBe('date,chain\n2026-07-01,solana\n');
+    expect((await get(`uploads/${date}-logs.zip`)).headers.get('content-disposition')).toMatch(/^attachment/);
+    expect((await get(`uploads/${date}-q3-volumes.csv`, true)).headers.get('content-disposition')).toMatch(/^attachment/);
+    expect((await get('../../atlas.db')).status).toBe(404);
+    expect((await get(db)).status).toBe(404);
+    writeFileSync(join(ws, 'secret.txt'), 'x');
+    expect((await get('secret.txt')).status).toBe(404);
+  });
+
+  it('a crash after the copies but before the row: the staged file stays, sending again works', async () => {
+    const dataDir = mkdtempSync(join(tmpdir(), 'atlas-'));
+    const u = new Uploads(dataDir);
+    const up = await u.stage('notes.txt', Buffer.from('hello'));
+    const ws = join(dataDir, 'ws');
+    await expect(u.send([up.id], ws, () => {
+      throw new Error('killed before the row');
+    })).rejects.toThrow('killed before the row');
+    expect(readdirSync(join(ws, 'uploads'))).toEqual([]); // the copy removed
+    expect(readdirSync(u.dir)).toHaveLength(1); // still staged
+    const placed = await u.send([up.id], ws, (p) => p);
+    expect(placed.files).toHaveLength(1);
+    expect(readFileSync(placed.files[0]!.path, 'utf8')).toBe('hello');
+    expect(readdirSync(u.dir)).toEqual([]);
+    await expect(u.send([up.id], ws, (p) => p)).rejects.toThrow(/not found/); // never placed twice
+  });
+
+  it('limits: 10 attachments per message, of which 5 pictures', async () => {
+    const dataDir = mkdtempSync(join(tmpdir(), 'atlas-'));
+    const e = await start(new FakeProvider([]), ':memory:', dataDir);
+    const card = e.kanban.create({ title: 'x', assignee: 'atlas' }, 'user');
+    const stageFile = async (n: string, b: Buffer) => ((await (await upload(e, card.id, n, b)).json()) as Upload).id;
+    const pics = [];
+    for (let i = 0; i < 6; i++) pics.push(await stageFile(`p${i}.png`, await png(10 + i, 10)));
+    const docs = [];
+    for (let i = 0; i < 6; i++) docs.push(await stageFile(`d${i}.txt`, Buffer.from(`doc ${i}`)));
+    const six = await send(e, card.id, { uploads: pics });
+    expect(six.status).toBe(400);
+    expect(((await six.json()) as { error: string }).error).toBe('5 pictures per message at most');
+    const eleven = await send(e, card.id, { uploads: [...pics.slice(0, 5), ...docs] });
+    expect(eleven.status).toBe(400);
+    expect(JSON.stringify(await eleven.json())).toMatch(/10/);
+    expect(readdirSync(join(dataDir, 'uploads'))).toHaveLength(12); // refusals copy nothing, stage stays
+    expect((await send(e, card.id, { uploads: [...pics.slice(0, 5), ...docs.slice(0, 5)] })).status).toBe(201);
   });
 
   it('upload, restart, send: the image lands in the workspace, the message carries it, the model sees it', async () => {
