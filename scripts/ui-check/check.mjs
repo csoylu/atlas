@@ -674,6 +674,9 @@ const SCREENS = [
   ...(doc ? [{ name: 'library-doc', hash: `#/library/${doc.id}`, ready: '.viewer .doc-md', keys: ['.sd-ver-btn', '.crumb h1', '.viewer h2'] }] : []),
   // The version picker open over the viewer.
   ...(doc ? [{ name: 'library-doc-versions', hash: `#/library/${doc.id}`, ready: '.viewer .doc-md', then: { js: `document.querySelector('.sd-ver-btn').click();`, ready: '.fixed-pop .pop-row' }, keys: ['.fixed-pop .pop-row', '.pop-note'] }] : []),
+  // The sidebar's Search row (#349; the More tab on a phone) opens the same palette on a click; in server mode « Server » sits after the name.
+  { name: 'search-click', hash: '#/more', ready: '.nav-item[title^="Search"]', then: { js: `document.querySelector('.nav-item[title^="Search"]').click();`, ready: '.pal-in input' }, keys: ['.nav-item'] },
+  { name: 'server-foot', hash: '#/more', ready: '.me-scope', server: true, keys: ['.me-scope'] },
   // ⌘K palette over the chat (query « lib », as in the mockup) and the « ? » cheat sheet over the board.
   { name: 'palette', hash: `#/chat/${chat.id}`, ready: '.chat-pin', pins: true, then: { js: `window.dispatchEvent(new KeyboardEvent('keydown', { key: 'k', metaKey: true, bubbles: true })); await new Promise((r) => setTimeout(r, 300)); const i = document.querySelector('.pal-in input'); Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, 'value').set.call(i, 'lib'); i.dispatchEvent(new Event('input', { bubbles: true }));`, ready: '.pal-op.on' }, keys: ['.pal-t', '.pal-sec', '.pal-ctx'] },
   { name: 'shortcuts', hash: '#/board', ready: '.board', then: { js: `window.dispatchEvent(new KeyboardEvent('keydown', { key: '?', shiftKey: true, bubbles: true }));`, ready: '.keys-sheet' }, keys: ['.keys-head h2', '.keys-row > span:first-child', '.pal-sec'] },
@@ -953,6 +956,8 @@ handlers.set('Fetch.requestPaused', async ({ requestId, request }) => {
       refusedWrites.push(`${screen?.name}: ${request.method} ${url.pathname} (answered 204, nothing stored)`);
       return await send('Fetch.fulfillRequest', { requestId, responseCode: 204, responseHeaders: [] });
     }
+    // Server mode (#349): the footer shows « Server » after the name. A fake « signed in, auth on » answer, nothing stored.
+    if (request.method === 'POST' && url.pathname === '/api/auth/check' && screen?.server) return await json({ authenticated: true, enabled: true });
     if (!['GET', 'HEAD', 'OPTIONS'].includes(request.method) && url.pathname !== '/api/auth/check') {
       refusedWrites.push(`${screen?.name}: ${request.method} ${url.pathname}`);
       return await send('Fetch.failRequest', { requestId, errorReason: 'BlockedByClient' });

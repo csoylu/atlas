@@ -1,7 +1,6 @@
 import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from 'react';
 import { AgentFace } from './AgentFace.tsx';
 import { Mark } from './Mark.tsx';
-import { markState } from './markState.ts';
 import { cardRef, type SecretStoreStatus, type UpdateStatus, type Doc, type Agent, type Card, type ChatGptStatus, type Inbox as InboxData, type Model, type Settings, type Workflow, type Project } from '@atlas/shared';
 import { api, setViewing, subscribe, type AuthState } from './api.ts';
 import { CheckIcon, RowMenu, useRowMenu } from './RowMenu.tsx';
@@ -596,20 +595,17 @@ export function App() {
     chat.then((id) => api.panelOpen(id, doc.id).then(() => go('#/chat/' + id)), fail);
   };
 
-  const wsRow = (
-    <div className="ws-row">
-      <Mark state={markState(cards, chats, shownInbox)} />
-      <span className="ws-name">Atlas</span>
-      <span className="ws-scope">{auth.enabled ? 'Server' : ''}</span>
-      <span className="ws-acts">
-        <button type="button" className="ws-k" aria-label="Search and commands" title="Search and commands (⌘K)" onClick={() => setPalette(true)}>
-          ⌘K
-        </button>
-      </span>
-    </div>
+  // ⌘K as the nav's first row (#349): it opens the palette, it is not a route, so never active.
+  const searchRow = (
+    <button type="button" className="nav-item" title="Search and commands (⌘K)" onClick={() => setPalette(true)}>
+      <Icon.search />
+      <span>Search</span>
+      <kbd className="nav-kbd">⌘K</kbd>
+    </button>
   );
   const navRows = (only?: View[]) => (
     <nav className="nav">
+      {!only && searchRow}
       {nav
         .filter((n) => !only || only.includes(n.view))
         .map((n) => (
@@ -721,6 +717,7 @@ export function App() {
     <div className="sidebar-foot">
       <span className="me" aria-hidden="true">{(settings?.userName ?? '?').slice(0, 1).toUpperCase()}</span>
       <span className="me-name">{settings?.userName ?? ''}</span>
+      {auth.enabled && <span className="me-scope">Server</span>}
       <span className={'conn ' + (online ? 'up' : 'down')} role="status" aria-label={online ? 'Engine connected' : 'Engine offline'} title={online ? 'Engine connected' : 'Engine offline'} />
       {auth.enabled && (
         <button type="button" className="icon-btn" aria-label="Log out" title="Log out" onClick={() => api.authLogout().then(() => location.reload())}>
@@ -755,7 +752,6 @@ export function App() {
     <div className={'app' + (narrow ? ' narrow' : '')}>
       {!narrow && (
         <aside className="sidebar" aria-label="Navigation">
-          {wsRow}
           {navRows()}
           {agentsSection}
           {runningSection}
@@ -898,7 +894,7 @@ export function App() {
         ) : route.view === 'more' ? (
           // The narrow window's More tab: what the sidebar has that the other four tabs don't.
           <div className="side-list" aria-label="More">
-            {wsRow}
+            {searchRow}
             {navRows(['workflows'])}
             {runningSection}
             {badges}
