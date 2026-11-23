@@ -6,7 +6,7 @@ const card = (p: Partial<Card>): Card =>
   ({ id: 'c', number: 1, title: 't', body: '', status: 'blocked', assignee: 'scout', priority: 0, board: 'main', parents: [], block: null, waiting: null, ...p }) as Card;
 const need = (p: Partial<InboxNeed> & { card: Card }): InboxNeed => ({ since: '2026-11-13T10:00:00Z', failed: false, notificationId: 1, unread: true, summary: null, ...p });
 const upd = (p: Partial<Notification>): Notification => ({ id: 9, at: '2026-11-13T09:00:00Z', kind: 'card.done', title: 'Palette', body: 'ok', cardId: null, readAt: null, archivedAt: null, projectId: null, link: null, ...p });
-const ask = card({ id: 'c_ask', number: 39, block: { kind: 'needs_input', reason: '**Kaiko** or CoinGecko?\nmore', options: ['Kaiko', 'CoinGecko'], until: null } });
+const ask = card({ id: 'c_ask', number: 39, block: { kind: 'needs_input', reason: '**Paid feed** or CoinGecko?\nmore', options: ['Paid feed', 'CoinGecko'], until: null } });
 const inbox: Inbox = {
   needsYou: [need({ card: ask }), need({ card: card({ id: 'c_rev', number: 40, status: 'review' }), summary: '2 400 words', unread: false, notificationId: 2 })],
   updates: [upd({ id: 5, cardId: 'c_done' }), upd({ id: 6, kind: 'plan.switched', title: 'Claude plan limit reached', readAt: '2026-11-13T09:30:00Z' })],
@@ -63,7 +63,7 @@ describe('inbox view', () => {
     expect([a, r, d, s].map((i) => kindOf(i!).label)).toEqual(['asked', 'review', 'done', 'system']);
     expect(kindOf({ key: 'x', need: need({ card: ask, failed: true }) }).icon).toBe('failed');
     expect(kindOf({ key: 'y', update: { ...s!.update!, kind: 'card.stalled' } }).label).toBe('stuck');
-    expect(lineOf(a!)).toBe('Kaiko or CoinGecko?');
+    expect(lineOf(a!)).toBe('Paid feed or CoinGecko?');
     expect(lineOf(r!)).toBe('2 400 words');
     expect([a, r, d, s].map((i) => unreadOf(i!))).toEqual([true, false, true, false]);
     expect([a, r, d, s].map((i) => toRead(i!))).toEqual([1, null, 5, null]);

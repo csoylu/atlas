@@ -392,7 +392,7 @@ const ago = (min) => new Date(Date.now() - min * 60_000).toISOString();
 const INBOX_CARDS = [
   fixture('i1', 'Pick a data source for CEX volumes', {
     number: 9139, assignee: 'atlas', status: 'blocked', originCard: null,
-    block: { kind: 'needs_input', reason: 'For the monthly CEX volume report I need one source of truth. Both have the 14 exchanges we track.', options: ['Kaiko: tick-level, paid key already in .env', 'CoinGecko: free, daily granularity only'], until: null },
+    block: { kind: 'needs_input', reason: 'For the monthly CEX volume report I need one source of truth. Both have the 14 exchanges we track.', options: ['Paid feed: tick-level, key already in .env', 'CoinGecko: free, daily granularity only'], until: null },
   }),
   fixture('i2', 'MEV primer, first draft', { number: 9140, assignee: 'atlas', status: 'review', originCard: null }),
   fixture('i3', 'Backfill Binance funding rates', { number: 9145, assignee: 'atlas', status: 'triage', originCard: null }),

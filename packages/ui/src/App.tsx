@@ -256,7 +256,7 @@ export function App() {
           setChatgpt(e.status);
           api.models().then(setModels, (err: Error) => setError(err.message));
         } else if (e.type === 'notification.created') {
-          notify(systemTitle(e.notification), e.notification.body);
+          if (pageNotifies.current) notify(systemTitle(e.notification), e.notification.body);
           reloadInbox();
         } else if (e.type === 'inbox.changed') {
           reloadInbox();
@@ -265,7 +265,7 @@ export function App() {
         } else if (e.type === 'chat.replied') {
           // Sent only when no window has that chat on screen and focused (#338).
           const l = latest.current;
-          if (l.settings?.notifyReplies !== false) {
+          if (pageNotifies.current && l.settings?.notifyReplies !== false) {
             const project = l.projects.find((p) => p.id === e.projectId)?.name ?? e.projectId;
             notify(`${e.agentId} · ${project}`, e.text, {
               tag: `${e.chatId}:${e.seq}`,
@@ -291,6 +291,7 @@ export function App() {
           api.workflows().then(setWorkflows, (e: Error) => setError(e.message));
           api.projects().then(setProjects, (e: Error) => setError(e.message));
           api.settings().then(setSettings, (e: Error) => setError(e.message));
+          api.about().then((a) => (pageNotifies.current = a.notifier.by === 'page'), (e: Error) => setError(e.message));
           api.update().then(setUpdate, (e: Error) => setError(e.message));
           api.secretsStatus().then(setSecretStatus, (e: Error) => setError(e.message));
           api.chatgpt().then(setChatgpt, (e: Error) => setError(e.message));
@@ -447,6 +448,9 @@ export function App() {
   const closeAgentMenu = useCallback(() => agentMenu.setAt(null), [agentMenu.setAt]);
   // What the events socket needs at the time of an event, not of its subscription.
   const latest = useRef({ settings, projects, go });
+  // Who shows system notifications (#350): the page only without the desktop app, whose main process posts them
+  // (window closed too). Unknown until /api/about answers: nothing from the page, so never two banners.
+  const pageNotifies = useRef(false);
   latest.current = { settings, projects, go };
   const onPlan = (m: Model | undefined) => m?.provider === 'chatgpt';
   const planAgents = new Set(agents.filter((a) => onPlan(models.find((m) => m.id === a.modelId))).map((a) => a.id));
@@ -976,7 +980,7 @@ export function App() {
   );
 }
 
-/** A system notification (the desktop app shows it in macOS Notification Center); asks once in a browser. */
+/** A web notification, without the desktop app (server mode, dev): asks once. The desktop app posts its own (#350). */
 function notify(title: string, body: string, o: { tag?: string; onClick?(): void } = {}): void {
   if (typeof Notification === 'undefined') return;
   const show = () => {

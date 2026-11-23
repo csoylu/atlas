@@ -35,9 +35,9 @@ describe('inbox', () => {
     const events: ServerEvent[] = [];
     e.bus.on((ev) => events.push(ev));
     const ask = e.kanban.create({ title: 'Pick a data source', status: 'ready', assignee: 'atlas' }, 'user');
-    e.kanban.block(ask.id, { kind: 'needs_input', reason: 'Kaiko or CoinGecko?', options: ['Kaiko', 'CoinGecko'] }, 'atlas');
+    e.kanban.block(ask.id, { kind: 'needs_input', reason: 'Paid feed or CoinGecko?', options: ['Paid feed', 'CoinGecko'] }, 'atlas');
     const created = events.filter((ev) => ev.type === 'notification.created');
-    expect(created).toMatchObject([{ notification: { kind: 'card.blocked', title: 'Pick a data source', body: 'Kaiko or CoinGecko?', cardId: ask.id } }]);
+    expect(created).toMatchObject([{ notification: { kind: 'card.blocked', title: 'Pick a data source', body: 'Paid feed or CoinGecko?', cardId: ask.id } }]);
     // Announced after the commit: the row is there when the event arrives (same order as card.updated).
     expect(events.findIndex((ev) => ev.type === 'notification.created')).toBeLessThan(events.findIndex((ev) => ev.type === 'card.updated' && ev.card.id === ask.id && ev.card.status === 'blocked'));
 
