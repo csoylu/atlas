@@ -282,16 +282,6 @@ select { padding: 4px 8px; }
 }
 .sidebar button, .sidebar select, .sidebar label, .sidebar a { -webkit-app-region: no-drag; }
 .electron-mac .sidebar { padding-top: 40px; }
-.ws-row { display: flex; align-items: center; gap: 8px; height: 36px; padding: 0 2px 0 6px; margin-bottom: 6px; flex: none; }
-.ws-name { font-weight: var(--fw-bold); font-size: var(--fs-base); min-width: 0; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
-.ws-scope { color: var(--faint); font-size: var(--fs-small); white-space: nowrap; }
-.ws-acts { margin-left: auto; display: flex; gap: 2px; flex: none; }
-/* ⌘K: the palette (search and commands). */
-.ws-k {
-  height: 22px; padding: 0 6px; border: 1px solid var(--line-2); border-radius: 5px; background: none; color: var(--muted);
-  font-size: var(--fs-small); font-weight: var(--fw-regular); line-height: var(--lh-tight); white-space: nowrap;
-}
-.ws-k:hover { background: var(--hover); color: var(--text); }
 /*
  * Living Orb mark (#310, paris's atlas-icon.html v23, .lv*): base · glow · swirl · badge, stacked, moved by transform
  * and opacity only so the compositor runs it. Idle: the glow breathes every 4 s. Working: the swirl turns every 3 s and
@@ -341,6 +331,12 @@ select { padding: 4px 8px; }
 .nav-item.agent-item { height: 36px; gap: 10px; padding: 0 7px; color: var(--text); }
 .nav-item.agent-item .dot-avatar { width: 22px; height: 22px; }
 .nav-item > span:not(.nav-count):not(.dot-avatar):not(.spin) { min-width: 0; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+/* ⌘K hint on the Search row (#349: the old « Atlas » row's chip, now inside a nav item). */
+.nav-kbd {
+  margin-left: auto; height: 20px; padding: 0 5px; border: 1px solid var(--line-2); border-radius: 5px; display: grid; place-items: center;
+  color: var(--faint); font-family: inherit; font-size: var(--fs-small); font-weight: var(--fw-regular); line-height: var(--lh-tight); flex: none;
+}
+.nav-item:hover .nav-kbd { color: var(--muted); }
 .nav-count {
   margin-left: auto; min-width: 18px; height: 18px; padding: 0 5px; border-radius: 9px; font-size: var(--fs-small); font-weight: var(--fw-bold); line-height: var(--lh-tight);
   display: grid; place-items: center; background: var(--accent); color: var(--on-accent); font-variant-numeric: tabular-nums;
@@ -405,6 +401,8 @@ select { padding: 4px 8px; }
 .sidebar-foot { margin-top: auto; display: flex; align-items: center; gap: 8px; padding: 8px 2px 0 8px; flex: none; color: var(--muted); min-height: 40px; font-size: var(--fs-base); border-top: 1px solid var(--line); }
 .me { width: 22px; height: 22px; border-radius: 30%; background: var(--accent-soft); color: var(--accent); font-size: var(--fs-small); font-weight: var(--fw-bold); display: grid; place-items: center; flex: none; }
 .me-name { min-width: 0; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+/* « Server » after the user's name, server mode only (#349). */
+.me-scope { color: var(--faint); font-size: var(--fs-small); white-space: nowrap; flex: none; }
 .conn { width: 6px; height: 6px; border-radius: 50%; background: var(--negative); flex: none; margin-left: auto; }
 .conn.up { background: var(--positive); }
 .sidebar-foot .icon-btn.active { background: var(--active); color: var(--text); }
@@ -944,7 +942,6 @@ button.artifact:hover .art-open { color: var(--accent); }
 }
 /* Chats and More (narrow tabs): the sidebar's rows on the sheet, one scrolling column. */
 .side-list { flex: 1; min-width: 0; overflow-y: auto; display: flex; flex-direction: column; gap: 1px; padding: 8px 10px 16px; }
-.side-list .ws-row { margin-bottom: 2px; }
 .side-list .side-chats { flex: none; min-height: 0; }
 .side-list .chat-history { overflow: visible; }
 .side-list .sidebar-foot { margin-top: 12px; }
@@ -1626,8 +1623,8 @@ button.msg-quote:hover { color: var(--text); }
   .app:has(.side-doc.side) { --sidebar: 60px; }
   .app:has(.side-doc.side) .sidebar { padding: 10px 8px 8px; }
   .electron-mac .app:has(.side-doc.side) .sidebar { padding-top: 40px; }
-  .app:has(.side-doc.side) :is(.ws-name, .ws-scope, .ws-acts, .nav-item > span:not(.dot-avatar), .chat-hist-title, .chat-hist-when, .side-group, .me-name, .nav-item .spin, .nav-item .unread-dot, .chat-hist-item .unread-dot) { display: none; }
-  .app:has(.side-doc.side) :is(.nav-item, .chat-hist-item, .ws-row) { justify-content: center; padding-left: 0; padding-right: 0; }
+  .app:has(.side-doc.side) :is(.nav-item > span:not(.dot-avatar), .nav-kbd, .me-scope, .chat-hist-title, .chat-hist-when, .side-group, .me-name, .nav-item .spin, .nav-item .unread-dot, .chat-hist-item .unread-dot) { display: none; }
+  .app:has(.side-doc.side) :is(.nav-item, .chat-hist-item) { justify-content: center; padding-left: 0; padding-right: 0; }
   .app:has(.side-doc.side) .side-agents { margin-top: 12px; }
   .app:has(.side-doc.side) .side-chats { margin-top: 12px; }
   .app:has(.side-doc.side) .sidebar-foot { flex-direction: column; padding: 8px 0 0; gap: 6px; }
