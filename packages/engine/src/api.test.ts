@@ -43,7 +43,16 @@ describe('api', () => {
   it('reports the version and data folder for Settings → About', async () => {
     const dataDir = mkdtempSync(join(tmpdir(), 'atlas-'));
     engine = await startEngine({ dbFile: ':memory:', dataDir, port: 0, version: '1.2.3' });
-    expect(await (await fetch(engine.url + '/api/about')).json()).toEqual({ version: '1.2.3', dataDir, server: false, voice: false, shellPath: { path: process.env.PATH ?? '', source: 'engine', shell: null, error: null } });
+    expect(await (await fetch(engine.url + '/api/about')).json()).toEqual({ version: '1.2.3', dataDir, server: false, voice: false, shellPath: { path: process.env.PATH ?? '', source: 'engine', shell: null, error: null }, notifier: { by: 'page', error: null } });
+  });
+
+  it('reports the desktop notifier and its last failure (#350)', async () => {
+    let error: string | null = null;
+    const e = (engine = await startEngine({ dbFile: ':memory:', dataDir: mkdtempSync(join(tmpdir(), 'atlas-')), port: 0, notifier: { status: () => ({ by: 'osascript', error }) } }));
+    const notifier = async () => ((await (await fetch(e.url + '/api/about')).json()) as { notifier: unknown }).notifier;
+    expect(await notifier()).toEqual({ by: 'osascript', error: null });
+    error = 'osascript exited with code 1: execution error';
+    expect(await notifier()).toEqual({ by: 'osascript', error });
   });
 
   it('serves cards over REST and pushes events over the WebSocket', async () => {

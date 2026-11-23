@@ -510,6 +510,29 @@ export interface About {
   voice: boolean;
   /** The PATH agent commands get (#136); null while the login shell is still being read. */
   shellPath: ShellPathInfo | null;
+  /** Who shows system notifications (#350) and why they can't be shown, if they failed. */
+  notifier: NotifierStatus;
+}
+/**
+ * System notifications (#350). 'osascript': the desktop app on a Mac posts them from its main process with osascript
+ * (the app is unsigned, so Electron's own notifications never show; banners come under « Script Editor »). 'electron':
+ * the desktop app elsewhere, Electron's Notification from the main process. 'page': no desktop app (server mode, dev),
+ * the page's web Notification. `error`: the last attempt failed and why; null once one shows again.
+ */
+export interface NotifierStatus {
+  by: 'osascript' | 'electron' | 'page';
+  error: string | null;
+}
+/** The system notification's title for a new Inbox item (desktop main process and page alike). */
+export function systemTitle(n: Pick<Notification, 'kind' | 'title'>): string {
+  const lead: Record<string, string> = {
+    'card.blocked': 'Needs you',
+    'card.review': 'Ready for review',
+    'card.done': 'Done',
+    'run.failed': 'Failed',
+    'schedule.ran': 'Schedule ran',
+  };
+  return lead[n.kind] ? `${lead[n.kind]} · ${n.title}` : n.title;
 }
 /** Where agent shells get their PATH from (#136). */
 export interface ShellPathInfo {

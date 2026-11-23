@@ -184,17 +184,8 @@ export function rowTime(item: InboxItem, now = Date.now()): string {
   return h < 24 ? `${h} h` : `${Math.round(h / 24)} d`;
 }
 
-/** The macOS notification's title for a new row. */
-export function systemTitle(n: Pick<Notification, 'kind' | 'title'>): string {
-  const lead: Record<string, string> = {
-    'card.blocked': 'Needs you',
-    'card.review': 'Ready for review',
-    'card.done': 'Done',
-    'run.failed': 'Failed',
-    'schedule.ran': 'Schedule ran',
-  };
-  return lead[n.kind] ? `${lead[n.kind]} · ${n.title}` : n.title;
-}
+/** The system notification's title for a new row (shared with the desktop app's notifier, #350). */
+export { systemTitle } from '@atlas/shared';
 
 /** Saved tab, kept across reloads. */
 export const parseTab = (raw: string | null): InboxTab => (raw === 'needs' ? 'needs' : 'all');

@@ -24,7 +24,7 @@ import type { WorkspaceFiles } from './workspaceFiles.ts';
 import type { Projects } from './projects.ts';
 import type { ReviewFlow } from './reviewFlow.ts';
 import { ClientEvent, PaneSees, servedFile, withPaneHelper } from '@atlas/shared';
-import type { SandboxStatus } from '@atlas/shared';
+import type { NotifierStatus, SandboxStatus } from '@atlas/shared';
 import { PanePresence, paneNote } from './pane.ts';
 import { commentBlocks, type PageShot } from './comments.ts';
 import { inside } from './tools.ts';
@@ -55,6 +55,11 @@ export const MAX_SERVED_REDACT = 10 * 1024 * 1024;
 import { Auth, SESSION_COOKIE } from './auth.ts';
 import { Uploads } from './uploads.ts';
 import { TaskImages } from './taskImages.ts';
+
+/** The desktop app's system notifications (#350): how they are shown and the last failure (Settings → Notifications). */
+export interface NotifierHost {
+  status(): NotifierStatus;
+}
 
 export function createApi(deps: {
   kanban: Kanban;
@@ -103,6 +108,8 @@ export function createApi(deps: {
   reviewFlow: ReviewFlow;
   /** Pictures of commented page areas (#304); null: none. */
   pageShot?: PageShot | null;
+  /** The desktop app's notifier (#350); absent: the page shows notifications. */
+  notifier?: NotifierHost;
 }): Server {
   const { kanban, agents, models, runner, rewinds, slash, dispatcher, settings, documents, memories, cleanup, workflows, local, accounts, chatgpt, claude, plans, notifications, reads, usage, bus, auth, projects, reviewFlow } = deps;
   const app = express();
@@ -179,7 +186,7 @@ export function createApi(deps: {
 
   // ── About (Settings → About & data) ──────────────────────────────────
   app.get('/api/about', (_req, res) => {
-    const about: About = { version: deps.version, dataDir: deps.dataDir, server: auth.enabled, voice: !!deps.voice, shellPath: deps.shellEnv?.status() ?? null };
+    const about: About = { version: deps.version, dataDir: deps.dataDir, server: auth.enabled, voice: !!deps.voice, shellPath: deps.shellEnv?.status() ?? null, notifier: deps.notifier?.status() ?? { by: 'page', error: null } };
     res.json(about);
   });
 

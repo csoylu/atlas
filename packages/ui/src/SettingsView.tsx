@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useState } from 'react';
-import type { About, ShellPathInfo, UpdateStatus, Agent, Card, ChatGptStatus, Model, SecretStoreStatus, Settings, Workflow } from '@atlas/shared';
+import type { About, NotifierStatus, ShellPathInfo, UpdateStatus, Agent, Card, ChatGptStatus, Model, SecretStoreStatus, Settings, Workflow } from '@atlas/shared';
 import { api } from './api.ts';
 import { AgentsView } from './AgentsView.tsx';
 import { MemoryPage } from './MemoryPage.tsx';
@@ -256,6 +256,12 @@ function BoardSettings(props: { settings: Settings | null; agents: Agent[]; onSe
 function Appearance(props: { theme: ThemeChoice; onTheme(t: ThemeChoice): void; settings: Settings | null; onSettings(s: Settings): void; onError(e: unknown): void }) {
   const set = (patch: Partial<Settings>) => api.updateSettings(patch).then(props.onSettings, props.onError);
   const s = props.settings;
+  // Who shows notifications and the last failure (#350), read when the page opens.
+  const [notifier, setNotifier] = useState<NotifierStatus | null>(null);
+  const onError = props.onError;
+  useEffect(() => {
+    api.about().then((a) => setNotifier(a.notifier), onError);
+  }, [onError]);
   return (
     <>
       <SetSec first>
@@ -277,7 +283,11 @@ function Appearance(props: { theme: ThemeChoice; onTheme(t: ThemeChoice): void; 
           <SetRows>
             <SetRow
               label="When an agent replies"
-              help="A desktop notification when Atlas is in the background or another chat is open. Clicking it opens the chat at the « New » line."
+              help={
+                notifier?.by === 'osascript'
+                  ? 'A notification when Atlas is in the background, closed or another chat is open.'
+                  : 'A desktop notification when Atlas is in the background or another chat is open. Clicking it opens the chat at the « New » line.'
+              }
               auto
             >
               <label className="switch" title={s.notifyReplies ? 'On' : 'Off'}>
@@ -285,6 +295,13 @@ function Appearance(props: { theme: ThemeChoice; onTheme(t: ThemeChoice): void; 
                 <span />
               </label>
             </SetRow>
+            {notifier?.error && <SetRow danger label="Notifications can't be shown" help={`The last one failed: ${notifier.error}.`} />}
+            {notifier?.by === 'osascript' && (
+              <SetRow
+                label="Banners on macOS"
+                help="Until Atlas is signed, Inbox items and replies show under « Script Editor »: allow it in System Settings → Notifications. Clicking a banner does not open the chat; the count on the Dock icon shows what is waiting."
+              />
+            )}
             <SetRow label="Count on the Dock icon and in the window title" help="Chats with an unread reply plus the Inbox count: one number for everything waiting." auto>
               <label className="switch" title={s.countBadge ? 'On' : 'Off'}>
                 <input type="checkbox" aria-label="Count on the Dock icon and in the window title" checked={s.countBadge} onChange={(e) => void set({ countBadge: e.target.checked })} />
