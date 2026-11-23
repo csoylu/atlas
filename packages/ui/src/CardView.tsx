@@ -1,6 +1,6 @@
 import { forwardRef, useEffect, useLayoutEffect, useRef, useState, type ClipboardEvent, type ReactNode } from 'react';
 import { AgentFace } from './AgentFace.tsx';
-import { pastedImages, TASK, TaskImages, useAttachments, useFileDrop } from './Images.tsx';
+import { pastedFiles, TASK, TaskImages, useAttachments, useFileDrop } from './Images.tsx';
 import Markdown from 'react-markdown';
 import remarkGfm from 'remark-gfm';
 import { CARD_STATUSES, cardRef, type Doc, type Agent, type Card, type Model, type Run } from '@atlas/shared';
@@ -80,8 +80,10 @@ export const CardView = forwardRef<HTMLTextAreaElement, CardViewProps & { lead?:
     // The answer of an add / remove shows at once; the live card (its event) takes over when it is as new.
     const [answer, setAnswerRaw] = useState<Card | null>(null);
     const setAnswer = (c: Card) => setAnswerRaw((prev) => (prev && prev.id === c.id && prev.updatedAt > c.updatedAt ? prev : c));
-    const images = answer && answer.id === card.id && answer.updatedAt >= card.updatedAt ? answer.images : (card.images ?? []); // ?? : an engine older than the UI
-    const att = useAttachments(card.id, { ...TASK, taken: images.length });
+    const shown = answer && answer.id === card.id && answer.updatedAt >= card.updatedAt ? answer : card;
+    const images = shown.images ?? []; // ?? : an engine older than the UI
+    const files = shown.files ?? [];
+    const att = useAttachments(card.id, { ...TASK, taken: { all: images.length + files.length, images: images.length } });
     const adding = useRef(new Set<string>());
     useEffect(() => {
       for (const a of att.items) {
@@ -101,10 +103,10 @@ export const CardView = forwardRef<HTMLTextAreaElement, CardViewProps & { lead?:
     }, [att, card.id]);
     const drop = useFileDrop(att.add);
     const onPaste = (e: ClipboardEvent) => {
-      const files = pastedImages(e.clipboardData);
-      if (!files.length) return;
-      e.preventDefault(); // an image, not its file name as text
-      att.add(files);
+      const pasted = pastedFiles(e.clipboardData);
+      if (!pasted.length) return;
+      e.preventDefault(); // a file, not its name as text
+      att.add(pasted);
     };
     const byId = new Map(props.cards.map((c) => [c.id, c]));
     const children = props.cards.filter((c) => c.parents.includes(card.id));
@@ -228,7 +230,7 @@ export const CardView = forwardRef<HTMLTextAreaElement, CardViewProps & { lead?:
               className="cm-desc"
               value={body}
               autoFocus={editing}
-              placeholder="Description, acceptance criteria… (paste or drop images)"
+              placeholder="Description, acceptance criteria… (paste or drop files)"
               aria-label="Description"
               onChange={(e) => setBody(e.target.value)}
               onBlur={leaveEditing}
@@ -246,9 +248,10 @@ export const CardView = forwardRef<HTMLTextAreaElement, CardViewProps & { lead?:
             <TaskImages
               cardId={card.id}
               images={images}
+              files={files}
               att={att}
               onAdd={att.add}
-              onRemove={(im) => void api.removeCardImage(card.id, im.path).then(setAnswer, onError)}
+              onRemove={(item) => void api.removeCardImage(card.id, item.path).then(setAnswer, onError)}
             />
           </div>
           <div className="relations">

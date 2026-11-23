@@ -283,9 +283,12 @@ describe('store', () => {
     const keep = (r: Record<string, unknown>) => Object.fromEntries(Object.entries(r).filter(([k]) => !gone.includes(k)));
     const rows = { cards: keep(row('cards')), card_prs: keep(row('card_prs')) };
     expect(migrate(db)).toContain('0057_drop_merge_queue.sql');
-    expect(cols('cards')).toEqual(before.cards.filter((c) => !gone.includes(c)));
-    expect(cols('card_prs')).toEqual(before.card_prs.filter((c) => !gone.includes(c)));
-    expect({ cards: row('cards'), card_prs: row('card_prs') }).toEqual(rows);
+    // Later migrations may add columns (0072: cards.files): only the columns there before 0057 are compared.
+    const old = (t: 'cards' | 'card_prs', names: string[]) => names.filter((c) => before[t].includes(c));
+    const oldRow = (t: 'cards' | 'card_prs') => Object.fromEntries(Object.entries(row(t)).filter(([k]) => before[t].includes(k)));
+    expect(old('cards', cols('cards'))).toEqual(before.cards.filter((c) => !gone.includes(c)));
+    expect(old('card_prs', cols('card_prs'))).toEqual(before.card_prs.filter((c) => !gone.includes(c)));
+    expect({ cards: oldRow('cards'), card_prs: oldRow('card_prs') }).toEqual(rows);
     expect(db.pragma('foreign_key_check')).toEqual([]);
     db.close();
   });

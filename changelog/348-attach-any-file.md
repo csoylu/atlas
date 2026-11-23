@@ -1,0 +1,1 @@
+## Added · #348 · You can attach any file (up to 100 MB) in chats, task threads, new tasks and task descriptions: it is copied into the agent's workspace under uploads/ and the agent opens it with its tools.

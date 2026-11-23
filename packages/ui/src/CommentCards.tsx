@@ -3,8 +3,8 @@
 // the human part, and a click opens the place in the pane.
 import { Icon } from './ScreenHeader.tsx';
 import type { ReactNode } from 'react';
-import { parseComment, type ImageBlock, type Message, type ParsedComment } from '@atlas/shared';
-import { ImageThumbs, imageUrl } from './Images.tsx';
+import { parseComment, parseFileLine, type ImageBlock, type Message, type ParsedComment } from '@atlas/shared';
+import { FileChips, ImageThumbs, imageUrl } from './Images.tsx';
 import { KindIcon } from './Viewer.tsx';
 import type { CommentDraft } from './comments.ts';
 import type { MessageRef } from './CardPanel.tsx';
@@ -59,13 +59,15 @@ export function splitComments(content: Message['content']): { comments: { c: Par
   return { comments, rest };
 }
 
-/** A user message: its images, its text, then a card per comment (mockup « sent message »). */
-export function UserContent({ message, cardId, text, onOpenRef }: { message: Message; cardId: string; text(t: string, key: string): ReactNode; onOpenRef?(r: MessageRef): void }) {
+/** A user message: its pictures, its files (#348), its text, then a card per comment (mockup « sent message »). */
+export function UserContent({ message, cardId, text, onOpenRef, onOpenFile, opens }: { message: Message; cardId: string; text(t: string, key: string): ReactNode; onOpenRef?(r: MessageRef): void; onOpenFile?(path: string): void; opens?(name: string): string }) {
   const { comments, rest } = splitComments(message.content);
   const images = rest.flatMap((r) => (r.block.type === 'image' ? [r.block] : []));
+  const files = rest.flatMap((r) => (r.block.type === 'text' ? [parseFileLine(r.block.text)].filter((f) => f !== null) : []));
   return (
     <>
       <ImageThumbs cardId={cardId} images={images} />
+      {onOpenFile && <FileChips files={files} onOpen={onOpenFile} opens={opens ?? (() => 'open')} />}
       {rest.map((r) => (r.block.type === 'text' ? text(r.block.text, r.key) : null))}
       {comments.length > 0 && <CommentCards cardId={cardId} comments={comments} onOpenRef={onOpenRef} />}
     </>
