@@ -1,0 +1,3 @@
+## Fixed · #350 · macOS notifications show again: Atlas posts them itself (under « Script Editor » until the app is signed), even with its window closed.
+
+Inbox items and agent replies were posted by the page with Electron's notifications, which need a signed app since Electron 42: they failed silently. The desktop app now posts them from its main process, driven by the engine (window open, in the background or closed): with `osascript` on macOS (agent text passed as arguments, never inside the script), Electron's own elsewhere. One banner per event. A failed notification is logged (`data/logs/notify.log`) and shown in Settings → Appearance → Notifications, which also says where the banners appear and that clicking one doesn't open the chat yet.

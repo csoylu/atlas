@@ -1,4 +1,5 @@
-import { app, BrowserWindow, dialog, globalShortcut, nativeTheme, safeStorage, shell, systemPreferences } from 'electron';
+import { app, BrowserWindow, dialog, globalShortcut, nativeTheme, Notification, safeStorage, shell, systemPreferences } from 'electron';
+import { execFile } from 'node:child_process';
 import { existsSync, mkdirSync, readFileSync, renameSync, writeFileSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 import { startEngine, type Engine, type SecretStore, type UpdateHost, type VoiceHost } from '@atlas/engine';
@@ -9,6 +10,7 @@ import { AtlasTray } from './tray/tray.ts';
 import { ElectronBrowser } from './browser.ts';
 import { dockBadge, type TrayAction, type TrayInput } from './tray/model.ts';
 import { closeForQuit, openDecision, type WindowState } from './window.ts';
+import { DesktopNotifier, noticeOf } from './notifier.ts';
 import { appNavigation } from '@atlas/shared';
 
 /**
@@ -85,6 +87,38 @@ let tray: AtlasTray | undefined;
 /** The shared browser's views (#298 S6), laid over the Atlas window: with the in-process engine only. */
 let browser: ElectronBrowser | undefined;
 
+/**
+ * System notifications (#350) from this process, not the page: they show with the window closed too. A Mac posts them
+ * with osascript (the app is unsigned, so Electron's own never show), elsewhere Electron's Notification.
+ */
+const notifier = new DesktopNotifier({
+  platform: process.platform,
+  exec: (file, args, opts, done) => void execFile(file, args, { ...opts, encoding: 'utf8' }, done),
+  electron: (n, on) => {
+    if (!Notification.isSupported()) return on.failed('this system does not support notifications');
+    const shown = new Notification({ title: n.title, body: n.body });
+    shown.on('failed', (_e, error) => on.failed(error));
+    shown.on('click', () => on.click());
+    shown.show();
+  },
+  log: (line) => {
+    console.error(`Atlas notifications: ${line}`);
+    voiceLog(join(app.getPath('userData'), 'data', 'logs', 'notify.log'), line);
+  },
+  open: (hash) => showAtlas('notification', hash),
+});
+
+function followNotifications(e: Engine) {
+  e.bus.on((ev) => {
+    if (ev.type !== 'notification.created' && ev.type !== 'chat.replied') return;
+    const notice = noticeOf(ev, {
+      notifyReplies: e.settings.get().notifyReplies,
+      projectName: (id) => e.projects.list({ archived: true }).find((p) => p.id === id)?.name ?? id,
+    });
+    if (notice) notifier.show(notice);
+  });
+}
+
 function createWindow(url: string) {
   const win = (mainWindow = new BrowserWindow({
     width: 1440,
@@ -126,7 +160,8 @@ async function start() {
   mkdirSync(dataDir, { recursive: true });
   // The built UI ships as an extra resource in the packaged app; in a local build it sits in packages/ui/dist.
   const uiDir = app.isPackaged ? join(process.resourcesPath, 'ui') : join(app.getAppPath(), '../../packages/ui/dist');
-  engine = await startEngine({ dbFile: join(dataDir, 'atlas.db'), dataDir, port: 0, uiDir, secrets: new KeychainStore(), version: app.getVersion(), voice: voiceHost(), updates: updateHost(), shellPath: 'login', browser: (browser = new ElectronBrowser(() => mainWindow)) });
+  engine = await startEngine({ dbFile: join(dataDir, 'atlas.db'), dataDir, port: 0, uiDir, secrets: new KeychainStore(), version: app.getVersion(), voice: voiceHost(), updates: updateHost(), shellPath: 'login', browser: (browser = new ElectronBrowser(() => mainWindow)), notifier });
+  followNotifications(engine);
   createWindow(engine.url);
   if (engine.voice) followVoice(engine, engine.voice);
   startTray(engine);

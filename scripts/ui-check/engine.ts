@@ -41,6 +41,8 @@ const engine = await startEngine({
   sandbox: { enabled: false }, // no agent commands here; inside an agent's sandbox a nested one cannot start (#316)
   prs: { read: noGitHub, intervalMs: false },
   projects: { clone: noGitHub },
+  // The desktop Mac notifier with a failure (#350): Settings → Appearance shows its longest rows.
+  notifier: { status: () => ({ by: 'osascript', error: 'osascript exited with code 1: execution error: Not authorized to send Apple events to System Events. (-1743)' }) },
 });
 let stopping = false;
 const stop = async () => {

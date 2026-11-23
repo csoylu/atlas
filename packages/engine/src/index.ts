@@ -21,7 +21,7 @@ import { MemoryCleanup } from './cleanup.ts';
 import { MemoryReview } from './memoryReview.ts';
 import { envWithSecrets, Secrets, type SecretStore } from './secrets.ts';
 import { HookTokens } from './webhooks.ts';
-import { createApi } from './api.ts';
+import { createApi, type NotifierHost } from './api.ts';
 import { ghBinary, ghClient } from '../../../scripts/pr/validate.mjs';
 import { Workflows } from './workflows.ts';
 import { Auth, isLoopbackHost } from './auth.ts';
@@ -123,6 +123,11 @@ export interface EngineOptions {
    * (dev, server, tests) the pane is unavailable and the UI opens links in a new tab.
    */
   browser?: BrowserHost;
+  /**
+   * System notifications (#350): the desktop app posts them from its main process (apps/desktop/src/notifier.ts) and
+   * reports here how and the last failure, for Settings → Notifications. Absent (dev, server): the page's web Notification.
+   */
+  notifier?: NotifierHost;
   updates?: { host: UpdateHost | null; cannotInstall?: string; api?: string; fetch?: typeof fetch; intervalMs?: number | false; openCommand?: string; pid?: number; sampleCommand?: string; helperTicks?: { quit: number; exit: number } };
 }
 
@@ -342,6 +347,7 @@ export async function startEngine(opts: EngineOptions): Promise<Engine> {
     sandbox,
     network,
     browser,
+    notifier: opts.notifier,
   });
   await new Promise<void>((resolve, reject) => {
     server.once('error', reject);
@@ -454,6 +460,7 @@ export { Kanban } from './kanban.ts';
 export { openDb } from './store/db.ts';
 export type { SecretStore } from './secrets.ts';
 export type { VoiceHost } from './voice.ts';
+export type { NotifierHost } from './api.ts';
 export type { UpdateHost } from './updater.ts';
 export type { BrowserHost, HostEvent as BrowserHostEvent, HostTab as BrowserHostTab } from './browser.ts';
 export type { VoiceChat } from './voiceChat.ts';
