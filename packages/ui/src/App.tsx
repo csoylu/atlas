@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from 'react';
 import { AgentFace } from './AgentFace.tsx';
 import { Mark } from './Mark.tsx';
-import { cardRef, type SecretStoreStatus, type UpdateStatus, type Doc, type Agent, type Card, type ChatGptStatus, type Inbox as InboxData, type Model, type Settings, type Workflow, type Project } from '@atlas/shared';
+import { cardRef, markdownToPlainText, type SecretStoreStatus, type UpdateStatus, type Doc, type Agent, type Card, type ChatGptStatus, type Inbox as InboxData, type Model, type Settings, type Workflow, type Project } from '@atlas/shared';
 import { api, setViewing, subscribe, type AuthState } from './api.ts';
 import { CheckIcon, RowMenu, useRowMenu } from './RowMenu.tsx';
 import { Board } from './Board.tsx';
@@ -985,7 +985,8 @@ function notify(title: string, body: string, o: { tag?: string; onClick?(): void
   if (typeof Notification === 'undefined') return;
   const show = () => {
     // The same tag in two windows is one notification.
-    const n = new Notification(title, { body, ...(o.tag ? { tag: o.tag } : {}) });
+    // Banners don't render markdown (#363).
+    const n = new Notification(markdownToPlainText(title), { body: markdownToPlainText(body), ...(o.tag ? { tag: o.tag } : {}) });
     if (o.onClick) n.onclick = o.onClick;
   };
   if (Notification.permission === 'granted') show();

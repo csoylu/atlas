@@ -1,4 +1,4 @@
-import { systemTitle, type NotifierStatus, type ServerEvent } from '@atlas/shared';
+import { markdownToPlainText, systemTitle, type NotifierStatus, type ServerEvent } from '@atlas/shared';
 
 /**
  * System notifications from the main process (#350), driven by the engine bus, so they show with the window open, in
@@ -68,7 +68,9 @@ export class DesktopNotifier {
   }
 
   /** Posts it; a failure is logged and kept for Settings, never thrown (it runs from a bus listener). */
-  show(n: Notice): void {
+  show(notice: Notice): void {
+    // Banners don't render markdown: agent text arrives as plain words (#363).
+    const n = { ...notice, title: markdownToPlainText(notice.title), body: markdownToPlainText(notice.body) };
     if (this.o.platform !== 'darwin') {
       this.o.electron(n, { failed: (reason) => this.failed(reason), click: () => n.hash && this.o.open(n.hash) });
       return;
