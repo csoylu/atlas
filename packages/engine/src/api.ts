@@ -43,6 +43,7 @@ import type { Updater } from './updater.ts';
 import type { ShellEnv } from './shellEnv.ts';
 import type { Sandbox } from './sandbox.ts';
 import type { Network } from './network.ts';
+import { FaviconRefused, type Favicons } from './favicons.ts';
 import { BrowserBusyError, type Browser } from './browser.ts';
 import { BrowserInspect, BrowserNav, BrowserOpen, BrowserSetOwner, BrowserView } from '@atlas/shared';
 import { DEFAULT_CONTEXT_WINDOW, MEMORY_BUDGET, MEMORY_BUDGET_GLOBAL, type About, type MemoryBudget, type Timeline } from '@atlas/shared';
@@ -95,6 +96,8 @@ export function createApi(deps: {
   sandbox?: Sandbox;
   /** Internet levels and refusals (#298 S3). */
   network: Network;
+  /** Site icons of web results (#361). */
+  favicons: Favicons;
   /** The shared browser (#298 §3, S6): tabs per chat, the pane's view, input owner. */
   browser: Browser;
   bus: Bus;
@@ -818,6 +821,22 @@ export function createApi(deps: {
     res.sendFile(file, { dotfiles: 'deny' }, (err) => {
       if (err && !res.headersSent) next(err);
     });
+  });
+
+  // A site's icon for web results in the chat (#361), fetched from the site by the engine (favicons.ts). A miss is 404:
+  // the UI keeps the letter. SVG icons are served under a CSP that runs nothing.
+  app.get('/api/favicon', async (req, res) => {
+    const domain = typeof req.query.domain === 'string' ? req.query.domain : '';
+    let icon;
+    try {
+      icon = await deps.favicons.get(domain);
+    } catch (e) {
+      if (e instanceof FaviconRefused) return void res.status(400).json({ error: e.message });
+      throw e;
+    }
+    if (!icon) return void res.status(404).set('Cache-Control', 'max-age=3600').json({ error: `no icon for ${domain}` });
+    res.set({ 'Content-Type': icon.contentType, 'Cache-Control': 'max-age=86400', 'X-Content-Type-Options': 'nosniff', 'Content-Security-Policy': "default-src 'none'" });
+    res.send(icon.bytes);
   });
 
   // Secrets (#206): model keys and agent secrets. Names and metadata only; values go in, never out.

@@ -1,6 +1,6 @@
 import { useState, type ReactNode } from 'react';
 import type { Step } from './chatTurn.ts';
-import { domainLetter, domainOf, fetchedPage, searchHits, type SearchHit } from './webRows.ts';
+import { domainLetter, domainOf, failedIcons, faviconSrc, fetchedPage, searchHits, type SearchHit } from './webRows.ts';
 
 /** Results shown before « Show all N ». */
 const FIRST = 5;
@@ -51,13 +51,11 @@ function SearchResults({ hits }: { hits: SearchHit[] }) {
   );
 }
 
-/** A result: the domain's letter, the title, the URL; a link to the page in the search list. */
+/** A result: the site's icon (else its letter), the title, the URL; a link to the page in the search list. */
 function Hit({ hit, link }: { hit: SearchHit; link?: boolean }) {
   const body = (
     <>
-      <span className="web-fav" aria-hidden="true">
-        {domainLetter(hit.domain)}
-      </span>
+      <Favicon url={hit.url} domain={hit.domain} />
       <span className="web-hit-t">{hit.title}</span>
       <span className="web-hit-u">{hit.url.replace(/^https?:\/\//, '')}</span>
     </>
@@ -68,5 +66,32 @@ function Hit({ hit, link }: { hit: SearchHit; link?: boolean }) {
     </a>
   ) : (
     <div className="web-hit">{body}</div>
+  );
+}
+
+/**
+ * The site's icon (#361) in the 16 px tile: the letter shows until the icon loads, and stays when there is none (the
+ * engine answers 404) or it fails to load. The picture is hidden until loaded, so a broken image never shows.
+ */
+export function Favicon({ url, domain }: { url: string; domain: string }) {
+  const src = faviconSrc(url);
+  const [state, setState] = useState<'loading' | 'loaded' | 'failed'>(() => (src && !failedIcons.has(src) ? 'loading' : 'failed'));
+  return (
+    <span className={state === 'loaded' ? 'web-fav loaded' : 'web-fav'} aria-hidden="true">
+      {state !== 'loaded' && domainLetter(domain)}
+      {src && state !== 'failed' && (
+        <img
+          src={src}
+          alt=""
+          width={16}
+          height={16}
+          onLoad={() => setState('loaded')}
+          onError={() => {
+            failedIcons.add(src);
+            setState('failed');
+          }}
+        />
+      )}
+    </span>
   );
 }
