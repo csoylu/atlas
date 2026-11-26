@@ -10,6 +10,7 @@ export * from './projects.ts';
 export * from './pane.ts';
 export * from './browser.ts';
 export * from './files.ts';
+export * from './plainText.ts';
 import { TaskFile } from './files.ts';
 import type { BrowserTab } from './browser.ts';
 import { PaneSees } from './pane.ts';

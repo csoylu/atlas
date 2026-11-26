@@ -1,6 +1,6 @@
 // The main-process notifier (#350): which events notify, osascript's arguments, failures. No Electron, a fake exec.
 import { describe, expect, it } from 'vitest';
-import type { Notification, ServerEvent } from '@atlas/shared';
+import { markdownToPlainText as plain, type Notification, type ServerEvent } from '@atlas/shared';
 import { DesktopNotifier, noticeOf, osascriptArgs, OSASCRIPT_TIMEOUT_MS, type Exec, type Notice } from './notifier.ts';
 
 const row: Notification = { id: 1, at: '2026-11-23T10:00:00Z', kind: 'card.blocked', title: 'Pick a source', body: '#12 needs you', cardId: 'c1', readAt: null, archivedAt: null, projectId: 'atlas', link: null };
@@ -104,6 +104,50 @@ describe('DesktopNotifier on a Mac: osascript', () => {
     k.n.show({ title: 't', body: 'b' });
     k.calls[1]!.done(Object.assign(new Error('spawn /usr/bin/osascript ENOENT'), { code: 'ENOENT' }), '', '');
     expect(k.n.status().error).toBe('osascript could not run (spawn /usr/bin/osascript ENOENT)');
+  });
+});
+
+describe('plain text in banners (#363)', () => {
+  it('bold, italics, strike and code markers go, the words stay', () => {
+    expect(plain('I created **#362** (mine) for the __fix__, *see* _this_ and ~~not~~ `npm test`')).toBe('I created #362 (mine) for the fix, see this and not npm test');
+    expect(plain('keep snake_case_name and 2*3*4')).toBe('keep snake_case_name and 2*3*4');
+    expect(plain('a `a**b*c` code span')).toBe('a a**b*c code span');
+  });
+
+  it('links become their text, images their alt text', () => {
+    expect(plain('See [PR #144](https://github.com/x/y/pull/144) and ![the board](shots/b.png) or <https://a.io>')).toBe('See PR #144 and the board or https://a.io');
+    expect(plain('![](x.png)Done')).toBe('Done');
+  });
+
+  it('headings, quotes, lists and fences', () => {
+    expect(plain('## Summary\n> quoted line\n\nChanges:\n- one\n* two\n1. three\n\n```ts\nconst x = 1;\n```\nEnd')).toBe('Summary quoted line Changes: one · two · three const x = 1; End');
+  });
+
+  it('a table loses its pipes and separator row', () => {
+    expect(plain('| Task | State |\n|---|:---:|\n| #362 | done |')).toBe('Task · State #362 · done');
+  });
+
+  it('a lone task number stays, whitespace collapses', () => {
+    expect(plain('#362')).toBe('#362');
+    expect(plain('  #362 \n\n  needs   you\t now ')).toBe('#362 needs you now');
+  });
+
+  it('cut at about 180 characters on a word, with « … »', () => {
+    const long = Array.from({ length: 60 }, (_, i) => `word${i}`).join(' ');
+    const out = plain(long);
+    expect(out.length).toBeLessThanOrEqual(180);
+    expect(out.endsWith('…')).toBe(true);
+    expect(long.startsWith(out.slice(0, -1) + ' ')).toBe(true);
+    expect(plain('short')).toBe('short');
+  });
+
+  it('show() posts plain title and body, through osascript and Electron', () => {
+    const mac = kit();
+    mac.n.show({ title: 'munih · **Atlas**', body: 'I created **#362** (mine) for the [fix](https://x.io)' });
+    expect(mac.calls[0]!.args.slice(-2)).toEqual(['munih · Atlas', 'I created #362 (mine) for the fix']);
+    const other = kit('linux');
+    other.n.show({ title: '# Done', body: '- a\n- b', hash: '#/chat/c' });
+    expect(other.posted).toEqual([{ title: 'Done', body: 'a · b', hash: '#/chat/c' }]);
   });
 });
 
