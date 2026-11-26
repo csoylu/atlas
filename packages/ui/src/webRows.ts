@@ -37,6 +37,22 @@ export function domainOf(url: string): string {
 /** The letter in a result's favicon square. */
 export const domainLetter = (domain: string) => (/[a-z0-9]/i.exec(domain)?.[0] ?? '?').toUpperCase();
 
+/**
+ * The site's real icon (#361), served by the engine (it fetches and caches it from the site): the URL's own host name
+ * (www. kept: some sites answer only there). null when the URL has no http(s) host: the letter stays.
+ */
+export function faviconSrc(url: string): string | null {
+  try {
+    const u = new URL(url);
+    return (u.protocol === 'http:' || u.protocol === 'https:') && u.hostname ? `/api/favicon?domain=${encodeURIComponent(u.hostname)}` : null;
+  } catch {
+    return null;
+  }
+}
+
+/** Icons that failed to load in this page: shown as the letter at once, not asked again (#361). */
+export const failedIcons = new Set<string>();
+
 /** webSearchResult's text back into hits. */
 export function searchHits(out: string): SearchHit[] {
   if (out === 'no results') return [];

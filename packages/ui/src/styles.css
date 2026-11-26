@@ -1541,7 +1541,10 @@ a.step-list-row:hover { background: var(--hover); }
 .web-results { display: grid; gap: 1px; max-height: 300px; overflow: auto; }
 .web-hit { display: grid; grid-template-columns: 16px minmax(0, 1fr); gap: 0 8px; padding: 4px 6px; margin: 0 -6px; border-radius: 6px; color: var(--text); text-decoration: none; min-width: 0; }
 a.web-hit:hover { background: var(--hover); }
-.web-fav { grid-row: span 2; width: 16px; height: 16px; margin-top: 2px; border-radius: 4px; background: var(--accent-soft); color: var(--accent); font-size: 10px; /* type-exception: one letter in a 16 px favicon tile, 13 px does not fit */ font-weight: var(--fw-bold); line-height: var(--lh-tight); display: grid; place-items: center; }
+.web-fav { grid-row: span 2; width: 16px; height: 16px; margin-top: 2px; border-radius: 4px; background: var(--accent-soft); color: var(--accent); font-size: 10px; /* type-exception: one letter in a 16 px favicon tile, 13 px does not fit */ font-weight: var(--fw-bold); line-height: var(--lh-tight); display: grid; place-items: center; position: relative; }
+.web-fav img { position: absolute; inset: 0; width: 16px; height: 16px; border-radius: 4px; object-fit: contain; opacity: 0; }
+.web-fav.loaded { background: none; }
+.web-fav.loaded img { opacity: 1; }
 .web-hit-t { min-width: 0; font-weight: var(--fw-medium); font-size: var(--fs-small); overflow-wrap: anywhere; }
 .web-hit-u { min-width: 0; color: var(--faint); font-size: var(--fs-small); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .web-results + .chat-row-open { margin-top: 6px; }

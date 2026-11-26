@@ -44,6 +44,7 @@ import { Projects, ghClone, ghRunner, type CloneRun, type GhRun } from './projec
 import { Stalls } from './stalls.ts';
 import { Sandbox, type SandboxOptions } from './sandbox.ts';
 import { Network, type NetworkOptions } from './network.ts';
+import { Favicons, type FaviconOptions } from './favicons.ts';
 import { ReviewFlow, openReviewRun } from './reviewFlow.ts';
 import { Browser, type BrowserHost } from './browser.ts';
 
@@ -116,6 +117,8 @@ export interface EngineOptions {
   sandbox?: Partial<Pick<SandboxOptions, 'enabled' | 'home' | 'platform' | 'sandboxExec' | 'bwrap' | 'procSys' | 'socat'>>;
   /** The allow-list proxy (#298 S3). Tests: a resolver, local upstreams, the Linux unix socket. */
   network?: NetworkOptions;
+  /** Site icons of web results (#361). Tests: a resolver and a local fake site. */
+  favicons?: FaviconOptions;
   /** Pictures of an area of a page commented on (#304), taken in headless Chrome; false: none (tests), the text says so. */
   pageShots?: false | PageShot;
   /**
@@ -310,6 +313,7 @@ export async function startEngine(opts: EngineOptions): Promise<Engine> {
           return join(o.workdir, shot.file);
         }));
   const server = createApi({
+    favicons: new Favicons(db, opts.favicons),
     pageShot,
     kanban,
     agents,
