@@ -1459,7 +1459,10 @@ export interface UsageCount {
 }
 /** One chat's usage, and how full its context was at the latest answer. */
 export interface ChatUsage extends UsageCount {
+  /** Prompt tokens read from the provider's cache. */
   cached: number;
+  /** Prompt tokens written to it (Anthropic; billed above the input price), part of input too. */
+  cacheWrite: number;
   /** Prompt size of the latest answer; null before the first one. */
   lastInput: number | null;
   lastModelId: string | null;
@@ -1474,7 +1477,7 @@ export interface UsageSummary {
   perDay: { day: string; anthropic: number; chatgpt: number; claude_plan: number; openai_compat: number }[];
   /** Most used first. week = the last 7 days, month = the whole range. */
   models: { modelId: string; provider: Model['provider']; today: UsageCount; week: UsageCount; month: UsageCount }[];
-  total: UsageCount & { cached: number };
+  total: UsageCount & { cached: number; cacheWrite: number };
 }
 
 /* ── ChatGPT plan (design §5: OpenAI's Sign in with ChatGPT for open-source, locally hosted apps) ─────────── */

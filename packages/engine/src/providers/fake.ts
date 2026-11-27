@@ -5,7 +5,8 @@ import type { ModelRequest, ModelResponse, OnDelta, Provider } from './types.ts'
  * Scripted provider for tests: each call gets the next reply (or a function of the request). Usage is reported like a
  * real provider: input = the whole prompt (estimated), cached = the longest prefix an earlier call wrote to the cache,
  * simulating Anthropic's prompt caching (prefix order tools → system → messages; breakpoints only on `cache` requests:
- * after the stable system prefix, and after each of the last two user messages).
+ * after the stable system prefix, and after each of the last two user messages, the last `cache.tail` messages left
+ * out); cacheWrite = the longest prefix this call wrote beyond what it read.
  */
 export class FakeProvider implements Provider {
   calls: ModelRequest[] = [];
@@ -20,7 +21,7 @@ export class FakeProvider implements Provider {
     const step = this.script.shift();
     if (!step) throw new Error('FakeProvider: script exhausted');
     const forced = typeof step === 'function' || Array.isArray(step) ? null : step;
-    const usage = { input: estimateTokens(req.system) + estimateTokens(req.tools) + estimateTokens(req.messages), output: forced?.output ?? 1, cached: this.cached(req) };
+    const usage = { input: estimateTokens(req.system) + estimateTokens(req.tools) + estimateTokens(req.messages), output: forced?.output ?? 1, ...this.cached(req) };
     this.usages.push(usage);
     const content = forced ? forced.content : typeof step === 'function' ? step(req) : (step as ModelResponse['content']);
     for (const b of content) {
@@ -37,14 +38,16 @@ export class FakeProvider implements Provider {
   }
 
   /** Read the longest cached prefix, then write this request's breakpoints. */
-  private cached(req: ModelRequest): number {
-    if (!req.cache) return 0;
+  private cached(req: ModelRequest): { cached: number; cacheWrite: number } {
+    if (!req.cache) return { cached: 0, cacheWrite: 0 };
     const tools = JSON.stringify(req.tools);
     const prefixes = [tools + req.system.slice(0, req.cache.systemStable)];
-    const users = req.messages.flatMap((m, i) => (m.role === 'user' ? [i] : [])).slice(-2);
+    const marked = req.messages.slice(0, req.messages.length - (req.cache.tail ?? 0));
+    const users = marked.flatMap((m, i) => (m.role === 'user' ? [i] : [])).slice(-2);
     for (const i of users) prefixes.push(tools + req.system + JSON.stringify(req.messages.slice(0, i + 1)));
     const hit = prefixes.filter((p) => this.cache.has(p)).reduce((n, p) => Math.max(n, estimateTokens(p)), 0);
+    const longest = prefixes.reduce((n, p) => Math.max(n, estimateTokens(p)), 0);
     for (const p of prefixes) this.cache.add(p);
-    return hit;
+    return { cached: hit, cacheWrite: Math.max(0, longest - hit) };
   }
 }

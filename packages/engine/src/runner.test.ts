@@ -8,7 +8,7 @@ import { startEngine, type Engine } from './index.ts';
 import { FakeProvider } from './providers/fake.ts';
 import { toolInput, type ModelRequest } from './providers/types.ts';
 import { realProviders } from './models.ts';
-import { estimateTokens, INTERRUPTED, serverToolProblem, SUMMARY_LEAD, TODO_LEAD } from './context.ts';
+import { COMPACT_AT, estimateTokens, INTERRUPTED, serverToolProblem, SUMMARY_ASK, SUMMARY_LEAD, TODO_LEAD } from './context.ts';
 import { runCardTool } from './cardTools.ts';
 import { stopNote } from './loopGuard.ts';
 
@@ -341,9 +341,11 @@ describe('context management (design §8)', () => {
     return { ...s, card };
   }
   const sizeOf = (req: ModelRequest) => estimateTokens(req.system) + estimateTokens(req.tools) + estimateTokens(req.messages);
-  /** Summary calls (no tools) get `summary`, agent turns get `answer`. */
+  /** A summary call: the turn's request + the instruction (#376), or the one-shot call on the rendered text (no tools). */
+  const isSummary = (req: ModelRequest) => !req.tools.length || JSON.stringify(req.messages.at(-1)).includes(SUMMARY_ASK);
+  /** Summary calls get `summary`, agent turns get `answer`. */
   const responder = (n: number, summary: string, answer: string) =>
-    Array.from({ length: n }, () => (req: ModelRequest) => text(req.tools.length ? answer : summary));
+    Array.from({ length: n }, () => (req: ModelRequest) => text(isSummary(req) ? summary : answer));
   const conv = (engine: Engine, id: string) =>
     engine.db.prepare('SELECT * FROM conversations WHERE id = ?').get(id) as {
       summary: string | null;
@@ -392,16 +394,27 @@ describe('context management (design §8)', () => {
     engine.runner.wake(card.id);
     await engine.runner.settled(card.id);
 
-    const answers = fake.calls.filter((c) => c.tools.length);
-    const summaries = fake.calls.filter((c) => !c.tools.length);
+    const answers = fake.calls.filter((c) => !isSummary(c));
+    const summaries = fake.calls.filter(isSummary);
     expect(answers).toHaveLength(1);
-    expect(summaries.length).toBeGreaterThanOrEqual(1);
-    expect(summaries[0]!.cache).toBeUndefined(); // one-shot: no cache breakpoints
+    // A view bigger than the window goes as rendered text first (one-shot); once it fits with the summary's room, the
+    // summary call repeats the turn's request (#376: system, tools, view, cache split), plus one instruction.
+    expect(summaries[0]!.cache).toBeUndefined();
     expect((summaries[0]!.messages[0]!.content[0] as { text: string }).text).toContain('build the importer');
+    const sum = summaries.at(-1)!;
+    const view = sum.messages.slice(0, -1);
+    expect(sum.tools.map((t) => t.name)).toEqual(answers[0]!.tools.map((t) => t.name));
+    expect(sum.system).toBe(answers[0]!.system);
+    expect(sum.cache).toEqual({ systemStable: answers[0]!.cache!.systemStable, tail: 1 });
+    expect(sum.maxTokens).toBeLessThanOrEqual(4000);
+    expect((view[0]!.content[0] as { text: string }).text).toContain(SUMMARY_LEAD); // the first round's summary
+    expect(view.at(-1)!.content.at(-1)).toEqual({ type: 'text', text: 'what is left?' });
+    const ask = (sum.messages.at(-1)!.content[0] as { text: string }).text;
+    expect(ask).toMatch(/^\[Atlas: context compaction\] .*Do not call any tool.*every message before the last \d+ of this conversation .*folding the earlier summary/);
     const answer = answers[0]!;
     expect(answer.messages[0]!.content[0]).toEqual({ type: 'text', text: `${SUMMARY_LEAD}\n\nThoughts 0-15 planned the importer.` });
     expect(answer.messages[0]!.content[1]).toEqual({ type: 'text', text: `${TODO_LEAD}\n- [>] parse the CSV` });
-    expect(sizeOf(answer)).toBeLessThanOrEqual(40_000 * 0.7);
+    expect(sizeOf(answer)).toBeLessThanOrEqual(40_000 * COMPACT_AT);
     expect(answer.messages.at(-1)!.content.at(-1)).toEqual({ type: 'text', text: 'what is left?' });
     expect(conv(engine, card.conversationId).summary).toContain('planned the importer');
     expect(engine.runner.runs(card.id)[0]!.status).toBe('done');
@@ -427,7 +440,7 @@ describe('context management (design §8)', () => {
     await engine.runner.settled(card.id);
 
     const answer = fake.calls[1]!;
-    expect(sizeOf(answer)).toBeLessThanOrEqual(40_000 * 0.7);
+    expect(sizeOf(answer)).toBeLessThanOrEqual(40_000 * COMPACT_AT);
     expect(JSON.stringify(answer.messages)).toContain('chars omitted to fit the context');
     expect(answer.messages[0]!.content[0]).toEqual({ type: 'text', text: 'build the importer' });
     expect(engine.runner.runs(card.id)[0]!.status).toBe('done');
@@ -442,7 +455,7 @@ describe('context management (design §8)', () => {
     let turn = 0;
     // #142's shape: tool + search in one answer, the search's result opening the next answer; then 12 big tool rounds.
     const script = Array.from({ length: 30 }, () => (req: ModelRequest) => {
-      if (!req.tools.length) return text('Earlier: searched and ran steps.');
+      if (isSummary(req)) return text('Earlier: searched and ran steps.');
       const n = turn++;
       if (n === 0) return [big(0), search];
       if (n === 1) return [found, { type: 'text' as const, text: 'Ex says hi.' }, big(1)];
@@ -505,16 +518,48 @@ describe('context management (design §8)', () => {
     await engine.runner.settled(card.id);
     expect(fake.calls).toHaveLength(1); // small by estimate: no compaction
 
-    // The provider said the last prompt was 30k tokens (an estimate would say a few thousand): over 70% → compaction.
-    engine.db.prepare('UPDATE conversations SET last_input_tokens = 30000, last_input_upto = 2 WHERE id = ?').run(card.conversationId);
+    // The provider said the last prompt was 33k tokens (an estimate would say a few thousand): over 80% → compaction.
+    engine.db.prepare('UPDATE conversations SET last_input_tokens = 33000, last_input_upto = 2 WHERE id = ?').run(card.conversationId);
     engine.kanban.appendMessage(card.id, 'user', 'user', text('again'));
     engine.runner.wake(card.id);
     await engine.runner.settled(card.id);
-    expect(fake.calls.map((c) => (c.tools.length ? 'turn' : 'summary'))).toEqual(['turn', 'summary', 'turn']);
+    expect(fake.calls.map((c) => (isSummary(c) ? 'summary' : 'turn'))).toEqual(['turn', 'summary', 'turn']);
+    // #376: the summary call is the turn's request + the instruction, so the provider reads the turn's prefix from its
+    // cache (the fake simulates Anthropic's: tools → system → messages up to a breakpoint).
+    const [turn, sum] = [fake.calls[0]!, fake.calls[1]!];
+    expect(sum.system).toBe(turn.system);
+    expect(sum.tools).toEqual(turn.tools);
+    expect(sum.messages.slice(0, 1)).toEqual(turn.messages);
+    expect(sum.messages).toHaveLength(4); // hello, Hi again., again, the instruction
+    expect(fake.usages[1]!.cached).toBeGreaterThanOrEqual(estimateTokens(JSON.stringify(turn.tools) + turn.system + JSON.stringify(turn.messages)));
+    expect(fake.usages[1]!.cached).toBeGreaterThan(fake.usages[1]!.input * 0.9);
+    expect((sum.messages[3]!.content[0] as { text: string }).text).toContain('every message before the last 2 of this conversation (they start with « Hi again. »');
     const c = conv(engine, card.conversationId);
     expect(c.summary).toBe('They said hello.');
     expect(c.last_input_tokens).toBe(fake.usages[2]!.input); // a fresh reading of the new view
     expect(c.last_input_upto).toBe(3);
+  });
+
+  it('a summary call answered with a tool call runs no tool: the one-shot summary (no tools) is asked instead (#376)', async () => {
+    const fake = new FakeProvider([
+      text('Hi.'),
+      [{ type: 'tool_use', id: 'x', name: 'shell', input: { command: 'rm -rf /' } }],
+      text('They said hello.'),
+      text('Hi again.'),
+    ]);
+    const { engine } = await setup(fake);
+    engine.models.update(engine.agents.get('atlas').modelId, { contextWindow: 40_000 });
+    const card = engine.kanban.create({ title: 'Small', assignee: 'atlas' }, 'user');
+    engine.kanban.appendMessage(card.id, 'user', 'user', text('hello'));
+    engine.runner.wake(card.id);
+    await engine.runner.settled(card.id);
+    engine.db.prepare('UPDATE conversations SET last_input_tokens = 33000, last_input_upto = 2 WHERE id = ?').run(card.conversationId);
+    engine.kanban.appendMessage(card.id, 'user', 'user', text('again'));
+    engine.runner.wake(card.id);
+    await engine.runner.settled(card.id);
+    expect(fake.calls.map((c) => (!c.tools.length ? 'one-shot' : isSummary(c) ? 'summary' : 'turn'))).toEqual(['turn', 'summary', 'one-shot', 'turn']);
+    expect(engine.db.prepare("SELECT COUNT(*) AS n FROM tool_calls").get()).toEqual({ n: 0 });
+    expect(conv(engine, card.conversationId).summary).toBe('They said hello.');
   });
 
   it('splits the system prompt into a cached stable prefix and a volatile tail', async () => {

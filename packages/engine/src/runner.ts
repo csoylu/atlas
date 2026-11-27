@@ -11,8 +11,22 @@ import type { Agents } from './agents.ts';
 import type { Models } from './models.ts';
 import type { Usage } from './usage.ts';
 import { invalidToolInput, ModelError, OUTPUT_LIMIT, type ModelRequest, type Provider, type ToolSpec } from './providers/types.ts';
+
+/**
+ * A turn's request without its messages, and how its view becomes the messages sent (pictures read from their files).
+ * The summary call sends the same (#376), so the provider reads the turn's prefix from its cache.
+ */
+interface TurnShape {
+  system: { text: string; stable: number };
+  tools: ToolSpec[];
+  webSearch: boolean;
+  effort?: ModelRequest['effort'];
+  wire: (view: ModelRequest['messages']) => Promise<ModelRequest['messages']>;
+  /** Tokens added to the view outside the transcript (the task's images). */
+  extra: number;
+}
 import {
-  COMPACT_AT,
+  compactBudget,
   COMPACT_TO,
   compactedView,
   degrade,
@@ -24,8 +38,13 @@ import {
   pickPrune,
   PRUNE_MIN,
   PRUNE_TAIL,
+  opening,
   renderForSummary,
   serverToolProblem,
+  SUMMARY_GUIDE,
+  SUMMARY_MAX_TOKENS,
+  SUMMARY_ROOM,
+  summaryAsk,
   type Reading,
 } from './context.ts';
 import { runTool, toolSpecs } from './tools.ts';
@@ -316,13 +335,23 @@ export class Runner {
       const last = upto(transcript);
       const signal = AbortSignal.timeout(COMPACT_TIMEOUT_MS);
       let summary = conv.summary ?? '';
+      // The view the agent's next turn would send, repeated with the instruction (#376: read from the cache) when it fits
+      // the window with the summary's room; else the rendered text, in chunks.
+      const agent = this.agents.get(card.assignee);
+      const workdir = workspaceOf(this.db, this.opts.dataDir, agent.id, card.projectId);
+      const lastKind = this.db.prepare('SELECT kind FROM runs WHERE card_id = ? ORDER BY started_at DESC LIMIT 1').get(cardId) as { kind: RunKind } | undefined;
+      const shape = this.turnShape(agent, card, lastKind?.kind ?? (card.board === 'direct' ? 'chat' : 'work'), workdir, this.toolsFor(card, agent.id));
+      const view = compactedView(transcript, conv.summary, conv.uptoSeq, conv.pruneUpto, conv.todos, agent.id);
+      const size = measuredSize(conv.reading, transcript) ?? estimateTokens(shape.system.text) + estimateTokens(shape.tools) + shape.extra + estimateTokens(view);
+      let inView = size + SUMMARY_ROOM <= model.contextWindow ? { shape, view, kept: [] } : undefined;
       for (let round = 0; restOf().length; round++) {
         if (round >= 8) throw new ModelError('compaction needed more than 8 summary calls: the conversation is too big for this model');
         const rest = restOf();
         const room = Math.floor(model.contextWindow * 0.5) - estimateTokens(conv.summary ?? '') - 1000;
         // Everything left fits in one call: fold it all; else the biggest chunk that does (a cut never splits a tool call).
-        const cut = estimateTokens(renderForSummary(rest)) <= room ? last : (pickCut(rest, 0, room) ?? last);
-        summary = await this.summarize(model, provider, conv.summary, rest.filter((m) => m.seq <= cut), signal, card, focus);
+        const cut = inView || estimateTokens(renderForSummary(rest)) <= room ? last : (pickCut(rest, 0, room) ?? last);
+        summary = await this.summarize(model, provider, conv.summary, rest.filter((m) => m.seq <= cut), signal, card, { ...(focus ? { focus } : {}), ...(inView ? { inView } : {}) });
+        inView = undefined;
         this.db.transaction(() => {
           this.db
             .prepare('UPDATE conversations SET summary = ?, summary_upto_seq = ?, last_input_tokens = NULL, last_input_upto = NULL, memory_snapshot = NULL WHERE id = ?')
@@ -623,16 +652,7 @@ export class Runner {
       const workdir = workspaceOf(this.db, this.opts.dataDir, agent.id, first.projectId);
       mkdirSync(workdir, { recursive: true });
       const cleanup = this.opts.cleanup && isCleanupCard(first) ? this.opts.cleanup : null;
-      const tools = [
-        ...toolSpecs(),
-        ...cardToolSpecs(),
-        ...teamToolSpecs(),
-        ...(this.opts.documents ? docToolSpecs() : []),
-        ...(cleanup ? cleanupToolSpecs() : []),
-        ...(this.opts.secrets ? secretToolSpecs() : []),
-        ...prToolSpecs(first, agent.id),
-        ...(this.browserOn() ? browserToolSpecs() : []),
-      ];
+      const tools = this.toolsFor(first, agent.id);
       // Documents: a direct chat's panel is its own; a card's is the chat it was created from. Work is attached to its card.
       const panelChat = first.board === 'direct' ? first.id : first.originCard;
       const workCard = first.board === 'direct' ? null : first.id;
@@ -668,14 +688,9 @@ export class Runner {
           if (this.transcript(card).length !== before) transcript = this.transcript(card);
         }
         const seen = upto(transcript);
-        const system = this.systemPrompt(agent, card, kind, workdir);
-        // The task's own images (#119) open the view: not in the transcript, so they follow the task's current list.
-        const taskBlocks = card.board === 'direct' ? [] : taskImageBlocks(card, workdir);
-        const { view, exact } = await this.contextFor(card, agent.id, transcript, model, provider, system.text, tools, signal, estimateTokens(taskBlocks));
-        // The newest pictures carry their bytes (read from their files now); older ones go as a text line.
-        // The task's pictures always go, whatever the number of newer ones (they open the view, the oldest place).
-        const pinned = new Set(taskBlocks.filter((b): b is ImageBlock => b.type === 'image'));
-        const wire = await withPictures(withTaskImages(view, taskBlocks), IMAGE_KEEP, pinned);
+        const shape = this.turnShape(agent, card, kind, workdir, tools);
+        const { view, exact } = await this.contextFor(card, agent.id, transcript, model, provider, shape, signal);
+        const wire = await shape.wire(view);
         // A history the API would refuse fails the same way on every retry: stop with where it is (rule 3, #144).
         const unsendable = serverToolProblem(wire);
         if (unsendable) throw new ModelError(`the conversation's history can't be sent: ${unsendable}`);
@@ -684,13 +699,12 @@ export class Runner {
           {
             model: model.name,
             maxTokens: model.maxTokens,
-            system: system.text,
+            system: shape.system.text,
             messages: wire,
             tools,
-            // Off: no web search either (#298 §2.3); it runs at the provider, so it is simply not offered.
-            webSearch: this.opts.sandbox?.network?.setting(card.projectId, agent.id).level !== 'off',
-            cache: { systemStable: system.stable },
-            ...(card.effort ? { effort: card.effort } : {}),
+            webSearch: shape.webSearch,
+            cache: { systemStable: shape.system.stable },
+            ...(shape.effort ? { effort: shape.effort } : {}),
           },
           (text, kind) => this.bus.emit({ type: kind === 'thinking' ? 'run.thinking' : 'run.delta', runId, conversationId: card.conversationId, text }),
           signal,
@@ -907,10 +921,42 @@ export class Runner {
     }
   }
 
+  /** The tools an agent's turns on this card offer (fixed for a run: the summary call offers the same, #376). */
+  private toolsFor(card: Card, agentId: string): ToolSpec[] {
+    return [
+      ...toolSpecs(),
+      ...cardToolSpecs(),
+      ...teamToolSpecs(),
+      ...(this.opts.documents ? docToolSpecs() : []),
+      ...(this.opts.cleanup && isCleanupCard(card) ? cleanupToolSpecs() : []),
+      ...(this.opts.secrets ? secretToolSpecs() : []),
+      ...prToolSpecs(card, agentId),
+      ...(this.browserOn() ? browserToolSpecs() : []),
+    ];
+  }
+
+  /** The request of a turn of `agent` on `card`, minus its messages (TurnShape). */
+  private turnShape(agent: Agent, card: Card, kind: RunKind, workdir: string, tools: ToolSpec[]): TurnShape {
+    // The task's own images (#119) open the view: not in the transcript, so they follow the task's current list.
+    const taskBlocks = card.board === 'direct' ? [] : taskImageBlocks(card, workdir);
+    // The newest pictures carry their bytes (read from their files now); older ones go as a text line.
+    // The task's pictures always go, whatever the number of newer ones (they open the view, the oldest place).
+    const pinned = new Set(taskBlocks.filter((b): b is ImageBlock => b.type === 'image'));
+    return {
+      system: this.systemPrompt(agent, card, kind, workdir),
+      tools,
+      // Off: no web search either (#298 §2.3); it runs at the provider, so it is simply not offered.
+      webSearch: this.opts.sandbox?.network?.setting(card.projectId, agent.id).level !== 'off',
+      ...(card.effort ? { effort: card.effort } : {}),
+      wire: (view) => withPictures(withTaskImages(view, taskBlocks), IMAGE_KEEP, pinned),
+      extra: estimateTokens(taskBlocks),
+    };
+  }
+
   /**
    * The view sent to the model (design §8): summary + recent messages, the older ones pruned. Its size is the provider's
-   * real count of the last turn plus an estimate of the messages since (chars/4 without a reading). Past COMPACT_AT of
-   * the context window: first old tool outputs are pruned (no model call), and only if that doesn't bring the view
+   * real count of the last turn plus an estimate of the messages since (chars/4 without a reading). Past its budget
+   * (compactBudget: COMPACT_AT of the window, room kept for the answer): first old tool outputs are pruned (no model call), and only if that doesn't bring the view
    * under COMPACT_TO are the oldest messages folded into the conversation's summary with a call to the same model (a
    * few rounds at most, each leaving about half the budget free so it doesn't happen every turn). If that fails, the
    * view is degraded (old tool outputs first) and the summary is retried at the next turn. The stored transcript never
@@ -923,15 +969,12 @@ export class Runner {
     transcript: ReturnType<Runner['transcript']>,
     model: Model,
     provider: Provider,
-    system: string,
-    tools: ToolSpec[],
+    shape: TurnShape,
     signal: AbortSignal,
-    /** Tokens added to the view outside the transcript (the task's images). */
-    extra = 0,
   ): Promise<{ view: ModelRequest['messages']; exact: boolean }> {
     const window = model.contextWindow;
-    const overhead = estimateTokens(system) + estimateTokens(tools) + extra;
-    const budget = Math.floor(window * COMPACT_AT);
+    const overhead = estimateTokens(shape.system.text) + estimateTokens(shape.tools) + shape.extra;
+    const budget = compactBudget(model);
     let conv = this.conversation(card);
     // Another agent's turns in this thread are shown as theirs, not as the running agent's own (#221); the thread's todo
     // list is its assignee's.
@@ -968,7 +1011,9 @@ export class Runner {
       const cut = pickCut(rest, Math.floor((budget - overhead) / 2), room);
       if (cut == null) break;
       try {
-        const summary = await this.summarize(model, provider, conv.summary, rest.filter((m) => m.seq <= cut), signal, card);
+        // The turn's own request + the instruction when it fits (read from the cache, #376), else the rendered text.
+        const inView = size + SUMMARY_ROOM <= window ? { shape, view, kept: compactedView(rest.filter((m) => m.seq > cut), null, null, conv.pruneUpto, null, self) } : undefined;
+        const summary = await this.summarize(model, provider, conv.summary, rest.filter((m) => m.seq <= cut), signal, card, { inView });
         this.db
           .prepare('UPDATE conversations SET summary = ?, summary_upto_seq = ?, last_input_tokens = NULL, last_input_upto = NULL, memory_snapshot = NULL WHERE id = ?')
           .run(summary, cut, card.conversationId);
@@ -1050,7 +1095,13 @@ export class Runner {
       });
   }
 
-  /** Fold `messages` into the previous summary, with the agent's own model. */
+  /**
+   * Fold `messages` into the previous summary, with the agent's own model, in at most SUMMARY_MAX_TOKENS.
+   * `inView` (#376): the call repeats the turn's request (same system, tools, view, web search and effort: the provider
+   * reads it all from its cache) with one more user message, summaryAsk; `kept` = the view of the messages after the cut
+   * (they stay). No tool_choice (a change of it voids the cached messages): a tool call in the answer is not run, only
+   * its text is kept (no text: the one-shot call below instead). Without `inView`: a one-shot call on the rendered text of `messages` (a view too big to repeat).
+   */
   private async summarize(
     model: Model,
     provider: Provider,
@@ -1058,26 +1109,37 @@ export class Runner {
     messages: ReturnType<Runner['transcript']>,
     signal: AbortSignal,
     card: Card,
-    focus?: string,
+    opts: { focus?: string; inView?: { shape: TurnShape; view: ModelRequest['messages']; kept: ModelRequest['messages'] } } = {},
   ): Promise<string> {
-    const body =
-      (previous ? `Summary so far:\n${previous}\n\nNext part of the conversation, to fold into it:\n\n` : 'Conversation:\n\n') +
-      renderForSummary(messages) +
-      (focus ? `\n\nThe user asked for this summary (/compact) with this focus: ${focus}` : '') +
-      '\n\nWrite the updated summary.';
-    const res = await provider.complete(
-      {
+    const { focus, inView } = opts;
+    const maxTokens = Math.min(model.maxTokens, SUMMARY_MAX_TOKENS);
+    let req: ModelRequest;
+    if (inView) {
+      const { shape, view, kept } = inView;
+      const ask = summaryAsk({ previous: !!previous, kept: kept.length, first: opening(kept[0]), ...(focus ? { focus } : {}) });
+      req = {
         model: model.name,
-        maxTokens: Math.min(model.maxTokens, 4000),
-        system: SUMMARY_SYSTEM,
-        messages: [{ role: 'user', content: [{ type: 'text', text: body }] }],
-        tools: [],
-      },
-      () => {},
-      signal,
-    );
+        maxTokens,
+        system: shape.system.text,
+        messages: [...(await shape.wire(view)), { role: 'user', content: [{ type: 'text', text: ask }] }],
+        tools: shape.tools,
+        webSearch: shape.webSearch,
+        cache: { systemStable: shape.system.stable, tail: 1 },
+        ...(shape.effort ? { effort: shape.effort } : {}),
+      };
+    } else {
+      const body =
+        (previous ? `Summary so far:\n${previous}\n\nNext part of the conversation, to fold into it:\n\n` : 'Conversation:\n\n') +
+        renderForSummary(messages) +
+        (focus ? `\n\nThe user asked for this summary (/compact) with this focus: ${focus}` : '') +
+        '\n\nWrite the updated summary.';
+      req = { model: model.name, maxTokens, system: SUMMARY_SYSTEM, messages: [{ role: 'user', content: [{ type: 'text', text: body }] }], tools: [] };
+    }
+    const res = await provider.complete(req, () => {}, signal);
     this.opts.usage?.record({ model, agentId: card.assignee, cardId: card.id, conversationId: card.conversationId, kind: 'summary', usage: res.usage, accountId: res.account });
     const text = res.content.flatMap((b) => (b.type === 'text' ? [b.text] : [])).join('\n').trim();
+    // A model that called a tool instead of writing: once more as the one-shot call, which offers none.
+    if (!text && inView && res.content.some((b) => b.type === 'tool_use')) return this.summarize(model, provider, previous, messages, signal, card, focus ? { focus } : {});
     if (!text) throw new ModelError(`model ${model.id} returned no summary text (stop: ${res.stopReason})`);
     return text;
   }
@@ -1388,10 +1450,8 @@ const COMPACT_TIMEOUT_MS = 5 * 60_000;
 
 const SUMMARY_SYSTEM = [
   "You compress an agent's working conversation so the agent can continue it with less context.",
-  'Write what the agent needs to carry on: the goal; what the user asked and decided (their exact words where they matter);',
-  'what was done (files, commands, results, task and artifact ids); what was learned; errors and how they were fixed;',
-  'what remains. Keep identifiers, paths, numbers and URLs exact. Plain text, no preamble.',
-  'Several agents can write in one thread (a builder and its reviewer): say which agent (the name before each message) did what.',
+  SUMMARY_GUIDE,
+  'The name before each message is who wrote it.',
 ].join(' ');
 
 /** Full outputs older than this are deleted at start. */

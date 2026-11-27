@@ -83,7 +83,7 @@ export class AnthropicProvider implements Provider {
           // Stable prefix is cached (design §5).
           system: [...(this.systemPrefix ? [{ type: 'text' as const, text: this.systemPrefix }] : []), ...systemBlocks(req)],
           // The history too: breakpoints at its end (withCacheBreakpoints).
-          messages: (req.cache ? withCacheBreakpoints(this.wire(req.messages)) : this.wire(req.messages)) as Anthropic.MessageParam[],
+          messages: (req.cache ? withCacheBreakpoints(this.wire(req.messages), req.cache.tail) : this.wire(req.messages)) as Anthropic.MessageParam[],
           tools: [...(req.tools as Anthropic.ToolUnion[]), ...(req.webSearch && this.webSearch ? [WEB_SEARCH] : [])],
           ...(req.effort ? { output_config: { effort: req.effort } } : {}),
           // Newer models think adaptively but omit the thinking text by default: ask for the summary so the user sees it.
@@ -144,6 +144,7 @@ export class AnthropicProvider implements Provider {
           input: usage.input_tokens + (usage.cache_read_input_tokens ?? 0) + (usage.cache_creation_input_tokens ?? 0),
           output: usage.output_tokens,
           cached: usage.cache_read_input_tokens ?? 0,
+          cacheWrite: usage.cache_creation_input_tokens ?? 0,
         },
       };
     } catch (e) {
@@ -213,6 +214,13 @@ function isAnthropicApi(baseURL: string | undefined): boolean {
   }
 }
 
+/**
+ * Every breakpoint lives an hour (#376): an agent often waits more than 5 minutes between turns (the user answers
+ * later, a task waits), and with the default 5-minute life the next turn paid the whole history again. A 1-hour write
+ * costs 2x the input price (5 minutes: 1.25x), a read 0.1x either way.
+ */
+export const CACHE_CONTROL = { type: 'ephemeral', ttl: '1h' } as const;
+
 /** Anthropic's server-side web search (API key and Claude plan): runs at Anthropic, results come back in the answer. */
 export const WEB_SEARCH = { type: 'web_search_20250305', name: 'web_search', max_uses: 5 } as const;
 
@@ -226,7 +234,7 @@ export function systemBlocks(req: Pick<ModelRequest, 'system' | 'cache'>): Anthr
   const tail = req.system.slice(stable.length);
   if (!req.cache || !stable.trim()) return [{ type: 'text', text: req.system }];
   return [
-    { type: 'text', text: stable, cache_control: { type: 'ephemeral' } },
+    { type: 'text', text: stable, cache_control: CACHE_CONTROL },
     ...(tail.trim() ? [{ type: 'text' as const, text: tail }] : []),
   ];
 }
@@ -238,17 +246,18 @@ export function systemBlocks(req: Pick<ModelRequest, 'system' | 'cache'>): Anthr
  * call) and the user message before it (where the previous call wrote, so this call hits it exactly even when the
  * new turn has more blocks than the API's 20-block lookback). With the system one, 3 of the 4 allowed. Returns copies:
  * the caller's messages are never touched. Only user messages are marked: their blocks are text or tool_result, never
- * thinking (which can't carry cache_control).
+ * thinking (which can't carry cache_control). The last `tail` messages get none (the summary call's instruction: the
+ * marks stay on the view's own messages, where the turns wrote and read).
  */
-export function withCacheBreakpoints(messages: ModelRequest['messages']): unknown[] {
+export function withCacheBreakpoints(messages: ModelRequest['messages'], tail = 0): unknown[] {
   const out: unknown[] = messages.map((m) => m);
   let marked = 0;
-  for (let i = messages.length - 1; i >= 0 && marked < 2; i--) {
+  for (let i = messages.length - 1 - tail; i >= 0 && marked < 2; i--) {
     const m = messages[i]!;
     if (m.role !== 'user' || m.content.length === 0) continue;
     const last = m.content.at(-1)!;
     if (last.type === 'text' && !last.text) continue; // empty text blocks can't be cached
-    out[i] = { role: m.role, content: [...m.content.slice(0, -1), { ...last, cache_control: { type: 'ephemeral' } }] };
+    out[i] = { role: m.role, content: [...m.content.slice(0, -1), { ...last, cache_control: CACHE_CONTROL }] };
     marked++;
   }
   return out;

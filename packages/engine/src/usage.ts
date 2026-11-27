@@ -20,24 +20,24 @@ export class Usage {
     cardId: string | null;
     conversationId: string | null;
     kind: 'turn' | 'summary' | 'title' | 'review';
-    usage: { input: number; output: number; cached?: number };
+    usage: { input: number; output: number; cached?: number; cacheWrite?: number };
     /** The plan subscription that answered, if any. */
     accountId?: string | null;
   }): void {
     this.db
       .prepare(
-        `INSERT INTO model_usage (at, model_id, provider, agent_id, card_id, conversation_id, kind, input, output, cached, account_id)
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+        `INSERT INTO model_usage (at, model_id, provider, agent_id, card_id, conversation_id, kind, input, output, cached, cache_write, account_id)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
       )
-      .run(this.now().toISOString(), u.model.id, u.model.provider, u.agentId, u.cardId, u.conversationId, u.kind, u.usage.input, u.usage.output, u.usage.cached ?? 0, u.accountId ?? null);
+      .run(this.now().toISOString(), u.model.id, u.model.provider, u.agentId, u.cardId, u.conversationId, u.kind, u.usage.input, u.usage.output, u.usage.cached ?? 0, u.usage.cacheWrite ?? 0, u.accountId ?? null);
     this.bus.emit({ type: 'usage.recorded', conversationId: u.conversationId, cardId: u.cardId });
   }
 
   /** One conversation: totals, and the prompt size of its latest answer (how full the context was then). */
   conversation(conversationId: string): Omit<ChatUsage, 'contextWindow' | 'plan'> & { lastAccountId: string | null } {
     const t = this.db
-      .prepare('SELECT COUNT(*) AS calls, COALESCE(SUM(input), 0) AS input, COALESCE(SUM(output), 0) AS output, COALESCE(SUM(cached), 0) AS cached FROM model_usage WHERE conversation_id = ?')
-      .get(conversationId) as { calls: number; input: number; output: number; cached: number };
+      .prepare('SELECT COUNT(*) AS calls, COALESCE(SUM(input), 0) AS input, COALESCE(SUM(output), 0) AS output, COALESCE(SUM(cached), 0) AS cached, COALESCE(SUM(cache_write), 0) AS cacheWrite FROM model_usage WHERE conversation_id = ?')
+      .get(conversationId) as { calls: number; input: number; output: number; cached: number; cacheWrite: number };
     const last = this.db
       .prepare("SELECT input, model_id, account_id FROM model_usage WHERE conversation_id = ? AND kind = 'turn' ORDER BY id DESC LIMIT 1")
       .get(conversationId) as { input: number; model_id: string; account_id: string | null } | undefined;
@@ -50,16 +50,16 @@ export class Usage {
     const from = this.day(new Date(this.now().getTime() - (days - 1) * 86_400_000));
     const rows = this.db
       .prepare(
-        `SELECT date(at, 'localtime') AS day, model_id, provider, COUNT(*) AS calls, SUM(input) AS input, SUM(output) AS output, SUM(cached) AS cached
+        `SELECT date(at, 'localtime') AS day, model_id, provider, COUNT(*) AS calls, SUM(input) AS input, SUM(output) AS output, SUM(cached) AS cached, SUM(cache_write) AS cache_write
          FROM model_usage WHERE date(at, 'localtime') >= ? GROUP BY day, model_id, provider`,
       )
-      .all(from) as { day: string; model_id: string; provider: string; calls: number; input: number; output: number; cached: number }[];
+      .all(from) as { day: string; model_id: string; provider: string; calls: number; input: number; output: number; cached: number; cache_write: number }[];
     const dayList: string[] = [];
     for (let i = days - 1; i >= 0; i--) dayList.push(this.day(new Date(this.now().getTime() - i * 86_400_000)));
     const byDay = new Map(dayList.map((d) => [d, { day: d, anthropic: 0, chatgpt: 0, claude_plan: 0, openai_compat: 0 }]));
     const models = new Map<string, UsageSummary['models'][number]>();
     const zero = () => ({ calls: 0, input: 0, output: 0 });
-    const total = { ...zero(), cached: 0 };
+    const total = { ...zero(), cached: 0, cacheWrite: 0 };
     const weekFrom = this.day(new Date(this.now().getTime() - 6 * 86_400_000));
     for (const r of rows) {
       const d = byDay.get(r.day);
@@ -78,6 +78,7 @@ export class Usage {
       total.input += r.input;
       total.output += r.output;
       total.cached += r.cached;
+      total.cacheWrite += r.cache_write;
     }
     return { days, perDay: [...byDay.values()], models: [...models.values()].sort((a, b) => b.month.input + b.month.output - (a.month.input + a.month.output)), total };
   }

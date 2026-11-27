@@ -203,7 +203,7 @@ function ModelRow(props: { model: Model; keyStore: string | null; stored: boolea
             <input value={draft.name} onChange={(e) => setDraft({ ...draft, name: e.target.value })} placeholder="model name" />
             {m.provider === 'openai_compat' && <input value={draft.baseUrl} onChange={(e) => setDraft({ ...draft, baseUrl: e.target.value })} placeholder="http://127.0.0.1:11434/v1" />}
             {m.provider !== 'claude_plan' && m.provider !== 'chatgpt' && <input value={draft.credentialEnv} onChange={(e) => setDraft({ ...draft, credentialEnv: e.target.value.toUpperCase() })} placeholder="KEY_ENV_VAR (optional)" />}
-            <label className="ctx-input" title="Tokens the model can read at once. Atlas summarizes older messages past 70 % of it. Test detects it for Ollama and llama.cpp.">
+            <label className="ctx-input" title="Tokens the model can read at once. Atlas summarizes older messages past 80 % of it. Test detects it for Ollama and llama.cpp.">
               <input type="number" min={2048} step={1024} value={draft.contextWindow} onChange={(e) => setDraft({ ...draft, contextWindow: e.target.value })} aria-invalid={!ctxValid} />
               <span className="muted">context tokens</span>
             </label>
@@ -220,7 +220,7 @@ function ModelRow(props: { model: Model; keyStore: string | null; stored: boolea
                 {m.credentialEnv} {m.credentialPresent ? 'set' : 'missing'}
               </span>
             )}
-            <span className="muted" title="Context window: older messages are summarized past 70 % of it">{tokens(m.contextWindow)} context</span>
+            <span className="muted" title="Context window: older messages are summarized past 80 % of it">{tokens(m.contextWindow)} context</span>
             <span className="muted">checked {ago(m.verifiedAt)}</span>
           </div>
         )}

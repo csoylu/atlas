@@ -205,9 +205,9 @@ works with the window closed and, later, on the VPS for that machine's models.
   wrapper in `Models.provider()` starts the server if it's down; with autostart off the call fails with that reason.
 - Downloads by library name (`qwen3:8b`) stream progress over the WebSocket (`local.pull`, summed over layers).
 - **Usage** (10 Nov 2026; `engine/src/usage.ts`, migration 0014): every model call is a `model_usage` row (model,
-  source, agent, card, conversation, tokens in/out/cached; no foreign keys so totals outlive deletions). `input` is the
+  source, agent, card, conversation, tokens in/out/cached, cache writes since #376 (`cache_write`); no foreign keys so totals outlive deletions). `input` is the
   whole prompt: Anthropic's uncached `input_tokens` + cache reads + cache writes. Chat screens show, above the
-  composer, the context fill at the latest answer (prompt / model window; amber past 50 %, red past the 70 %
+  composer, the context fill at the latest answer (prompt / model window; amber past 50 %, red past the 80 %
   compaction point) and the chat's tokens, plus « Using ChatGPT plan · Manage usage » on the plan. The Models page
   starts with « Usage »: 30-day totals, tokens per day stacked by source, per-model today/7/30 days. Tokens only, no
   cost (no price table to keep right); ChatGPT plan quota stays in ChatGPT settings (OpenAI exposes no figure).
@@ -337,13 +337,14 @@ Statuses: `triage → todo → ready → running → (blocked | review) → done
   for free: whatever runs there sees the others as named context.
 - The full transcript is never deleted. What's sent to the model is a **view**: system prompt + memory + card + the
   conversation summary (if any) + the most recent messages that fit.
-- Compaction when the view passes 70 % of the context window: a summary call over the oldest part, stored in
+- Compaction when the view passes 80 % of the context window (70 % before #376; less when the model's answer size
+  (`maxTokens`) or a summary call's 5k would not fit after it: `compactBudget`, never under 50 %): a summary call over the oldest part, stored in
   `conversations.summary` with `summary_upto_seq`. If the summary call fails: drop the oldest tool **outputs** first
   (replace with « output omitted, n chars, see tool_call #id »), then older assistant text; never drop user messages
   or the card. Retry the summary on the next turn.
 - Built 12 Nov 2026 (card #31): the size is the provider's real input count of the last turn (`last_input_tokens`,
   `last_input_upto`) + chars/4 of only the messages since; chars/4 alone when there's no reading (new conversation,
-  view just changed). Past 70 % the runner first **prunes** (no model call): outside a protected tail of 25 % of the
+  view just changed). Past it the runner first **prunes** (no model call): outside a protected tail of 25 % of the
   window, big tool outputs/inputs become « omitted … history_search can read it (seq n) » stubs and identical outputs
   are deduped (`prune_upto_seq`, view only). A prune breaks the prompt cache, so it happens only if it reclaims ≥ 5 % of
   the window; if the view is then under 50 % no summary is made, else the summary runs as above.
@@ -355,7 +356,12 @@ Statuses: `triage → todo → ready → running → (blocked | review) → done
   block (rule 3) instead of a 400 on every retry.
 - Prompt caching (Anthropic): the system prompt is a stable prefix (role, rules, workspace, team, project files) with a
   breakpoint, then a volatile tail (memory, card, date); breakpoints on the last two user messages too (3 of 4). None
-  on one-shot calls (title, summary, model test).
+  on one-shot calls (title, model test). Every breakpoint has a 1-hour TTL (#376: agents often wait longer than
+  5 minutes between turns; a 1h write costs 2x input, a read 0.1x). The summary call repeats the turn's request (same
+  system, tools, view, web search, effort; no tool_choice, whose change would void the cached messages) plus one last
+  user message asking for the summary of the messages before the cut (and the earlier summary), so the provider reads
+  the turn's prefix from its cache; a tool call in its answer is not run. A view too big for that (it plus 5k over
+  the window) goes as rendered text in a one-shot call, as before.
 - `todo_write(todos)`: the agent's full todo list each call, stored on the conversation; when its last call is folded
   into the summary, the current list is re-injected after the summary. The UI shows the call as a checklist.
 - A tool `history_search(query)` lets the agent read omitted parts of its own transcript.
@@ -926,7 +932,7 @@ These override the sections above where they differ.
 - **Context management** (built in step 8): each model has a `context_window` (default 200k Anthropic, 32k local;
   a model test reads the real value from Ollama `/api/ps` or llama.cpp `/props`, since local servers run far below
   the model's maximum and Ollama silently cuts prompts that overflow). Token counts are estimated (~4 chars/token).
-  Past 70 % the runner folds the oldest messages into `conversations.summary` with the agent's own model, cutting only
+  Past 80 % (#376) the runner folds the oldest messages into `conversations.summary` with the agent's own model, cutting only
   before an assistant message so tool calls and results stay paired, folding enough to leave about half the budget
   free, a bounded chunk per call. If the summary call fails, the view drops old tool outputs, then old tool inputs,
   then old assistant text, never the user's words or the newest two turns, and the summary is retried at the next turn

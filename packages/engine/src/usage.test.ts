@@ -23,7 +23,7 @@ describe('token usage', () => {
     const provider: Provider = {
       complete: async () => {
         n++;
-        return { content: [{ type: 'text', text: 'ok ' + n }], stopReason: 'end_turn', usage: { input: 40_000 * n, output: 500, cached: 30_000 } };
+        return { content: [{ type: 'text', text: 'ok ' + n }], stopReason: 'end_turn', usage: { input: 40_000 * n, output: 500, cached: 30_000, cacheWrite: 2_000 } };
       },
     };
     engine = await startEngine({ dbFile: ':memory:', dataDir: mkdtempSync(join(tmpdir(), 'atlas-')), port: 0, providers: () => provider });
@@ -38,13 +38,13 @@ describe('token usage', () => {
     }
     const used = (await (await fetch(u + `/cards/${chat.id}/usage`)).json()) as ChatUsage;
     const agentModel = engine.models.get(engine.agents.get('atlas').modelId);
-    expect(used).toMatchObject({ calls: 2, input: 120_000, output: 1000, cached: 60_000, lastInput: 80_000, lastModelId: agentModel.id, contextWindow: agentModel.contextWindow });
+    expect(used).toMatchObject({ calls: 2, input: 120_000, output: 1000, cached: 60_000, cacheWrite: 4_000, lastInput: 80_000, lastModelId: agentModel.id, contextWindow: agentModel.contextWindow });
 
     const s = (await (await fetch(u + '/usage?days=7')).json()) as UsageSummary;
     expect(s.perDay).toHaveLength(7);
     expect(s.perDay.at(-1)![agentModel.provider as 'anthropic']).toBe(121_000);
     expect(s.models).toEqual([expect.objectContaining({ modelId: agentModel.id, today: { calls: 2, input: 120_000, output: 1000 } })]);
-    expect(s.total).toMatchObject({ calls: 2, input: 120_000, output: 1000, cached: 60_000 });
+    expect(s.total).toMatchObject({ calls: 2, input: 120_000, output: 1000, cached: 60_000, cacheWrite: 4_000 });
   });
 
   it('sums per local day, per source and per model over the range, oldest day first', () => {

@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import type { ContentBlock, Message } from '@atlas/shared';
-import { buildMessages, compactedView, otherLead, degrade, estimateTokens, INTERRUPTED, measuredSize, needsTurn, pairServerTools, pickCut, pickPrune, pruneMessages, serverToolProblem, SUMMARY_LEAD, TODO_LEAD } from './context.ts';
+import { buildMessages, COMPACT_AT, compactBudget, compactedView, opening, otherLead, SUMMARY_ROOM, summaryAsk, degrade, estimateTokens, INTERRUPTED, measuredSize, needsTurn, pairServerTools, pickCut, pickPrune, pruneMessages, serverToolProblem, SUMMARY_LEAD, TODO_LEAD } from './context.ts';
 
 let seq = 0;
 const m = (role: 'user' | 'assistant', content: ContentBlock[], contextUpto: number | null = null) => ({
@@ -142,6 +142,47 @@ describe('compaction', () => {
     const tight = degrade(view, 8_000, 0);
     expect((tight[1]!.content[0] as { text: string }).text).toMatch(/chars omitted to fit the context\)$/);
     expect(tight[0]!.content).toEqual(view[0]!.content);
+  });
+});
+
+describe('compaction budget (#376)', () => {
+  it('compacts at 80% of the window, keeping room for the answer and for a summary call after the view', () => {
+    expect(COMPACT_AT).toBe(0.8);
+    expect(compactBudget({ contextWindow: 200_000, maxTokens: 16_000 })).toBe(160_000);
+    expect(compactBudget({ contextWindow: 1_000_000, maxTokens: 32_000 })).toBe(800_000);
+    expect(compactBudget({ contextWindow: 200_000, maxTokens: 64_000 })).toBe(136_000); // 0.8 would leave no room to answer
+    expect(compactBudget({ contextWindow: 32_768, maxTokens: 16_000 })).toBe(16_768);
+    expect(compactBudget({ contextWindow: 8_192, maxTokens: 1_000 })).toBe(4_096); // a small local window: the summary's room
+    expect(compactBudget({ contextWindow: 4_096, maxTokens: 16_000 })).toBe(2_048); // never under half
+  });
+  it('a view at its budget + the summary instruction + its answer fits the window, for every window and answer size', () => {
+    for (const contextWindow of [2_048, 4_096, 8_192, 16_384, 32_768, 131_072, 200_000, 1_000_000])
+      for (const maxTokens of [1_000, 4_096, 8_192, 16_000, 32_000, 64_000]) {
+        const budget = compactBudget({ contextWindow, maxTokens });
+        if (contextWindow - Math.floor(contextWindow / 2) >= Math.max(maxTokens, SUMMARY_ROOM)) {
+          expect(budget + Math.max(maxTokens, SUMMARY_ROOM), `${contextWindow}/${maxTokens}`).toBeLessThanOrEqual(contextWindow);
+        }
+        expect(budget).toBeGreaterThanOrEqual(Math.floor(contextWindow / 2));
+        expect(budget).toBeLessThanOrEqual(Math.floor(contextWindow * COMPACT_AT));
+      }
+  });
+});
+
+describe('summary instruction (#376)', () => {
+  it('asks for a summary of what comes before the kept messages, no tool call, folding the earlier summary', () => {
+    const ask = summaryAsk({ previous: true, kept: 3, first: 'what is left?', focus: 'the importer' });
+    expect(ask).toMatch(/^\[Atlas: context compaction\] /);
+    expect(ask).toContain('Do not call any tool');
+    expect(ask).toContain('every message before the last 3 of this conversation (they start with « what is left? »');
+    expect(ask).toContain('folding the earlier summary at its start into it');
+    expect(ask).toContain('with this focus: the importer');
+    expect(summaryAsk({ previous: false, kept: 0, first: null })).toContain('a summary of the whole conversation.');
+  });
+  it('names a message by its first text or tool call, on one line, at most 160 chars', () => {
+    expect(opening({ role: 'user', content: [{ type: 'text', text: ' two\nlines ' }] })).toBe('two lines');
+    expect(opening({ role: 'assistant', content: [{ type: 'tool_use', id: 'a', name: 'shell', input: { command: 'ls' } }] })).toBe('→ shell {"command":"ls"}');
+    expect(opening({ role: 'user', content: [{ type: 'text', text: 'x'.repeat(200) }] })).toBe('x'.repeat(160) + '…');
+    expect(opening(undefined)).toBeNull();
   });
 });
 

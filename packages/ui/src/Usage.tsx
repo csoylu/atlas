@@ -24,7 +24,7 @@ export function useChatUsage(cardId: string, stream: MessageStream, onError: (e:
 
 /**
  * The row under the composer's text (redesign #271, mockup « Chat »): the model pill « Fable 5.2 · Medium ▾ » that
- * opens the picker, then the context ring (amber past 50 %, red past the 70 % compaction point); this chat's tokens and
+ * opens the picker, then the context ring (amber past 50 %, red past the 80 % compaction point); this chat's tokens and
  * the plan meter are behind the ring (hover, or a click / tap for the card). The plan meter joins the row only past
  * QUOTA_WARN. OpenAI's « Using ChatGPT plan · Manage usage » stays visible when on that plan. Right: attach, the voice
  * toggle (desktop, the voice chat only), send. `sees`: the eye after the ring (#305), what the agent will see.
@@ -33,7 +33,7 @@ export function useChatUsage(cardId: string, stream: MessageStream, onError: (e:
 export function ComposerMeta(props: { usage: ChatUsage | null; plan: boolean; models?: Model[]; pick?: PickProps; send?: { disabled: boolean; title?: string }; attach?: ReactNode; voice?: ReactNode; sees?: ReactNode }) {
   const u = props.usage;
   const pct = contextPct(u);
-  const level = pct === null ? '' : pct >= 70 ? ' full' : pct >= 50 ? ' warm' : '';
+  const level = pct === null ? '' : pct >= 80 ? ' full' : pct >= 50 ? ' warm' : '';
   const hasUsage = !!u && u.calls > 0;
   // A friendly name or nothing: never a raw model id (a deleted model just isn't named).
   const lastM = u?.lastModelId ? (props.models ?? props.pick?.models ?? []).find((m) => m.id === u.lastModelId) : undefined;
@@ -42,7 +42,7 @@ export function ComposerMeta(props: { usage: ChatUsage | null; plan: boolean; mo
   const planHot = !!q && Math.max(q.fiveHour?.usedPct ?? 0, q.week?.usedPct ?? 0) >= QUOTA_WARN;
   const lines = hasUsage
     ? [
-        pct !== null ? `Context ${pct === 0 && u!.lastInput ? '<1' : pct}% used: ${tok(u!.lastInput!)} of ${tok(u!.contextWindow!)} at the last answer. Past 70 % the oldest messages are folded into a summary.` : null,
+        pct !== null ? `Context ${pct === 0 && u!.lastInput ? '<1' : pct}% used: ${tok(u!.lastInput!)} of ${tok(u!.contextWindow!)} at the last answer. Past 80 % the oldest messages are folded into a summary.` : null,
         `${tok(u!.input)} tokens in (${tok(u!.cached)} from cache) · ${tok(u!.output)} out`,
         `${u!.calls} model call${u!.calls === 1 ? '' : 's'}${lastModel ? ` · last answer by ${lastModel}` : ''}`,
         u!.plan ? planLine(u!.plan) : null,
@@ -334,7 +334,7 @@ export function UsageSection(props: { stream: MessageStream; onError(e: unknown)
             <Stat
               label="From cache"
               value={s.total.input ? `${Math.round((s.total.cached / s.total.input) * 100)}%` : '–'}
-              sub="of prompt tokens, reused"
+              sub={`of prompt tokens, reused · ${tok(s.total.cacheWrite)} written`}
             />
           </div>
           <div className="usage-chart" role="img" aria-label={`Tokens per day over ${s.days} days`}>

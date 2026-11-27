@@ -19,16 +19,21 @@ export interface ModelRequest {
   /**
    * Prompt caching, for an agent's turns (Anthropic): the first `systemStable` chars of `system` are a prefix that stays
    * the same across turns (marked), the rest is volatile; the history's end is marked too. Unset on one-shot calls
-   * (title, summary, model test): a cache write nothing would read costs more than no cache.
+   * (title, model test): a cache write nothing would read costs more than no cache. `tail`: that many last messages
+   * carry no breakpoint (the summary call's instruction, read once: the breakpoints stay where the turn put them).
+   * Breakpoints live an hour (CACHE_TTL): agents often wait more than 5 minutes between turns.
    */
-  cache?: { systemStable: number };
+  cache?: { systemStable: number; tail?: number };
 }
 
 export interface ModelResponse {
   content: ContentBlock[];
   stopReason: string;
-  /** input = the whole prompt, cached part included (Anthropic reports cache reads/writes apart: summed here). */
-  usage: { input: number; output: number; cached?: number };
+  /**
+   * input = the whole prompt, cached part included (Anthropic reports cache reads/writes apart: summed here); cached =
+   * the part read from the cache; cacheWrite = the part written to it (Anthropic only; billed above the input price).
+   */
+  usage: { input: number; output: number; cached?: number; cacheWrite?: number };
   /** The plan subscription that answered (plan-accounts.ts), for the composer's quota. */
   account?: string;
 }
