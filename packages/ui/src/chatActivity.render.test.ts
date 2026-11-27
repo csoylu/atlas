@@ -1,7 +1,7 @@
 import { createElement } from 'react';
 import { renderToString } from 'react-dom/server';
 import { describe, expect, it } from 'vitest';
-import type { ContentBlock, Message } from '@atlas/shared';
+import type { ContentBlock, Message, ToolCallTiming } from '@atlas/shared';
 import { Turn } from './ChatActivity.tsx';
 import type { ToolOutcome } from './toolRows.ts';
 
@@ -58,7 +58,7 @@ describe('a live « N steps » box (#382)', () => {
       createElement(Turn, {
         messages: [message(content)],
         results,
-        timings: new Map(content.flatMap((b) => (b.type === 'tool_use' ? [[b.id, { startedAt: '2026-11-14T17:00:00.000Z', ...(results.has(b.id) ? { endedAt: '2026-11-14T17:00:01.000Z' } : { tail }) }] as const] : []))),
+        timings: new Map(content.flatMap((b): [string, ToolCallTiming][] => (b.type === 'tool_use' ? [[b.id, { toolUseId: b.id, name: b.name, status: results.has(b.id) ? 'done' : 'running', startedAt: '2026-11-14T17:00:00.000Z', endedAt: results.has(b.id) ? '2026-11-14T17:00:01.000Z' : null, ...(tail === undefined ? {} : { tail }) }]] : []))),
         live,
         last: true,
         stream: { push: () => {}, listen: () => () => {} },
