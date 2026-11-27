@@ -27,6 +27,7 @@ import { ClientEvent, PaneSees, servedFile, withPaneHelper } from '@atlas/shared
 import type { NotifierStatus, SandboxStatus } from '@atlas/shared';
 import { PanePresence, paneNote } from './pane.ts';
 import { commentBlocks, type PageShot } from './comments.ts';
+import { byNumber, commentGroups, quoteBlocks } from './quotes.ts';
 import { inside } from './tools.ts';
 import { realpathSync, statSync } from 'node:fs';
 import { ConflictError, InvalidError, NotFoundError, type Kanban } from './kanban.ts';
@@ -324,7 +325,7 @@ export function createApi(deps: {
     res.json(kanban.messages(req.params.id));
   });
   app.post('/api/cards/:id/messages', async (req, res) => {
-    const { text, uploads: ids, comments, pane: sent } = PostMessage.parse(req.body);
+    const { text, uploads: ids, comments, quotes, pane: sent } = PostMessage.parse(req.body);
     const card = kanban.get(req.params.id);
     projects.assertActive(card.projectId, 'its tasks and chats'); // archived (#213): read-only
     if (ids.length && !card.assignee) throw new InvalidError('assign an agent before sending files: they go into its workspace');
@@ -348,6 +349,12 @@ export function createApi(deps: {
           },
         })
       : [];
+    // Quotes of this chat's messages (#367): one text block each. Quotes and comments go before the text, in their
+    // shared numbering.
+    const quoted = quotes.length
+      ? quoteBlocks(quotes, { messages: kanban.messages(card.id), userName: settings.user().name, redact: (t) => deps.secrets.redact(t).text })
+      : [];
+    const notes = byNumber([...commentGroups(commented), ...quoted.map((b, i) => ({ n: quotes[i]!.n, blocks: [b] }))]);
     // The card's state before this message: « Rewind to here » / Stop go back to it (rewind.ts).
     const snapshot = rewinds.beforeUserMessage(req.params.id);
     // « What the agent sees » (#305): the open pane tab, one line, said when it changed. A voice message sends none:
@@ -358,8 +365,8 @@ export function createApi(deps: {
     // A picture goes to the model; any other file is one line, its path, size and kind (#348).
     const message = await uploads.send(ids, workdir, ({ images, files }) =>
       kanban.appendMessage(req.params.id, 'user', USER, [
+        ...notes,
         ...(text ? [{ type: 'text' as const, text }] : []),
-        ...commented,
         ...images.flatMap((im) => [im, { type: 'text' as const, text: `[attached: ${relative(workdir, im.path)}]` }]),
         ...files.map((f) => ({ type: 'text' as const, text: fileLine(posixRel(workdir, f.path), f.bytes) })),
         ...(seen ? [{ type: 'text' as const, text: seen }] : []),

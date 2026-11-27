@@ -46,7 +46,8 @@ export const CommentTarget = z.discriminatedUnion('kind', [
 ]);
 export type CommentTarget = z.infer<typeof CommentTarget>;
 
-export const PostComment = z.object({ target: CommentTarget, anchor: CommentAnchor, text: z.string().trim().min(1).max(5000) });
+/** `n`: its number in the message, shared with quotes (#367); absent: its place among the comments. */
+export const PostComment = z.object({ target: CommentTarget, anchor: CommentAnchor, text: z.string().trim().min(1).max(5000), n: z.number().int().positive().optional() });
 export type PostComment = z.infer<typeof PostComment>;
 export const COMMENTS_MAX = 20;
 

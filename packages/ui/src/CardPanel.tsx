@@ -29,7 +29,10 @@ import { SecretBox, secretBoxOf } from './SecretBox.tsx';
 import { deleteChatQuestion } from './chatHistoryMenu.ts';
 import { HeaderActions, Icon } from './ScreenHeader.tsx';
 import { StatusIcon, STATUS_LABEL } from './StatusIcon.tsx';
-import { chipAnchor, toPost, type Comments } from './comments.ts';
+import { chipAnchor, isComment, isQuote, toPost, toQuote, type Comments } from './comments.ts';
+import { QuoteLayer } from './QuoteLayer.tsx';
+import { rehypeQuoteMarks, type QuoteMark } from './quoteMarks.ts';
+import { useQuoteSurface } from './useQuoteSurface.ts';
 import { CommentChips, UserContent } from './CommentCards.tsx';
 import { draftKey, readDraft, useDraft, writeDraft } from './drafts.ts';
 import { useAutoGrow } from './useAutoGrow.ts';
@@ -224,6 +227,7 @@ export function CardPanel(props: {
           onUndo={rw.undoById}
           onError={onError}
           newAfter={props.newAfter}
+          comments={props.comments}
           empty={`Ask @${card.assignee} anything. For work to track, it creates tasks.`}
         />
       </div>
@@ -325,6 +329,8 @@ export function Activity(props: {
   onUndo?(rewindId: string): Promise<unknown>;
   /** Failed answers from the question's buttons (option, approve, retry). */
   onError(e: unknown): void;
+  /** The composer's waiting comments and quotes (#367): a selection in a message quotes it there. */
+  comments?: Comments;
   /**
    * The task sheet (#269) shows a blocked task's question in its « Now » box: the conversation then doesn't repeat it,
    * and opens scrolled to that box instead of the end.
@@ -394,8 +400,18 @@ export function Activity(props: {
     void el.offsetWidth; // restart the animation
     el.classList.add('flash');
   }, [focusSeq, messages.length]);
-  const text = (t: string, key?: string, user?: boolean) => <TextBlock key={key} text={t} onOpenRef={user ? props.onOpenRef : undefined} quotes={user} cardLinks={cardLinks} />;
-  const renderText = useCallback((t: string, key: string) => <TextBlock key={key} text={t} cardLinks={cardLinks} />, [cardLinks]);
+  // Quotes (#367): which text block a selection is in, the passages waiting as chips, the one a click lit.
+  const quote = useQuoteSurface(messages, props.comments, listBox, fold, expanded, setExpanded);
+  const userWho = props.userName ?? 'You';
+  const text = (t: string, key?: string, user?: boolean, at?: { seq: number; block: number; who: string }) => (
+    <TextBlock key={key} text={t} onOpenRef={user ? props.onOpenRef : undefined} quotes={user} cardLinks={cardLinks} qb={at} marks={at ? quote.marks(at.seq, at.block) : undefined} />
+  );
+  const renderText = (t: string, key: string) => {
+    const cut = key.lastIndexOf(':');
+    const m = quote.byId.get(key.slice(0, cut));
+    const at = m ? { seq: m.seq, block: Number(key.slice(cut + 1)), who: m.author } : undefined;
+    return <TextBlock key={key} text={t} cardLinks={cardLinks} qb={at} marks={at ? quote.marks(at.seq, at.block) : undefined} />;
+  };
   const renderTurn = (ms: Message[], live: boolean, last: boolean) => (
     <Turn messages={ms} results={results} timings={timings} live={live} last={last} stream={props.stream} renderText={renderText} onOpenArtifact={props.onOpenRef} cards={cardLinks} cardId={card.id} />
   );
@@ -488,8 +504,9 @@ export function Activity(props: {
                     cardId={card.id}
                     onOpenFile={card.board === 'direct' ? (path) => void api.panelOpenFile(card.id, path).catch(props.onError) : (path) => openTaskFile(card.id, path)}
                     opens={card.board === 'direct' ? () => 'open in Files' : (name) => (opensInTab(name) ? 'open in a tab' : 'download')}
-                    text={(t, k) => (isAttachedLine(t) || (m.author === USER && isPaneLine(t)) ? null : text(t, k, m.author === USER))}
+                    text={(t, k) => (isAttachedLine(t) || (m.author === USER && isPaneLine(t)) ? null : text(t, k, m.author === USER, { seq: m.seq, block: Number(k), who: m.author === USER ? userWho : m.author }))}
                     onOpenRef={m.author === USER ? props.onOpenRef : undefined}
+                    quoteJump={quote.jumper}
                   />
                   {m.author === USER && m.pane && (
                     <div className="pane-was" title="Open in your pane when you sent this: the agent was told where (not the content)">
@@ -527,6 +544,7 @@ export function Activity(props: {
         </AskMessage>
       )}
       <div ref={end} />
+      {props.comments && <QuoteLayer root={quote.root} resolve={quote.resolve} comments={props.comments} within={quote.root} />}
     </>
   );
 }
@@ -688,6 +706,12 @@ export const CardComposer = forwardRef<
         el.scrollTop = el.scrollHeight;
       });
     }, [fill]);
+    // « Send now » in a quote's note box (#367): send what waits, as Send would.
+    const form = useRef<HTMLFormElement>(null);
+    const sendAsk = comments?.sendAsk ?? 0;
+    useEffect(() => {
+      if (sendAsk) form.current?.requestSubmit();
+    }, [sendAsk]);
     const usage = useChatUsage(card.id, stream, onError);
     const agent = agents.find((a) => a.id === card.assignee);
     // Slash commands (#99): the popup while `/` starts the box; Esc hides it until the text changes.
@@ -719,6 +743,7 @@ export const CardComposer = forwardRef<
     };
     return (
       <form
+        ref={form}
         className={'composer' + (dragging ? ' dropping' : '')}
         onDragOver={(e) => {
           if (![...e.dataTransfer.types].includes('Files')) return;
@@ -755,7 +780,7 @@ export const CardComposer = forwardRef<
           setEyeOff(false);
           // A failed send puts the text (and the images) back, unless the user already started a new message.
           void pending
-            .then((ids) => api.postMessage(card.id, t, ids, notes.map(toPost), pane))
+            .then((ids) => api.postMessage(card.id, t, ids, notes.filter(isComment).map(toPost), pane, notes.filter(isQuote).map(toQuote)))
             .then(() => att.release(sent))
             .catch((err: unknown) => {
               if (!readDraft(draftId).trim()) writeDraft(draftId, text); // the composer may be gone already
@@ -766,7 +791,7 @@ export const CardComposer = forwardRef<
             });
         }}
       >
-        {!!comments?.list.length && <CommentChips list={comments.list} label={chipAnchor} onRemove={comments.remove} />}
+        {!!comments?.list.length && <CommentChips list={comments.list} label={chipAnchor} onRemove={comments.remove} onPickQuote={comments.pick} />}
         {matches.length > 0 && (
           <div className="slash-pop" role="listbox" aria-label="Commands">
             {matches.map((c, i) => (
@@ -835,7 +860,7 @@ export const CardComposer = forwardRef<
           plan={plan}
           attach={canAttach ? <AttachButton onFiles={addFiles} /> : undefined}
           voice={card.board === 'direct' ? <VoiceToggle chatId={card.id} agents={agents} stream={stream} onError={onError} /> : undefined}
-          send={att.uploading ? { disabled: true, title: WAITING } : { disabled: !text.trim() && !att.sendable }}
+          send={att.uploading ? { disabled: true, title: WAITING } : { disabled: !text.trim() && !att.sendable && !comments?.list.length }}
           sees={sees ? <PaneEye sees={sees} off={eyeOff} onToggle={() => setEyeOff(!eyeOff)} /> : undefined}
           pick={{
             models,
@@ -861,9 +886,20 @@ export const blockLabel: Record<NonNullable<Card['block']>['kind'], string> = {
 type CardLinks = { known(ref: string): boolean; open(ref: string): void; card?(ref: string): Card | undefined };
 
 /** `streaming`: a reply still arriving (#79), same markdown as the final one plus the caret at the end of its text. */
-function TextBlock({ text: raw, onOpenRef, quotes, cardLinks, streaming }: { text: string; onOpenRef?(ref: MessageRef): void; quotes?: boolean; cardLinks?: CardLinks; streaming?: boolean }) {
+function TextBlock(props: {
+  text: string;
+  onOpenRef?(ref: MessageRef): void;
+  quotes?: boolean;
+  cardLinks?: CardLinks;
+  streaming?: boolean;
+  /** A message's text block a selection can quote (#367): its seq, its index in the content, who wrote it. */
+  qb?: { seq: number; block: number; who: string };
+  /** Passages waiting as quotes, and the one lit by a jump. */
+  marks?: QuoteMark[];
+}) {
+  const { text: raw, onOpenRef, quotes, cardLinks, streaming, qb, marks } = props;
   const text = streaming ? draftMarkdown(raw) : raw;
-  const rehype = streaming ? REHYPE_CARET : REHYPE;
+  const rehype = streaming ? REHYPE_CARET : marks?.length ? [...REHYPE, [rehypeQuoteMarks, marks] as [typeof rehypeQuoteMarks, QuoteMark[]]] : REHYPE;
   // « Ask about this »: the quoted document part shows as a chip; the agent got the full quote.
   const ref = quotes ? parseDocRef(text) : null;
   if (ref)
@@ -875,7 +911,7 @@ function TextBlock({ text: raw, onOpenRef, quotes, cardLinks, streaming }: { tex
       <div className="msg-quote">❝ {ref.label}</div>
     );
   const md = (
-    <div className={'text md' + (streaming ? ' streaming' : '')}>
+    <div className={'text md' + (streaming ? ' streaming' : '')} {...(qb && !streaming ? { 'data-qseq': qb.seq, 'data-qblock': qb.block, 'data-qwho': qb.who } : {})}>
       {cardLinks ? (
         <Markdown
           remarkPlugins={[remarkGfm]}

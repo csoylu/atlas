@@ -122,17 +122,18 @@ describe('comments: what reaches the agent (#304)', () => {
     await engine.runner.settled(chat.id);
     const sent = fake.calls[0]!.messages.at(-1)!.content;
     const texts = sent.flatMap((b) => (b.type === 'text' ? [b.text] : []));
-    expect(texts[0]).toBe('Three things on these, and one in the code.');
-    expect(texts[1]).toBe(
+    // The comments come first, in their numbers, then Master's text (#367).
+    expect(texts.at(-1)).toBe('Three things on these, and one in the code.');
+    expect(texts[0]).toBe(
       `[comment 1] Workflows v2 · build plan · « Editor: the canvas stays. »\n(on markdown docs/plan.md in atlas's workspace, ${md.id} v1, section #decisions, lines 7–8)\nSelected: « Editor: the canvas stays. »\nComment: Say which canvas.`,
     );
-    expect(texts[2]).toBe(
+    expect(texts[1]).toBe(
       `[comment 2] browser.svg · « Chromium (server) » box\n(on svg diagram diagrams/browser.svg in atlas's workspace, ${svg.id} v1, element svg > g#chromium > rect)\nElement text: « Chromium (server) »\nComment: One process per chat, or one shared?`,
     );
-    expect(texts[3]).toContain(`(on html page pages/settings.html in atlas's workspace, ${page.id} v1, area x=20 y=110 w=300 h=60 px of 640×900)`);
-    expect(texts[3]).toContain('Inside: div.setting-row « Network »');
-    expect(texts[3]).toContain('Picture of the area: screenshots/area.png (attached below)');
-    expect(texts[4]).toBe(
+    expect(texts[2]).toContain(`(on html page pages/settings.html in atlas's workspace, ${page.id} v1, area x=20 y=110 w=300 h=60 px of 640×900)`);
+    expect(texts[2]).toContain('Inside: div.setting-row « Network »');
+    expect(texts[2]).toContain('Picture of the area: screenshots/area.png (attached below)');
+    expect(texts[3]).toBe(
       '[comment 4] docPanel.ts · lines 5–6\n(on file packages/ui/src/docPanel.ts, lines 5–6)\n> const line5 = 5;\n> const line6 = 6;\nComment: Use the same breakpoints.',
     );
     // The area's picture goes to the model as an image, right after its comment.

@@ -3,8 +3,10 @@ import { type Doc, type Folder, type PanelTab } from './documents.ts';
 
 export * from './documents.ts';
 export * from './comments.ts';
+export * from './quotes.ts';
 export * from './paneHelper.ts';
 import { COMMENTS_MAX, PostComment } from './comments.ts';
+import { PostQuote, QUOTES_MAX } from './quotes.ts';
 export * from './cardRefs.ts';
 export * from './projects.ts';
 export * from './pane.ts';
@@ -343,7 +345,8 @@ export const TODO_LIMIT = 50;
 
 /**
  * A user message. `uploads`: ids from POST /api/cards/:id/uploads; `comments`: places on the pane's open tab with
- * Master's words (#304). A message may be images or comments only (then `text` is empty).
+ * Master's words (#304); `quotes`: passages of this chat's messages with Master's notes (#367). A message may be images,
+ * comments or quotes only (then `text` is empty).
  */
 export const PostMessage = z
   .object({
@@ -355,8 +358,9 @@ export const PostMessage = z
      */
     pane: PaneSees.nullable().optional(),
     comments: z.array(PostComment).max(COMMENTS_MAX).default([]),
+    quotes: z.array(PostQuote).max(QUOTES_MAX).default([]),
   })
-  .refine((m) => m.text.length > 0 || m.uploads.length > 0 || m.comments.length > 0, { message: 'a message needs text, a file or a comment' });
+  .refine((m) => m.text.length > 0 || m.uploads.length > 0 || m.comments.length > 0 || m.quotes.length > 0, { message: 'a message needs text, a file, a comment or a quote' });
 /**
  * A file waiting to be sent (POST /api/cards/:id/uploads): the composer shows it, the message names its id. `kind`
  * image: a picture the model sees (png, jpeg, gif, webp up to IMAGE_MAX_BYTES, read from its bytes, with its size);

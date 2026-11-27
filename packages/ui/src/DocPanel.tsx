@@ -12,7 +12,7 @@ import { fileDrafts, useDrafts } from './fileDrafts.ts';
 import { fileTitle, splitPath } from './files.ts';
 import type { PanelResize } from './PanelResizer.tsx';
 import { CommentBox, CommentHint, CommentIcon, type PaneComment } from './CommentLayer.tsx';
-import { boxOf, draftKey, hintFor, isTyping, type Comments, type PanePick } from './comments.ts';
+import { boxOf, draftKey, hintFor, isComment, isTyping, type Comments, type PanePick } from './comments.ts';
 import { BrowserPane, useBrowserStatus, useDriving } from './BrowserPane.tsx';
 import { browserTitle } from './browserTab.ts';
 
@@ -155,7 +155,7 @@ export function DocPanel(props: {
       : pageOn && tab.kind === 'browser'
         ? { kind: 'browser', url: tab.tab.url!, title: tab.tab.title }
         : null;
-  const mine = target ? comments.list.filter((c) => draftKey(c.target) === draftKey(target)) : [];
+  const mine = target ? comments.list.filter(isComment).filter((c) => draftKey(c.target) === draftKey(target)) : [];
   const comment: PaneComment = {
     on: commenting && !pending,
     marks: [...mine.map((c) => ({ n: c.n, mark: c.mark })), ...(pending ? [{ n: comments.list.length + 1, mark: pending.pick.mark }] : [])],

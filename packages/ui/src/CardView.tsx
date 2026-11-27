@@ -7,6 +7,7 @@ import { CARD_STATUSES, cardRef, type Doc, type Agent, type Card, type Model, ty
 import { api } from './api.ts';
 import type { MessageStream } from './useMessages.ts';
 import { Activity, CardComposer, useCardConversation, type MessageRef } from './CardPanel.tsx';
+import { useComments } from './comments.ts';
 import { pillStatus } from './cardModal.ts';
 import { PopButton, PopItem, PopRow } from './HeadMenu.tsx';
 import { Icon } from './ScreenHeader.tsx';
@@ -55,6 +56,8 @@ export const CardView = forwardRef<HTMLTextAreaElement, CardViewProps & { lead?:
     const { card, stream, onError, onClose } = props;
     const convo = useCardConversation(card, stream, onError);
     const rw = useRewind(card, convo.run, onError, { globalEsc: false });
+    // Quotes of this thread's messages (#367): chips in the composer, kept per device.
+    const quotes = useComments(card.id);
     const [title, setTitle] = useState(card.title);
     const [body, setBody] = useState(card.body);
     // The description reads as rendered markdown; a click (or Edit) switches to the raw text.
@@ -304,6 +307,7 @@ export const CardView = forwardRef<HTMLTextAreaElement, CardViewProps & { lead?:
               onUndo={rw.undoById}
               onError={onError}
               askAt={nowRef}
+              comments={quotes}
               empty={card.assignee ? `Write to @${card.assignee}: it works here and answers live.` : 'Assign an agent, then write to it here.'}
             />
           </div>
@@ -311,7 +315,7 @@ export const CardView = forwardRef<HTMLTextAreaElement, CardViewProps & { lead?:
         <div className="cm-notices">
           <RewindNote rw={rw} />
         </div>
-        <CardComposer ref={composer} card={card} agents={props.agents} models={props.models} plan={props.plan} stream={stream} onError={onError} rewind={rw} />
+        <CardComposer ref={composer} card={card} agents={props.agents} models={props.models} plan={props.plan} stream={stream} onError={onError} rewind={rw} comments={quotes} />
         <RewindConfirm rw={rw} />
         {reading && <TaskDocReader read={reading} stream={stream} onOpenInPanel={props.onOpenDoc} onBack={() => setReading(null)} onError={onError} />}
       </>
