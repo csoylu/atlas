@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useState } from 'react';
-import { type Agent, type Card, type Memory, type Model, type Settings, type Workflow } from '@atlas/shared';
+import { cardRef, type Agent, type Card, type Memory, type Model, type Settings, type Workflow } from '@atlas/shared';
 import { api, ApiError } from './api.ts';
 import { AgentFace } from './AgentFace.tsx';
 import { HeaderActions, Icon } from './ScreenHeader.tsx';
@@ -22,6 +22,8 @@ export function AgentsView(props: {
   chats: Card[];
   onSettings(s: Settings): void;
   onAgentsChanged(): void;
+  /** Opens a task beside the page (the hero's « Working #N »). */
+  onOpenCard(id: string): void;
   onError(e: unknown): void;
 }) {
   const { onError } = props;
@@ -48,7 +50,7 @@ export function AgentsView(props: {
           <p>It was deleted, or the link is wrong.</p>
         </ErrorState>
       );
-    return <AgentPage key={a.id} agent={a} models={models} settings={props.settings} onChanged={changed} onError={onError} />;
+    return <AgentPage key={a.id} agent={a} agents={agents} models={models} settings={props.settings} cards={props.cards} chats={props.chats} onOpenCard={props.onOpenCard} onChanged={changed} onError={onError} />;
   }
   return <AgentList agents={agents} models={models} memories={memories} settings={props.settings} cards={props.cards} chats={props.chats} onChanged={changed} onError={onError} />;
 }
@@ -65,7 +67,7 @@ function AgentList(props: {
 }) {
   const pinfo = useProjects();
   const [adding, setAdding] = useState(false);
-  const busy = (id: string) => props.cards.some((c) => c.assignee === id && c.status === 'running') || props.chats.some((c) => c.assignee === id && c.working);
+  const busy = (id: string) => isBusy(id, props.cards, props.chats);
   return (
     <section className="set-page">
       {/* The header names the page (#307): « New agent » sits in its row. */}
@@ -123,7 +125,24 @@ function AgentList(props: {
   );
 }
 
-function AgentPage(props: { agent: Agent; models: Model[]; settings: Settings | null; onChanged(): void; onError(e: unknown): void }) {
+/** Is the agent at work: a running task or a chat it is answering (the sidebar's live square). */
+const isBusy = (id: string, cards: Card[], chats: Card[]) => cards.some((c) => c.assignee === id && c.status === 'running') || chats.some((c) => c.assignee === id && c.working);
+
+/**
+ * One agent's page (redesign #362, mockup « Agents »): a strip to switch agent, a hero (face, role, projects, the task
+ * it works on, runs in use), then its settings in the 240 px label column, the always-on memory as a meter, Delete.
+ */
+function AgentPage(props: {
+  agent: Agent;
+  agents: Agent[];
+  models: Model[];
+  settings: Settings | null;
+  cards: Card[];
+  chats: Card[];
+  onOpenCard(id: string): void;
+  onChanged(): void;
+  onError(e: unknown): void;
+}) {
   const { agent: a, onError } = props;
   const pinfo = useProjects();
   const [draft, setDraft] = useState(a);
@@ -159,6 +178,9 @@ function AgentPage(props: { agent: Agent; models: Model[]; settings: Settings | 
   const projects = pinfo.active.filter((p) => p.members.some((m) => m.agentId === a.id));
   const triage = props.settings?.triageAgent === a.id;
   const verdicts = verdictSteps(workflows ?? []).filter((v) => v.agentId === a.id);
+  const running = props.cards.filter((c) => c.assignee === a.id && c.status === 'running');
+  const now = running[0];
+  const role = a.rolePrompt.split('\n')[0]?.trim() || 'no role';
   const modelBadge = model?.lastError
     ? 'model failing'
     : model?.provider === 'chatgpt' && !model.credentialPresent
@@ -168,16 +190,57 @@ function AgentPage(props: { agent: Agent; models: Model[]; settings: Settings | 
         : model && !model.credentialPresent && (model.credentialEnv || model.provider === 'anthropic')
           ? 'key missing'
           : null;
+  const setRuns = (n: number) => setDraft({ ...draft, maxRuns: Math.min(MAX_RUNS, Math.max(1, n)) });
   return (
     <section className={'set-page agent-page' + (a.enabled ? '' : ' off')}>
-      {(triage || modelBadge) && (
-        <div className="set-tools">
-          {triage && <span className="badge">triage</span>}
-          {modelBadge && <span className="badge bad">{modelBadge}</span>}
+      <HeaderActions>
+        <span className="head-sp" />
+        <a className="btn ghost small" href={'#/chat/' + encodeURIComponent(a.mainChat ?? a.id)}>
+          <Icon.ask />
+          Open chat
+        </a>
+      </HeaderActions>
+      <nav className="ag-strip" aria-label="Agents">
+        {props.agents.map((x) => {
+          const busy = isBusy(x.id, props.cards, props.chats);
+          return (
+            <a
+              key={x.id}
+              href={'#/settings/agents/' + encodeURIComponent(x.id)}
+              className={'ag-tab' + (x.id === a.id ? ' on' : '') + (x.enabled ? '' : ' off')}
+              aria-current={x.id === a.id ? 'page' : undefined}
+              title={busy ? `@${x.id} · working` : `@${x.id}`}
+            >
+              <AgentFace id={x.id} live={busy} />
+              <span>@{x.id}</span>
+              {busy && <span className="live-sq" role="img" aria-label="working" />}
+            </a>
+          );
+        })}
+      </nav>
+      <header className="ag-hero">
+        <AgentFace id={a.id} live={isBusy(a.id, props.cards, props.chats)} />
+        <div className="ag-hero-main">
+          <div className="ag-hero-name">@{a.id}</div>
+          <div className="ag-hero-sub">
+            <span className="ag-hero-role">{role}</span>
+            <span className="ag-hero-pj">{projects.length ? projects.map((p) => p.name).join(', ') : 'no project'}</span>
+            {now && (
+              <button type="button" className="ag-now" title={now.title} onClick={() => props.onOpenCard(now.id)}>
+                <i aria-hidden="true" />
+                Working {cardRef(now)}
+              </button>
+            )}
+            {!a.enabled && <span className="badge">off</span>}
+            {triage && <span className="badge">triage</span>}
+            {modelBadge && <span className="badge bad">{modelBadge}</span>}
+          </div>
         </div>
-      )}
+        <span className="ag-runs" title="Tasks running now, of the tasks it may run at once">
+          {running.length}/{a.maxRuns} runs
+        </span>
+      </header>
       <p className="set-lead">
-        {projects.length ? <>Member of {projects.map((p) => p.name).join(', ')}. </> : 'Member of no project. '}
         {verdicts.length > 0 && (
           <>
             Gives the verdict on PRs in{' '}
@@ -193,19 +256,19 @@ function AgentPage(props: { agent: Agent; models: Model[]; settings: Settings | 
         )}
         The triage role is set in <a href="#/settings/board">Board &amp; triage</a>.
       </p>
-      <SetSec first>
+      <SetSec title="Identity and model">
         <SetRows>
-          <SetRow label="Enabled" auto>
+          <SetRow label="Enabled" help="Off: none of its tasks or chats start." auto>
             <label className="switch" title="Enabled">
               <input type="checkbox" aria-label="Enabled" checked={draft.enabled} onChange={(e) => setDraft({ ...draft, enabled: e.target.checked })} />
               <span />
             </label>
           </SetRow>
-          <SetRow label="Role" help="Who this agent is and what it does. The first line shows to other agents." stack>
+          <SetRow label="Role" help="Who this agent is and what it does. The first line shows to other agents.">
             <textarea aria-label="Role" rows={4} value={draft.rolePrompt} onChange={(e) => setDraft({ ...draft, rolePrompt: e.target.value })} />
           </SetRow>
           <SetRow label="Model" help="Plans, keys and local models are in the Models group.">
-            <select aria-label="Model" value={draft.modelId} onChange={(e) => setDraft({ ...draft, modelId: e.target.value })}>
+            <select className="mono" aria-label="Model" value={draft.modelId} onChange={(e) => setDraft({ ...draft, modelId: e.target.value })}>
               {!model && <option value={draft.modelId}>{draft.modelId} (missing)</option>}
               {props.models.map((m) => (
                 <option key={m.id} value={m.id}>
@@ -215,10 +278,18 @@ function AgentPage(props: { agent: Agent; models: Model[]; settings: Settings | 
             </select>
           </SetRow>
           <SetRow label="Tasks at once" help="How many of its tasks can run in parallel." auto>
-            <input className="set-num" aria-label="Tasks at once" type="number" min={1} max={10} value={draft.maxRuns} onChange={(e) => setDraft({ ...draft, maxRuns: Number(e.target.value) || 1 })} />
+            <span className="stepper" role="group" aria-label="Tasks at once">
+              <button type="button" aria-label="One fewer" disabled={draft.maxRuns <= 1} onClick={() => setRuns(draft.maxRuns - 1)}>
+                <Icon.minus />
+              </button>
+              <input aria-label="Tasks at once" type="number" min={1} max={MAX_RUNS} value={draft.maxRuns} onChange={(e) => setRuns(Number(e.target.value) || 1)} />
+              <button type="button" aria-label="One more" disabled={draft.maxRuns >= MAX_RUNS} onClick={() => setRuns(draft.maxRuns + 1)}>
+                <Icon.plus />
+              </button>
+            </span>
           </SetRow>
           <SetRow label="Working folder" help="Its home workspace, where its commands run.">
-            <input aria-label="Working folder" value={draft.workdir ?? ''} placeholder={`default: data/workspaces/${a.id}`} onChange={(e) => setDraft({ ...draft, workdir: e.target.value || null })} />
+            <input className="mono" aria-label="Working folder" value={draft.workdir ?? ''} placeholder={`default: data/workspaces/${a.id}`} onChange={(e) => setDraft({ ...draft, workdir: e.target.value || null })} />
           </SetRow>
         </SetRows>
         {dirty && (
@@ -241,18 +312,20 @@ function AgentPage(props: { agent: Agent; models: Model[]; settings: Settings | 
         )}
       </SetSec>
       <SetSec title="Memory">
-        <a className="set-card set-link" href={memoryHref('agent:' + a.id)} title="Open this agent's memory in Settings → Memory">
-          <Icon.memory />
-          <span>Memory</span>
-          <span className="muted">{memory === null ? '…' : `${memory.length} active`}</span>
-          {budget && (
-            <span className={'muted' + (budget.used > budget.limit ? ' over' : '')} title="Always on: rules, preferences and pinned (own + shared)">
-              · <span className="num">{budget.used}/{budget.limit}</span> chars always on
-            </span>
-          )}
-          <span className="head-sp" />
-          <Icon.chev />
-        </a>
+        <SetRows>
+          <SetRow label="Always on" help="Rules, preferences and pinned memories (own and shared), in each of its prompts.">
+            <div className="mem-meter-box">
+              <div className="mem-meter-top">
+                <span>{memory === null ? '…' : `${memory.length} active of its own`}</span>
+                <a className="btn ghost small" href={memoryHref('agent:' + a.id)} title="Open this agent's memory in Settings → Memory">
+                  Open
+                  <Icon.chev />
+                </a>
+              </div>
+              {budget && <MemoryMeter used={budget.used} limit={budget.limit} />}
+            </div>
+          </SetRow>
+        </SetRows>
       </SetSec>
       <SetSec title="Delete">
         <SetRows>
@@ -301,6 +374,28 @@ function AgentPage(props: { agent: Agent; models: Model[]; settings: Settings | 
       )}
       </SetSec>
     </section>
+  );
+}
+
+/** « Tasks at once » goes from 1 to this (the old number field's max). */
+const MAX_RUNS = 10;
+
+/** The always-on memory budget (#142) as a meter: chars used of the limit, what is left (red when nearly full or over). */
+function MemoryMeter({ used, limit }: { used: number; limit: number }) {
+  const left = limit - used;
+  const tight = left < limit * 0.1;
+  return (
+    <div className="mem-meter">
+      <div className={'meter' + (left < 0 ? ' over' : tight ? ' tight' : '')} role="meter" aria-label="Always-on memory" aria-valuemin={0} aria-valuemax={limit} aria-valuenow={used} aria-valuetext={`${used} of ${limit} characters`}>
+        <i style={{ width: `${Math.min(100, (used / Math.max(1, limit)) * 100)}%` }} />
+      </div>
+      <div className="mem-meter-figs">
+        <span>
+          {used.toLocaleString('en-US')} / {limit.toLocaleString('en-US')} chars
+        </span>
+        <span className={tight ? 'tight' : undefined}>{left < 0 ? `${(-left).toLocaleString('en-US')} over` : `${left.toLocaleString('en-US')} left`}</span>
+      </div>
+    </div>
   );
 }
 
