@@ -12,9 +12,9 @@ import { owesTurn } from './context.ts';
 import type { DoneEffect, SideEffects } from './sideEffects.ts';
 
 /**
- * Rewind (card #34). Before each user message the card's state is noted (`checkpoints`). Rewinding to a user message —
- * Stop/Esc during the run that answers it, or « Rewind to here » — stops the run, hides that message and every later one
- * (messages.rewind_id: never deleted), drops a summary that covered them, puts the card back in its status of that
+ * Rewind (card #34). Before each user message the card's state is noted (`checkpoints`). Rewinding to a user message
+ * (« Rewind to here », the only way: since #374 Stop/Esc just stops the run) stops a run going on, hides that message
+ * and every later one (messages.rewind_id: never deleted), drops a summary that covered them, puts the card back in its status of that
  * moment, kills background processes started since, and puts back the files this chat's tool calls changed since
  * (fileLog.ts). Only those (card #68): the workdir is shared with other cards and chats, whose work is never touched.
  * A file this chat changed that something else changed too (another card, or by hand) is a conflict: then no file is
@@ -159,20 +159,6 @@ export class Rewinds {
     await this.pruning;
   }
 
-  /**
-   * The user message Stop/Esc rewinds to: the latest one, if the running run answers it (it came after the run before
-   * this one ended). Null when nothing runs, or the run is the card's own work started earlier (Stop just stops).
-   */
-  turnMessage(cardId: string): Message | null {
-    const run = this.runner.current(cardId);
-    if (!run) return null;
-    const last = this.kanban.messages(cardId).filter((m) => m.author === USER).at(-1);
-    if (!last) return null;
-    const prev = this.runner.runs(cardId).find((r) => r.id !== run.id);
-    if (prev && (prev.endedAt ?? prev.startedAt) > last.at) return null;
-    return last;
-  }
-
   /** What rewinding to the user message `seq` would do. */
   async preview(cardId: string, seq: number): Promise<RewindPreview> {
     const target = this.target(cardId, seq);
@@ -182,20 +168,9 @@ export class Rewinds {
     return { seq, hidden, files: plan.conflicts.length ? [] : plan.ops.map(changeOf), filesError: planError(plan), effects };
   }
 
-  /**
-   * Rewind to the user message `seq`, or (no seq: Stop/Esc) the turn the running run answers. Returns null when there is
-   * no such turn: the run (if any) is just stopped.
-   */
-  async rewind(cardId: string, seq?: number): Promise<RewindResult | null> {
-    let target: Message;
-    if (seq === undefined) {
-      const t = this.turnMessage(cardId);
-      if (!t) {
-        this.runner.stop(cardId);
-        return null;
-      }
-      target = t;
-    } else target = this.target(cardId, seq);
+  /** Rewind to the user message `seq` (« Rewind to here »). A run going on is stopped first. */
+  async rewind(cardId: string, seq: number): Promise<RewindResult> {
+    const target = this.target(cardId, seq);
 
     if (this.runner.current(cardId)) {
       this.runner.stop(cardId, REWOUND);
@@ -259,7 +234,7 @@ export class Rewinds {
 
   /**
    * The rewinds in effect on a card (not undone), oldest first: a row each in the chat, with Undo on the one it works for.
-   * Rewinds in a row (nothing written between them: Stop, then « Rewind to here » further up) are one row (#138), whose
+   * Rewinds in a row (nothing written between them: « Rewind to here », then again further up) are one row (#138), whose
    * Undo undoes them all.
    */
   events(cardId: string): RewindEvent[] {
@@ -305,8 +280,8 @@ export class Rewinds {
 
   /**
    * Undo a rewind: its messages come back, the card's state, and the files as they were right before it. `resume`: the
-   * restored conversation still owes an answer (a Stop/Esc rewind cut the agent off mid-turn) on a card that is still
-   * open, so the caller puts the agent back to work, as if the user had written.
+   * restored conversation still owes an answer (a rewind made during a run cut the agent off mid-turn) on a card that is
+   * still open, so the caller puts the agent back to work, as if the user had written.
    */
   async undo(id: string): Promise<{ cardId: string; files: FileChange[]; filesError: string | null; resume: boolean }> {
     const res = await this.undoFiles(id);

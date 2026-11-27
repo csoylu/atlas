@@ -367,7 +367,7 @@ export function createApi(deps: {
       ? quoteBlocks(quotes, { messages: kanban.messages(card.id), userName: settings.user().name, card, redact: (t) => deps.secrets.redact(t).text })
       : [];
     const notes = byNumber([...commentGroups(commented), ...quoted.map((b, i) => ({ n: quotes[i]!.n, blocks: [b] }))]);
-    // The card's state before this message: « Rewind to here » / Stop go back to it (rewind.ts).
+    // The card's state before this message: « Rewind to here » goes back to it (rewind.ts).
     const snapshot = rewinds.beforeUserMessage(req.params.id);
     // « What the agent sees » (#305): the open pane tab, one line, said when it changed. A voice message sends none:
     // the chat's pane as its UI last reported it.
@@ -518,10 +518,11 @@ export function createApi(deps: {
     await dispatcher.retry(req.params.id);
     res.json(kanban.get(req.params.id));
   });
+  /** Stop (and Esc during a run, #374): the run ends, what it wrote stays, files stay as they are; a running command is killed. */
   app.post('/api/cards/:id/stop', (req, res) => {
     res.json({ stopped: runner.stop(req.params.id) });
   });
-  /** Rewind (rewind.ts): to the user message `seq`, or without it (Stop/Esc) the turn being answered; null = just stopped. */
+  /** Rewind (rewind.ts): « Rewind to here » on the user message `seq`, the only way to rewind. */
   app.get('/api/cards/:id/rewind', async (req, res) => {
     const seq = Number(req.query.seq);
     if (!Number.isInteger(seq) || seq < 1) throw new InvalidError('seq: the number of a message');
@@ -540,7 +541,7 @@ export function createApi(deps: {
   });
   app.post('/api/rewinds/:id/undo', async (req, res) => {
     const r = await rewinds.undo(req.params.id);
-    // The undone rewind had cut the agent off mid-turn: it picks up where it stopped, as if the user had written.
+    // The undone rewind (made during a run) had cut the agent off mid-turn: it picks up where it stopped, as if the user had written.
     if (r.resume) dispatcher.onUserMessage(r.cardId);
     res.json(r);
   });
