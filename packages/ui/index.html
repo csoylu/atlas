@@ -6,7 +6,7 @@
     <title>Atlas</title>
     <link rel="icon" type="image/svg+xml" href="/favicon.svg" />
     <script>
-      // Apply the saved theme before the first paint (no flash). Kept in sync with src/theme.ts.
+      // Apply the saved theme and accent before the first paint (no flash). Kept in sync with src/theme.ts.
       (function () {
         // ?theme=light previews a theme without saving it. « gray » was dropped (13 Nov 2026): it reads as dark.
         var t = new URLSearchParams(location.search).get('theme') || localStorage.getItem('atlas.theme');
@@ -14,6 +14,9 @@
         if (t !== 'light' && t !== 'dark')
           t = window.matchMedia('(prefers-color-scheme: dark)').matches ? 'dark' : 'light';
         document.documentElement.dataset.theme = t;
+        // The accent (#369): lime unless another known one is saved or previewed (?accent=).
+        var a = new URLSearchParams(location.search).get('accent') || localStorage.getItem('atlas.accent');
+        document.documentElement.dataset.accent = ['lime', 'signal', 'ice', 'ultra'].indexOf(a) >= 0 ? a : 'lime';
       })();
     </script>
   </head>

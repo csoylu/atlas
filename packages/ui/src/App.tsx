@@ -663,9 +663,9 @@ export function App() {
                       {...(main ? agentMenu.bind(main) : {})}
                       onClick={() => agentMenu.clicked() && (main ? go('#/chat/' + main) : openMain(a.id, p))}
                     >
-                      <AgentFace id={a.id} />
+                      <AgentFace id={a.id} live={working} />
                       <span>{a.id}</span>
-                      {working ? <span className="spin" aria-label="working" /> : unread && <span className="unread-dot" aria-label="unread reply" />}
+                      {working ? <span className="live-sq" role="img" aria-label="working" /> : unread && <span className="unread-dot" aria-label="unread reply" />}
                     </button>
                   );
                 })}
@@ -685,9 +685,9 @@ export function App() {
                 {...(a.mainChat ? agentMenu.bind(a.mainChat) : {})}
                 onClick={() => agentMenu.clicked() && go('#/chat/' + (a.mainChat ?? a.id))}
               >
-                <AgentFace id={a.id} />
+                <AgentFace id={a.id} live={busy(a.id)} />
                 <span>{a.id}</span>
-                {busy(a.id) ? <span className="spin" aria-label="working" /> : unread && <span className="unread-dot" aria-label="unread reply" />}
+                {busy(a.id) ? <span className="live-sq" role="img" aria-label="working" /> : unread && <span className="unread-dot" aria-label="unread reply" />}
               </button>
             );
           })}
@@ -698,8 +698,8 @@ export function App() {
       <div className="side-group">Running</div>
       {runningTasks.map((c) => (
         <button key={c.id} type="button" className="nav-item running-item" title={`${cardRef(c)} ${c.title}${c.assignee ? ' · @' + c.assignee : ''}${pinfo.multi && pinfo.byId(c.projectId) ? ' · ' + pinfo.byId(c.projectId)!.name : ''}`} onClick={() => setOpenId(c.id)}>
-          <span className="spin" aria-hidden="true" />
-          <span className="running-ref">{cardRef(c)}</span>
+          <span className="live-sq" aria-hidden="true" />
+          <span className="running-ref mono">{cardRef(c)}</span>
           <span className="running-title">{c.title}</span>
         </button>
       ))}

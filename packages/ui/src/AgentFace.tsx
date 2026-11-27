@@ -2,9 +2,10 @@ import type { ReactNode } from 'react';
 import { tint } from './agentTint.ts';
 
 /**
- * An agent's avatar (#104): its #94 face drawn on a rounded tile in the agent's hue (agentTint.ts). The tile and figure
- * colours come from styles.css (.face .tile / .fig / .ink / .line, per theme); the size from where it sits. An agent
- * without a drawn face gets its initial on the same tile.
+ * An agent's avatar (#104): its #94 face on a square tile. Since #369 (the #362 redesign) the tile is neutral: the figure
+ * in the text colours on a tinted square, no hue and no accent. `live` (the agent is working) adds a thin accent light
+ * orbiting the square (styles.css .face.live). The size comes from where it sits. An agent without a drawn face gets
+ * its initial on the same tile.
  */
 const FACES: Record<string, ReactNode> = {
   // compass
@@ -42,12 +43,12 @@ export function hasFace(id: string): boolean {
   return id in FACES;
 }
 
-export function AgentFace({ id, title }: { id: string | null | undefined; title?: string }) {
+export function AgentFace({ id, title, live }: { id: string | null | undefined; title?: string; live?: boolean }) {
   const name = id || '?';
   return (
-    <span className="dot-avatar face" style={tint(id ?? '')} title={title} aria-hidden="true">
+    <span className={'dot-avatar face' + (live ? ' live' : '')} style={tint(id ?? '')} title={title} aria-hidden="true">
       <svg viewBox="0 0 24 24">
-        <rect className="tile" width="24" height="24" rx="7" />
+        <rect className="tile" width="24" height="24" />
         {FACES[name] ?? (
           <text className="initial" x="12" y="12" textAnchor="middle" dominantBaseline="central">
             {name.slice(0, 1).toUpperCase()}
