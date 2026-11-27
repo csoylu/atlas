@@ -13,6 +13,8 @@ const engine = await startEngine({
   leaseMs: LEASE_MS,
   providers: () => new SlowProvider(marker),
   env: {},
+  // Durability is under test, not the sandbox (#316 S5: always on, test harnesses opt out): the command step writes its marker in the data dir, which the sandbox denies.
+  sandbox: { enabled: false },
   // A command step (#273) clones a local bare repo standing in for GitHub.
   workflowCommand: { clone: async (_repo, dir) => void execFileSync('git', ['clone', '-q', origin, dir]) },
   // The default Review workflow (#263): GitHub says the task's PR is red, read every 20 ms.
@@ -64,7 +66,7 @@ if (engine.kanban.list().length === 0) {
       projectId: p.id,
       nodes: [
         { id: 'trigger', kind: 'trigger', x: 0, y: 0, config: { kind: 'manual' } },
-        { id: 'c', kind: 'action', x: 0, y: 0, config: { do: 'command', title: 'Count', command: `echo ran >> ${dataDir}/command-runs; sleep 0.3 # ${marker}`, secrets: [], limitMin: 5 } },
+        { id: 'c', kind: 'action', x: 0, y: 0, config: { do: 'command', title: 'Count', command: `echo ran >> "${dataDir}/command-runs"; sleep 0.3 # ${marker}`, secrets: [], limitMin: 5 } },
       ],
       edges: [{ from: 'trigger', exit: 'start', to: 'c' }],
     },

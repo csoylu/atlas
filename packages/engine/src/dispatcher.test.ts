@@ -189,6 +189,9 @@ describe('a ready task that does not start (#327)', () => {
     e.dispatcher.start(20);
     // Before #327 the first card's error ended every tick: the second never started, and both said « starting… ».
     await until(() => e.kanban.get(good.id).status === 'done', 'the other task done');
+    // Not at once: while the good run holds @atlas's slot the dispatcher drops the bad task's failure (« busy »), and
+    // the reason is back with the first tick after that run ends. Checked the instant the good task is done, it can still read « starting… ».
+    await until(() => e.kanban.get(bad.id).waiting === 'could not start: disk I/O error', 'the reason on the task that could not start');
     expect(e.kanban.get(bad.id)).toMatchObject({ status: 'ready', waiting: 'could not start: disk I/O error' });
     expect(e.runner.runs(bad.id)).toEqual([]);
     err.mockRestore();
