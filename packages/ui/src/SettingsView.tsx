@@ -18,7 +18,7 @@ import { SetRow, SetRows, SetSec } from './SettingsKit.tsx';
 import { ProjectsPage } from './ProjectsPage.tsx';
 import { WorkspacesPage } from './WorkspacesPage.tsx';
 import { useProjects } from './projects.tsx';
-import { THEMES, type ThemeChoice } from './theme.ts';
+import { ACCENTS, THEMES, useAccent, type ThemeChoice } from './theme.ts';
 import type { MessageStream } from './useMessages.ts';
 import { UpdateAbout } from './UpdateDialog.tsx';
 import { Skeleton } from './Kit.tsx';
@@ -256,6 +256,7 @@ function BoardSettings(props: { settings: Settings | null; agents: Agent[]; onSe
 function Appearance(props: { theme: ThemeChoice; onTheme(t: ThemeChoice): void; settings: Settings | null; onSettings(s: Settings): void; onError(e: unknown): void }) {
   const set = (patch: Partial<Settings>) => api.updateSettings(patch).then(props.onSettings, props.onError);
   const s = props.settings;
+  const [accent, setAccent] = useAccent();
   // Who shows notifications and the last failure (#350), read when the page opens.
   const [notifier, setNotifier] = useState<NotifierStatus | null>(null);
   const onError = props.onError;
@@ -271,6 +272,16 @@ function Appearance(props: { theme: ThemeChoice; onTheme(t: ThemeChoice): void; 
               {THEMES.map((t) => (
                 <button key={t} type="button" role="radio" aria-checked={props.theme === t} className={props.theme === t ? 'on' : ''} onClick={() => props.onTheme(t)}>
                   {t === 'system' ? 'Auto' : t.charAt(0).toUpperCase() + t.slice(1)}
+                </button>
+              ))}
+            </span>
+          </SetRow>
+          <SetRow label="Accent" help="For this device. The colour of what is live and of the main buttons; Blocked stays red." auto>
+            <span className="segmented accent-pick" role="radiogroup" aria-label="Accent">
+              {ACCENTS.map((a) => (
+                <button key={a.id} type="button" role="radio" aria-checked={accent === a.id} className={accent === a.id ? 'on' : ''} onClick={() => setAccent(a.id)}>
+                  <i className="accent-sw" style={{ background: a.hex }} aria-hidden="true" />
+                  {a.label}
                 </button>
               ))}
             </span>

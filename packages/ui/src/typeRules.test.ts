@@ -88,21 +88,28 @@ describe('UI type rules', () => {
 // ── Contrast ─────────────────────────────────────────────────────────────────────────────────────────────────────────
 type Theme = Record<string, string>;
 /** The custom properties set at the top level for :root (dark, the default) and for :root[data-theme='light']. */
-function themes(): { dark: Theme; light: Theme } {
+/** …and with an accent (#369): its dark block on both themes, then its light block on the light theme. */
+function themes(accent = 'lime'): { dark: Theme; light: Theme } {
   const top = CSS.replace(/\/\*[\s\S]*?\*\//g, '').replace(/@media[^{]*\{(?:[^{}]*\{[^}]*\})*[^{}]*\}/g, '');
   const dark: Theme = {};
   const light: Theme = {};
+  const accDark: Theme = {};
+  const accLight: Theme = {};
   for (const m of top.matchAll(/([^{}]+)\{([^}]*)\}/g)) {
     const sels = m[1]!.split(',').map((s) => s.trim());
     const props = [...m[2]!.matchAll(/--([\w-]+)\s*:\s*([^;]+);/g)].map((p) => [p[1]!, p[2]!.trim()] as const);
     const isLight = sels.includes(":root[data-theme='light']");
     const isDark = sels.includes(':root') || sels.includes(":root[data-theme='dark']");
+    const isAccDark = accent !== 'lime' && sels.includes(`:root[data-accent='${accent}']`);
+    const isAccLight = accent !== 'lime' && sels.includes(`:root[data-theme='light'][data-accent='${accent}']`);
     for (const [k, v] of props) {
       if (isDark) dark[k] = v;
       if (isLight) light[k] = v;
+      if (isAccDark) accDark[k] = v;
+      if (isAccLight) accLight[k] = v;
     }
   }
-  return { dark, light: { ...dark, ...light } };
+  return { dark: { ...dark, ...accDark }, light: { ...dark, ...light, ...accDark, ...accLight } };
 }
 function resolve(t: Theme, v: string, seen = 0): string {
   const m = /^var\(--([\w-]+)\)$/.exec(v);
@@ -123,13 +130,15 @@ export const contrast = (a: number[], b: number[]) => {
   return (x + 0.05) / (y + 0.05);
 };
 
-describe('text contrast (4.5:1 for information, both themes)', () => {
-  const { dark, light } = themes();
+describe.each(['lime', 'signal', 'ice', 'ultra'])('text contrast (4.5:1 for information, both themes), accent %s', (accent) => {
+  const { dark, light } = themes(accent);
   // Text colours that carry information; placeholders and disabled text may stay lower (not listed).
   const TEXT = ['text', 'muted', 'faint', 'accent', 'neg-ink', 'warn-ink', 'pos-ink'];
   const SURFACES = ['app', 'panel', 'raised'];
   // Inks on their own tint (chips, notices), the tint laid over the panel.
-  const PAIRS: Array<[string, string]> = [['wk-ink', 'wk-bg'], ['bk-ink', 'bk-bg'], ['dn-ink', 'dn-bg'], ['neg-ink', 'neg-bg'], ['warn-ink', 'warn-bg'], ['pos-ink', 'pos-bg'], ['bk-ink', 'panel'], ['bk-ink', 'raised']];
+  const PAIRS: Array<[string, string]> = [['wk-ink', 'wk-bg'], ['bk-ink', 'bk-bg'], ['dn-ink', 'dn-bg'], ['neg-ink', 'neg-bg'], ['warn-ink', 'warn-bg'], ['pos-ink', 'pos-bg'], ['bk-ink', 'panel'], ['bk-ink', 'raised'],
+    // the accent (#369): its text on its tint, a primary button's label, text on the accent fill
+    ['accent-hi', 'accent-soft'], ['btn-ink', 'btn-bg'], ['on-accent', 'accent-fill']];
   for (const [name, t] of [['dark', dark], ['light', light]] as const) {
     it(`${name}: text tokens on every surface`, () => {
       const low: string[] = [];

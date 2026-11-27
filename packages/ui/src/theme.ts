@@ -62,3 +62,47 @@ export function useTheme(): [ThemeChoice, Theme, (t: ThemeChoice) => void] {
     },
   ];
 }
+
+/**
+ * The accent (#369, the #362 redesign): one colour for what is live and what you act on, chosen per device next to the
+ * theme. Lime is the default. index.html applies it before the first paint; styles.css maps each one to the --accent*
+ * tokens of both themes (in light, the accent is only a fill, never text on paper). ?accent= previews one unsaved.
+ */
+export const ACCENTS = [
+  { id: 'lime', label: 'Lime', hex: '#c6ff1a' },
+  { id: 'signal', label: 'Signal', hex: '#ff6b1a' },
+  { id: 'ice', label: 'Ice', hex: '#2ee6ff' },
+  { id: 'ultra', label: 'Ultra', hex: '#9f7aff' },
+] as const;
+export type Accent = (typeof ACCENTS)[number]['id'];
+
+const ACCENT_KEY = 'atlas.accent';
+
+/** A stored or ?accent= value → an accent; anything unknown is Lime. */
+export function parseAccent(v: string | null): Accent {
+  return ACCENTS.some((a) => a.id === v) ? (v as Accent) : 'lime';
+}
+
+export function storedAccent(): Accent {
+  return parseAccent(new URLSearchParams(location.search).get('accent') ?? localStorage.getItem(ACCENT_KEY));
+}
+
+/** The current accent and a setter; follows a change made in another window. */
+export function useAccent(): [Accent, (a: Accent) => void] {
+  const [accent, setAccent] = useState<Accent>(storedAccent);
+  useEffect(() => {
+    document.documentElement.dataset.accent = accent;
+  }, [accent]);
+  useEffect(() => {
+    const on = (e: StorageEvent) => e.key === ACCENT_KEY && setAccent(storedAccent());
+    window.addEventListener('storage', on);
+    return () => window.removeEventListener('storage', on);
+  }, []);
+  return [
+    accent,
+    (a) => {
+      localStorage.setItem(ACCENT_KEY, a);
+      setAccent(a);
+    },
+  ];
+}

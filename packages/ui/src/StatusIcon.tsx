@@ -19,7 +19,7 @@ export const STATUS_LABEL: Record<IconStatus, string> = {
 
 /**
  * Linear-style status circles, one per card status (design §16): triage dashed, todo/ready empty (todo grey, ready
- * bright), running half-filled yellow, blocked orange with « ! », review half-filled green, done teal with a check,
+ * bright), running half-filled in the accent, blocked red with « ! », review half-filled (periwinkle, teal under Ultra), done grey with a check (#369),
  * failed (a run state, not a task status) red with a cross, closed/archived a grey ring with a cross (#265). Colours come from the --st-* tokens (both themes).
  */
 export function StatusIcon({ status, size = 14, title }: { status: IconStatus; size?: number; title?: string }) {
@@ -64,7 +64,7 @@ const SHAPES: Record<IconStatus, ReactNode> = {
   done: (
     <>
       <circle cx="7" cy="7" r="6.3" fill="var(--st-done)" />
-      <path d="m4.4 7.1 1.8 1.8 3.4-3.6" fill="none" stroke="var(--on-accent)" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round" />
+      <path d="m4.4 7.1 1.8 1.8 3.4-3.6" fill="none" stroke="var(--panel)" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round" />
     </>
   ),
   failed: (

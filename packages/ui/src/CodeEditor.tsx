@@ -219,7 +219,7 @@ const theme = EditorView.theme({
   '.cm-searchMatch': {
     background: 'var(--warn-bg)',
     outline: '1px solid var(--warning)',
-    borderRadius: '2px',
+    borderRadius: 0,
   },
   '.cm-searchMatch.cm-searchMatch-selected': {
     background: 'var(--accent-soft)',
