@@ -40,6 +40,7 @@ import {
   PRUNE_TAIL,
   opening,
   renderForSummary,
+  pairServerTools,
   serverToolProblem,
   SUMMARY_GUIDE,
   SUMMARY_MAX_TOKENS,
@@ -1162,7 +1163,8 @@ export class Runner {
         model: model.name,
         maxTokens,
         system: shape.system.text,
-        messages: [...(await shape.wire(view)), { role: 'user', content: [{ type: 'text', text: ask }] }],
+        // The ask after the view: a search still open in its last answer (pause_turn) goes as text (#395).
+        messages: pairServerTools([...(await shape.wire(view)), { role: 'user', content: [{ type: 'text', text: ask }] }]),
         tools: shape.tools,
         webSearch: shape.webSearch,
         cache: { systemStable: shape.system.stable, tail: 1 },

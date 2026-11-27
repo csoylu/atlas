@@ -508,6 +508,26 @@ describe('context management (design §8)', () => {
     expect(JSON.stringify(fake.calls[0]!.messages)).not.toContain('srv_9');
   });
 
+  it("a search left open by a tool turn, then the tool's result and notes (#395's stored shape), is sent valid", async () => {
+    const fake = new FakeProvider([text('Carrying on.')]);
+    const { engine } = await setup(fake);
+    const card = engine.kanban.create({ title: 'Open search', assignee: 'atlas' }, 'user');
+    engine.kanban.appendMessage(card.id, 'user', 'user', text('go'));
+    const search = { type: 'server_tool_use' as const, id: 'srv_open', name: 'web_search', input: { query: 'x' } };
+    engine.kanban.appendMessage(card.id, 'assistant', 'atlas', [{ type: 'thinking', thinking: 'hm', signature: 'sig' }, { type: 'tool_use', id: 'a', name: 'shell', input: { command: 'ls' } }, search], 1);
+    engine.kanban.appendMessage(card.id, 'user', 'tool', [{ type: 'tool_result', tool_use_id: 'a', content: 'ok' }]);
+    engine.kanban.appendMessage(card.id, 'user', 'system', text('[memory] a note'));
+    engine.kanban.appendMessage(card.id, 'user', 'system', text('a reply from paris'));
+    engine.runner.wake(card.id);
+    await engine.runner.settled(card.id);
+    expect(engine.runner.runs(card.id)[0]!.status).toBe('done');
+    const sent = fake.calls[0]!.messages;
+    expect(serverToolProblem(sent)).toBeNull();
+    expect(JSON.stringify(sent)).not.toContain('srv_open');
+    expect(JSON.stringify(sent)).toContain('(searched the web: {\\"query\\":\\"x\\"})');
+    expect(engine.kanban.messages(card.id)[1]!.content[2]).toEqual(search); // the stored history is not edited
+  });
+
   it('decides with the provider’s real token count, chars/4 only without one', async () => {
     const fake = new FakeProvider(responder(4, 'They said hello.', 'Hi again.'));
     const { engine } = await setup(fake);

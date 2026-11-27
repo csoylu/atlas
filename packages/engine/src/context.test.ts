@@ -323,9 +323,28 @@ describe('provider web search pairs (#144)', () => {
     const out = pairServerTools(before);
     expect(out[1]!.content[0]).toEqual({ type: 'text', text: '(searched the web: {"query":"q p"})' });
     expect(serverToolProblem(out)).toBeNull();
-    // The answer just after a client tool that also started a search: the search may still come back.
+    // Just after a client tool that also started a search, the API refuses the open search (#395): it goes as text.
+    expect(serverToolProblem(before.slice(0, 3))).toBe('messages.1.content.0: server_tool_use p without its web_search_tool_result');
     expect(serverToolProblem(pairServerTools(before.slice(0, 3)))).toBeNull();
-    expect(pairServerTools(before.slice(0, 3))[1]!.content[0]).toEqual(search('p'));
+    expect(pairServerTools(before.slice(0, 3))[1]!.content[0]).toEqual({ type: 'text', text: '(searched the web: {"query":"q p"})' });
+  });
+
+  it("sends #395's stored shape valid: tool + search in one answer, then the tool's result and text notes", () => {
+    seq = 0;
+    const msgs = [
+      m('user', t('go')),
+      m('assistant', [thinking, use('a'), search('s')], 1),
+      m('user', [result('a')]),
+      m('user', t('[memory] a note')),
+      m('user', t('a reply from paris')),
+    ];
+    const view = compactedView(msgs, 'earlier work', 0);
+    expect(JSON.stringify(view)).not.toContain('server_tool_use');
+    expect(view.at(-2)!.content).toEqual([thinking, use('a'), { type: 'text', text: '(searched the web: {"query":"q s"})' }]);
+    expect(view.at(-1)!.content.map((b) => b.type)).toEqual(['tool_result', 'text', 'text']);
+    expect(serverToolProblem(view)).toBeNull();
+    // Unrepaired, it stops with where it is instead of a 400.
+    expect(serverToolProblem(buildMessages(msgs))).toBe('messages.1.content.2: server_tool_use s without its web_search_tool_result');
   });
 
   it('drops a message emptied by the move and merges its neighbours', () => {
