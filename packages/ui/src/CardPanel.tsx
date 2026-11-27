@@ -170,6 +170,8 @@ export function CardPanel(props: {
   return (
     <aside className={'panel chat-pane' + (props.hiddenDocs ? ' has-docs' : '')}>
       <HeaderActions>
+        {/* While the agent works, a light runs along the header's bottom line (redesign #362/#370). */}
+        {convo.run?.status === 'running' && <span className="scan" aria-hidden="true" />}
         <ChatPins chatId={card.id} cards={props.cards} stream={stream} onOpen={props.onOpen} onError={onError} />
         {!!props.hiddenDocs && (
           <button
@@ -499,7 +501,8 @@ export function Activity(props: {
           <Fragment key={m.id}>
           {newLine}
           <div className={'msg ' + m.role + (cont && !newLine ? ' cont' : '')} data-seq={m.seq}>
-            {(!cont || newLine) && <div className="who">{m.author === USER ? (props.userName ?? 'You') : <><AgentFace id={m.author} />{m.author}</>}</div>}
+            {/* Master's messages sit on a surface and need no name (redesign #370); the agent's carry its face and name. */}
+            {(!cont || newLine) && m.author !== USER && <div className="who"><AgentFace id={m.author} />{m.author}</div>}
             <div className="msg-body">
               {isAgent(m) ? (
                 renderTurn(ms, running && last, last)
@@ -831,6 +834,12 @@ export const CardComposer = forwardRef<
           </div>
         )}
         <AttachmentStrip a={att} />
+        {/* The keyboard hint on the empty line (#370): gone as soon as there is something to send. */}
+        {!text && !att.items.length && !comments?.list.length && !dragging && (
+          <span className="composer-hint" aria-hidden="true">
+            <span className="kbd">/</span> for commands
+          </span>
+        )}
         {dragging && <div className="drop-hint">{canAttach ? DROP_HINT : NO_AGENT}</div>}
         <textarea
           style={dragging ? { display: 'none' } : undefined}
