@@ -185,7 +185,7 @@ describe('the shared browser (#298 S6)', () => {
     l.host.emit({ type: 'quote', id: chat.id, via: 'key' });
     expect(l.events.at(-1)).toEqual({ type: 'browser.selection', chatId: chat.id, sel: null, quote: 'key' });
     expect(l.engine.browser.get(chat.id)).toEqual(before);
-    const pill = { x: 400, y: 300, colors: { bg: '#222', border: '#333', text: '#eee', accent: '#4fb8d0', chip: '#2a2a2a', faint: '#888' }, font: 'Inter, sans-serif', mono: 'ui-monospace' };
+    const pill = { x: 400, y: 300, colors: { bg: '#222', border: '#333', text: '#eee', accent: '#4fb8d0', chip: '#2a2a2a', faint: '#888' }, sans: 'Inter, sans-serif', mono: 'ui-monospace' };
     // Not on screen: hidden.
     expect((await l.call('PUT', `/browser/tabs/${chat.id}/pill`, { pill })).status).toBe(204);
     expect(l.host.pills.at(-1)).toEqual([chat.id, null]);

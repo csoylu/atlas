@@ -68,7 +68,10 @@ export function paneResolve(t: PaneQuoteTab): QuoteResolve {
       if (s.empty) return null;
       const passage = view.state.sliceDoc(s.from, s.to).replace(/\s+$/, '');
       if (!passage.trim()) return null;
-      const lines: [number, number] = [view.state.doc.lineAt(s.from).number, view.state.doc.lineAt(s.to).number];
+      // A selection ending at the start of a line (a triple click takes the line break) ends on the line before.
+      const end = view.state.doc.lineAt(s.to);
+      const last = end.from === s.to && s.to > s.from ? end.number - 1 : end.number;
+      const lines: [number, number] = [view.state.doc.lineAt(s.from).number, Math.max(view.state.doc.lineAt(s.from).number, last)];
       return paneSource(t, target, passage, true, { lines });
     }
     if (kind === 'src') {

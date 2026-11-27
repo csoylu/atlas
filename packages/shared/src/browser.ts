@@ -114,7 +114,7 @@ export const BrowserPill = z
     /** The app's tokens now (theme and accent are Master's): --raised, --line-2, --text, --accent, --chip, --faint. */
     colors: z.object({ bg: z.string().max(80), border: z.string().max(80), text: z.string().max(80), accent: z.string().max(80), chip: z.string().max(80), faint: z.string().max(80) }),
     /** --font and --mono. */
-    font: z.string().max(300),
+    sans: z.string().max(300),
     mono: z.string().max(300),
   })
   .nullable();

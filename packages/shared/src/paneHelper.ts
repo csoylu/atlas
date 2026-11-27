@@ -141,9 +141,9 @@ const selNow = () => {
     const k = document.createRange();
     k.setStart(pre, 0);
     k.setEnd(r.startContainer, r.startOffset);
-    const from = k.toString().split('\n').length;
+    const from = k.toString().split('\\n').length;
     k.setEnd(r.endContainer, r.endOffset);
-    return { text: s.toString().replace(/^\n+|\s+$/g, ''), selector: null, lines: [from, k.toString().split('\n').length], code: true, rect: view(f) };
+    return { text: s.toString().replace(/^\\n+|\\s+$/g, ''), selector: null, lines: [from, k.toString().split('\\n').length], code: true, rect: view(f) };
   }
   return { text: s.toString().trim(), selector: cssPath(el, document.body), lines: null, code: !!el.closest('pre'), rect: view(f) };
 };

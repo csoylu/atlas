@@ -192,7 +192,7 @@ export function DocPanel(props: {
         x: Math.max(8, pillAt.x),
         y: Math.max(8, pillAt.y - 42),
         colors: { bg: v('--raised'), border: v('--line-2'), text: v('--text'), accent: v('--accent'), chip: v('--chip'), faint: v('--faint') },
-        font: v('--font'),
+        sans: v('--font'),
         mono: v('--mono'),
       })
       .catch(onError);

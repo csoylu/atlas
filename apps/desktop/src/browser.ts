@@ -188,7 +188,7 @@ export class ElectronBrowser implements BrowserHost {
     this.pillAt = at;
     const paint = () =>
       view.webContents
-        .executeJavaScript(`paint(${JSON.stringify({ ...p.colors, font: p.font, mono: p.mono })})`)
+        .executeJavaScript(`paint(${JSON.stringify({ ...p.colors, font: p.sans, mono: p.mono })})`)
         .then((size: [number, number]) => {
           if (this.pillAt !== at) return;
           at.size = size;

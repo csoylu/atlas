@@ -38,6 +38,12 @@ test.beforeAll(async () => {
 /** A local site: sets a cookie, counts clicks on its button. Loopback goes direct (the agent's dev server). */
 async function site(): Promise<{ url: string; close(): Promise<void> }> {
   const s = http.createServer((req, res) => {
+    if (req.url?.startsWith('/quote')) {
+      res.setHeader('content-type', 'text/html');
+      return res.end(
+        `<title>Quote</title><body style="margin:0;font:20px sans-serif"><p id=t style="position:fixed;left:10px;top:10px;margin:0">Plans start at nine euros</p><input id=i style="position:fixed;left:10px;top:100px;width:300px"><div id=ce contenteditable style="position:fixed;left:10px;top:160px;width:300px;height:30px;border:1px solid">edit</div><p id=n style="position:fixed;left:10px;top:220px;margin:0;user-select:none">Not selectable</p></body>`,
+      );
+    }
     if (req.url?.startsWith('/dl')) res.setHeader('content-disposition', 'attachment; filename="atlas.dmg"');
     res.setHeader('set-cookie', `visit=${encodeURIComponent(req.url ?? '/')}; Path=/; Max-Age=3600`);
     res.setHeader('content-type', 'text/html');
@@ -331,4 +337,70 @@ test('agent tools (S7): snapshot → click → type → Master takes control →
   expect(back.output.startsWith('Master handed back the browser; the page is now:\nPage: Site /tools')).toBe(true);
   expect(back.output).toContain('value="munih and Master"');
   expect((await tool('browser_snapshot', {})).output.startsWith('Page: ')).toBe(true);
+});
+
+test('#368: Master’s selection on the page is read in Atlas’s world and drawn as Atlas’s pill; Q quotes it; Q in an input or a contenteditable is the page’s', async () => {
+  const chat = (await atlas.call<{ id: string }>('POST', '/agents/atlas/chats')).body;
+  await atlas.call('POST', `/browser/tabs/${chat.id}/open`, { url: web.url + '/quote' });
+  await atlas.call('PUT', '/browser/view', { chatId: chat.id, bounds: { x: 600, y: 80, width: 600, height: 700 } });
+  await expect.poll(async () => (await atlas.call<Tab>('GET', `/browser/tabs/${chat.id}`)).body).toMatchObject({ title: 'Quote', loading: false });
+  const input = (events: Record<string, unknown>[]) =>
+    app.evaluate(async (_e, [id, evs]) => {
+      const wc = (globalThis as any).__atlas.host.tabs.get(id).view.webContents;
+      for (const ev of evs) wc.sendInputEvent(ev);
+      await new Promise((ok) => setTimeout(ok, 300));
+    }, [chat.id, events] as const);
+  const dbl = (x: number, y: number) =>
+    input([
+      { type: 'mouseDown', x, y, button: 'left', clickCount: 1 },
+      { type: 'mouseUp', x, y, button: 'left', clickCount: 1 },
+      { type: 'mouseDown', x, y, button: 'left', clickCount: 2 },
+      { type: 'mouseUp', x, y, button: 'left', clickCount: 2 },
+    ]);
+  const click = (x: number, y: number) => input([{ type: 'mouseDown', x, y, button: 'left', clickCount: 1 }, { type: 'mouseUp', x, y, button: 'left', clickCount: 1 }]);
+  const key = (k: string) => input([{ type: 'keyDown', keyCode: k }, { type: 'char', keyCode: k }, { type: 'keyUp', keyCode: k }]);
+  const sels = () => app.evaluate(() => (globalThis as any).__atlas.events.filter((e: any) => e.type === 'browser.selection') as { sel: { text: string; selector: string; rect: { x: number } } | null; quote?: string }[]);
+  const page = (code: string) => app.evaluate((_e, [id, c]) => (globalThis as any).__atlas.host.tabs.get(id).view.webContents.executeJavaScript(c), [chat.id, code] as const);
+
+  // A double click on « nine »: the selection is said, with where it sits; the page's own world sees no Atlas global.
+  await dbl(160, 22);
+  await expect.poll(async () => (await sels()).at(-1)?.sel?.text).toBe('nine');
+  expect((await sels()).at(-1)!.sel!.selector).toContain('#t');
+  expect(await page('Object.keys(window).filter((k) => /atlas/i.test(k)).length')).toBe(0);
+  // The pill: Atlas's own view, over the page (the site's DOM is untouched).
+  await atlas.call('PUT', `/browser/tabs/${chat.id}/pill`, { pill: { x: 700, y: 60, colors: { bg: '#222', border: '#444', text: '#eee', accent: '#7af', chip: '#333', faint: '#999' }, sans: 'sans-serif', mono: 'monospace' } });
+  await expect.poll(() => app.evaluate(() => (globalThis as any).__atlas.host.pillView?.getVisible() ?? false)).toBe(true);
+  expect(await page('!!document.querySelector(".qt-pop")')).toBe(false);
+  // Q quotes it (the key never reaches the page).
+  await page('window.__keys = 0; addEventListener("keydown", () => window.__keys++, true); 0');
+  await key('q');
+  await expect.poll(async () => (await sels()).at(-1)?.quote).toBe('key');
+  expect(await page('window.__keys')).toBe(0);
+  // The wheel scrolls the page from under it: the selection and the pill go.
+  await input([{ type: 'mouseWheel', x: 100, y: 100, deltaX: 0, deltaY: -50 }]);
+  await expect.poll(async () => (await sels()).at(-1)?.sel ?? null).toBeNull();
+
+  // Q in an input: a q typed, nothing quoted.
+  const quotes = async () => (await sels()).filter((e) => e.quote).length;
+  const before = await quotes();
+  await dbl(160, 22);
+  await click(100, 110);
+  await key('q');
+  await expect.poll(() => page('document.getElementById("i").value')).toBe('q');
+  // And in a contenteditable.
+  await dbl(160, 22);
+  await click(200, 175);
+  await key('q');
+  await expect.poll(() => page('document.getElementById("ce").textContent')).toContain('q');
+  expect(await quotes()).toBe(before);
+  // A selection the page forbids (user-select: none): nothing said.
+  await click(400, 400);
+  await expect.poll(async () => (await sels()).at(-1)?.sel ?? null).toBeNull();
+  await dbl(40, 230);
+  await new Promise((ok) => setTimeout(ok, 300));
+  expect((await sels()).at(-1)?.sel ?? null).toBeNull();
+  // A jump back lights the passage again (selected on the page for 2 s); one that is gone says so.
+  expect((await atlas.call<{ found: boolean }>('POST', `/browser/tabs/${chat.id}/flash`, { passage: 'nine euros', selector: 'body > p#t' })).body).toEqual({ found: true });
+  expect(await page('getSelection().toString()')).toBe('nine euros');
+  expect((await atlas.call<{ found: boolean }>('POST', `/browser/tabs/${chat.id}/flash`, { passage: 'ten dollars', selector: null })).body).toEqual({ found: false });
 });
