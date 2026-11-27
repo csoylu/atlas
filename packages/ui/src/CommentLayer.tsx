@@ -307,8 +307,11 @@ interface FrameMsg {
   flashed?: boolean;
 }
 
-/** Talks to the helper of the page in `frame`: comment mode on/off, the marks to draw; its picks and keys come back. */
-export function useFrameComments(frame: RefObject<HTMLIFrameElement | null>, c: PaneComment | undefined, version: number) {
+/**
+ * Talks to the helper of the page in `frame`: comment mode on/off, the marks to draw; its picks and keys come back.
+ * Returns whether the helper has answered (a page served without it never does).
+ */
+export function useFrameComments(frame: RefObject<HTMLIFrameElement | null>, c: PaneComment | undefined, version: number): boolean {
   const on = !!c?.on;
   const marks = JSON.stringify(c?.marks.map((m) => ({ n: m.n, style: m.mark.style, box: m.mark.box })).filter((m) => m.box) ?? []);
   const [ready, setReady] = useState(0);
@@ -347,6 +350,7 @@ export function useFrameComments(frame: RefObject<HTMLIFrameElement | null>, c: 
   }, [frame, flash?.t, ready]); // eslint-disable-line react-hooks/exhaustive-deps
   // The selection's pill goes when the page goes (a new version, another tab).
   useEffect(() => () => cb.current.c?.onSel?.(null, cb.current.version), []); // eslint-disable-line react-hooks/exhaustive-deps
+  return ready > 0;
 }
 
 /* ── The comment box, the hint, the chips ─────────────────────────────────────────────────── */

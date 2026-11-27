@@ -744,17 +744,20 @@ function CommentLink({ url, title, version, comment: cm }: { url: string; title:
     return { shown: r, of: { w: Math.max(1, Math.round(r.w)), h: Math.max(1, Math.round(r.h)) }, origin: { x: 0, y: 0 }, unit: 'px' };
   };
   const s = space();
-  // A file of a workspace (#368): served with the pane helper, so its text (a raw file, a page) can be quoted. Its
-  // marks stay drawn here, over the frame (an area or a spot of the frame as shown).
+  // A file of a workspace (#368): served with the pane helper (a page, a raw text file). Once the helper answers, it
+  // takes comment mode like an html artifact's (#381): a pick in the page's own coordinates, at any scroll, with the
+  // elements inside an area. Without it (another site, a file the engine serves as is): an area of the frame as shown.
   const frame = useRef<HTMLIFrameElement>(null);
   const own = paneUrl(url);
-  const quoting = useMemo(() => (own ? { ...cm, on: false, marks: [] } : undefined), [own, cm]);
-  useFrameComments(frame, quoting, version);
+  const [helped, setHelped] = useState(false);
+  const inFrame = useMemo(() => (own ? (helped ? cm : { ...cm, on: false, marks: [] }) : undefined), [own, helped, cm]);
+  const ready = useFrameComments(frame, inFrame, version);
+  useEffect(() => setHelped(!!own && ready), [own, ready]);
   return (
     <div ref={box} className="cm-pic cm-pic-frame">
       <iframe ref={frame} className="doc-frame" title={title} sandbox={sandboxFor(url)} src={own ?? url} loading="lazy" />
-      {s && <Marks items={pictureMarks(cm.marks, s, s.shown)} />}
-      {cm.on && (
+      {s && !helped && <Marks items={pictureMarks(cm.marks, s, s.shown)} />}
+      {cm.on && !helped && (
         <PickOverlay
           label="Click a spot or drag an area of the page"
           onPick={(b, click) => {
