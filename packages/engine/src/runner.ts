@@ -135,6 +135,23 @@ export interface WakeOptions {
 }
 
 /** What the dispatcher needs to know when a run ends. */
+/** How long shutdown() waits for the aborted runs to end (#375). */
+export const SHUTDOWN_LIMIT_MS = 10_000;
+/** A run still going after the shutdown limit: what the quit log names. */
+export interface StuckRun {
+  runId: string;
+  /** « #370 » (a task) or the chat's id. */
+  card: string;
+  agentId: string;
+  kind: RunKind;
+  /** Its tool calls still running, in order. */
+  tools: string[];
+}
+
+/** « #370 munih (work run) in shell, web_fetch », « c_1a2b atlas (chat run) in its model call ». */
+export const stuckText = (s: StuckRun): string =>
+  `${s.card} @${s.agentId} (${s.kind} run ${s.runId}) in ${s.tools.length ? s.tools.join(', ') : 'its model call or between calls'}`;
+
 export interface RunEnd {
   run: Run;
   terminal: Terminal;
@@ -160,6 +177,8 @@ export class Runner {
   private timers: NodeJS.Timeout[] = [];
   /** Set by shutdown(): no run starts any more on this engine (#327: a stopping engine went on starting chat runs). */
   private closing = false;
+  /** Aborted by shutdown(): a /compact still writing its summary stops too (#375). */
+  private closed = new AbortController();
   /** Set by the dispatcher. */
   onRunEnd: (end: RunEnd) => void = () => {};
   /** Set by the dispatcher: deliver a message an agent posted on another card. */
@@ -314,7 +333,7 @@ export class Runner {
       const folded = restOf();
       if (!folded.length) throw new ConflictError(transcript.length ? 'nothing new to compact since the last summary' : 'nothing to compact yet');
       const last = upto(transcript);
-      const signal = AbortSignal.timeout(COMPACT_TIMEOUT_MS);
+      const signal = AbortSignal.any([AbortSignal.timeout(COMPACT_TIMEOUT_MS), this.closed.signal]);
       let summary = conv.summary ?? '';
       for (let round = 0; restOf().length; round++) {
         if (round >= 8) throw new ModelError('compaction needed more than 8 summary calls: the conversation is too big for this model');
@@ -555,14 +574,34 @@ export class Runner {
     return null;
   }
 
-  /** Graceful stop: abort runs (they end 'interrupted' and resume at next start), stop timers. */
-  async shutdown(): Promise<void> {
+  /**
+   * Graceful stop: abort runs (they end 'interrupted' and resume at next start), stop timers. A run still going
+   * `limitMs` after its abort (a call that ignores it) no longer holds the quit (#375): the processes of its running
+   * tool calls are killed, its lease is expired so the next start resumes it at once (design §6), and it is returned,
+   * named, for the quit log. Empty: every run ended.
+   */
+  async shutdown(limitMs = SHUTDOWN_LIMIT_MS): Promise<StuckRun[]> {
     this.closing = true;
+    this.closed.abort(new Error('engine shutting down'));
     this.timers.forEach(clearInterval);
     this.background.shutdown();
     const all = [...this.active.values()];
     for (const a of all) a.ctrl.abort(new Error('engine shutting down'));
-    await Promise.allSettled(all.map((a) => a.done));
+    let timer: NodeJS.Timeout | undefined;
+    const ended = await Promise.race([
+      Promise.allSettled(all.map((a) => a.done)).then(() => true),
+      new Promise<false>((ok) => (timer = setTimeout(() => ok(false), limitMs))),
+    ]);
+    clearTimeout(timer);
+    if (ended) return [];
+    const stuck = [...this.active.entries()].filter(([, a]) => all.includes(a));
+    const now = new Date().toISOString();
+    return stuck.map(([cardId, a]) => {
+      const calls = this.db.prepare("SELECT name, pid FROM tool_calls WHERE run_id = ? AND status = 'running' ORDER BY id").all(a.runId) as { name: string; pid: number | null }[];
+      for (const c of calls) killOrphan(c.pid);
+      this.db.prepare("UPDATE runs SET lease_until = ? WHERE id = ? AND owner = ? AND status = 'running'").run(now, a.runId, this.instance);
+      return { runId: a.runId, card: this.kanban.ref(cardId), agentId: a.agentId, kind: a.kind, tools: calls.map((c) => c.name) };
+    });
   }
 
   private renew(): void {

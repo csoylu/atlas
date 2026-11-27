@@ -1,0 +1,1 @@
+## Fixed · #375 · An update no longer fails because a working agent holds up the quit: each quit step waits at most 10 s, names in the quit log what was still running, and the agent's run resumes after the restart.

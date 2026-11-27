@@ -125,7 +125,7 @@ async function tried(ctx: BrowserToolContext, name: 'browser_open' | 'browser_ac
   let target = o.action === 'press' ? (o.text ?? '') : '';
   if (o.ref !== undefined && o.action !== 'press' && o.action !== 'back') {
     // A read (no input) as Master's side: the agent's own calls are refused now. A page that can't answer: no name.
-    const r = await ctx.browser.cdp(ctx.chatId, 'Accessibility.getPartialAXTree', { backendNodeId: o.ref, fetchRelatives: false }, 'master').then(
+    const r = await untilAborted(ctx.browser.cdp(ctx.chatId, 'Accessibility.getPartialAXTree', { backendNodeId: o.ref, fetchRelatives: false }, 'master'), ctx.signal).then(
       (v) => v as { nodes: AxNode[] },
       () => ({ nodes: [] as AxNode[] }),
     );
@@ -158,9 +158,22 @@ async function shown(ctx: BrowserToolContext, o: Input<'browser_act'>): Promise<
   return { verb: VERB[o.action], target: o.action === 'scroll' ? (o.text ?? 'down').trim() : target, point };
 }
 
-/** CDP on the chat's tab, as the agent (refused while Master has it). */
+/**
+ * CDP on the chat's tab, as the agent (refused while Master has it). A page that never answers (a dialog, a frozen
+ * renderer) no longer holds the run: a stop or the engine's shutdown ends the wait (#375).
+ */
 const cdp = <T = Record<string, unknown>>(ctx: BrowserToolContext, method: string, params?: Record<string, unknown>) =>
-  ctx.browser.cdp(ctx.chatId, method, params, 'agent') as Promise<T>;
+  untilAborted(ctx.browser.cdp(ctx.chatId, method, params, 'agent') as Promise<T>, ctx.signal);
+
+/** `p`, or the signal's reason as soon as it aborts (the CDP call itself has no signal). */
+function untilAborted<T>(p: Promise<T>, signal: AbortSignal): Promise<T> {
+  if (signal.aborted) return Promise.reject(signal.reason instanceof Error ? signal.reason : new Error('aborted'));
+  return new Promise<T>((ok, fail) => {
+    const onAbort = () => fail(signal.reason instanceof Error ? signal.reason : new Error('aborted'));
+    signal.addEventListener('abort', onAbort, { once: true });
+    p.then(ok, fail).finally(() => signal.removeEventListener('abort', onAbort));
+  });
+}
 
 /** Does the action; returns a line to put above the snapshot, or ''. */
 async function act(ctx: BrowserToolContext, o: Input<'browser_act'>): Promise<string> {
