@@ -259,7 +259,9 @@ export const resultText = (b: { content: unknown }): ContentBlock => ({ type: 't
  * into text and keep the other. Here, on the view (the transcript is never changed):
  * - a result whose request is elsewhere (an earlier message, or after it) gets its request moved right before it,
  * - a result whose request is gone (folded, pruned) becomes its one line of text,
- * - a request with no result becomes text, except in the view's last assistant message (a turn the provider continues).
+ * - a request with no result becomes text, except when its message is the view's last message (a paused turn the
+ *   provider continues, pause_turn). Followed by anything, even tool results, the API refuses it (#395: 400
+ *   « server_tool_use … without a corresponding web_search_tool_result », on every retry).
  * Emptied messages are dropped and neighbours of one role merged (tool results first). Returns copies (the input itself when it has no web search).
  */
 export function pairServerTools(view: Turn[]): Turn[] {
@@ -267,7 +269,7 @@ export function pairServerTools(view: Turn[]): Turn[] {
   if (!view.some(has)) return view;
   const out: Turn[] = view.map((t) => ({ role: t.role, content: [...t.content] }));
   const assistants = out.filter((t) => t.role === 'assistant');
-  const lastAssistant = assistants.at(-1);
+  const final = out.at(-1);
   const findUse = (id: string) => {
     for (const t of assistants) {
       const i = t.content.findIndex((b) => b.type === 'server_tool_use' && b.id === id);
@@ -292,7 +294,7 @@ export function pairServerTools(view: Turn[]): Turn[] {
       i++;
     }
   for (const t of assistants)
-    t.content = t.content.map((b) => (b.type === 'server_tool_use' && !answered.has(b.id) && t !== lastAssistant ? searchedText(b) : b));
+    t.content = t.content.map((b) => (b.type === 'server_tool_use' && !answered.has(b.id) && t !== final ? searchedText(b) : b));
 
   const merged: Turn[] = [];
   for (const t of out) {
@@ -312,7 +314,6 @@ export function pairServerTools(view: Turn[]): Turn[] {
  */
 export function serverToolProblem(view: Turn[]): string | null {
   const answered = new Set<string>();
-  const lastAssistant = view.findLastIndex((t) => t.role === 'assistant');
   for (let m = 0; m < view.length; m++) {
     const t = view[m]!;
     const uses = new Set<string>();
@@ -326,7 +327,7 @@ export function serverToolProblem(view: Turn[]): string | null {
         answered.add(b.tool_use_id);
       }
     }
-    if (m !== lastAssistant)
+    if (m !== view.length - 1) // only a paused turn, the view's last message, may hold a search still running
       for (let i = 0; i < t.content.length; i++) {
         const b = t.content[i]!;
         if (b.type === 'server_tool_use' && !answered.has(b.id)) return `messages.${m}.content.${i}: server_tool_use ${b.id} without its web_search_tool_result`;
