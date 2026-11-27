@@ -560,14 +560,18 @@ export class Kanban {
             const { n } = this.db.prepare("SELECT COUNT(*) AS n FROM memory_proposals WHERE card_id = ? AND status = 'pending'").get(id) as { n: number };
             this.notify({ kind: 'memory.cleanup', title: n ? `Memory cleanup: ${n} proposal${n === 1 ? '' : 's'}` : 'Memory cleanup: nothing to change', body: summary ?? '', cardId: id });
           } else if (after.status === 'done') {
-            // A workflow's agent step (#170): the Inbox says which workflow ran (kind kept from schedules).
+            // A task a workflow made (#170: a step's own task): the Inbox says which workflow ran (kind kept from schedules).
+            // Not a task a workflow only acted on (#377): the Review's agent step works in the task's own thread, and its
+            // actions move it; that task is a plain « done » with its handoff.
             const s = this.db
               .prepare(
-                `SELECT w.name AS title FROM workflow_run_steps st JOIN workflow_runs r ON r.id = st.run_id JOIN workflows w ON w.id = r.workflow_id WHERE st.card_id = ?
+                `SELECT w.name AS title FROM workflow_run_steps st JOIN workflow_runs r ON r.id = st.run_id JOIN workflows w ON w.id = r.workflow_id
+                   WHERE st.card_id = ? AND st.card_id IS NOT r.subject_card
                  UNION ALL SELECT w.name FROM workflow_nodes n JOIN workflows w ON w.id = n.workflow_id WHERE n.own_card_id = ? LIMIT 1`,
               )
               .get(id, id) as { title: string } | undefined;
-            this.notify(s ? { kind: 'schedule.ran', title: s.title, body: summary ?? '', cardId: id } : { kind: 'card.done', title: after.title, body: summary ?? '', cardId: id });
+            const body = this.doneText(before, summary);
+            this.notify(s ? { kind: 'schedule.ran', title: s.title, body, cardId: id } : { kind: 'card.done', title: after.title, body, cardId: id });
           }
         }
       }
@@ -706,6 +710,24 @@ export class Kanban {
   }
 
   /** A notification row inside the current transaction (tx()), announced once it commits. */
+  /**
+   * What a done item says (#377): the given summary, and for a task with pull requests its builder's latest handoff
+   * (task_request_review), else the reviewer's latest verdict. A merge seen on GitHub or the Review's « Task → Done »
+   * gives no text of its own, or only the merge.
+   */
+  private doneText(card: Card, summary: string | undefined): string {
+    const parts = [summary?.trim() ?? ''];
+    if (card.prs.length) {
+      const last = (kind: string, field: string): string => {
+        const r = this.db.prepare('SELECT payload FROM card_events WHERE card_id = ? AND kind = ? ORDER BY id DESC LIMIT 1').get(card.id, kind) as { payload: string } | undefined;
+        const v = r ? (JSON.parse(r.payload) as Record<string, unknown>)[field] : null;
+        return typeof v === 'string' ? v.trim() : '';
+      };
+      parts.push(last('review_requested', 'summary') || last('pr_verdict', 'reason'));
+    }
+    return [...new Set(parts.filter(Boolean))].join('\n\n');
+  }
+
   private notify(n: NewNotification): void {
     const created = insertNotification(this.db, n);
     this.afterCommit.push(() => this.bus.emit({ type: 'notification.created', notification: created }));

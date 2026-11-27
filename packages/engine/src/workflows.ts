@@ -512,17 +512,6 @@ export class Workflows {
     });
   }
 
-  /** The workflow a card belongs to (a step's task, or an agent step's own task), for notifications. */
-  workflowOfCard(cardId: string): { id: string; name: string } | null {
-    const r = this.db
-      .prepare(
-        `SELECT w.id, w.name FROM workflow_run_steps s JOIN workflow_runs r ON r.id = s.run_id JOIN workflows w ON w.id = r.workflow_id WHERE s.card_id = ?
-         UNION ALL SELECT w.id, w.name FROM workflow_nodes n JOIN workflows w ON w.id = n.workflow_id WHERE n.own_card_id = ? LIMIT 1`,
-      )
-      .get(cardId, cardId) as { id: string; name: string } | undefined;
-    return r ?? null;
-  }
-
   /** An agent step's own task (« one task, keeps history »), once created. */
   ownTask(workflowId: string, nodeId: string): string | null {
     const r = this.db.prepare('SELECT own_card_id FROM workflow_nodes WHERE workflow_id = ? AND id = ?').get(workflowId, nodeId) as { own_card_id: string | null } | undefined;

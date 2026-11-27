@@ -259,7 +259,7 @@ describe('pull requests linked to tasks (#189), reviewed by the Review workflow 
     await eventually(() => e.kanban.get(c.id).status === 'done', { what: 'Done from the merge' });
     expect(e.kanban.get(c.id)).toMatchObject({ status: 'done', block: null });
     expect(e.notifications.inbox().needsYou).toEqual([]);
-    expect(e.notifications.inbox().updates).toMatchObject([{ kind: 'card.done', cardId: c.id, body: 'PR #41 merged into main (a44628d)' }]);
+    expect(e.notifications.inbox().updates).toMatchObject([{ kind: 'card.done', cardId: c.id, body: 'PR #41 merged into main (a44628d)\n\nengine + tests' }]);
     expect(e.runner.runs(c.id)).toEqual([]); // moved from GitHub, no agent run
   });
 
