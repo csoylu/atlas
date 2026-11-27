@@ -875,6 +875,7 @@ export function App() {
             onModelsChanged={() => api.models().then(setModels, fail)}
             update={update}
             onOpenUpdate={() => setUpdateOpen(true)}
+            onOpenCard={setOpenId}
             secretStatus={secretStatus}
             onError={fail}
           />

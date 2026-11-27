@@ -51,6 +51,8 @@ export function SettingsView(props: {
   /** App updates (#123): Settings → About shows the version, the last check and « Check now ». */
   update: UpdateStatus | null;
   onOpenUpdate(): void;
+  /** Opens a task beside the page. */
+  onOpenCard(id: string): void;
   /** Where secret values are kept and whether the server's file is locked (#208), live. */
   secretStatus: SecretStoreStatus | null;
   onError(e: unknown): void;
@@ -173,7 +175,7 @@ export function SettingsView(props: {
             {page === 'projects' ? (
               <ProjectsPage rest={props.memoryRest} agents={props.agents} cards={props.cards} workflows={props.workflows} onError={onError} />
             ) : page === 'agents' ? (
-              <AgentsView rest={props.memoryRest} settings={props.settings} cards={props.cards} chats={props.chats} onSettings={props.onSettings} onAgentsChanged={props.onAgentsChanged} onError={onError} />
+              <AgentsView rest={props.memoryRest} settings={props.settings} cards={props.cards} chats={props.chats} onSettings={props.onSettings} onAgentsChanged={props.onAgentsChanged} onOpenCard={props.onOpenCard} onError={onError} />
             ) : page === 'workspaces' ? (
               <WorkspacesPage agents={props.agents} stream={stream} onError={onError} />
             ) : page === 'memory' ? (

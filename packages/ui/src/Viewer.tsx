@@ -1,6 +1,6 @@
-import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState, type CSSProperties, type ReactNode, type RefObject } from 'react';
 import { createPortal } from 'react-dom';
-import Markdown from 'react-markdown';
+import Markdown, { type Components } from 'react-markdown';
 import remarkGfm from 'remark-gfm';
 import { changedSections, findSection, linkOf, splitSections, USER, withPaneHelper, type Doc, type DocContent, type DocSection, type DocVersion } from '@atlas/shared';
 import { api, ApiError } from './api.ts';
@@ -488,7 +488,13 @@ function MarkdownDoc(props: { doc: Doc; sections: DocSection[]; changed: Set<str
   const tick = useSizeTick(art, !!cm?.marks.length);
   const marks = useMemo(() => (art.current && cm?.marks.length ? markdownMarks(art.current, cm.marks) : []), [cm?.marks, tick]); // eslint-disable-line react-hooks/exhaustive-deps
   const sectionOf = useCallback((el: Element) => (el.closest('[data-sec]') as HTMLElement | null)?.dataset.sec ?? null, []);
-  return (
+  // The Library (redesign #362): H2 sections numbered 01, 02… in the text and in a contents rail; a meta line under the H1.
+  const lib = !!props.path;
+  const numbers = useMemo(() => (lib ? sectionNumbers(props.sections) : new Map<string, string>()), [lib, props.sections]);
+  const current = useCurrentSection(art, doc.id, lib ? props.sections.filter((s) => numbers.has(s.id)) : []);
+  const meta = lib && <DocMeta doc={doc} version={props.version} />;
+  const h1First = props.sections[0]?.level === 1;
+  const article = (
     <article
       ref={art}
       className="doc-md md"
@@ -502,22 +508,118 @@ function MarkdownDoc(props: { doc: Doc; sections: DocSection[]; changed: Set<str
         if (p) cm.onPick(p, props.version);
       }}
     >
-      {props.path && <p className="doc-path">{doc.path}</p>}
-      {props.sections.map((s) => (
-        <section key={s.id || '_intro'} id={secId(doc.id, s.id)} data-sec={s.id} className={'doc-sec' + (props.changed.has(s.id) ? ' changed' : '')}>
-          {props.changed.has(s.id) && (
-            <div className="doc-sec-tools">
-              <button className="doc-chg" title="Mark as seen" onClick={props.onSeen}>
-                changed
-              </button>
-            </div>
-          )}
-          <MarkdownText text={s.text} line={s.line} />
-        </section>
-      ))}
+      {lib && !h1First && meta}
+      {props.sections.map((s, i) => {
+        const n = numbers.get(s.id);
+        return (
+          <section
+            key={s.id || '_intro'}
+            id={secId(doc.id, s.id)}
+            data-sec={s.id}
+            className={'doc-sec' + (props.changed.has(s.id) ? ' changed' : '') + (n ? ' numbered' : '')}
+            style={n ? ({ '--sec-n': `"${n}"` } as CSSProperties) : undefined}
+          >
+            {props.changed.has(s.id) && (
+              <div className="doc-sec-tools">
+                <button className="doc-chg" title="Mark as seen" onClick={props.onSeen}>
+                  changed
+                </button>
+              </div>
+            )}
+            <MarkdownText text={s.text} line={s.line} afterH1={i === 0 && h1First ? meta : undefined} />
+          </section>
+        );
+      })}
       {!props.sections.length && <p className="muted">This document is empty.</p>}
       {marks.length > 0 && <Marks items={marks} />}
     </article>
+  );
+  if (!lib || !numbers.size) return article;
+  return (
+    <div className="doc-lay">
+      <nav className="doc-toc" aria-label="Contents">
+        <div className="doc-toc-in">
+          <div className="doc-toc-t">Contents</div>
+          <ol>
+            {props.sections
+              .filter((s) => numbers.has(s.id))
+              .map((s) => (
+                <li key={s.id}>
+                  <a
+                    href={'#' + secId(doc.id, s.id)}
+                    className={current === s.id ? 'on' : undefined}
+                    aria-current={current === s.id ? 'location' : undefined}
+                    onClick={(e) => {
+                      e.preventDefault(); // the hash is the app's route
+                      document.getElementById(secId(doc.id, s.id))?.scrollIntoView({ block: 'start', behavior: 'smooth' });
+                    }}
+                  >
+                    <span className="doc-toc-n">{numbers.get(s.id)}</span>
+                    <span>{s.title}</span>
+                  </a>
+                </li>
+              ))}
+          </ol>
+        </div>
+      </nav>
+      {article}
+    </div>
+  );
+}
+
+/** « 01 », « 02 »… for each H2 section, in order (the contents rail and the heading share it). */
+export function sectionNumbers(sections: DocSection[]): Map<string, string> {
+  const out = new Map<string, string>();
+  for (const s of sections) if (s.level === 2) out.set(s.id, String(out.size + 1).padStart(2, '0'));
+  return out;
+}
+
+/** The section being read: the last of `sections` whose top has reached the top of the scroller (the first one before). */
+function useCurrentSection(art: RefObject<HTMLElement | null>, docId: string, sections: DocSection[]): string | null {
+  const ids = sections.map((s) => s.id).join('\n');
+  const [current, setCurrent] = useState<string | null>(null);
+  useEffect(() => {
+    const list = ids ? ids.split('\n') : [];
+    const box = art.current?.closest('.sd-body');
+    if (!box || !list.length) return;
+    const update = () => {
+      const top = box.getBoundingClientRect().top + 96;
+      let on = list[0]!;
+      for (const id of list) {
+        const el = document.getElementById(secId(docId, id));
+        if (el && el.getBoundingClientRect().top <= top) on = id;
+      }
+      // At the very bottom the last sections can't reach the top: the last one is being read.
+      if (box.scrollTop > 0 && box.scrollTop + box.clientHeight >= box.scrollHeight - 2) on = list[list.length - 1]!;
+      setCurrent(on);
+    };
+    update();
+    box.addEventListener('scroll', update, { passive: true });
+    return () => box.removeEventListener('scroll', update);
+  }, [art, docId, ids]);
+  return current;
+}
+
+/** The Library's meta line, mono: file path, author, when (the latest version), « vN of M ». */
+function DocMeta({ doc, version }: { doc: Doc; version: number }) {
+  const by = doc.updatedBy || doc.agentId;
+  const at = new Date(doc.updatedAt);
+  return (
+    <p className="doc-meta">
+      <span className="doc-meta-path">{doc.path}</span>
+      <span className="doc-meta-by">
+        <AgentFace id={by} />
+        {who(by)}
+      </span>
+      {version === doc.version && (
+        <span title={at.toLocaleString()}>
+          {at.toLocaleDateString('en-GB', { day: 'numeric', month: 'short', year: 'numeric' })} · {at.toLocaleTimeString('en-GB', { hour: '2-digit', minute: '2-digit' })}
+        </span>
+      )}
+      <span>
+        v{version} of {doc.version}
+      </span>
+    </p>
   );
 }
 
@@ -541,10 +643,40 @@ function lineComponents(line: number) {
     };
   return out;
 }
-const MarkdownText = ({ text, line }: { text: string; line?: number }) => {
+/** A table cell that starts with a figure (« 122 », « $4.20 », « −3 % ») is set in mono (redesign #362). */
+export const isFigure = (text: string) => /^\s*[-+−~≈<>±]?\s*[$€£]?\d/.test(text);
+const textOf = (n: ReactNode): string => (typeof n === 'string' || typeof n === 'number' ? String(n) : Array.isArray(n) ? n.map(textOf).join('') : n && typeof n === 'object' && 'props' in n ? textOf((n.props as { children?: ReactNode }).children) : '');
+const MarkdownText = ({ text, line, afterH1 }: { text: string; line?: number; afterH1?: ReactNode }) => {
   const lined = useMemo(() => (line ? lineComponents(line) : {}), [line]);
+  const components = useMemo(() => {
+    const H1 = lined.h1;
+    const Td = lined.td;
+    return {
+      ...lined,
+      a: ({ node: _n, ...a }: Record<string, unknown>) => <a {...(a as object)} target="_blank" rel="noreferrer" />,
+      td: (p: Record<string, unknown> & { node?: MdNode; children?: ReactNode }) => {
+        const cls = isFigure(textOf(p.children)) ? 'fig' : undefined;
+        if (Td) return Td({ ...p, className: cls });
+        const { node: _n, ...rest } = p;
+        return <td {...(rest as object)} className={cls} />;
+      },
+      ...(afterH1
+        ? {
+            h1: (p: Record<string, unknown> & { node?: MdNode }) => {
+              const { node: _n, ...rest } = p;
+              return (
+                <>
+                  {H1 ? H1(p) : <h1 {...(rest as object)} />}
+                  {afterH1}
+                </>
+              );
+            },
+          }
+        : {}),
+    };
+  }, [lined, afterH1]);
   return (
-    <Markdown remarkPlugins={[remarkGfm]} components={{ ...lined, a: ({ node: _n, ...a }) => <a {...a} target="_blank" rel="noreferrer" /> }}>
+    <Markdown remarkPlugins={[remarkGfm]} components={components as Components}>
       {text}
     </Markdown>
   );

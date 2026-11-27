@@ -699,7 +699,7 @@ const SCREENS = [
   { name: 'settings-memory-old-link', hash: '#/library/memory/m9302', ready: '.mem-row.focus', memory: true, keys: ['.mem-note', '.mem-t', '.settings-nav a'] },
   { name: 'inbox-cleanup', hash: '#/inbox/n9007', ready: '.mem-digest', inbox: true, keys: ['.ibx-dh .ibx-title', '.md-act', '.md-text', '.mem-digest .btn'] },
   { name: 'inbox-digest', hash: '#/inbox/n-1', ready: '.mem-digest', inbox: true, memory: true, keys: ['.ibx-dh .ibx-title', '.md-act', '.md-text a', '.mem-digest .btn'] },
-  ...(doc ? [{ name: 'library-doc', hash: `#/library/${doc.id}`, ready: '.viewer .doc-md', keys: ['.sd-ver-btn', '.crumb h1', '.viewer h2'] }] : []),
+  ...(doc ? [{ name: 'library-doc', hash: `#/library/${doc.id}`, ready: '.viewer .doc-md', keys: ['.sd-ver-btn', '.crumb h1', '.viewer h2', '.doc-toc a', '.doc-meta span', '.md td'] }] : []),
   // The version picker open over the viewer.
   ...(doc ? [{ name: 'library-doc-versions', hash: `#/library/${doc.id}`, ready: '.viewer .doc-md', then: { js: `document.querySelector('.sd-ver-btn').click();`, ready: '.fixed-pop .pop-row' }, keys: ['.fixed-pop .pop-row', '.pop-note'] }] : []),
   // The sidebar's Search row (#349; the More tab on a phone) opens the same palette on a click; in server mode « Server » sits after the name.
@@ -739,6 +739,8 @@ const SCREENS = [
   { name: 'settings-secrets', hash: '#/settings/secrets', ready: '.sec-row', secrets: SECRET_STATUS, keys: ['.settings-group-title', '.sec-grant.all', '.sec-desc', '.sec-row .badge', '.sec-row .model-actions button', '.set-sec-title, .section-head h2'] },
   { name: 'settings-secrets-add', hash: '#/settings/secrets', ready: '.sec-row', secrets: SECRET_STATUS, then: { js: `[...document.querySelectorAll('.model-row.add')].find((b) => b.textContent.includes('Add a secret')).click(); await new Promise((r) => setTimeout(r, 100)); document.querySelector('.segmented [role=radio]:nth-child(2)').click(); await new Promise((r) => setTimeout(r, 100)); document.querySelector('.sec-form').scrollIntoView({ block: 'start' });`, ready: '.sec-pick label' }, keys: ['.sec-form .field', '.segmented button', '.sec-pick label', '.sec-form .actions button'] },
   { name: 'settings-secrets-locked', hash: '#/settings/secrets', ready: '.sec-lock', secrets: SECRET_LOCKED, keys: ['.sec-lock h3', '.sec-lock .sec-paused', '.update-badge-label', '.update-badge-v'] },
+  // An agent's page (#372): the switcher strip, the hero, the stepper and the memory meter.
+  { name: 'settings-agent-page', hash: '#/settings/agents/atlas', ready: '.ag-hero', keys: ['.ag-tab span', '.ag-hero-name', '.ag-hero-pj', '.ag-runs', '.set-label', '.mem-meter-figs span'] },
   ...SETTINGS.map((p) => ({ name: 'settings-' + p.replace('/', '-'), hash: '#/settings/' + p, ready: '.settings', keys: ['.settings-group-title', '.settings-nav a', '.set-label, .set-sec-title, .section-head h2'] })),
   // The narrow window's list of settings pages (#272): #/settings alone.
   { name: 'settings-index', hash: '#/settings', ready: '.settings', keys: ['.settings-group-title', '.settings-nav a', '.settings-index a', 'h1'] },
