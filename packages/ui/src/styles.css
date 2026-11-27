@@ -3409,6 +3409,42 @@ button.cm-sref:hover { border-color: var(--accent); }
   display: -webkit-box; -webkit-line-clamp: 3; -webkit-box-orient: vertical; overflow: hidden;
 }
 .cm-sref-c { font-size: var(--fs-base); line-height: var(--lh-normal); white-space: pre-wrap; overflow-wrap: anywhere; }
+/* Quotes in a chat (#367, mockup #364). The Quote action: a pill above the start of the selection (fixed, placed by QuoteLayer). */
+.qt-pop {
+  position: fixed; z-index: 40; display: inline-flex; align-items: center; gap: 6px; height: 32px; padding: 0 6px 0 10px;
+  border-radius: 999px; background: var(--raised); border: 1px solid var(--line-2); box-shadow: var(--float-shadow); color: var(--text);
+  font: var(--fw-medium) var(--fs-small) / var(--lh-tight) var(--font); white-space: nowrap; cursor: pointer;
+}
+.qt-pop:hover { border-color: var(--accent); }
+.qt-pop .icon { color: var(--accent); }
+.qt-pop.off { padding: 0 12px; color: var(--muted); cursor: default; font-weight: var(--fw-regular); }
+.qt-pop.off:hover { border-color: var(--line-2); }
+/* Phone: the system menu keeps the selection; Quote waits in a pill just above the composer. */
+.qt-dock { position: sticky; bottom: 0; z-index: 3; display: flex; justify-content: center; padding: 0 14px 6px; pointer-events: none; }
+.qt-pop.dock { position: static; height: 40px; padding: 0 16px; font-size: var(--fs-base); pointer-events: auto; }
+/* A passage waiting in the composer as a quote: underlined in its message, with its number. */
+.qt-mark { background: none; color: inherit; text-decoration: underline 2px var(--accent); text-underline-offset: 4px; }
+.cm-num.qt-n { width: 18px; height: 18px; border-radius: 5px; margin-left: 4px; vertical-align: 1px; cursor: pointer; }
+/* Jump back: the passage the clicked quote came from, lit for 2 s. */
+.qt-flash { color: inherit; border-radius: 4px; background: var(--accent-soft); outline: 2px solid var(--accent); outline-offset: 1px; -webkit-box-decoration-break: clone; box-decoration-break: clone; animation: qt-flash 2s ease-out forwards; }
+@keyframes qt-flash { 0%, 60% { outline-color: var(--accent); } 100% { outline-color: transparent; } }
+/* A quote chip is a comment chip (#304) with the quote mark in the kind slot. */
+.qt-kind .icon { color: var(--accent); }
+.qt-chip { cursor: pointer; }
+.qt-chip:hover { border-color: var(--accent); }
+.qt-code { font-family: var(--mono); }
+/* The note box: the pane's comment box, floating under the selection (a sheet on a phone). */
+.cm-box.qt-box { width: 340px; }
+.cm-box.qt-box.sheet {
+  left: 0; right: 0; top: auto; bottom: 0; width: auto; max-width: none; padding: 14px 14px calc(14px + env(safe-area-inset-bottom));
+  border-radius: 14px 14px 0 0; border-width: 1px 0 0; z-index: 70;
+}
+.qt-box.sheet .btn { min-height: 40px; padding: 0 16px; }
+.qt-box .cm-box-what { color: var(--text); }
+.qt-box .cm-box-foot { justify-content: flex-end; } /* keys sit inside the buttons, as « Create task ⌘↵ » */
+/* The sent message: the quote and comment cards, in number order, above the text. */
+.cm-sent.qt-sent { margin-top: 0; margin-bottom: 6px; }
+.qt-card .cm-sref-q { color: var(--text); white-space: pre-wrap; overflow-wrap: anywhere; }
 @media (hover: none) { .cm-hint .kbd { display: none; } }
 
 /* Unread replies (#338): a chat whose agent's final reply wasn't seen: bold name and a teal dot (the spinner takes the

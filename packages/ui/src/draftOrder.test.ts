@@ -21,7 +21,8 @@ function render(messages: Message[], draft: Draft): string {
   const html = renderToStaticMarkup(createElement(Activity, { convo, card, stream, empty: '', onError() {} }));
   // What only differs by streaming: the caret, the streaming class, React's generated ids, the seq a landed message
   // carries for memory source links (#82).
-  return html.replace('<span class="caret" aria-hidden="true"></span>', '').replace(' streaming', '').replace(/ (id|aria-controls|data-seq)="[^"]*"/g, '');
+  // Quote attributes (#367) come with the landed message: a streaming text can't be quoted yet.
+  return html.replace('<span class="caret" aria-hidden="true"></span>', '').replace(' streaming', '').replace(/ (id|aria-controls|data-seq|data-qseq|data-qblock|data-qwho)="[^"]*"/g, '');
 }
 
 describe('streaming thinking (#80)', () => {

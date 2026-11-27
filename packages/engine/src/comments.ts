@@ -36,8 +36,9 @@ const MIN_SIDE = 4;
 export async function commentBlocks(comments: PostComment[], d: CommentDeps): Promise<({ type: 'text'; text: string } | ImageBlock)[]> {
   const out: ({ type: 'text'; text: string } | ImageBlock)[] = [];
   for (const [i, c] of comments.entries()) {
-    const { where, extra, picture } = await describe(c, d, i + 1);
-    out.push({ type: 'text', text: d.redact(formatComment(i + 1, where, c.anchor, c.text, extra)) });
+    const n = c.n ?? i + 1;
+    const { where, extra, picture } = await describe(c, d, n);
+    out.push({ type: 'text', text: d.redact(formatComment(n, where, c.anchor, c.text, extra)) });
     if (picture) out.push(picture);
   }
   return out;
