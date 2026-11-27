@@ -348,6 +348,9 @@ describe('the update to #334 (no project review agent): each review step gets th
     expect(path(run)).toEqual([['trigger', 'start'], ['ci', 'event'], ['checks', 'yes'], ['own', 'yes'], ['review', 'approved'], ['merge', 'merged'], ['done', 'done']]);
     expect(e.runner.runs(m.id).filter((r) => r.kind !== 'work' || r.agentId !== 'munih').map((r) => r.agentId)).toContain('zurich');
     expect(e.kanban.get(m.id).reviewer).toBe('zurich');
+    // The Inbox (#377): one « done » item with the task's title and the builder's handoff, not « Review ran » with no text.
+    expect(inbox(e, 'schedule.ran')).toEqual([]);
+    expect(inbox(e, 'card.done')).toEqual([{ title: 'Workflows', body: 'built', card_id: m.id, archived_at: null }]);
     await idle(m.id);
   });
 });
