@@ -1232,7 +1232,7 @@ button.artifact:hover .art-open { color: var(--accent); }
 .pick-model { overflow: hidden; text-overflow: ellipsis; color: var(--text); }
 .pick-effort { color: var(--text); }
 .pick-pop {
-  position: absolute; bottom: calc(100% + 10px); right: -2px; z-index: 30; width: 300px; padding: 8px;
+  position: absolute; bottom: calc(100% + 10px); left: -2px; z-index: 30; width: min(300px, calc(100vw - 24px)); padding: 8px;
   border: 1px solid var(--border); border-radius: 0; background: var(--sheet); color: var(--text); font-size: var(--fs-small);
   display: flex; flex-direction: column; gap: 4px;
 }
@@ -3424,6 +3424,13 @@ button.wfl-ghead:hover { color: var(--text); background: var(--hover); }
 .set-row .set-val { font-size: var(--fs-base); color: var(--text); overflow-wrap: anywhere; padding-top: 6px; }
 .set-ctl select.mono, .set-ctl input.mono { font-family: var(--mono); font-size: var(--fs-small); }
 .set-ctl textarea { width: 100%; resize: vertical; }
+/* Model and its default effort side by side (#380); the effort drops under the model on a narrow screen. */
+.set-ctl > .model-effort { width: 100%; display: flex; flex-wrap: wrap; gap: 8px; }
+.model-effort > select:first-child { flex: 1 1 240px; min-width: 0; }
+.model-effort > select:last-child { flex: 0 0 150px; }
+.agent-new-row { flex-wrap: wrap; }
+.agent-new-row .field { min-width: 180px; }
+.agent-new-row .field.effort-field { flex: 0 0 150px; min-width: 150px; }
 .set-row.danger .set-label { color: var(--neg-ink); }
 .set-row > .repo-check, .set-row > p { margin: 0; }
 /* − N + : the number between two square buttons, one block. */

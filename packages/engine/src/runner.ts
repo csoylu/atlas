@@ -976,6 +976,8 @@ export class Runner {
 
   /** The request of a turn of `agent` on `card`, minus its messages (TurnShape). */
   private turnShape(agent: Agent, card: Card, kind: RunKind, workdir: string, tools: ToolSpec[]): TurnShape {
+    // The chat/task pick wins; on Auto, the agent's default effort (#380); neither = the model's default.
+    const effort = card.effort ?? agent.effort;
     // The task's own images (#119) open the view: not in the transcript, so they follow the task's current list.
     const taskBlocks = card.board === 'direct' ? [] : taskImageBlocks(card, workdir);
     // The newest pictures carry their bytes (read from their files now); older ones go as a text line.
@@ -986,7 +988,7 @@ export class Runner {
       tools,
       // Off: no web search either (#298 §2.3); it runs at the provider, so it is simply not offered.
       webSearch: this.opts.sandbox?.network?.setting(card.projectId, agent.id).level !== 'off',
-      ...(card.effort ? { effort: card.effort } : {}),
+      ...(effort ? { effort } : {}),
       wire: (view) => withPictures(withTaskImages(view, taskBlocks), IMAGE_KEEP, pinned),
       extra: estimateTokens(taskBlocks),
     };

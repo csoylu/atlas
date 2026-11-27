@@ -7,6 +7,7 @@ interface AgentRow {
   id: string;
   role_prompt: string;
   model_id: string;
+  effort: Agent['effort'];
   workdir: string | null;
   enabled: number;
   max_runs: number;
@@ -17,6 +18,7 @@ const toAgent = (r: AgentRow): Agent => ({
   id: r.id,
   rolePrompt: r.role_prompt,
   modelId: r.model_id,
+  effort: r.effort,
   workdir: r.workdir,
   enabled: r.enabled === 1,
   maxRuns: r.max_runs,
@@ -54,8 +56,8 @@ export class Agents {
     if (!this.db.prepare('SELECT 1 FROM models WHERE id = ?').get(c.modelId)) throw new ConflictError(`model ${c.modelId} does not exist`);
     this.db.transaction(() => {
       this.db
-        .prepare('INSERT INTO agents (id, role_prompt, model_id, workdir, max_runs) VALUES (?, ?, ?, ?, ?)')
-        .run(c.id, c.rolePrompt, c.modelId, c.workdir, c.maxRuns);
+        .prepare('INSERT INTO agents (id, role_prompt, model_id, effort, workdir, max_runs) VALUES (?, ?, ?, ?, ?, ?)')
+        .run(c.id, c.rolePrompt, c.modelId, c.effort, c.workdir, c.maxRuns);
       // A new agent joins the default project, in its own workdir (#213): with one project, everyone is in it.
       this.db
         .prepare(
@@ -105,6 +107,7 @@ export class Agents {
       if (!this.db.prepare('SELECT 1 FROM models WHERE id = ?').get(p.modelId)) throw new NotFoundError(`model ${p.modelId} does not exist`);
       cols.model_id = p.modelId;
     }
+    if (p.effort !== undefined) cols.effort = p.effort;
     if (p.workdir !== undefined) cols.workdir = p.workdir;
     if (p.enabled !== undefined) cols.enabled = p.enabled ? 1 : 0;
     if (p.maxRuns !== undefined) cols.max_runs = p.maxRuns;

@@ -459,6 +459,8 @@ export interface Agent {
   id: string;
   rolePrompt: string;
   modelId: string;
+  /** Default effort (#380), sent when the chat or task has effort on Auto; null = the model's default. */
+  effort: Effort | null;
   workdir: string | null;
   enabled: boolean;
   /** Work runs this agent may have at once. */
@@ -475,6 +477,7 @@ export const UpdateAgent = z
   .object({
     rolePrompt: z.string().max(50_000),
     modelId: z.string(),
+    effort: Effort.nullable(),
     workdir: z.string().nullable(),
     enabled: z.boolean(),
     maxRuns: z.number().int().min(1).max(10),
@@ -485,6 +488,7 @@ export const CreateAgent = z.object({
   id: z.string().regex(/^[a-z][a-z0-9_-]{1,30}$/, 'lowercase letters, digits, - or _'),
   rolePrompt: z.string().max(50_000).default(''),
   modelId: z.string(),
+  effort: Effort.nullable().default(null),
   workdir: z.string().nullable().default(null),
   maxRuns: z.number().int().min(1).max(10).default(1),
 });

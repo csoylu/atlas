@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useState } from 'react';
-import { cardRef, type Agent, type Card, type Memory, type Model, type Settings, type Workflow } from '@atlas/shared';
+import { cardRef, Effort, type Agent, type Card, type Memory, type Model, type Settings, type Workflow } from '@atlas/shared';
 import { api, ApiError } from './api.ts';
 import { AgentFace } from './AgentFace.tsx';
 import { HeaderActions, Icon } from './ScreenHeader.tsx';
@@ -8,6 +8,7 @@ import { EmptyState, ErrorState, Skeleton } from './Kit.tsx';
 import { memoryHref } from './memoryView.ts';
 import { friendlyModel, friendlyModelOf } from './modelNames.ts';
 import { useProjects } from './projects.tsx';
+import { effortName } from './Usage.tsx';
 import { verdictSteps } from './workflowView.ts';
 
 /**
@@ -267,15 +268,18 @@ function AgentPage(props: {
           <SetRow label="Role" help="Who this agent is and what it does. The first line shows to other agents.">
             <textarea aria-label="Role" rows={4} value={draft.rolePrompt} onChange={(e) => setDraft({ ...draft, rolePrompt: e.target.value })} />
           </SetRow>
-          <SetRow label="Model" help="Plans, keys and local models are in the Models group.">
-            <select className="mono" aria-label="Model" value={draft.modelId} onChange={(e) => setDraft({ ...draft, modelId: e.target.value })}>
-              {!model && <option value={draft.modelId}>{draft.modelId} (missing)</option>}
-              {props.models.map((m) => (
-                <option key={m.id} value={m.id}>
-                  {friendlyModel(m.name)} · {m.id}
-                </option>
-              ))}
-            </select>
+          <SetRow label="Model" help="Plans, keys and local models are in the Models group. Effort applies when a chat or task leaves it on Auto.">
+            <span className="model-effort">
+              <select className="mono" aria-label="Model" value={draft.modelId} onChange={(e) => setDraft({ ...draft, modelId: e.target.value })}>
+                {!model && <option value={draft.modelId}>{draft.modelId} (missing)</option>}
+                {props.models.map((m) => (
+                  <option key={m.id} value={m.id}>
+                    {friendlyModel(m.name)} · {m.id}
+                  </option>
+                ))}
+              </select>
+              <EffortSelect value={draft.effort} onChange={(effort) => setDraft({ ...draft, effort })} />
+            </span>
           </SetRow>
           <SetRow label="Tasks at once" help="How many of its tasks can run in parallel." auto>
             <span className="stepper" role="group" aria-label="Tasks at once">
@@ -302,7 +306,7 @@ function AgentPage(props: {
               className="btn primary small"
               onClick={() =>
                 api
-                  .updateAgent(a.id, { rolePrompt: draft.rolePrompt, modelId: draft.modelId, workdir: draft.workdir, enabled: draft.enabled, maxRuns: draft.maxRuns })
+                  .updateAgent(a.id, { rolePrompt: draft.rolePrompt, modelId: draft.modelId, effort: draft.effort, workdir: draft.workdir, enabled: draft.enabled, maxRuns: draft.maxRuns })
                   .then(props.onChanged, onError)
               }
             >
@@ -399,24 +403,40 @@ function MemoryMeter({ used, limit }: { used: number; limit: number }) {
   );
 }
 
+/** The agent's default effort (#380): « Model default » = none sent, the model's own. */
+function EffortSelect(props: { value: Effort | null; onChange(v: Effort | null): void }) {
+  return (
+    <select aria-label="Effort" value={props.value ?? ''} onChange={(e) => props.onChange(e.target.value ? Effort.parse(e.target.value) : null)}>
+      <option value="">Model default</option>
+      {Effort.options.map((e) => (
+        <option key={e} value={e}>
+          {effortName(e)}
+        </option>
+      ))}
+    </select>
+  );
+}
+
 function NewAgent(props: { models: Model[]; onCreated(): void; onCancel(): void; onError(e: unknown): void }) {
   const [id, setId] = useState('');
   const [role, setRole] = useState('');
   const [modelId, setModelId] = useState('');
+  const [effort, setEffort] = useState<Effort | null>(null);
   return (
     <form
       className="set-card"
       aria-label="New agent"
       onSubmit={(e) => {
         e.preventDefault();
-        api.createAgent({ id: id.trim(), rolePrompt: role, modelId: modelId || props.models[0]?.id || '' }).then(() => {
+        api.createAgent({ id: id.trim(), rolePrompt: role, modelId: modelId || props.models[0]?.id || '', effort }).then(() => {
           setId('');
           setRole('');
+          setEffort(null);
           props.onCreated();
         }, props.onError);
       }}
     >
-      <div className="field-row">
+      <div className="field-row agent-new-row">
         <label className="field">
           Name
           <input autoFocus value={id} onChange={(e) => setId(e.target.value.toLowerCase())} placeholder="munih" pattern="[a-z][a-z0-9_-]{1,30}" required />
@@ -430,6 +450,10 @@ function NewAgent(props: { models: Model[]; onCreated(): void; onCancel(): void;
               </option>
             ))}
           </select>
+        </label>
+        <label className="field effort-field">
+          Effort
+          <EffortSelect value={effort} onChange={setEffort} />
         </label>
       </div>
       <label className="field">
