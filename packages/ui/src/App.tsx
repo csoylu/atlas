@@ -666,7 +666,7 @@ export function App() {
                     >
                       <AgentFace id={a.id} live={working} />
                       <span>{a.id}</span>
-                      {working ? <span className="live-sq" role="img" aria-label="working" /> : unread && <span className="unread-dot" aria-label="unread reply" />}
+                      {working ? <span className="live-fly" role="img" aria-label="working"><i /><i /><i /><i /></span> : unread && <span className="unread-dot" aria-label="unread reply" />}
                     </button>
                   );
                 })}
@@ -688,7 +688,7 @@ export function App() {
               >
                 <AgentFace id={a.id} live={busy(a.id)} />
                 <span>{a.id}</span>
-                {busy(a.id) ? <span className="live-sq" role="img" aria-label="working" /> : unread && <span className="unread-dot" aria-label="unread reply" />}
+                {busy(a.id) ? <span className="live-fly" role="img" aria-label="working"><i /><i /><i /><i /></span> : unread && <span className="unread-dot" aria-label="unread reply" />}
               </button>
             );
           })}
@@ -699,7 +699,7 @@ export function App() {
       <div className="side-group">Running</div>
       {runningTasks.map((c) => (
         <button key={c.id} type="button" className="nav-item running-item" title={`${cardRef(c)} ${c.title}${c.assignee ? ' · @' + c.assignee : ''}${pinfo.multi && pinfo.byId(c.projectId) ? ' · ' + pinfo.byId(c.projectId)!.name : ''}`} onClick={() => setOpenId(c.id)}>
-          <span className="live-sq" aria-hidden="true" />
+          <span className="live-fly" aria-hidden="true"><i /><i /><i /><i /></span>
           <span className="running-ref mono">{cardRef(c)}</span>
           <span className="running-title">{c.title}</span>
         </button>
@@ -720,7 +720,6 @@ export function App() {
   );
   const foot = (
     <div className="sidebar-foot">
-      <span className="me" aria-hidden="true">{(settings?.userName ?? '?').slice(0, 1).toUpperCase()}</span>
       <span className="me-name">{settings?.userName ?? ''}</span>
       {auth.enabled && <span className="me-scope">Server</span>}
       <span className={'conn ' + (online ? 'up' : 'down')} role="status" aria-label={online ? 'Engine connected' : 'Engine offline'} title={online ? 'Engine connected' : 'Engine offline'} />

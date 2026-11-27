@@ -35,14 +35,16 @@ export type Pin = 'doc' | 'ask' | 'plan';
 export type Segment =
   | { kind: 'text'; key: string; text: string }
   | { kind: 'step'; step: Step }
-  | { kind: 'group'; key: string; steps: Step[] }
+  /** live: the turn's trailing calls while its run goes on (#382): one steady box from the first call. */
+  | { kind: 'group'; key: string; steps: Step[]; live?: boolean }
   | { kind: 'pin'; pin: Pin; step: Step };
 
 type Use = Extract<ContentBlock, { type: 'tool_use' | 'server_tool_use' }>;
 
 /**
  * Split a turn (one agent's consecutive messages) into segments. 2+ tool calls in a row (text breaks the row) fold
- * into a group; fewer stay single rows. `live`: the turn is still running (calls without a result are running, the
+ * into a group; fewer stay single rows. In a live turn the trailing calls are a live group from the first call
+ * (#382), so the box doesn't swap from a row to a group when the 2nd call arrives. `live`: the turn is still running (calls without a result are running, the
  * latest todo_write is pinned). `details`: the engine's file tool details by tool_use id.
  */
 export function groupTurn(
@@ -52,8 +54,10 @@ export function groupTurn(
 ): Segment[] {
   const out: Segment[] = [];
   let pending: Step[] = [];
-  const flush = () => {
-    if (pending.filter((s) => s.kind === 'tool').length >= 2) out.push({ kind: 'group', key: pending[0]!.id, steps: pending });
+  const flush = (trailing = false) => {
+    const tools = pending.filter((s) => s.kind === 'tool').length;
+    if (trailing && opts.live && tools >= 1) out.push({ kind: 'group', key: pending[0]!.id, steps: pending, live: true });
+    else if (tools >= 2) out.push({ kind: 'group', key: pending[0]!.id, steps: pending });
     else for (const step of pending) out.push({ kind: 'step', step });
     pending = [];
   };
@@ -80,7 +84,7 @@ export function groupTurn(
         } else pending.push(step);
       }
     });
-  flush();
+  flush(true);
   return out;
 }
 

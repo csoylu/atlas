@@ -137,9 +137,6 @@ export function fileDetail(step: Step, timing?: ToolCallTiming): ReactNode | nul
 
 const str = (v: unknown) => (typeof v === 'string' ? v : '');
 
-/** True while a foreground shell command runs: its row opens itself to show the live tail, and closes when it ends. */
-export const isLiveShell = (step: Step) => step.kind === 'tool' && step.name === 'shell' && step.state === 'running' && (step.input as { background?: unknown } | null)?.background !== true;
-
 /** Box capped at ~260 px (scrolls inside), with Show all when it's cut, and Copy. */
 function View({ head, children, copy, note, foot, term }: { head?: ReactNode; children: ReactNode; copy?: string; note?: ReactNode; foot?: ReactNode; term?: boolean }) {
   const box = useRef<HTMLDivElement>(null);

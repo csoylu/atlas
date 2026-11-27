@@ -375,7 +375,7 @@ select { padding: 4px 8px; }
 /* Agent rows: taller, with the agent's face (#104). */
 .nav-item.agent-item { height: 36px; gap: 10px; padding: 0 7px; color: var(--text); }
 .nav-item.agent-item .dot-avatar { width: 22px; height: 22px; }
-.nav-item > span:not(.nav-count):not(.dot-avatar):not(.spin):not(.live-sq) { min-width: 0; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.nav-item > span:not(.nav-count):not(.dot-avatar):not(.spin):not(.live-sq):not(.live-fly) { min-width: 0; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 /* ⌘K hint on the Search row (#349: the old « Atlas » row's chip, now inside a nav item). */
 .nav-kbd {
   margin-left: auto; height: 20px; padding: 0 5px; border: 0; background: var(--chip); border-radius: 0; display: grid; place-items: center;
@@ -420,25 +420,31 @@ select { padding: 4px 8px; }
 .face .initial { font: var(--fw-bold) var(--fs-small) var(--mono); }
 .face .ink { stroke: var(--panel); fill: none; }
 .face .line { stroke: var(--muted); fill: none; }
-/* A live agent: its figure in the text colour, and a thin accent light orbiting the square (2.4 s a turn). */
-@property --orb { syntax: '<angle>'; inherits: false; initial-value: 0deg; }
-.face.live { position: relative; }
+/* A live agent: its figure in the text colour (the orbit went in #382: the row's .live-fly says it works). */
 .face.live .fig, .face.live .initial { fill: var(--text); }
 .face.live .line { stroke: var(--text); }
-.face.live::after {
-  content: ''; position: absolute; inset: -2px; padding: 1.5px; pointer-events: none;
-  background: conic-gradient(from var(--orb), transparent 0 50%, color-mix(in srgb, var(--accent-fill) 30%, transparent) 75%, var(--accent-fill) 97%, transparent 100%);
-  -webkit-mask: linear-gradient(#000 0 0) content-box, linear-gradient(#000 0 0); -webkit-mask-composite: xor; mask-composite: exclude;
-  animation: orb 2.4s linear infinite;
-}
-:root[data-theme='light'] .face.live::after {
-  background: conic-gradient(from var(--orb), transparent 0 50%, color-mix(in srgb, var(--accent-fill) 50%, var(--text)) 97%, transparent 100%);
-}
-@keyframes orb { to { --orb: 360deg; } }
 /* Live, as a 6 px square (sidebar rows, the Running list): the accent in dark, ink in light; it breathes. */
 .live-sq { width: 6px; height: 6px; flex: none; margin-left: auto; background: var(--accent-mark); animation: breathe 1.8s ease-in-out infinite; }
 .running-item .live-sq { margin-left: 0; }
 @keyframes breathe { 0%, 100% { opacity: 1; } 50% { opacity: 0.45; } }
+/* Working (#382, sidebar agent rows and Running): four squares fly in, lock together with a flash, fly apart; 3.2 s.
+   Reduce motion stops the animation, and the base state is the four squares assembled. */
+.live-fly { position: relative; width: 9px; height: 9px; flex: none; margin-left: auto; color: var(--accent-mark); }
+.running-item .live-fly { margin-left: 0; }
+.live-fly i { position: absolute; width: 4px; height: 4px; background: currentColor; animation: fly 3.2s cubic-bezier(0.34, 1.4, 0.5, 1) infinite; }
+.live-fly i:nth-child(1) { left: 0; top: 0; --dx: -7px; --dy: -7px; --r: -90deg; animation-delay: 0s; }
+.live-fly i:nth-child(2) { right: 0; top: 0; --dx: 7px; --dy: -7px; --r: 90deg; animation-delay: 0.2s; }
+.live-fly i:nth-child(3) { right: 0; bottom: 0; --dx: 7px; --dy: 7px; --r: -90deg; animation-delay: 0.4s; }
+.live-fly i:nth-child(4) { left: 0; bottom: 0; --dx: -7px; --dy: 7px; --r: 90deg; animation-delay: 0.6s; }
+@keyframes fly {
+  0% { transform: translate(var(--dx), var(--dy)) rotate(var(--r)) scale(0.3); opacity: 0; }
+  35% { transform: none; opacity: 1; }
+  68% { transform: none; opacity: 1; }
+  100% { transform: translate(calc(var(--dx) * -0.4), calc(var(--dy) * -0.4)) scale(0.2); opacity: 0; }
+}
+.live-fly::after { content: ''; position: absolute; inset: -2px; box-shadow: 0 0 0 1px currentColor; opacity: 0; animation: fly-flash 3.2s ease-out infinite; animation-delay: 0.6s; }
+@keyframes fly-flash { 0%, 30% { opacity: 0; transform: scale(0.8); } 36% { opacity: 0.7; transform: scale(1); } 55%, 100% { opacity: 0; transform: scale(1.5); } }
+@media (prefers-reduced-motion: reduce) { .live-fly i { opacity: 1; transform: none; } .live-fly::after { opacity: 0; } }
 .crumb .dot-avatar { width: 24px; height: 24px; }
 /* Status chips (#104): no pulse. */
 .st-chip {
@@ -463,7 +469,6 @@ select { padding: 4px 8px; }
   .nc-foot .kbd { display: none; }
 }
 .sidebar-foot { margin-top: auto; display: flex; align-items: center; gap: 8px; padding: 8px 2px 0 8px; flex: none; color: var(--muted); min-height: 40px; font-size: var(--fs-base); border-top: 1px solid var(--line); }
-.me { width: 22px; height: 22px; border-radius: 0; background: var(--accent-soft); color: var(--accent); font-size: var(--fs-small); font-weight: var(--fw-bold); display: grid; place-items: center; flex: none; }
 .me-name { min-width: 0; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 /* « Server » after the user's name, server mode only (#349). */
 .me-scope { color: var(--faint); font-size: var(--fs-small); white-space: nowrap; flex: none; }
@@ -754,7 +759,7 @@ button.artifact:hover .art-open { color: var(--accent); }
   background: var(--raised); border: 1px solid var(--line-2); border-radius: 0; box-shadow: var(--composer-shadow);
   transition: border-color var(--fast), box-shadow var(--fast);
 }
-.composer:focus-within { border-color: var(--accent); box-shadow: var(--composer-shadow), 0 0 0 3px var(--accent-soft); }
+.composer:focus-within { border-color: color-mix(in srgb, var(--text) 26%, transparent); box-shadow: var(--composer-shadow); }
 .composer textarea {
   flex: none; resize: none; min-height: calc(1.5em + 4px); max-height: 40vh; max-height: 40dvh; overflow-y: hidden; background: none; border: 0; outline: none; padding: 2px 0; line-height: var(--lh-normal); font-size: var(--fs-base);
 }
@@ -1551,7 +1556,7 @@ a.task-note:focus-visible { outline: 2px solid var(--accent); outline-offset: 1p
 .chat-row.mem-quiet > .chat-row-line { min-height: 28px; }
 .chat-row.mem-quiet .chat-row-verb { color: var(--muted); }
 .chat-row.mem-quiet.open > .chat-row-line { border-bottom: 0; border-radius: 0; }
-.chat-row.mem-quiet > .chat-row-body { padding: 0; }
+.chat-row.mem-quiet > .chat-row-fold > div > .chat-row-body { padding: 0; }
 .mem-list { list-style: none; margin: 2px 0 0; padding: 6px 0; border: 1px solid var(--line); border-radius: 0; }
 .mem-list li { display: grid; grid-template-columns: 36px auto minmax(0, auto) minmax(0, 1fr); gap: 10px; align-items: center; padding: 4px 12px; line-height: var(--lh-normal); }
 .mem-list .chat-row-ref { cursor: default; }
@@ -1584,7 +1589,7 @@ a.task-note:focus-visible { outline: 2px solid var(--accent); outline-offset: 1p
 .row-stack-ic.rowic-x { color: var(--neg-ink); }
 .chat-row.steps > .chat-row-line .chat-row-icon { width: auto; }
 .chat-row.steps > .chat-row-line .chat-row-rest { color: var(--text); }
-.chat-row.steps > .chat-row-body { padding: 4px 4px 6px; }
+.chat-row.steps > .chat-row-fold > div > .chat-row-body { padding: 4px 4px 6px; }
 .steps-tl { display: flex; flex-direction: column; }
 .chat-row.nested { --row-h: 28px; --tl-w: 1px; position: relative; border: 0; border-radius: 0; }
 .chat-row.nested > .chat-row-line { min-height: var(--row-h); }
@@ -1598,7 +1603,12 @@ a.task-note:focus-visible { outline: 2px solid var(--accent); outline-offset: 1p
 .steps-tl > .chat-row.nested::after { top: calc((var(--row-h) + var(--row-ic)) / 2); bottom: 0; }
 .steps-tl > .chat-row.nested:first-child::before, .steps-tl > .chat-row.nested:last-child::after { content: none; }
 .chat-row.nested.open > .chat-row-line { border-bottom: 0; }
-.chat-row.nested > .chat-row-body { padding: 4px 8px 10px 34px; }
+/* Every ChatRow opens and closes with a 160 ms height animation (#382); Reduce motion's global rule turns it off. */
+.chat-row-fold { display: grid; grid-template-rows: 0fr; transition: grid-template-rows var(--fast); }
+.chat-row.open > .chat-row-fold { grid-template-rows: 1fr; }
+@starting-style { .chat-row.open > .chat-row-fold { grid-template-rows: 0fr; } }
+.chat-row-fold > div { overflow: hidden; min-height: 0; }
+.chat-row.nested > .chat-row-fold > div > .chat-row-body { padding: 4px 8px 10px 34px; }
 .chat-row.nested.tone-bad { background: color-mix(in srgb, var(--neg-bg) 50%, transparent); }
 /* Generic detail (the family cards #62–#66 replace it per tool). */
 .chat-row-body pre { margin: 0; padding: 8px 10px; border-radius: 0; background: var(--code); border: 1px solid var(--line); font: var(--fs-small)/var(--lh-normal) var(--mono); color: var(--muted); white-space: pre-wrap; overflow-wrap: anywhere; max-height: 260px; overflow: auto; }
@@ -3656,11 +3666,9 @@ button.cm-sref:hover { border-color: var(--accent); }
 .new-line { display: flex; align-items: center; gap: 10px; margin: 4px 0 16px; color: var(--accent); font-size: var(--fs-small); font-weight: var(--fw-medium); line-height: var(--lh-tight); }
 .new-line::before { content: ''; flex: 1; height: 1px; background: var(--accent-mark); }
 
-/* « Reduce motion » (#369): every animation and transition stops, the live orbit included (the square stays lit). */
+/* « Reduce motion » (#369): every animation and transition stops. */
 @media (prefers-reduced-motion: reduce) {
   *, *::before, *::after { animation: none !important; transition: none !important; }
-  .face.live::after { background: var(--accent-fill); }
-  :root[data-theme='light'] .face.live::after { background: var(--text); }
 }
 
 /* ── Redesign #362 · 2/4 (#370): chat and side panel in the obsidian style (paris's chat CSS, doc_e9ebd9ee) ──────────── */
@@ -3676,15 +3684,27 @@ button.cm-sref:hover { border-color: var(--accent); }
 .chat-row.steps { background: color-mix(in srgb, var(--raised) 70%, transparent); border-color: var(--line); }
 .chat-row.steps.open > .chat-row-line { border-bottom-color: var(--line); }
 .chat-row.steps > .chat-row-line .chat-row-verb { color: var(--faint); }
-.chat-row.steps > .chat-row-body { padding: 0; }
+.chat-row.steps > .chat-row-fold > div > .chat-row-body { padding: 0; }
 .steps-tl > .chat-row.nested + .chat-row.nested { box-shadow: inset 0 1px 0 var(--line); } /* a shadow, not a border: the timeline geometry stays (#145) */
 .chat-row.nested > .chat-row-line .chat-row-verb { color: var(--text); font-weight: var(--fw-medium); }
 .chat-row.nested > .chat-row-line .chat-row-obj.mono, .chat-row-meta { font-family: var(--mono); }
 .chat-row.running { box-shadow: inset 2px 0 0 var(--accent-mark); background: linear-gradient(90deg, var(--accent-soft), transparent 70%); }
-.chat-row.steps.running, .chat-row.steps:has(.chat-row.nested.running) { border-color: color-mix(in srgb, var(--accent-mark) 35%, var(--line)); }
-.chat-row.steps:has(.chat-row.nested.running) { box-shadow: none; background: color-mix(in srgb, var(--raised) 70%, transparent); }
+.chat-row.steps.running, .chat-row.steps:not(.live):has(.chat-row.nested.running) { border-color: color-mix(in srgb, var(--accent-mark) 35%, var(--line)); }
+.chat-row.steps:not(.live):has(.chat-row.nested.running) { box-shadow: none; background: color-mix(in srgb, var(--raised) 70%, transparent); }
 :root[data-theme='light'] .chat-row.running { box-shadow: inset 3px 0 0 var(--text); }
-:root[data-theme='light'] .chat-row.steps.running, :root[data-theme='light'] .chat-row.steps:has(.chat-row.nested.running) { border-color: var(--line-2); }
+:root[data-theme='light'] .chat-row.steps.running, :root[data-theme='light'] .chat-row.steps:not(.live):has(.chat-row.nested.running) { border-color: var(--line-2); }
+/* The live box (#382): one steady frame for the whole live turn (the group is last and the run is live). */
+.chat-row.steps.live { box-shadow: inset 2px 0 0 var(--accent-mark); background: linear-gradient(90deg, var(--accent-soft), transparent 70%); border-color: color-mix(in srgb, var(--accent-mark) 35%, var(--line)); }
+:root[data-theme='light'] .chat-row.steps.live { box-shadow: inset 3px 0 0 var(--text); border-color: var(--line-2); }
+/* Ticker: the call running now, or the last one between two calls; folds once when the turn ends. */
+.steps-tick { display: grid; grid-template-rows: 1fr; transition: grid-template-rows var(--fast); }
+.steps-tick.gone { grid-template-rows: 0fr; }
+.steps-tick > div { overflow: hidden; min-height: 0; }
+.steps-tick .chat-row-line { min-height: 28px; padding-left: calc(var(--row-pad-x) + 22px); }
+.steps-tick .chat-row-verb { color: var(--text); font-weight: var(--fw-medium); }
+.steps-tick .tick-tail { flex: 1 1 0; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-family: var(--mono); font-size: var(--fs-small); color: var(--faint); }
+.steps-tick .chat-row-obj { flex: 0 1 auto; max-width: 55%; }
+.steps-tick.idle .chat-row-verb { color: var(--muted); font-weight: var(--fw-regular); }
 
 /* Header: a light runs along the bottom line while the agent works (CardPanel puts the .scan in the header). */
 /* backdrop-filter makes the header its own stacking context: z-index keeps its menus over the screen below (#383). */
@@ -3710,7 +3730,7 @@ a.web-hit:hover .web-hit-t { text-decoration: underline; text-underline-offset: 
 
 /* Composer: a floating command surface; the model is a quiet picker, the keys are hinted. */
 .composer { border-color: var(--line-2); box-shadow: var(--composer-shadow); }
-.composer:focus-within { border-color: color-mix(in srgb, var(--accent-mark) 60%, var(--line-2)); }
+.composer:focus-within { border-color: color-mix(in srgb, var(--text) 26%, transparent); } /* #382: neutral, no accent */
 .pick-pill { border-color: transparent; padding: 0 8px; }
 .pick-pill .pick-model { color: var(--text); }
 .pick-pill .pick-effort { color: var(--muted); }

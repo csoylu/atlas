@@ -1,0 +1,1 @@
+## Changed · #382 · While an agent works, its steps stay in one steady box that never opens or closes by itself, with a ticker line for the call running now; the composer focus is neutral and the sidebar shows four flying squares instead of the orbit, with no avatar in the footer.

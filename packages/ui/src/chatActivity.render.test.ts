@@ -1,7 +1,7 @@
 import { createElement } from 'react';
 import { renderToString } from 'react-dom/server';
 import { describe, expect, it } from 'vitest';
-import type { ContentBlock, Message } from '@atlas/shared';
+import type { ContentBlock, Message, ToolCallTiming } from '@atlas/shared';
 import { Turn } from './ChatActivity.tsx';
 import type { ToolOutcome } from './toolRows.ts';
 
@@ -48,5 +48,44 @@ describe('an old chat with canvas tool steps (#342)', () => {
     expect(html).toContain('Opened in the panel');
     expect(html).not.toContain('href');
     expect(html).not.toContain('art-text'); // the artifact card's body
+  });
+});
+
+describe('a live « N steps » box (#382)', () => {
+  const message = (content: ContentBlock[]): Message => ({ id: 'm1', conversationId: 'c', seq: 1, role: 'assistant', author: 'atlas', at: '2026-11-14T17:00:00.000Z', content }) as Message;
+  const render = (content: ContentBlock[], results: Map<string, ToolOutcome>, live: boolean, tail?: string) =>
+    renderToString(
+      createElement(Turn, {
+        messages: [message(content)],
+        results,
+        timings: new Map(content.flatMap((b): [string, ToolCallTiming][] => (b.type === 'tool_use' ? [[b.id, { toolUseId: b.id, name: b.name, status: results.has(b.id) ? 'done' : 'running', startedAt: '2026-11-14T17:00:00.000Z', endedAt: results.has(b.id) ? '2026-11-14T17:00:01.000Z' : null, ...(tail === undefined ? {} : { tail }) }]] : []))),
+        live,
+        last: true,
+        stream: { push: () => {}, listen: () => () => {} },
+        renderText: (t: string) => t,
+      }),
+    );
+
+  it('is one closed live group from the first call, a running shell opens nothing, the ticker shows the call', () => {
+    const one = render([use('a', 'shell', { command: 'npm test' })], new Map(), true, 'line 1\nPASS chatTurn.test.ts\n');
+    expect(one).toContain('chat-row tone-plain running steps live');
+    expect(one).toContain('Working');
+    expect(one).not.toContain('chat-row-body'); // no autoOpen: the live tail stays folded
+    expect(one).toContain('steps-tick');
+    expect(one).toContain('PASS chatTurn.test.ts'); // the tail's last line in the ticker
+    const many = render([use('a', 'read_file', { path: 'x.ts' }), use('b', 'shell', { command: 'npm test' }), use('c', 'shell', { command: 'npm run typecheck' })], new Map([['a', ok('1|x')], ['b', ok('exit 0\n')]]), true);
+    expect(many).toContain('steps live');
+    expect(many).toContain('3 steps');
+    expect(many).not.toContain('chat-row-body');
+  });
+
+  it('between two calls the ticker shows the last call, idle; a finished turn has no ticker', () => {
+    const calls = [use('a', 'read_file', { path: 'x.ts' }), use('b', 'grep', { pattern: 'y' })];
+    const between = render(calls, new Map([['a', ok('1|x')], ['b', ok('no matches')]]), true);
+    expect(between).toContain('steps live');
+    expect(between).toContain('steps-tick idle');
+    const over = render(calls, new Map([['a', ok('1|x')], ['b', ok('no matches')]]), false);
+    expect(over).not.toContain('steps live');
+    expect(over).not.toContain('steps-tick');
   });
 });
