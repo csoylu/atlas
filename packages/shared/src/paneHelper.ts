@@ -35,12 +35,50 @@ export function cssPath(el: Element, root: Element): string {
   return steps.join(' > ');
 }
 
+/**
+ * The range of `passage` inside `root`, white space counted as one space (as a selection reads it); null when the
+ * text is not there (any more). Self-contained like `cssPath`: the helper inlines it to light a quoted passage (#368).
+ */
+export function findPassage(root: Node, passage: string): Range | null {
+  const want = passage.replace(/\s+/g, ' ').trim();
+  if (!want) return null;
+  const doc = root.ownerDocument ?? (root as Document);
+  const walk = doc.createTreeWalker(root, 4);
+  let flat = '';
+  const at: { node: Text; i: number }[] = [];
+  let space = true;
+  for (let n = walk.nextNode() as Text | null; n; n = walk.nextNode() as Text | null) {
+    const t = n.data;
+    for (let i = 0; i < t.length; i++) {
+      const ch = t[i]!;
+      if (/\s/.test(ch)) {
+        if (space) continue;
+        space = true;
+        flat += ' ';
+      } else {
+        space = false;
+        flat += ch;
+      }
+      at.push({ node: n, i });
+    }
+  }
+  const k = flat.indexOf(want);
+  if (k < 0) return null;
+  const a = at[k]!;
+  const b = at[k + want.length - 1]!;
+  const r = doc.createRange();
+  r.setStart(a.node, a.i);
+  r.setEnd(b.node, b.i + 1);
+  return r;
+}
+
 /** The script added to a page in the pane (one IIFE; `cssPath` above is inlined as text). */
 export const PANE_HELPER = `(() => {
 if (window.__atlasPane || window.parent === window) return;
 window.__atlasPane = 1;
 const __name = (f) => f;
 const cssPath = ${cssPath.toString()};
+const findPassage = ${findPassage.toString()};
 const P = window.parent;
 const send = (m) => P.postMessage(Object.assign({ atlasPane: 1 }, m), '*');
 let on = false, marks = [], down = null, hover = null;
@@ -84,7 +122,57 @@ addEventListener('message', (e) => {
   if ('on' in e.data) { on = !!e.data.on; de.classList.toggle('atlas-pane-on', on); if (!on) { setHover(null); down = null; } }
   if (e.data.marks) { marks = e.data.marks; draw(); }
   if (e.data.hello) send({ ready: 1 });
+  if (e.data.flash) flash(e.data.flash);
 });
+// A text selection (#368): reported when the mouse or a key lets go, gone when it collapses; the app draws the pill.
+const typingIn = (t) => !!t && (t.isContentEditable || /^(input|textarea|select)$/i.test(t.tagName));
+const selNow = () => {
+  if (on || typingIn(document.activeElement)) return null;
+  const s = getSelection();
+  if (!s || s.isCollapsed || !s.rangeCount || !s.toString().trim()) return null;
+  const r = s.getRangeAt(0);
+  const c = r.commonAncestorContainer;
+  const el = c.nodeType === 1 ? c : c.parentElement;
+  if (!el || ours(el)) return null;
+  const rs = [...r.getClientRects()].filter((x) => x.width > 0);
+  const f = rs[0] || r.getBoundingClientRect();
+  const pre = el.closest('pre[data-atlas-text]');
+  if (pre) {
+    const k = document.createRange();
+    k.setStart(pre, 0);
+    k.setEnd(r.startContainer, r.startOffset);
+    const from = k.toString().split('\n').length;
+    k.setEnd(r.endContainer, r.endOffset);
+    return { text: s.toString().replace(/^\n+|\s+$/g, ''), selector: null, lines: [from, k.toString().split('\n').length], code: true, rect: view(f) };
+  }
+  return { text: s.toString().trim(), selector: cssPath(el, document.body), lines: null, code: !!el.closest('pre'), rect: view(f) };
+};
+let shown = false;
+const report = () => { const v = selNow(); if (v || shown) send({ sel: v }); shown = !!v; };
+document.addEventListener('selectionchange', () => { if (shown && !selNow()) report(); });
+addEventListener('mouseup', () => setTimeout(report, 0), true);
+addEventListener('keyup', (e) => { if (e.shiftKey || e.key === 'Shift') report(); }, true);
+addEventListener('scroll', () => { if (shown) report(); }, true);
+// Light a quoted passage again for 2 s; the app is told whether it is still there.
+let lit = [];
+const flash = (f) => {
+  mount();
+  for (const d of lit) d.remove();
+  lit = [];
+  const scope = (f.selector && document.querySelector(f.selector)) || document.body || de;
+  const r = findPassage(scope, f.text) || (scope !== document.body && document.body ? findPassage(document.body, f.text) : null);
+  send({ flashed: !!r });
+  if (!r) return;
+  for (const b of r.getClientRects()) {
+    const d = document.createElement('div');
+    d.className = 'atlas-pane-hl';
+    d.style.cssText = 'left:' + (b.left + scrollX) + 'px;top:' + (b.top + scrollY) + 'px;width:' + b.width + 'px;height:' + b.height + 'px;background:rgba(79,184,208,.25)';
+    layer.appendChild(d);
+    lit.push(d);
+  }
+  (r.startContainer.parentElement || scope).scrollIntoView({ block: 'center' });
+  setTimeout(() => { for (const d of lit) d.remove(); lit = []; }, 2000);
+};
 const stop = (e) => { if (!on) return; e.preventDefault(); e.stopPropagation(); };
 for (const t of ['click', 'dblclick', 'auxclick', 'submit', 'mousedown', 'mouseup', 'contextmenu']) addEventListener(t, stop, true);
 addEventListener('pointerdown', (e) => { if (!on || e.button !== 0) return; stop(e); down = { x: e.clientX, y: e.clientY, moved: false }; }, true);
@@ -136,9 +224,22 @@ addEventListener('keydown', (e) => {
   const typing = t && (t.isContentEditable || /^(input|textarea|select)$/i.test(t.tagName));
   if (e.key === 'Escape' && on) { e.preventDefault(); send({ key: 'Escape' }); }
   else if (!typing && !e.metaKey && !e.ctrlKey && !e.altKey && (e.key === 'c' || e.key === 'C')) send({ key: 'c' });
+  // Q quotes the selection (#368), only when there is one and no field has focus: else the key is the page's.
+  else if (!typing && !on && !e.metaKey && !e.ctrlKey && !e.altKey && !e.repeat && (e.key === 'q' || e.key === 'Q') && selNow()) { e.preventDefault(); send({ key: 'q' }); }
+  else if (e.key === 'Escape' && !on && shown) { getSelection().removeAllRanges(); report(); }
 }, true);
 send({ ready: 1 });
 })();`;
+
+/** A text file shown in the pane (#368: a url artifact's raw text): one pre, the helper reads its lines. */
+export function textPage(text: string): string {
+  const esc = text.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
+  return withPaneHelper(
+    '<!doctype html><html><head><meta charset="utf-8"><style>body{margin:0;background:#fff;color:#1a1a1a}@media (prefers-color-scheme:dark){body{background:#17181a;color:#e6e6e6}}'
+      + 'pre{margin:0;padding:12px 16px;font:13px/1.5 ui-monospace,SFMono-Regular,Menlo,monospace;white-space:pre-wrap;overflow-wrap:anywhere}</style></head><body><pre data-atlas-text>'
+      + esc + '</pre></body></html>',
+  );
+}
 
 /** A page's html with the helper added (before </body>, else at the end). */
 export function withPaneHelper(html: string): string {

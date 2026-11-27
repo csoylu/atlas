@@ -25,6 +25,9 @@ export interface Step {
   state: StepState;
   /** When its message was written. */
   at: string;
+  /** Its message (#368: a passage of its output is quoted as « tool call <id> in message <seq> »). */
+  seq?: number;
+  who?: string;
 }
 
 export type Pin = 'doc' | 'ask' | 'plan';
@@ -69,7 +72,7 @@ export function groupTurn(
         const detail = opts.details?.(b.id);
         const row = toolRow(b.name, b.input, result, detail);
         const state: StepState = result ? (result.isError || row.tone === 'bad' ? 'failed' : 'done') : opts.live ? 'running' : 'cut';
-        const step: Step = { id: b.id, kind: 'tool', name: b.name, input: b.input, result, ...(detail ? { detail } : {}), row, state, at: m.at };
+        const step: Step = { id: b.id, kind: 'tool', name: b.name, input: b.input, result, ...(detail ? { detail } : {}), row, state, at: m.at, seq: m.seq, who: m.author };
         const pin = pinOf(step, b.id === lastPlan);
         if (pin) {
           flush();

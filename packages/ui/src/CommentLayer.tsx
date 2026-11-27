@@ -14,6 +14,21 @@ export interface PaneComment {
   onPick(p: PanePick, version: number): void;
   /** Esc or C typed inside a page's frame (the frame has the focus, not the app). */
   onKey(key: 'Escape' | 'c'): void;
+  /** #368: a text selection inside a page's frame (rect in this window's px), null when it goes; Q typed there. */
+  onSel?(s: FrameSel | null, version: number): void;
+  onQuoteKey?(): void;
+  /** A quoted passage to light again in the frame (a jump back); `onLit` says whether it is still there. */
+  flash?: { text: string; selector: string | null; t: number } | null;
+  onLit?(found: boolean): void;
+}
+
+/** A selection in a frame, as its helper reports it (shared/paneHelper.ts). */
+export interface FrameSel {
+  text: string;
+  selector: string | null;
+  lines: [number, number] | null;
+  code: boolean;
+  rect: Box;
 }
 
 /** Pins, areas and outlines, in px relative to their positioned parent. */
@@ -251,14 +266,14 @@ export function markdownPick(article: HTMLElement, target: EventTarget | null, s
     const ls = lines([a, b]);
     const sec = a ? sectionOf(a) : null;
     const rect = boxOf(sel.getRangeAt(0).getBoundingClientRect());
-    return { anchor: { type: 'text', quote, section: sec, lines: ls }, rect, mark: { style: 'hl', lines: ls ?? undefined } };
+    return { anchor: { type: 'text', quote, section: sec, lines: ls, selector: null }, rect, mark: { style: 'hl', lines: ls ?? undefined } };
   }
   const block = target instanceof Element ? target.closest('[data-l1]') : null;
   if (!block || !article.contains(block)) return null;
   const quote = textOf(block, 4000);
   if (!quote) return null;
   const ls = lines([block]);
-  return { anchor: { type: 'text', quote, section: sectionOf(block), lines: ls }, rect: boxOf(block.getBoundingClientRect()), mark: { style: 'hl', lines: ls ?? undefined } };
+  return { anchor: { type: 'text', quote, section: sectionOf(block), lines: ls, selector: null }, rect: boxOf(block.getBoundingClientRect()), mark: { style: 'hl', lines: ls ?? undefined } };
 }
 
 /** Marks of markdown comments: the blocks of their lines, in px relative to the article. */
@@ -287,7 +302,9 @@ interface FrameMsg {
   atlasPane?: 1;
   ready?: 1;
   pick?: { anchor: CommentAnchor; rect: Box; mark: PaneMark };
-  key?: 'Escape' | 'c';
+  key?: 'Escape' | 'c' | 'q';
+  sel?: FrameSel | null;
+  flashed?: boolean;
 }
 
 /** Talks to the helper of the page in `frame`: comment mode on/off, the marks to draw; its picks and keys come back. */
@@ -304,7 +321,13 @@ export function useFrameComments(frame: RefObject<HTMLIFrameElement | null>, c: 
       const d = e.data as FrameMsg;
       if (!d || d.atlasPane !== 1) return;
       if (d.ready) setReady((n) => n + 1);
-      if (d.key) cb.current.c?.onKey(d.key);
+      if (d.key === 'q') cb.current.c?.onQuoteKey?.();
+      else if (d.key) cb.current.c?.onKey(d.key);
+      if ('sel' in d) {
+        const r = f.getBoundingClientRect();
+        cb.current.c?.onSel?.(d.sel ? { ...d.sel, rect: { ...d.sel.rect, x: d.sel.rect.x + r.left, y: d.sel.rect.y + r.top } } : null, cb.current.version);
+      }
+      if (typeof d.flashed === 'boolean') cb.current.c?.onLit?.(d.flashed);
       if (d.pick) {
         const r = f.getBoundingClientRect();
         cb.current.c?.onPick({ anchor: d.pick.anchor, rect: { ...d.pick.rect, x: d.pick.rect.x + r.left, y: d.pick.rect.y + r.top }, mark: d.pick.mark, thumb: null }, cb.current.version);
@@ -316,6 +339,14 @@ export function useFrameComments(frame: RefObject<HTMLIFrameElement | null>, c: 
   useEffect(() => {
     frame.current?.contentWindow?.postMessage({ atlasPane: 1, on, marks: JSON.parse(marks) as unknown }, '*');
   }, [frame, on, marks, ready]);
+  // A jump back: once the page is ready, ask it to light the passage.
+  const flash = c?.flash;
+  useEffect(() => {
+    if (!flash || !ready) return;
+    frame.current?.contentWindow?.postMessage({ atlasPane: 1, flash: { text: flash.text, selector: flash.selector } }, '*');
+  }, [frame, flash?.t, ready]); // eslint-disable-line react-hooks/exhaustive-deps
+  // The selection's pill goes when the page goes (a new version, another tab).
+  useEffect(() => () => cb.current.c?.onSel?.(null, cb.current.version), []); // eslint-disable-line react-hooks/exhaustive-deps
 }
 
 /* ── The comment box, the hint, the chips ─────────────────────────────────────────────────── */

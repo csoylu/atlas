@@ -18,7 +18,7 @@ export function QuoteIcon() {
 /** What a surface makes of a selection: a passage to quote, one that crosses two places, or nothing (null). */
 export type QuoteResolve = (range: Range) => QuoteSource | 'cross' | null;
 
-type Sel = { kind: 'one'; source: QuoteSource; rect: Box } | { kind: 'cross'; rect: Box };
+type Sel = { kind: 'one'; source: QuoteSource; rect: Box; out?: boolean } | { kind: 'cross'; rect: Box };
 
 /** The selection now, as the surface reads it; null when it is empty or outside `root`. */
 function readSelection(root: HTMLElement | null, resolve: QuoteResolve): Sel | null {
@@ -37,7 +37,36 @@ function readSelection(root: HTMLElement | null, resolve: QuoteResolve): Sel | n
 /** The open note box: a new quote, or a chip's (to edit its note). */
 type Open = { source: QuoteSource; n: number; rect: Box; id: string | null; note: string };
 
-export function QuoteLayer({ root, resolve, comments, within }: { root: RefObject<HTMLElement | null>; resolve: QuoteResolve; comments: Comments; within?: RefObject<HTMLElement | null> }) {
+/**
+ * A selection the layer can't read itself (#368): one inside a frame (an html page's helper reports it) or in the
+ * browser tab (the desktop reads it). `rect` in this window's px; `q` counts Q presses made there. `onOpen` tells the
+ * surface when the note box opens and closes (the browser freezes on a picture meanwhile).
+ */
+export interface OutsideSel {
+  sel: { source: QuoteSource; rect: Box } | null;
+  q: number;
+  /** The surface draws its own pill (the browser's, over the native view): this layer only opens the box. */
+  ownPill?: boolean;
+}
+
+export function QuoteLayer({
+  root,
+  resolve,
+  comments,
+  within,
+  chips = true,
+  outside,
+  onOpen,
+}: {
+  root: RefObject<HTMLElement | null>;
+  resolve: QuoteResolve;
+  comments: Comments;
+  within?: RefObject<HTMLElement | null>;
+  /** This layer opens a clicked chip's box (one layer per composer does). */
+  chips?: boolean;
+  outside?: OutsideSel;
+  onOpen?(open: boolean): void;
+}) {
   const touch = useMedia('(pointer: coarse)');
   const [sel, setSel] = useState<Sel | null>(null);
   const [open, setOpen] = useState<Open | null>(null);
@@ -55,11 +84,12 @@ export function QuoteLayer({ root, resolve, comments, within }: { root: RefObjec
     const up = (e: MouseEvent) => {
       if ((e.target as Element | null)?.closest?.('.qt-pop, .qt-box')) return;
       requestAnimationFrame(() => setSel(read()));
+      // (A selection reported from a frame goes too: the surface drops it on a click in the app, see DocPanel.)
     };
     const change = () => {
       const now = read();
       if (touch) setSel(now);
-      else if (!now) setSel(null);
+      else if (!now) setSel((cur) => (cur?.kind === 'one' && cur.out ? cur : null)); // a frame's selection is the frame's
     };
     if (!touch) document.addEventListener('mouseup', up);
     document.addEventListener('selectionchange', change);
@@ -88,15 +118,29 @@ export function QuoteLayer({ root, resolve, comments, within }: { root: RefObjec
     window.addEventListener('keydown', key, true);
     return () => window.removeEventListener('keydown', key, true);
   }, [open, sel, read, start]);
+  // A selection in a frame or the browser: the pill follows it; a Q pressed there opens the box.
+  const outSel = outside?.sel ?? null;
+  useEffect(() => {
+    if (outside) setSel((cur) => (outSel ? { kind: 'one', source: outSel.source, rect: outSel.rect, out: true } : cur?.kind === 'one' && cur.out ? null : cur));
+  }, [outSel]); // eslint-disable-line react-hooks/exhaustive-deps
+  const outQ = outside?.q ?? 0;
+  const lastQ = useRef(outQ);
+  useEffect(() => {
+    if (outQ === lastQ.current) return;
+    lastQ.current = outQ;
+    if (outSel && !open) start({ kind: 'one', source: outSel.source, rect: outSel.rect });
+  }, [outQ]); // eslint-disable-line react-hooks/exhaustive-deps
+  const isOpen = !!open;
+  useEffect(() => onOpen?.(isOpen), [isOpen, onOpen]);
   // A chip was clicked: its box, over the chip.
   const { picked, unpick } = comments;
   useEffect(() => {
-    if (!picked) return;
+    if (!picked || !chips) return;
     const c = comments.list.find((x) => x.id === picked.id);
     unpick();
     if (!c || !('quote' in c)) return;
     setOpen({ source: c.quote, n: c.n, rect: picked.rect, id: c.id, note: c.text });
-  }, [picked, unpick, comments.list]);
+  }, [picked, unpick, comments.list, chips]);
 
   const close = () => {
     setOpen(null);
@@ -111,7 +155,7 @@ export function QuoteLayer({ root, resolve, comments, within }: { root: RefObjec
   };
   return (
     <>
-      {sel && !touch && !open && <QuotePill sel={sel} onQuote={() => start(sel)} />}
+      {sel && !touch && !open && !(outside?.ownPill && sel.kind === 'one' && sel.out) && <QuotePill sel={sel} onQuote={() => start(sel)} />}
       {sel?.kind === 'one' && touch && !open && (
         <div className="qt-dock">
           <button

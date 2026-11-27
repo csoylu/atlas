@@ -1,4 +1,6 @@
 import { forwardRef, useEffect, useLayoutEffect, useRef, useState, type ClipboardEvent, type ReactNode } from 'react';
+import { QuoteLayer } from './QuoteLayer.tsx';
+import { taskResolve } from './useQuoteSurface.ts';
 import { AgentFace } from './AgentFace.tsx';
 import { pastedFiles, TASK, TaskImages, useAttachments, useFileDrop } from './Images.tsx';
 import Markdown from 'react-markdown';
@@ -64,6 +66,8 @@ export const CardView = forwardRef<HTMLTextAreaElement, CardViewProps & { lead?:
     const [editing, setEditing] = useState(false);
     const titleRef = useRef<HTMLTextAreaElement>(null);
     const bodyRef = useRef<HTMLTextAreaElement>(null);
+    // The description can be quoted in the thread's composer (#368).
+    const descArea = useRef<HTMLDivElement>(null);
     const [reading, setReading] = useState<DocToRead | null>(null);
     const openRef =
       props.onOpenRef ?? ((r: MessageRef) => setReading({ docId: r.docId, version: r.version, section: r.section, key: String(Date.now()) }));
@@ -226,7 +230,7 @@ export const CardView = forwardRef<HTMLTextAreaElement, CardViewProps & { lead?:
           <TaskNow ref={nowRef} card={card} run={convo.run} onStop={() => void rw.stopTurn()} onError={onError}>
             <TaskWorkflows cardId={card.id} cards={props.cards} stream={stream} onOpenCard={props.onOpen} onError={onError} />
           </TaskNow>
-          <div className={'cm-desc-area drop-zone' + (drop.dragging ? ' dropping' : '')} {...drop.props} onPaste={onPaste}>
+          <div ref={descArea} className={'cm-desc-area drop-zone' + (drop.dragging ? ' dropping' : '')} {...drop.props} onPaste={onPaste}>
           {editing || !body.trim() ? (
             <textarea
               ref={bodyRef}
@@ -317,6 +321,7 @@ export const CardView = forwardRef<HTMLTextAreaElement, CardViewProps & { lead?:
         </div>
         <CardComposer ref={composer} card={card} agents={props.agents} models={props.models} plan={props.plan} stream={stream} onError={onError} rewind={rw} comments={quotes} />
         <RewindConfirm rw={rw} />
+        <QuoteLayer root={descArea} resolve={taskResolve} comments={quotes} chips={false} />
         {reading && <TaskDocReader read={reading} stream={stream} onOpenInPanel={props.onOpenDoc} onBack={() => setReading(null)} onError={onError} />}
       </>
     );
@@ -396,7 +401,9 @@ function Description({ body, clamp, onEdit }: { body: string; clamp: boolean; on
         tabIndex={0}
         title="Click to edit"
         aria-label="Description (click to edit)"
-        onClick={(e) => (e.target as HTMLElement).closest('a') || onEdit()}
+        data-qtask=""
+        // A link opens; a selection is being quoted (#368), not a click to edit.
+        onClick={(e) => (e.target as HTMLElement).closest('a') || hasSelectionIn(e.currentTarget) || onEdit()}
         onKeyDown={(e) => e.key === 'Enter' && (e.preventDefault(), onEdit())}
       >
         <Markdown remarkPlugins={[remarkGfm]}>{body}</Markdown>
@@ -408,4 +415,10 @@ function Description({ body, clamp, onEdit }: { body: string; clamp: boolean; on
       )}
     </>
   );
+}
+
+/** A text selection inside `el` (a drag that ends in a click). */
+function hasSelectionIn(el: HTMLElement): boolean {
+  const sel = window.getSelection();
+  return !!sel && !sel.isCollapsed && !!sel.toString().trim() && el.contains(sel.anchorNode) && el.contains(sel.focusNode);
 }

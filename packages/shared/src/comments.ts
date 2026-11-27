@@ -19,12 +19,16 @@ const Unit = z.enum(['px', 'svg']);
 
 /** What is under the point or in the area, as precise as the kind can tell. */
 export const CommentAnchor = z.discriminatedUnion('type', [
-  /** Markdown: selected text, or a whole block; its section and its source lines. */
+  /**
+   * Selected text (markdown, or a quote on any pane tab, #368), or a whole markdown block: its section and its source
+   * lines when the kind knows them, the element it sits in on a page (html, the browser).
+   */
   z.object({
     type: z.literal('text'),
-    quote: z.string().trim().min(1).max(4000),
+    quote: z.string().trim().min(1).max(20_000),
     section: z.string().max(200).nullable().default(null),
     lines: z.tuple([z.number().int().positive(), z.number().int().positive()]).nullable().default(null),
+    selector: z.string().max(600).nullable().default(null),
   }),
   /** An html or svg element that was clicked. */
   z.object({ type: z.literal('element'), selector: z.string().min(1).max(600), text: z.string().max(1000).default(''), tag: z.string().max(40).default('') }),
@@ -46,8 +50,13 @@ export const CommentTarget = z.discriminatedUnion('kind', [
 ]);
 export type CommentTarget = z.infer<typeof CommentTarget>;
 
-/** `n`: its number in the message, shared with quotes (#367); absent: its place among the comments. */
-export const PostComment = z.object({ target: CommentTarget, anchor: CommentAnchor, text: z.string().trim().min(1).max(5000), n: z.number().int().positive().optional() });
+/**
+ * `n`: its number in the message, shared with quotes (#367); absent: its place among the comments. `text`: Master's
+ * words; only a selected passage (a quote of a pane tab, #368) may come without them, its note being optional.
+ */
+export const PostComment = z
+  .object({ target: CommentTarget, anchor: CommentAnchor, text: z.string().trim().max(5000).default(''), n: z.number().int().positive().optional() })
+  .refine((c) => c.text.length > 0 || c.anchor.type === 'text', { message: 'a comment needs words', path: ['text'] });
 export type PostComment = z.infer<typeof PostComment>;
 export const COMMENTS_MAX = 20;
 
@@ -119,7 +128,8 @@ export function formatComment(n: number, where: CommentWhere, a: CommentAnchor, 
     case 'text':
       if (a.section !== null) at.push(`section #${a.section || 'top'}`);
       if (a.lines) at.push(range(a.lines[0], a.lines[1]));
-      body.push(`Selected: « ${short(a.quote, 4000)} »`);
+      if (a.selector) at.push(`in element ${a.selector}`);
+      body.push(`Selected: « ${short(a.quote, 20_000)} »`);
       break;
     case 'element':
       at.push(`element ${a.selector}`);
@@ -145,7 +155,8 @@ export function formatComment(n: number, where: CommentWhere, a: CommentAnchor, 
   if (x.picture) body.push(`Picture of the area: ${x.picture} (attached below)`);
   else if (x.noPicture) body.push(`No picture: ${x.noPicture}`);
   const head = `[comment ${n}] ${where.title} · ${anchorLabel(a)}\n(on ${where.what}${at.length ? ', ' + at.join(', ') : ''})`;
-  return [head, ...body, `Comment: ${text.trim()}`].join('\n');
+  // A quoted passage with no note (#368) has no Comment line.
+  return [head, ...body, ...(text.trim() ? [`Comment: ${text.trim()}`] : [])].join('\n');
 }
 
 /** A comment block read back for its card: what it shows, and where a click opens. */
@@ -164,6 +175,11 @@ export interface ParsedComment {
   quoted: string[];
   /** Markdown: the selected text (the sent card quotes it when there are no source lines). */
   selected: string | null;
+  /** A page in the chat's browser (#368: its passage can be lit again there). */
+  url: string | null;
+  /** The element a passage or a click is in (pages). */
+  selector: string | null;
+  /** Master's words; '' for a passage quoted with no note (#368). */
   comment: string;
 }
 
@@ -172,7 +188,8 @@ export function parseComment(text: string): ParsedComment | null {
   const m = /^\[comment (\d+)\] (.+)\n\(on (.+)\)\n/.exec(text);
   if (!m) return null;
   const c = /\nComment: ([\s\S]*)$/.exec(text);
-  if (!c) return null;
+  const selected = /\nSelected: « ([\s\S]*?) »(?:\n|$)/.exec(text)?.[1] ?? null;
+  if (!c && selected === null) return null;
   const on = m[3]!;
   const doc = /, (doc_[\w-]+) v(\d+)/.exec(on);
   const sec = /, section #([^,\s]+)/.exec(on);
@@ -188,12 +205,14 @@ export function parseComment(text: string): ParsedComment | null {
     path: file?.[1] ?? null,
     lines: ln ? [Number(ln[1]), Number(ln[2] ?? ln[1])] : null,
     quoted: text
-      .slice(m[0].length, text.length - c[0].length)
+      .slice(m[0].length, text.length - (c?.[0].length ?? 0))
       .split('\n')
       .filter((l) => l.startsWith('> '))
       .map((l) => l.slice(2)),
-    selected: /\nSelected: « ([\s\S]*?) »\n/.exec(text)?.[1] ?? null,
-    comment: c[1]!,
+    selected,
+    url: /^page (\S+) in the chat's browser/.exec(on)?.[1] ?? null,
+    selector: /, (?:in )?element (.+?)(?:, |$)/.exec(on)?.[1] ?? null,
+    comment: c?.[1] ?? '',
   };
 }
 

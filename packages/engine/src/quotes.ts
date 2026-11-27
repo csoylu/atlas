@@ -1,6 +1,7 @@
 // Quotes in a chat (#367): passages of this chat's messages with Master's notes, turned into the text blocks the agent
-// reads. Called by POST /api/cards/:id/messages before the message row is written; stored with the message.
-import { USER, formatQuote, parseComment, quoteTime, type Message, type PostQuote } from '@atlas/shared';
+// reads. Called by POST /api/cards/:id/messages before the message row is written; stored with the message. #368 adds
+// a tool call's row (its input or output) and the task's description.
+import { USER, cardRef, formatQuote, parseComment, quoteTime, type Message, type PostQuote } from '@atlas/shared';
 import { InvalidError } from './kanban.ts';
 
 export interface QuoteDeps {
@@ -10,6 +11,8 @@ export interface QuoteDeps {
   userName: string;
   /** Secrets.redact (rule 5). */
   redact(text: string): string;
+  /** The chat's task: its description can be quoted (#368). */
+  card: { id: string; number?: number | null; updatedAt: string };
   timeZone?: string;
 }
 
@@ -17,10 +20,18 @@ export interface QuoteDeps {
 export function quoteBlocks(quotes: PostQuote[], d: QuoteDeps): { type: 'text'; text: string }[] {
   const bySeq = new Map(d.messages.map((m) => [m.seq, m]));
   return quotes.map((q) => {
+    if (q.on.kind === 'task') return { type: 'text', text: d.redact(formatQuote(q, `task ${cardRef(d.card)}`, quoteTime(d.card.updatedAt, d.timeZone))) };
     const m = bySeq.get(q.on.seq);
     if (!m) throw new InvalidError(`quote ${q.n}: message ${q.on.seq} is no longer in this chat`);
     const who = m.author === USER ? d.userName : m.author;
-    return { type: 'text', text: d.redact(formatQuote(q, who, quoteTime(m.at, d.timeZone))) };
+    let tool: string | undefined;
+    if (q.on.kind === 'tool') {
+      const call = q.on.call;
+      const use = m.content.find((b) => (b.type === 'tool_use' || b.type === 'server_tool_use') && b.id === call);
+      if (!use || (use.type !== 'tool_use' && use.type !== 'server_tool_use')) throw new InvalidError(`quote ${q.n}: message ${q.on.seq} has no tool call ${call}`);
+      tool = use.name;
+    }
+    return { type: 'text', text: d.redact(formatQuote(q, who, quoteTime(m.at, d.timeZone), tool)) };
   });
 }
 

@@ -125,6 +125,8 @@ export function BrowserPane(props: {
   blockedAt: number;
   comment?: PaneComment;
   commenting: boolean;
+  /** A quote's note box is open (#368): the page waits on its picture, as in comment mode, so the box shows over it. */
+  quoting?: boolean;
   onError(e: unknown): void;
 }) {
   const { chatId, tab, agentId, onError } = props;
@@ -148,7 +150,7 @@ export function BrowserPane(props: {
             : 'page';
   // Comment mode freezes the page on a picture of it (the native view can't take pins): picked on that picture.
   const [shot, setShot] = useState<BrowserShot | null>(null);
-  const freeze = props.commenting && state === 'page';
+  const freeze = (props.commenting || !!props.quoting) && state === 'page';
   useEffect(() => {
     if (!freeze) return setShot(null);
     let live = true;
@@ -288,7 +290,7 @@ export function BrowserPane(props: {
         </div>
       )}
       <div className={'wb-view' + (driving ? ' agent' : '') + (freeze ? ' frozen' : '')} ref={view}>
-        {state === 'page' && freeze && <FrozenPage shot={shot} comment={props.comment} />}
+        {state === 'page' && freeze && <FrozenPage shot={shot} comment={props.commenting ? props.comment : undefined} />}
         {state === 'empty' && <EmptyState chatId={chatId} agent={agent} onOpen={go} onError={onError} />}
         {state === 'blocked' && (
           <div className="wb-empty">

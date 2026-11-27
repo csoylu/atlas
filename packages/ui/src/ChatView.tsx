@@ -10,6 +10,8 @@ import { DocPanel, usePanelMode, usePanelTabs } from './DocPanel.tsx';
 import { activeTab } from './docPanel.ts';
 import { useComments } from './comments.ts';
 import { useBrowserStatus, useDriving } from './BrowserPane.tsx';
+import { paneFlash } from './quoteFlash.ts';
+import type { OpenPane } from './useQuoteSurface.ts';
 import { linkTarget } from '@atlas/shared';
 
 export const LAST_AGENT = 'atlas.chat.agent';
@@ -137,6 +139,27 @@ function ChatWithPanel(props: Parameters<typeof ChatView>[0] & { chat: Card }) {
   // Links clicked in this chat (messages, the task beside it) open in its browser (#298 §3.2), in the desktop app.
   const browserTab = tabs.find((t) => t.kind === 'browser')?.tab;
   const driving = useDriving(browserTab);
+  // A quote's jump back to a pane passage (#368): its tab opens (the artifact at the quoted version, the file at its
+  // line, the page), then the tab's view lights the passage.
+  const openPane: OpenPane = useCallback(
+    (target, at) => {
+      const shown = () => {
+        closeThread();
+        setHidden(false);
+        paneFlash.ask({ target, ...at });
+      };
+      const open =
+        target.kind === 'doc'
+          ? api.panelOpen(chat.id, target.docId, null).then(() => setWant({ docId: target.docId, version: target.version, key: String(Date.now()) }))
+          : target.kind === 'file'
+            ? api.panelOpenFile(chat.id, target.path, at.lines?.[0] ?? null)
+            : browserTab?.url === target.url
+              ? api.browserFocus(chat.id)
+              : api.browserOpen(chat.id, target.url, 'link');
+      void open.then(shown, onError);
+    },
+    [chat.id, browserTab?.url, closeThread, onError],
+  );
   const status = useBrowserStatus();
   const onLink = useCallback(
     (e: React.MouseEvent) => {
@@ -183,6 +206,7 @@ function ChatWithPanel(props: Parameters<typeof ChatView>[0] & { chat: Card }) {
           newAfter={newAfter}
           hiddenDocs={hidden ? tabs.length : 0}
           hiddenLive={hidden && driving ? `${browserTab?.agentId ?? 'The agent'} is using the browser` : undefined}
+          onOpenPane={openPane}
           onShowDocs={() => setHidden(false)}
           onHideDocs={show ? () => setHidden(true) : undefined}
           onOpenRef={(r) => {

@@ -1328,7 +1328,7 @@ export class Runner {
       ...(this.opts.documents
         ? [
             `Artifacts: what you make for ${name}; artifact_create saves one (versioned, in the Library, shown in the chat).`,
-            `A [comment N] block is ${name}'s note on a place in an open artifact or file (path, version, anchor, quote, maybe a picture): act on it there.`,
+            `A [comment N] block is ${name}'s note on a place in an open artifact, file or page (path, version, anchor, quote, maybe a picture): act on it there. A [quote N] block is a passage ${name} quoted from this chat (a message, a tool call's output) or from the task's description, with their note.`,
           ]
         : []),
       ...this.secretsBlock(agent.id, project.id),

@@ -1,6 +1,6 @@
 // Comment mode (#304): the comments waiting in the composer, and the small pure helpers the pane's surfaces share.
 import { useCallback, useEffect, useState } from 'react';
-import { anchorLabel, type CommentAnchor, type CommentTarget, type DocKind, type PostComment, type PostQuote } from '@atlas/shared';
+import { anchorLabel, type CommentAnchor, type CommentTarget, type DocKind, type PostComment, type PostQuote, type QuoteOn } from '@atlas/shared';
 
 export interface Box {
   x: number;
@@ -39,18 +39,27 @@ export interface CommentDraft {
   thumb: string | null;
 }
 
-/** A passage of a message of this chat (#367), quoted in the composer: numbered with the comments. */
+/**
+ * Where a quoted passage is (#367, #368): a message of this chat (its seq, and which text block: its index in the
+ * content; null when it spans several), a tool call's row (its id, in the message `seq`), the task's description, or
+ * a pane tab (what a #304 comment would be on, with a text anchor: sent as that comment, so the agent gets the place).
+ */
+export type QuoteAt =
+  | { kind: 'message'; seq: number; block: number | null }
+  | { kind: 'tool'; seq: number; call: string }
+  | { kind: 'task' }
+  | { kind: 'pane'; target: CommentTarget; anchor: Extract<CommentAnchor, { type: 'text' }>; tab: DocKind | 'file' | 'browser' };
+
 /**
  * What a surface says about a selection to quote (#367): where it is and what it is. The pill, the note box and the
- * chips only use this; a new surface (a document, a file, tool output) adds a kind to `at` and finds its own passages.
+ * chips only use this; each surface (a message, a tool row, a document, a file, a page) finds its own passages.
  */
 export interface QuoteSource {
-  /** A message of this chat: its seq, and which text block (its index in the content); null when it spans several. */
-  at: { kind: 'message'; seq: number; block: number | null };
-  /** Who wrote it: « atlas », or Master's name. */
+  at: QuoteAt;
+  /** Who wrote it (« atlas », Master's name), or the tab's title for a pane passage. */
   who: string;
   passage: string;
-  /** Selected inside a code block. */
+  /** Selected inside a code block (or in code: a file, a tool's output). */
   code: boolean;
 }
 export interface QuoteDraft {
@@ -65,8 +74,21 @@ export type ChipDraft = CommentDraft | QuoteDraft;
 export const isQuote = (c: ChipDraft): c is QuoteDraft => 'quote' in c;
 export const isComment = (c: ChipDraft): c is CommentDraft => !('quote' in c);
 export const sameQuote = (a: QuoteSource, b: QuoteSource) => JSON.stringify(a.at) === JSON.stringify(b.at) && a.passage === b.passage;
-export const toQuote = (c: QuoteDraft): PostQuote => ({ n: c.n, on: { kind: 'message', seq: c.quote.at.seq }, passage: c.quote.passage, code: c.quote.code, note: c.text });
-
+const onOf = (at: QuoteAt): QuoteOn | null => (at.kind === 'message' ? { kind: 'message', seq: at.seq } : at.kind === 'tool' ? { kind: 'tool', seq: at.seq, call: at.call } : at.kind === 'task' ? { kind: 'task' } : null);
+/**
+ * The composer's list as the API takes it: comments, plus each pane passage as a comment with its text anchor
+ * (#368); the chat's quotes. One numbering across both.
+ */
+export function toSend(list: ChipDraft[]): { comments: PostComment[]; quotes: PostQuote[] } {
+  const comments: PostComment[] = [];
+  const quotes: PostQuote[] = [];
+  for (const c of list) {
+    if (isComment(c)) comments.push(toPost(c));
+    else if (c.quote.at.kind === 'pane') comments.push({ target: c.quote.at.target, anchor: { ...c.quote.at.anchor, quote: c.quote.passage }, text: c.text, n: c.n });
+    else quotes.push({ n: c.n, on: onOf(c.quote.at)!, passage: c.quote.passage, code: c.quote.code, note: c.text });
+  }
+  return { comments, quotes };
+}
 export const draftKey = (target: CommentTarget) => (target.kind === 'doc' ? 'doc:' + target.docId : target.kind === 'file' ? 'file:' + target.path : 'browser:' + target.url);
 export const toPost = (c: CommentDraft): PostComment => ({ target: c.target, anchor: c.anchor, text: c.text, n: c.n });
 /** The chip's words after the comment: « Settings mockup · « Network » row ». */

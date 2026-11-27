@@ -3,7 +3,7 @@ import { renderToString } from 'react-dom/server';
 import Markdown from 'react-markdown';
 import { describe, expect, it } from 'vitest';
 import { formatComment, formatQuote, type Message } from '@atlas/shared';
-import { isQuote, readComments, renumber, toPost, toQuote, withQuote, writeComments, type ChipDraft, type CommentDraft, type QuoteSource } from './comments.ts';
+import { isQuote, readComments, renumber, toPost, toSend, withQuote, writeComments, type ChipDraft, type CommentDraft, type QuoteSource } from './comments.ts';
 import { UserContent } from './CommentCards.tsx';
 import { codeLines, isQuoteKey, rehypeQuoteMarks, type QuoteMark } from './quoteMarks.ts';
 
@@ -37,7 +37,7 @@ describe('quote chips (#367)', () => {
     ]);
     const after = renumber(l.slice(1));
     expect(after.map((c) => c.n)).toEqual([1, 2]);
-    expect(toQuote(after[1] as Extract<ChipDraft, { quote: unknown }>)).toEqual({ n: 2, on: { kind: 'message', seq: 6 }, passage: 'Tool output is left out', code: false, note: '' });
+    expect(toSend(after).quotes[1]).toEqual({ n: 2, on: { kind: 'message', seq: 6 }, passage: 'Tool output is left out', code: false, note: '' });
     expect(toPost(comment(3))).toMatchObject({ n: 3, text: 'note' });
     const store = mem();
     writeComments('ch1', l, store);
@@ -84,7 +84,7 @@ describe('a sent message with quotes and comments (#367)', () => {
         { type: 'text', text: 'My reply' },
       ],
     };
-    const html = renderToString(createElement(UserContent, { message, cardId: 'c', text: (t: string, k: string) => createElement('p', { key: k }, t), quoteJump: { has: (s: number) => s === 4, jump: () => {} } }));
+    const html = renderToString(createElement(UserContent, { message, cardId: 'c', text: (t: string, k: string) => createElement('p', { key: k }, t), quoteJump: { has: (q) => q.seq === 4, jump: () => {} } }));
     const at = (s: string) => html.indexOf(s);
     expect(at('Yes, one family')).toBeGreaterThan(-1);
     expect(at('Yes, one family')).toBeLessThan(at('Fix it'));

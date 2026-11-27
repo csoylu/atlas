@@ -3,13 +3,15 @@
 // the human part, and a click opens the place in the pane.
 import { Icon } from './ScreenHeader.tsx';
 import type { ReactNode } from 'react';
-import { parseComment, parseFileLine, parseQuote, type ImageBlock, type Message, type ParsedComment, type ParsedQuote } from '@atlas/shared';
+import { parseComment, parseFileLine, parseQuote, type CommentTarget, type ImageBlock, type Message, type ParsedComment, type ParsedQuote } from '@atlas/shared';
 import { FileChips, ImageThumbs, imageUrl } from './Images.tsx';
 import { KindIcon } from './Viewer.tsx';
 import { boxOf, isQuote, type Box, type ChipDraft, type CommentDraft } from './comments.ts';
 import { QuoteIcon } from './QuoteLayer.tsx';
 import { codeLines, oneLine } from './quoteMarks.ts';
 import type { MessageRef } from './CardPanel.tsx';
+import { usePaneGone } from './quoteFlash.ts';
+import type { OpenPane } from './useQuoteSurface.ts';
 
 export function CommentChips({ list, label, onRemove, onPickQuote }: { list: ChipDraft[]; label(c: CommentDraft): string; onRemove(id: string): void; onPickQuote?(id: string, rect: Box): void }) {
   return (
@@ -108,8 +110,10 @@ export function splitComments(content: Message['content']): { comments: SentComm
 
 /** Jumps from a sent quote card to its passage (#367); `has` says whether the message is still in the chat. */
 export interface QuoteJump {
-  has(seq: number): boolean;
+  has(q: ParsedQuote): boolean;
   jump(q: ParsedQuote): void;
+  /** A pane passage sent as a comment (#368): open its tab and light it. */
+  pane?: OpenPane;
 }
 
 /** A user message: its pictures, its files (#348), a card per comment and quote in number order, then its text. */
@@ -132,12 +136,22 @@ export function CommentCards({ cardId, comments, quotes = [], onOpenRef, quoteJu
     ...comments.map((c) => ({ n: c.c.n, key: c.key, comment: c })),
     ...quotes.map((q) => ({ n: q.q.n, key: q.key, quote: q })),
   ].sort((a, b) => a.n - b.n);
+  const gone = usePaneGone();
   return (
     <div className="cm-sent qt-sent">
       {cards.map((card) => {
         if ('quote' in card) return <QuoteCard key={card.key} q={card.quote.q} jump={quoteJump} />;
         const { c, picture, key } = card.comment;
-        const open = onOpenRef && c.docId && c.version !== null ? () => onOpenRef({ docId: c.docId!, version: c.version!, section: c.section, label: c.label }) : undefined;
+        // In a chat (#368) a card opens its tab (the version it was on, a file, a page) and lights the passage there.
+        const target = sentTarget(c);
+        const pane = quoteJump?.pane;
+        const lost = !!target && !!c.selected && gone(target, c.selected);
+        const open =
+          pane && target
+            ? () => pane(target, { passage: c.selected ?? '', lines: c.lines, selector: c.selector })
+            : onOpenRef && c.docId && c.version !== null
+              ? () => onOpenRef({ docId: c.docId!, version: c.version!, section: c.section, label: c.label })
+              : undefined;
         const body = (
           <>
             <span className="cm-num">{c.n}</span>
@@ -151,7 +165,7 @@ export function CommentCards({ cardId, comments, quotes = [], onOpenRef, quoteJu
           </>
         );
         return open ? (
-          <button key={key} type="button" className="cm-sref" title="Show it in the panel" onClick={open}>
+          <button key={key} type="button" className="cm-sref" title={lost ? 'The passage is no longer there: the tab opens without it' : 'Show it in the panel'} onClick={open}>
             {body}
           </button>
         ) : (
@@ -164,9 +178,17 @@ export function CommentCards({ cardId, comments, quotes = [], onOpenRef, quoteJu
   );
 }
 
+/** What a sent comment is on, as a tab to open: the artifact at its version, a file, a page. */
+function sentTarget(c: ParsedComment): CommentTarget | null {
+  if (c.docId && c.version !== null) return { kind: 'doc', docId: c.docId, version: c.version };
+  if (c.path) return { kind: 'file', path: c.path };
+  if (c.url) return { kind: 'browser', url: c.url, title: '' };
+  return null;
+}
+
 /** A sent quote: number, who · when, up to 3 lines of the passage (or a code box), the note. A click jumps back. */
 function QuoteCard({ q, jump }: { q: ParsedQuote; jump?: QuoteJump }) {
-  const here = !!jump?.has(q.seq);
+  const here = !!jump?.has(q);
   const body = (
     <>
       <span className="cm-num">{q.n}</span>

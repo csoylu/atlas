@@ -91,6 +91,38 @@ export type BrowserBounds = z.infer<typeof BrowserBounds>;
 export const BrowserView = z.object({ chatId: z.string().min(1).max(100).nullable(), bounds: BrowserBounds.nullable().default(null) });
 export type BrowserView = z.infer<typeof BrowserView>;
 
+/**
+ * A text selection on the page (#368), read by the host in an isolated world the page can't see: the text, where it
+ * starts (CSS px of the viewport), the element it is in, and whether a field has the focus (then Q is the page's).
+ */
+export const BrowserSelection = z.object({
+  text: z.string().min(1).max(20_000),
+  rect: z.object({ x: z.number().finite(), y: z.number().finite(), w: z.number().finite(), h: z.number().finite() }),
+  selector: z.string().max(1000).nullable(),
+  code: z.boolean(),
+});
+export type BrowserSelection = z.infer<typeof BrowserSelection>;
+
+/**
+ * PUT /api/browser/tabs/:chatId/pill: the « Quote Q » pill drawn by Atlas over the page (its own little view, #368),
+ * at x, y in CSS px of the Atlas page, in the app's colours; null hides it.
+ */
+export const BrowserPill = z
+  .object({
+    x: z.number().finite(),
+    y: z.number().finite(),
+    /** The app's tokens now (theme and accent are Master's): --raised, --line-2, --text, --accent, --chip, --faint. */
+    colors: z.object({ bg: z.string().max(80), border: z.string().max(80), text: z.string().max(80), accent: z.string().max(80), chip: z.string().max(80), faint: z.string().max(80) }),
+    /** --font and --mono. */
+    font: z.string().max(300),
+    mono: z.string().max(300),
+  })
+  .nullable();
+export type BrowserPill = z.infer<typeof BrowserPill>;
+
+/** POST /api/browser/tabs/:chatId/flash: a quoted passage to light again on the page (#368). */
+export const BrowserFlash = z.object({ passage: z.string().min(1).max(20_000), selector: z.string().max(1000).nullable().default(null) });
+
 export const BrowserOpen = z.object({ url: z.string().min(1).max(4000), via: z.enum(['link', 'typed']).default('typed') });
 
 /** What is under a point or in an area of the page (comment mode, #306): CSS px of the viewport. */
