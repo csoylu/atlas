@@ -388,7 +388,9 @@ function Source({ doc, version, onError }: { doc: Doc; version: number | null; o
   if (text === null) return <div className="sd-body loading" />;
   return (
     <div className="sd-body sd-src">
-      <pre>{text}</pre>
+      <pre data-qpane="src" data-qver={version ?? doc.version}>
+        {text}
+      </pre>
     </div>
   );
 }
@@ -498,6 +500,8 @@ function MarkdownDoc(props: { doc: Doc; sections: DocSection[]; changed: Set<str
     <article
       ref={art}
       className="doc-md md"
+      data-qpane="md"
+      data-qver={props.version}
       onClickCapture={(e) => {
         if (!cm?.on) return;
         if ((e.target as Element).closest('a')) e.preventDefault(); // a link is commented on, not followed
@@ -690,6 +694,14 @@ function LinkView({ url, title, preview, version, comment }: { url: string; titl
   return <iframe className={preview ? undefined : 'doc-frame'} title={title} sandbox={sandboxFor(url)} src={url} tabIndex={preview ? -1 : undefined} aria-hidden={preview || undefined} loading="lazy" />;
 }
 
+/** A link to a file Atlas serves (/api/files/…), with `?pane=1`: the helper added (#368); another site: null. */
+export function paneUrl(url: string): string | null {
+  const u = new URL(url, location.href);
+  if (u.origin !== location.origin || !u.pathname.startsWith('/api/files/')) return null;
+  u.searchParams.set('pane', '1');
+  return /^https?:/i.test(url) ? u.href : u.pathname + u.search + u.hash;
+}
+
 /** An image link in the pane: a spot or an area in the image's own pixels (#304). */
 function CommentImage({ url, title, version, comment: cm }: { url: string; title: string; version: number; comment: PaneComment }) {
   const img = useRef<HTMLImageElement>(null);
@@ -732,9 +744,15 @@ function CommentLink({ url, title, version, comment: cm }: { url: string; title:
     return { shown: r, of: { w: Math.max(1, Math.round(r.w)), h: Math.max(1, Math.round(r.h)) }, origin: { x: 0, y: 0 }, unit: 'px' };
   };
   const s = space();
+  // A file of a workspace (#368): served with the pane helper, so its text (a raw file, a page) can be quoted. Its
+  // marks stay drawn here, over the frame (an area or a spot of the frame as shown).
+  const frame = useRef<HTMLIFrameElement>(null);
+  const own = paneUrl(url);
+  const quoting = useMemo(() => (own ? { ...cm, on: false, marks: [] } : undefined), [own, cm]);
+  useFrameComments(frame, quoting, version);
   return (
     <div ref={box} className="cm-pic cm-pic-frame">
-      <iframe className="doc-frame" title={title} sandbox={sandboxFor(url)} src={url} loading="lazy" />
+      <iframe ref={frame} className="doc-frame" title={title} sandbox={sandboxFor(url)} src={own ?? url} loading="lazy" />
       {s && <Marks items={pictureMarks(cm.marks, s, s.shown)} />}
       {cm.on && (
         <PickOverlay

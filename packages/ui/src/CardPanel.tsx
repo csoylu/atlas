@@ -29,8 +29,9 @@ import { SecretBox, secretBoxOf } from './SecretBox.tsx';
 import { deleteChatQuestion } from './chatHistoryMenu.ts';
 import { HeaderActions, Icon } from './ScreenHeader.tsx';
 import { StatusIcon, STATUS_LABEL } from './StatusIcon.tsx';
-import { chipAnchor, isComment, isQuote, toPost, toQuote, type Comments } from './comments.ts';
+import { chipAnchor, toSend, type Comments } from './comments.ts';
 import { QuoteLayer } from './QuoteLayer.tsx';
+import type { OpenPane } from './useQuoteSurface.ts';
 import { rehypeQuoteMarks, type QuoteMark } from './quoteMarks.ts';
 import { useQuoteSurface } from './useQuoteSurface.ts';
 import { CommentChips, UserContent } from './CommentCards.tsx';
@@ -158,6 +159,8 @@ export function CardPanel(props: {
   onHideDocs?(): void;
   /** A quote chip in a message was clicked: open that document part in the panel. */
   onOpenRef?(ref: MessageRef): void;
+  /** A pane passage's chip or card (#368): open its tab and light it. */
+  onOpenPane?: OpenPane;
 }) {
   const { card, stream, onError } = props;
   const convo = useCardConversation(card, stream, onError);
@@ -228,6 +231,7 @@ export function CardPanel(props: {
           onError={onError}
           newAfter={props.newAfter}
           comments={props.comments}
+          onOpenPane={props.onOpenPane}
           empty={`Ask @${card.assignee} anything. For work to track, it creates tasks.`}
         />
       </div>
@@ -331,6 +335,8 @@ export function Activity(props: {
   onError(e: unknown): void;
   /** The composer's waiting comments and quotes (#367): a selection in a message quotes it there. */
   comments?: Comments;
+  /** A pane passage's chip or card (#368): open its tab and light it. */
+  onOpenPane?: OpenPane;
   /**
    * The task sheet (#269) shows a blocked task's question in its « Now » box: the conversation then doesn't repeat it,
    * and opens scrolled to that box instead of the end.
@@ -401,7 +407,7 @@ export function Activity(props: {
     el.classList.add('flash');
   }, [focusSeq, messages.length]);
   // Quotes (#367): which text block a selection is in, the passages waiting as chips, the one a click lit.
-  const quote = useQuoteSurface(messages, props.comments, listBox, fold, expanded, setExpanded);
+  const quote = useQuoteSurface(messages, props.comments, listBox, fold, expanded, setExpanded, props.onOpenPane);
   const userWho = props.userName ?? 'You';
   const text = (t: string, key?: string, user?: boolean, at?: { seq: number; block: number; who: string }) => (
     <TextBlock key={key} text={t} onOpenRef={user ? props.onOpenRef : undefined} quotes={user} cardLinks={cardLinks} qb={at} marks={at ? quote.marks(at.seq, at.block) : undefined} />
@@ -780,7 +786,10 @@ export const CardComposer = forwardRef<
           setEyeOff(false);
           // A failed send puts the text (and the images) back, unless the user already started a new message.
           void pending
-            .then((ids) => api.postMessage(card.id, t, ids, notes.filter(isComment).map(toPost), pane, notes.filter(isQuote).map(toQuote)))
+            .then((ids) => {
+              const out = toSend(notes);
+              return api.postMessage(card.id, t, ids, out.comments, pane, out.quotes);
+            })
             .then(() => att.release(sent))
             .catch((err: unknown) => {
               if (!readDraft(draftId).trim()) writeDraft(draftId, text); // the composer may be gone already

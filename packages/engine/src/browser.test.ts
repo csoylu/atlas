@@ -48,6 +48,15 @@ class FakeHost implements BrowserHost {
   signal(id: string, s: { caption: string; point: { x: number; y: number } | null }) {
     this.signals.push([id, s]);
   }
+  pills: [string, unknown][] = [];
+  pill(id: string, p: unknown) {
+    this.pills.push([id, p]);
+  }
+  flashes: [string, string, string | null][] = [];
+  async flash(id: string, passage: string, selector: string | null) {
+    this.flashes.push([id, passage, selector]);
+    return passage !== 'gone';
+  }
   on(l: (e: HostEvent) => void) {
     this.listeners.add(l);
     return () => this.listeners.delete(l);
@@ -163,6 +172,32 @@ describe('the shared browser (#298 S6)', () => {
     const opens = l.host.calls.filter((c) => c[0] === 'open').length;
     await l.call('PUT', '/browser/view', { chatId: chat.id, bounds: { x: 1, y: 2, width: 300, height: 400 } });
     expect(l.host.calls.filter((c) => c[0] === 'open').length).toBe(opens + 1);
+  });
+
+  it('#368: a selection on the page goes to the UI as it is (the tab unchanged); the pill shows only over the tab on screen', async () => {
+    const l = await withBrowser();
+    const chat = await l.chat();
+    await l.call('POST', `/browser/tabs/${chat.id}/open`, { url: 'https://example.com' });
+    const before = l.engine.browser.get(chat.id);
+    const sel = { text: 'Example Domain', rect: { x: 10, y: 20, w: 100, h: 18 }, selector: 'body > h1', code: false };
+    l.host.emit({ type: 'selection', id: chat.id, sel });
+    expect(l.events.at(-1)).toEqual({ type: 'browser.selection', chatId: chat.id, sel });
+    l.host.emit({ type: 'quote', id: chat.id, via: 'key' });
+    expect(l.events.at(-1)).toEqual({ type: 'browser.selection', chatId: chat.id, sel: null, quote: 'key' });
+    expect(l.engine.browser.get(chat.id)).toEqual(before);
+    const pill = { x: 400, y: 300, colors: { bg: '#222', border: '#333', text: '#eee', accent: '#4fb8d0', chip: '#2a2a2a', faint: '#888' }, sans: 'Inter, sans-serif', mono: 'ui-monospace' };
+    // Not on screen: hidden.
+    expect((await l.call('PUT', `/browser/tabs/${chat.id}/pill`, { pill })).status).toBe(204);
+    expect(l.host.pills.at(-1)).toEqual([chat.id, null]);
+    await l.call('PUT', '/browser/view', { chatId: chat.id, bounds: { x: 1, y: 2, width: 300, height: 400 } });
+    await l.call('PUT', `/browser/tabs/${chat.id}/pill`, { pill });
+    expect(l.host.pills.at(-1)).toEqual([chat.id, pill]);
+    await l.call('PUT', `/browser/tabs/${chat.id}/pill`, { pill: null });
+    expect(l.host.pills.at(-1)).toEqual([chat.id, null]);
+    // A jump back lights the passage; the page says whether it is still there.
+    expect((await l.call('POST', `/browser/tabs/${chat.id}/flash`, { passage: 'Example Domain', selector: 'body > h1' })).body).toEqual({ found: true });
+    expect((await l.call('POST', `/browser/tabs/${chat.id}/flash`, { passage: 'gone' })).body).toEqual({ found: false });
+    expect(l.host.flashes).toEqual([[chat.id, 'Example Domain', 'body > h1'], [chat.id, 'gone', null]]);
   });
 
   it('input owner: the agent is refused while Master has it; hand back gives it the page; take control again', async () => {

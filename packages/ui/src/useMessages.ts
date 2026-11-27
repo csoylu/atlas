@@ -1,5 +1,5 @@
 import { useMemo } from 'react';
-import type { BrowserTab, Doc, Folder, Memory, MemoryProposal, PanelTab, ClaudePlanStatus, LocalPull, LocalStatus, Message, Run, ToolCallTiming, VoiceStatus, WorkflowRun } from '@atlas/shared';
+import type { BrowserSelection, BrowserTab, Doc, Folder, Memory, MemoryProposal, PanelTab, ClaudePlanStatus, LocalPull, LocalStatus, Message, Run, ToolCallTiming, VoiceStatus, WorkflowRun } from '@atlas/shared';
 
 /** Fan-out of live chat events to whichever card panel is listening. */
 export type LiveEvent =
@@ -24,6 +24,8 @@ export type LiveEvent =
   /** The chat's browser tab changed (key 'browser:<chat id>'); `blocked`: Master's input was refused, the agent acts. */
   | { type: 'browser'; tab: BrowserTab; blocked: boolean }
   | { type: 'browserClosed' }
+  /** #368: Master's text selection on the page (null: gone), or Q / the pill quoting it. */
+  | { type: 'browserSel'; sel: BrowserSelection | null; quote?: 'key' | 'pill' }
   | { type: 'voice'; status: VoiceStatus }
   /** A memory was added or changed (key 'memories'). */
   | { type: 'memory'; memory: Memory }

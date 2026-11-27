@@ -439,7 +439,8 @@ export const CodeEditor = forwardRef<
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [markKey, props.docKey]);
 
-  return <div ref={box} className={'wb-cm' + (props.comment?.on ? ' wb-commenting' : '')} />;
+  // data-qpane: a selection here is quoted with its lines (#368, paneQuote.ts reads CodeMirror's own selection).
+  return <div ref={box} className={'wb-cm' + (props.comment?.on ? ' wb-commenting' : '')} data-qpane="code" />;
 });
 
 export default CodeEditor;

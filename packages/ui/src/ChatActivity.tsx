@@ -1,3 +1,4 @@
+import { useStepWanted } from './quoteFlash.ts';
 import { createContext, useContext, useEffect, useMemo, useState, type ReactNode } from 'react';
 import { KIND_WORD, type Message, type ToolCallTiming, type parseDocRef } from '@atlas/shared';
 import { useArtifactState } from './artifacts.ts';
@@ -71,6 +72,7 @@ function SegmentView(p: Parameters<typeof Turn>[0] & { s: Segment; now: number; 
 
 /** One tool call (or thinking block) as a row; nested inside a group's timeline. */
 export function StepRow({ step, timing, now, at, nested, defaultOpen, forceOpen, plan }: { step: Step; timing?: ToolCallTiming; now: number; at?: string; nested?: boolean; defaultOpen?: boolean; forceOpen?: boolean; plan?: boolean }) {
+  const wantedOpen = useStepWanted([step.id]); // a quote's jump back (#368)
   const { row } = step;
   const ctx = useContext(TurnContext);
   const { cards } = ctx;
@@ -100,12 +102,19 @@ export function StepRow({ step, timing, now, at, nested, defaultOpen, forceOpen,
       running={running}
       nested={nested}
       defaultOpen={defaultOpen}
-      forceOpen={forceOpen}
+      forceOpen={forceOpen || wantedOpen || undefined}
       autoOpen={isLiveShell(step)}
       className={'step' + (plan ? ' plan' : '') + (step.kind === 'tool' && isDangerous(step.name, step.input) ? ' danger' : '')}
     >
       {ctx.cardId && step.result?.images?.length ? <ImageThumbs cardId={ctx.cardId} images={step.result.images} /> : null}
-      {stepDetail(step, ctx, timing)}
+      {step.kind === 'tool' && step.seq ? (
+        // A passage of the call's input or output can be quoted (#368): the chat's quote surface reads these.
+        <div className="step-q" data-qtool={step.id} data-qtseq={step.seq} data-qwho={step.who ?? ''}>
+          {stepDetail(step, ctx, timing)}
+        </div>
+      ) : (
+        stepDetail(step, ctx, timing)
+      )}
     </ChatRow>
   );
 }
@@ -115,6 +124,7 @@ export function StepsGroup({ steps, timings, now, at, failedEnd }: { steps: Step
   const sum = groupSummary(steps);
   const running = !!sum.running;
   const opensOnFailure = !!failedEnd && steps.includes(failedEnd);
+  const wanted = useStepWanted(steps.map((s) => s.id)); // a quote's jump back (#368)
   const times = steps.flatMap((s) => {
     const t = timings.get(s.id);
     return t ? [t] : [];
@@ -140,7 +150,7 @@ export function StepsGroup({ steps, timings, now, at, failedEnd }: { steps: Step
       meta={<RowMeta meta={[{ add: sum.add, del: sum.del }, ...(sum.failed ? [{ pill: 'bad' as const, text: `${sum.failed} failed` }] : [])]} time={time} />}
       at={at}
       running={running}
-      forceOpen={opensOnFailure || undefined}
+      forceOpen={opensOnFailure || wanted || undefined}
       autoOpen={steps.some(isLiveShell)}
     >
       <div className="steps-tl">

@@ -3615,6 +3615,9 @@ button.cm-sref:hover { border-color: var(--accent); }
 /* Jump back: the passage the clicked quote came from, lit for 2 s. */
 .qt-flash { color: inherit; border-radius: 4px; background: var(--accent-soft); outline: 2px solid var(--accent); outline-offset: 1px; -webkit-box-decoration-break: clone; box-decoration-break: clone; animation: qt-flash 2s ease-out forwards; }
 @keyframes qt-flash { 0%, 60% { outline-color: var(--accent); } 100% { outline-color: transparent; } }
+/* #368: the same light on a passage that is not a chat message (a tool row, the description, a document, a file). */
+::highlight(qt-flash) { background-color: var(--accent-soft); color: var(--text); text-decoration: underline 2px var(--accent); }
+.step-q { display: contents; }
 /* A quote chip is a comment chip (#304) with the quote mark in the kind slot. */
 .qt-kind .icon { color: var(--accent); }
 .qt-chip { cursor: pointer; }

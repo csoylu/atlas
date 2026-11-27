@@ -1,6 +1,6 @@
 import { session, shell, WebContentsView, type BrowserWindow, type Session, type WebContents } from 'electron';
 import type { BrowserHost, BrowserHostEvent, BrowserHostTab } from '@atlas/engine';
-import { DRIVING_MS, type BrowserShot } from '@atlas/shared';
+import { cssPath, DRIVING_MS, findPassage, type BrowserPill, type BrowserSelection, type BrowserShot } from '@atlas/shared';
 
 /**
  * The shared browser's Electron backend (#298 §3.1, S6): one WebContentsView per chat tab, laid over the pane's page
@@ -39,6 +39,14 @@ interface Tab {
   /** Until when the overlay shows (DRIVING_MS after the agent's last action). */
   overlayUntil: number;
   overlayTimer: ReturnType<typeof setTimeout> | null;
+  /**
+   * Master's text selection on the page (#368), as last read in Atlas's isolated world (`SELECTION_JS`), and whether
+   * a field of the page had the focus then (Q is the page's). Read after Master's mouse or key lets go.
+   */
+  sel: BrowserSelection | null;
+  typing: boolean;
+  /** Reads in flight answer in order: an older one never overwrites a newer. */
+  selRead: number;
 }
 
 const BLOCK_REPORT_MS = 1500;
@@ -62,6 +70,41 @@ html,body{margin:0;height:100%;background:transparent;overflow:hidden;font:440 1
 function show(s){document.documentElement.className=s.theme;const c=document.getElementById('cap');c.hidden=!s.caption;c.querySelector('span').textContent=s.caption;
 const old=document.getElementById('pulse');if(old)old.remove();if(s.point){const p=document.createElement('div');p.id='pulse';p.style.left=s.point.x+'px';p.style.top=s.point.y+'px';document.body.appendChild(p)}}
 </script>`;
+/**
+ * The « Quote Q » pill over the page (#368, #367's .qt-pop): a view of Atlas's own laid above the page, so the site
+ * neither sees it nor can break it. Its colours and fonts are the app's tokens of the moment (`paint`).
+ */
+export const PILL_HTML = `<!doctype html><meta charset="utf-8"><style>
+html,body{margin:0;height:100%;background:transparent;overflow:hidden}
+#p{position:fixed;left:2px;top:2px;display:inline-flex;align-items:center;gap:6px;height:30px;padding:0 6px 0 10px;border-radius:999px;box-sizing:border-box;white-space:nowrap;cursor:pointer;font-size:13px;font-weight:530;line-height:1.3}
+#p svg{flex:none}#p b{font-weight:440;padding:0 5px}
+</style><div id="p" title="Quote this passage (Q)"><svg viewBox="0 0 16 16" width="14" height="14" fill="currentColor" aria-hidden="true"><path d="M3 9.2C3 6.6 4.4 4.7 6.6 4l.5 1c-1.2.6-1.9 1.5-2 2.6.9 0 1.7.7 1.7 1.7S6 11 5 11 3 10.4 3 9.2Zm6 0C9 6.6 10.4 4.7 12.6 4l.5 1c-1.2.6-1.9 1.5-2 2.6.9 0 1.7.7 1.7 1.7S12 11 11 11s-2-.6-2-1.8Z"/></svg><span>Quote</span><b>Q</b></div><script>
+function paint(c){const p=document.getElementById('p');p.style.cssText='background:'+c.bg+';border:1px solid '+c.border+';color:'+c.text+';font-family:'+c.font;
+p.querySelector('svg').style.color=c.accent;const k=p.querySelector('b');k.style.cssText='background:'+c.chip+';color:'+c.faint+';font-family:'+c.mono;return [Math.ceil(p.offsetWidth)+4,Math.ceil(p.offsetHeight)+4]}
+</script>`;
+
+/**
+ * Master's selection on the page (#368), read in an isolated world (the site sees no script, no global): its text,
+ * where it starts (CSS px of the viewport), the element it sits in, and whether a field has the focus. Nothing when
+ * the selection is empty, blocked (user-select: none reads empty) or in a frame of another origin (not in this one).
+ */
+const SELECTION_JS = `(() => {
+  const cssPath = ${cssPath.toString()};
+  const a = document.activeElement;
+  const typing = !!a && (a.isContentEditable || /^(input|textarea|select)$/i.test(a.tagName));
+  const s = getSelection();
+  const text = s && !s.isCollapsed && s.rangeCount ? s.toString().trim() : '';
+  if (!text || typing) return { sel: null, typing };
+  const r = s.getRangeAt(0);
+  const c = r.commonAncestorContainer;
+  const el = c.nodeType === 1 ? c : c.parentElement;
+  const f = [...r.getClientRects()].find((x) => x.width > 0) || r.getBoundingClientRect();
+  if (!el || !document.body) return { sel: null, typing };
+  return { sel: { text: text.slice(0, 20000), rect: { x: f.left, y: f.top, w: f.width, h: f.height }, selector: el === document.body ? 'body' : cssPath(el, document.body), code: !!el.closest('pre, code') }, typing };
+})()`;
+/** Atlas's own world on a page, apart from the site's (and from the agent's CDP calls in the main world). */
+const QUOTE_WORLD = 1368;
+
 /** How long Master's click or key counts as the gesture that lets the page open a mailto: or start a download. */
 const GESTURE_MS = 1000;
 /** The only schemes a page may hand to the system, after Master's gesture (§3.2: mail and phone links). */
@@ -74,6 +117,9 @@ export class ElectronBrowser implements BrowserHost {
   private creds = new Map<string, { username: string; password: string }>();
   private sessions = new Map<string, string>();
   private onScreen: string | null = null;
+  /** The quote pill (#368): one view, over the tab on screen; its size once painted. */
+  private pillView: WebContentsView | null = null;
+  private pillAt: { id: string; x: number; y: number; size: [number, number] } | null = null;
   private bounds: { x: number; y: number; width: number; height: number } | null = null;
 
   /**
@@ -119,13 +165,116 @@ export class ElectronBrowser implements BrowserHost {
     this.window()?.contentView.removeChildView(tab.view);
     if (!tab.view.webContents.isDestroyed()) tab.view.webContents.close();
     this.dropOverlay(tab);
+    if (this.pillAt?.id === id) this.pill(id, null);
     if (this.onScreen === id) this.onScreen = null;
   }
 
   show(id: string | null, bounds: { x: number; y: number; width: number; height: number } | null): void {
+    // Another tab, or none (the pane closed, a picture of the page instead): the pill and the selection go (#368).
+    if (this.onScreen && (id !== this.onScreen || !bounds)) this.forget(this.onScreen);
     this.onScreen = id;
     this.bounds = bounds;
     this.place();
+  }
+
+  /** The quote pill at x, y (CSS px of the Atlas window), painted in the app's colours; null hides it (#368). */
+  pill(id: string, p: BrowserPill): void {
+    if (!p) {
+      if (this.pillAt?.id === id || !this.pillAt) this.pillAt = null;
+      return this.place();
+    }
+    const view = this.pillView && !this.pillView.webContents.isDestroyed() ? this.pillView : this.makePill();
+    const at = { id, x: p.x, y: p.y, size: this.pillAt?.size ?? ([110, 36] as [number, number]) };
+    this.pillAt = at;
+    const paint = () =>
+      view.webContents
+        .executeJavaScript(`paint(${JSON.stringify({ ...p.colors, font: p.sans, mono: p.mono })})`)
+        .then((size: [number, number]) => {
+          if (this.pillAt !== at) return;
+          at.size = size;
+          this.place();
+        });
+    void (view.webContents.isLoading() ? new Promise<void>((ok) => view.webContents.once('did-finish-load', () => ok())).then(paint) : paint()).catch((e: unknown) => console.error('[browser] pill', e));
+    this.place();
+  }
+
+  /**
+   * A quote's jump back (#368): the passage selected again on the page and scrolled to, for 2 s (the selection is
+   * Master's own gesture on the page, no element added); waits up to 5 s for a page that is still loading.
+   */
+  async flash(id: string, passage: string, selector: string | null): Promise<boolean> {
+    const wc = this.need(id).view.webContents;
+    const code = `(() => {
+      const findPassage = ${findPassage.toString()};
+      const scope = (${JSON.stringify(selector)} && document.querySelector(${JSON.stringify(selector)})) || document.body;
+      const r = scope && (findPassage(scope, ${JSON.stringify(passage)}) || (scope !== document.body && findPassage(document.body, ${JSON.stringify(passage)})));
+      if (!r) return document.readyState === 'complete' ? 'no' : 'wait';
+      const s = getSelection();
+      s.removeAllRanges();
+      s.addRange(r);
+      (r.startContainer.parentElement || document.body).scrollIntoView({ block: 'center' });
+      const text = s.toString();
+      setTimeout(() => { if (getSelection().toString() === text) getSelection().removeAllRanges(); }, 2000);
+      return 'yes';
+    })()`;
+    for (let i = 0; i < 25; i++) {
+      if (wc.isDestroyed()) return false;
+      const r: unknown = wc.isLoading() ? 'wait' : await wc.executeJavaScriptInIsolatedWorld(QUOTE_WORLD, [{ code }]).catch(() => 'wait');
+      if (r === 'yes' || r === 'no') return r === 'yes';
+      await new Promise((ok) => setTimeout(ok, 200));
+    }
+    return false;
+  }
+
+  /** The tab's selection is gone (scrolled, navigated, hidden): said once, and its pill hidden. */
+  private forget(id: string): void {
+    const tab = this.tabs.get(id);
+    if (this.pillAt?.id === id) this.pillAt = null;
+    if (!tab?.sel) return;
+    tab.sel = null;
+    tab.selRead++;
+    this.emit({ type: 'selection', id, sel: null });
+  }
+
+  /** Read the selection again after Master's mouse or key let go; said when it changed. */
+  private readSelection(tab: Tab): void {
+    const wc = tab.view.webContents;
+    if (wc.isDestroyed()) return;
+    const n = ++tab.selRead;
+    void wc
+      .executeJavaScriptInIsolatedWorld(QUOTE_WORLD, [{ code: SELECTION_JS }])
+      .then((r: { sel: BrowserSelection | null; typing: boolean } | null) => {
+        if (n !== tab.selRead) return;
+        tab.typing = !!r?.typing;
+        const sel = r?.sel ?? null;
+        if (JSON.stringify(sel) === JSON.stringify(tab.sel)) return;
+        tab.sel = sel;
+        if (!sel && this.pillAt?.id === tab.id) {
+          this.pillAt = null;
+          this.place();
+        }
+        this.emit({ type: 'selection', id: tab.id, sel });
+      })
+      .catch(() => undefined); // the page is going (a navigation): its selection goes with it, said by did-start-navigation
+  }
+
+  private makePill(): WebContentsView {
+    const view = new WebContentsView({ webPreferences: { sandbox: true, contextIsolation: true, nodeIntegration: false, javascript: true } });
+    view.setBackgroundColor('#00000000');
+    view.setVisible(false);
+    void view.webContents.loadURL('data:text/html;charset=utf-8,' + encodeURIComponent(PILL_HTML));
+    view.webContents.setWindowOpenHandler(() => ({ action: 'deny' }));
+    view.webContents.on('will-navigate', (e) => e.preventDefault());
+    // A click on the pill quotes the selection; the pill takes no key (the page keeps the focus).
+    view.webContents.on('before-mouse-event', (e, m) => {
+      if (m.type === 'mouseMove' || m.type === 'mouseEnter' || m.type === 'mouseLeave') return;
+      e.preventDefault();
+      if (m.type === 'mouseUp' && this.pillAt) this.emit({ type: 'quote', id: this.pillAt.id, via: 'pill' });
+    });
+    view.webContents.on('before-input-event', (e) => e.preventDefault());
+    this.pillView = view;
+    this.window()?.contentView.addChildView(view);
+    return view;
   }
 
   setOwner(id: string, owner: 'agent' | 'master'): void {
@@ -189,7 +338,7 @@ export class ElectronBrowser implements BrowserHost {
     // WebRTC: no UDP that skips the proxy (STUN would reach the internet directly, past the workspace's level).
     view.webContents.setWebRTCIPHandlingPolicy('disable_non_proxied_udp');
     view.setVisible(false);
-    const tab: Tab = { id: t.id, view, partition: t.partition, proxyKey, owner: 'master', agentInput: 0, attached: false, blockedAt: 0, gestureAt: 0, overlay: null, overlayUntil: 0, overlayTimer: null };
+    const tab: Tab = { id: t.id, view, partition: t.partition, proxyKey, owner: 'master', agentInput: 0, attached: false, blockedAt: 0, gestureAt: 0, overlay: null, overlayUntil: 0, overlayTimer: null, sel: null, typing: false, selRead: 0 };
     this.tabs.set(t.id, tab);
     this.wire(tab, view.webContents);
     this.window()?.contentView.addChildView(view);
@@ -311,6 +460,9 @@ export class ElectronBrowser implements BrowserHost {
       emit({ type: 'loading', id, loading: false });
       this.attach(tab); // after the first load
     });
+    wc.on('did-start-navigation', (d) => {
+      if (d.isMainFrame && !d.isSameDocument) this.forget(id);
+    });
     wc.on('did-navigate', (_e, url) => emit({ type: 'navigated', id, url }));
     wc.on('did-navigate-in-page', (_e, url, main) => main && emit({ type: 'navigated', id, url }));
     wc.on('page-title-updated', (_e, title) => emit({ type: 'title', id, title }));
@@ -349,11 +501,23 @@ export class ElectronBrowser implements BrowserHost {
       if (now - tab.blockedAt > BLOCK_REPORT_MS || now >= tab.overlayUntil) emit({ type: 'input-blocked', id });
       tab.blockedAt = now;
     };
-    wc.on('before-input-event', (e) => block(e));
+    wc.on('before-input-event', (e, i) => {
+      // Q quotes Master's selection (#368): only with one, no field focused, no modifier; any other key is the page's.
+      // It changes nothing on the page, so it works while the agent drives too.
+      if (i.type === 'keyDown' && !i.isAutoRepeat && i.key.toLowerCase() === 'q' && !i.control && !i.meta && !i.alt && tab.sel && !tab.typing && tab.agentInput === 0) {
+        e.preventDefault();
+        return emit({ type: 'quote', id, via: 'key' });
+      }
+      block(e);
+      if (i.type === 'keyUp' && tab.agentInput === 0 && tab.owner === 'master') this.readSelection(tab);
+    });
     wc.on('before-mouse-event', (e, m) => {
       // Moving over the page shows nothing to the agent: only presses, the wheel and menus are blocked.
       if (m.type === 'mouseMove' || m.type === 'mouseEnter' || m.type === 'mouseLeave') return;
+      // The wheel scrolls the page from under the pill: it goes (#368).
+      if (m.type === 'mouseWheel' && tab.agentInput === 0) this.forget(id);
       block(e);
+      if (m.type === 'mouseUp' && tab.agentInput === 0 && tab.owner === 'master') this.readSelection(tab);
     });
   }
 
@@ -394,6 +558,18 @@ export class ElectronBrowser implements BrowserHost {
         }
         o.setVisible(over);
       }
+    }
+    // The quote pill, over the tab on screen only (#368), on top of the page and its overlay.
+    const pv = this.pillView;
+    if (pv && !pv.webContents.isDestroyed()) {
+      const at = this.pillAt;
+      const on = !!at && at.id === this.onScreen && !!this.bounds && !!this.tabs.get(at.id)?.sel;
+      if (on) {
+        pv.setBounds({ x: Math.round((at.x - 2) * zoom), y: Math.round((at.y - 2) * zoom), width: Math.round(at.size[0] * zoom), height: Math.round(at.size[1] * zoom) });
+        pv.webContents.setZoomFactor(zoom);
+        win.contentView.addChildView(pv);
+      }
+      pv.setVisible(on);
     }
   }
 

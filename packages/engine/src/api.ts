@@ -23,7 +23,7 @@ import type { Documents } from './documents.ts';
 import type { WorkspaceFiles } from './workspaceFiles.ts';
 import type { Projects } from './projects.ts';
 import type { ReviewFlow } from './reviewFlow.ts';
-import { ClientEvent, PaneSees, servedFile, withPaneHelper } from '@atlas/shared';
+import { ClientEvent, PaneSees, servedFile, textPage, withPaneHelper } from '@atlas/shared';
 import type { NotifierStatus, SandboxStatus } from '@atlas/shared';
 import { PanePresence, paneNote } from './pane.ts';
 import { commentBlocks, type PageShot } from './comments.ts';
@@ -46,7 +46,7 @@ import type { Sandbox } from './sandbox.ts';
 import type { Network } from './network.ts';
 import { FaviconRefused, type Favicons } from './favicons.ts';
 import { BrowserBusyError, type Browser } from './browser.ts';
-import { BrowserInspect, BrowserNav, BrowserOpen, BrowserSetOwner, BrowserView } from '@atlas/shared';
+import { BrowserInspect, BrowserNav, BrowserFlash, BrowserOpen, BrowserPill, BrowserSetOwner, BrowserView } from '@atlas/shared';
 import { DEFAULT_CONTEXT_WINDOW, MEMORY_BUDGET, MEMORY_BUDGET_GLOBAL, type About, type MemoryBudget, type Timeline } from '@atlas/shared';
 
 /** Who the UI acts as. One user (design §1). */
@@ -55,6 +55,8 @@ const USER = 'user';
 /** A path under `root` as the agent writes it (forward slashes on every OS). */
 const posixRel = (root: string, p: string) => relative(root, p).split(sep).join('/');
 export const MAX_SERVED_REDACT = 10 * 1024 * 1024;
+/** A file the pane shows as text (#368): text/* but html, and the usual text formats served as application/*. */
+export const isTextType = (type: string) => (/^text\//.test(type) && !type.startsWith('text/html')) || /^application\/(json|javascript|xml|x-sh|toml|yaml|x-yaml)\b/.test(type);
 
 import { Auth, SESSION_COOKIE } from './auth.ts';
 import { Uploads } from './uploads.ts';
@@ -244,6 +246,16 @@ export function createApi(deps: {
     deps.browser.close(req.params.chatId);
     res.status(204).end();
   });
+  /** The quote pill over the page (#368): where, in the app's colours, or hidden (null). */
+  app.put('/api/browser/tabs/:chatId/pill', (req, res) => {
+    deps.browser.pill(req.params.chatId, BrowserPill.parse(req.body?.pill ?? null));
+    res.status(204).end();
+  });
+  /** A quote's jump back (#368): light the passage on the page; { found } says whether it is still there. */
+  app.post('/api/browser/tabs/:chatId/flash', async (req, res) => {
+    const b = BrowserFlash.parse(req.body);
+    res.json({ found: await deps.browser.flash(req.params.chatId, b.passage, b.selector) });
+  });
   /** The tab on screen and where its view goes (the pane's page area), or none. */
   app.put('/api/browser/view', (req, res) => {
     const v = BrowserView.parse(req.body);
@@ -352,7 +364,7 @@ export function createApi(deps: {
     // Quotes of this chat's messages (#367): one text block each. Quotes and comments go before the text, in their
     // shared numbering.
     const quoted = quotes.length
-      ? quoteBlocks(quotes, { messages: kanban.messages(card.id), userName: settings.user().name, redact: (t) => deps.secrets.redact(t).text })
+      ? quoteBlocks(quotes, { messages: kanban.messages(card.id), userName: settings.user().name, card, redact: (t) => deps.secrets.redact(t).text })
       : [];
     const notes = byNumber([...commentGroups(commented), ...quoted.map((b, i) => ({ n: quotes[i]!.n, blocks: [b] }))]);
     // The card's state before this message: « Rewind to here » / Stop go back to it (rewind.ts).
@@ -817,6 +829,12 @@ export function createApi(deps: {
     if (pane) {
       res.setHeader('Cache-Control', 'no-store');
       return void res.send(withPaneHelper(deps.secrets.redactBytes(readFileSync(file)).buf.toString('utf8')));
+    }
+    // A text file in the pane (#368): shown as one pre with the helper, so a passage can be selected and quoted.
+    if (req.query.pane === '1' && isTextType(type) && !dotfile && size <= MAX_SERVED_REDACT) {
+      res.setHeader('Cache-Control', 'no-store');
+      res.type('html');
+      return void res.send(textPage(deps.secrets.redactBytes(readFileSync(file)).buf.toString('utf8')));
     }
     if (!media && !dotfile && size <= MAX_SERVED_REDACT) {
       const red = deps.secrets.redactBytes(readFileSync(file));

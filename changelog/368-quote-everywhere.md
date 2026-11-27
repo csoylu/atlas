@@ -1,0 +1,1 @@
+## Added · #368 · Quote a selection anywhere, not only in chat messages: documents, pages, raw text files, the Files editor, the browser tab, tool outputs and a task's description, with the same pill, note box and numbered chips.

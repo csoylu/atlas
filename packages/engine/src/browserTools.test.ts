@@ -100,6 +100,15 @@ class FakeHost implements BrowserHost {
         return {};
     }
   }
+  pills: [string, unknown][] = [];
+  pill(id: string, p: unknown) {
+    this.pills.push([id, p]);
+  }
+  flashes: [string, string, string | null][] = [];
+  async flash(id: string, passage: string, selector: string | null) {
+    this.flashes.push([id, passage, selector]);
+    return passage !== 'gone';
+  }
   on(l: (e: HostEvent) => void) {
     this.listeners.add(l);
     return () => this.listeners.delete(l);

@@ -27,7 +27,7 @@ describe('quotes: the text block (shared, #367)', () => {
   it('formats a quote the agent can read and the UI reads back: prose as > lines, code fenced, the note last', () => {
     const prose = formatQuote({ n: 1, on: { kind: 'message', seq: 42 }, passage: 'quotes reuse the chips.\n\nBoth in one message.', code: false, note: 'Yes, one family' }, 'atlas', '26 Nov 2026, 21:28');
     expect(prose).toBe('[quote 1] atlas · 26 Nov 2026, 21:28 · message 42 in this chat\n> quotes reuse the chips.\n>\n> Both in one message.\nNote: Yes, one family');
-    expect(parseQuote(prose)).toEqual({ n: 1, who: 'atlas', when: '26 Nov 2026, 21:28', seq: 42, passage: 'quotes reuse the chips.\n\nBoth in one message.', code: false, note: 'Yes, one family' });
+    expect(parseQuote(prose)).toEqual({ n: 1, who: 'atlas', when: '26 Nov 2026, 21:28', seq: 42, on: { kind: 'message', seq: 42 }, tool: null, passage: 'quotes reuse the chips.\n\nBoth in one message.', code: false, note: 'Yes, one family' });
     const code = formatQuote({ n: 2, on: { kind: 'message', seq: 7 }, passage: 'const a = `x`;\n```nested```\n', code: true, note: '' }, 'Master', '1 Dec 2026, 09:05');
     expect(code).toBe('[quote 2] Master · 1 Dec 2026, 09:05 · message 7 in this chat\n````\nconst a = `x`;\n```nested```\n````');
     expect(parseQuote(code)).toMatchObject({ n: 2, code: true, passage: 'const a = `x`;\n```nested```', note: '' });

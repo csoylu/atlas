@@ -1,4 +1,4 @@
-import { actionCaption, isDriving, MASTER_PANE, normalizeAddress, paneUrlProblem, type BrowserAction, type BrowserBounds, type BrowserInspected, type BrowserOwner, type BrowserShot, type BrowserStatus, type BrowserTab } from '@atlas/shared';
+import { actionCaption, isDriving, MASTER_PANE, normalizeAddress, paneUrlProblem, type BrowserAction, type BrowserBounds, type BrowserInspected, type BrowserOwner, type BrowserPill, type BrowserSelection, type BrowserShot, type BrowserStatus, type BrowserTab } from '@atlas/shared';
 import type { Db } from './store/db.ts';
 import type { Bus } from './events.ts';
 import { InvalidError, NotFoundError, type Kanban } from './kanban.ts';
@@ -45,7 +45,10 @@ export type HostEvent =
   /** The page tried to open something outside Atlas (another scheme, a download) and the host refused it. */
   | { type: 'refused'; id: string; url: string; message: string }
   /** Master's mouse or keyboard reached the view while the agent has it: refused. */
-  | { type: 'input-blocked'; id: string };
+  | { type: 'input-blocked'; id: string }
+  /** #368: Master's text selection on the page (null: it went: collapsed, scrolled, navigated), or Q / the pill on it. */
+  | { type: 'selection'; id: string; sel: BrowserSelection | null }
+  | { type: 'quote'; id: string; via: 'key' | 'pill' };
 
 /** What a browser backend does. Every method acts on one tab (`id` = the chat id). */
 export interface BrowserHost {
@@ -67,6 +70,10 @@ export interface BrowserHost {
   capture(id: string): Promise<BrowserShot>;
   /** Show the agent's action over the page (#306): a pulse on `point` (viewport CSS px) and the caption, for a moment. */
   signal(id: string, s: { caption: string; point: { x: number; y: number } | null }): void;
+  /** The « Quote Q » pill over the page (#368), drawn in a view of Atlas's own; null hides it. */
+  pill(id: string, p: BrowserPill): void;
+  /** Light a quoted passage on the page again (#368: a jump back), near `selector`; false when it is not there. */
+  flash(id: string, passage: string, selector: string | null): Promise<boolean>;
   /** Delete a browser profile's data (cookies, logins, storage, cache): « Clear browser data » (#308). */
   clearData(partition: string): Promise<void>;
   on(listener: (e: HostEvent) => void): () => void;
@@ -270,6 +277,20 @@ export class Browser {
     host.show(chatId, bounds);
   }
 
+  /** Show or hide the quote pill over the chat's page (#368): only over the tab on screen. */
+  pill(chatId: string, p: BrowserPill): void {
+    const host = this.need();
+    this.mustRow(chatId);
+    host.pill(chatId, p && this.onScreen === chatId ? p : null);
+  }
+
+  /** A quote's jump back to the page (#368): the passage lit for 2 s if it is still there. */
+  flash(chatId: string, passage: string, selector: string | null): Promise<boolean> {
+    const host = this.need();
+    this.mustRow(chatId);
+    return host.flash(chatId, passage, selector);
+  }
+
   nav(chatId: string, action: 'back' | 'forward' | 'reload' | 'stop'): BrowserTab {
     const host = this.need();
     const r = this.mustRow(chatId);
@@ -364,6 +385,9 @@ export class Browser {
   private onHost(e: HostEvent): void {
     const r = this.row(e.id);
     if (!r) return;
+    // A selection or a quote changes nothing on the tab: it goes to the UI as it is (#368).
+    if (e.type === 'selection') return void this.bus.emit({ type: 'browser.selection', chatId: e.id, sel: e.sel });
+    if (e.type === 'quote') return void this.bus.emit({ type: 'browser.selection', chatId: e.id, sel: null, quote: e.via });
     const live = this.liveOf(e.id);
     switch (e.type) {
       case 'navigated':

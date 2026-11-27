@@ -67,7 +67,7 @@ describe('comment mode helpers (#304)', () => {
 
 describe('sent comments: the cards of a message (#304)', () => {
   it('pairs each comment with the picture sent right after it; other images stay as images', () => {
-    const c1 = formatComment(1, { title: 'Plan', what: 'markdown docs/plan.md, doc_ab v3' }, { type: 'text', quote: 'hello', section: 'intro', lines: [3, 3] }, 'Shorter', { source: { from: 3, lines: ['hello world'] } });
+    const c1 = formatComment(1, { title: 'Plan', what: 'markdown docs/plan.md, doc_ab v3' }, { type: 'text', quote: 'hello', section: 'intro', lines: [3, 3], selector: null }, 'Shorter', { source: { from: 3, lines: ['hello world'] } });
     const c2 = formatComment(2, { title: 'Map', what: 'diagram diagrams/m.svg, doc_cd v1' }, { type: 'area', box: { x: 0, y: 0, w: 50, h: 50 }, of: { w: 100, h: 100 }, unit: 'svg', inside: [] }, 'Bigger', { picture: 'uploads/a.png' });
     const img = (path: string) => ({ type: 'image' as const, path, mediaType: 'image/png' as const, width: 10, height: 10 });
     const content = [{ type: 'text', text: 'two things' }, img('uploads/mine.png'), { type: 'text', text: c1 }, { type: 'text', text: c2 }, img('uploads/a.png')] as Message['content'];

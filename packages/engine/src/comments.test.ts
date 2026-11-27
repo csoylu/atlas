@@ -69,6 +69,8 @@ describe('comments: the text block (shared)', () => {
       lines: [5, 6],
       quoted: ['export const a = 1;', 'export const b = 2;'],
       selected: null,
+      url: null,
+      selector: null,
       comment: 'Use the same breakpoints.',
     });
     expect(parseComment('just text')).toBeNull();
@@ -243,6 +245,19 @@ describe('comments: a page in the pane (#304)', () => {
     // Not a page: served as it is.
     put('diagrams/b.svg', SVG);
     expect(await (await fetch(`${engine.url}/api/files/atlas/diagrams/b.svg?pane=1`)).text()).toBe(SVG);
+  });
+
+  it('#368: ?pane=1 shows a text file as one escaped pre with the helper (its passages can be quoted), still sandboxed', async () => {
+    const { engine, put } = await setup();
+    put('notes/run.log', 'line 1\n<b>two</b> & three\n');
+    const url = `${engine.url}/api/files/atlas/notes/run.log`;
+    expect(await (await fetch(url)).text()).toBe('line 1\n<b>two</b> & three\n');
+    const res = await fetch(url + '?pane=1');
+    expect(res.headers.get('content-type')).toMatch(/^text\/html/);
+    expect(res.headers.get('content-security-policy')).toMatch(/^sandbox /);
+    const page = await res.text();
+    expect(page).toContain('<pre data-atlas-text>line 1\n&lt;b&gt;two&lt;/b&gt; &amp; three\n</pre>');
+    expect(page).toContain('__atlasPane');
   });
 });
 

@@ -12,8 +12,12 @@ import { fileDrafts, useDrafts } from './fileDrafts.ts';
 import { fileTitle, splitPath } from './files.ts';
 import type { PanelResize } from './PanelResizer.tsx';
 import { CommentBox, CommentHint, CommentIcon, type PaneComment } from './CommentLayer.tsx';
-import { boxOf, draftKey, hintFor, isComment, isTyping, type Comments, type PanePick } from './comments.ts';
+import { boxOf, draftKey, hintFor, isComment, isTyping, type Box, type Comments, type PanePick, type QuoteSource } from './comments.ts';
+import type { BrowserSelection } from '@atlas/shared';
 import { BrowserPane, useBrowserStatus, useDriving } from './BrowserPane.tsx';
+import { QuoteLayer } from './QuoteLayer.tsx';
+import { paneResolve, paneSource, type PaneQuoteTab } from './paneQuote.ts';
+import { flashPassage, paneFlash, sameTab, usePaneFlash } from './quoteFlash.ts';
 import { browserTitle } from './browserTab.ts';
 
 /** A chat's open tabs, live (agents open and close them with panel_open / panel_close). */
@@ -86,6 +90,8 @@ export function DocPanel(props: {
   const tab = activeTab(tabs);
   const doc = tab?.kind === 'artifact' ? tab.doc : undefined;
   const browserStatus = useBrowserStatus();
+  // A quote's jump back to this pane (#368): the tab it names lights the passage once it shows.
+  const flashWant = usePaneFlash(() => true);
   const browserTab = tabs.find((t) => t.kind === 'browser')?.tab;
   const driving = useDriving(browserTab);
   // Master's click refused while the agent acts (#298 §3.1): the pane's strip says so for a moment.
@@ -136,6 +142,61 @@ export function DocPanel(props: {
     window.addEventListener('keydown', key, true);
     return () => window.removeEventListener('keydown', key, true);
   }, [docId, commenting, pending]);
+  // Quotes (#368): a text selection in the tab, outside comment mode, gets #367's pill. A frame (an html page, a
+  // url's text) reports its own selection and Q; the rest is read here (paneQuote.ts).
+  const [frameSel, setFrameSel] = useState<{ source: QuoteSource; rect: Box } | null>(null);
+  const [frameQ, setFrameQ] = useState(0);
+  useEffect(() => setFrameSel(null), [docId, commenting]);
+  // The browser's selection (read by the desktop, #368) comes on the browser's key; its pill is drawn there too.
+  const [browserSel, setBrowserSel] = useState<BrowserSelection | null>(null);
+  const [quoting, setQuoting] = useState(false);
+  useEffect(
+    () =>
+      props.stream.listen('browser:' + chatId, (e) => {
+        if (e.type !== 'browserSel') return;
+        if (e.quote) return setFrameQ((n) => n + 1);
+        // In this window's px: the view sits in .wb-view, at the page's scale.
+        const v = aside.current?.querySelector('.wb-view')?.getBoundingClientRect();
+        setBrowserSel(e.sel && v ? { ...e.sel, rect: { ...e.sel.rect, x: e.sel.rect.x + v.left, y: e.sel.rect.y + v.top } } : null);
+      }),
+    [props.stream, chatId],
+  );
+  // A click in the app drops a frame's or the page's pill (the selection there is the frame's own).
+  const hasOut = !!frameSel || !!browserSel;
+  useEffect(() => {
+    if (!hasOut) return;
+    const down = (e: MouseEvent) => {
+      if ((e.target as Element | null)?.closest?.('.qt-pop, .qt-box')) return;
+      setFrameSel(null);
+      setBrowserSel(null);
+    };
+    document.addEventListener('mousedown', down, true);
+    return () => document.removeEventListener('mousedown', down, true);
+  }, [hasOut]);
+  // Its pill: drawn by the desktop over the page (an Atlas element would sit under the native view), in the app's
+  // colours, where #367's pill goes (above the start of the selection).
+  const pillShown = useRef(false);
+  const pillAt = browserSel && tab?.kind === 'browser' && !commenting && !quoting ? browserSel.rect : null;
+  const pillKey = pillAt ? `${pillAt.x},${pillAt.y}` : '';
+  useEffect(() => {
+    if (!pillAt) {
+      if (pillShown.current) void api.browserPill(chatId, null).catch(onError);
+      pillShown.current = false;
+      return;
+    }
+    pillShown.current = true;
+    const css = getComputedStyle(document.documentElement);
+    const v = (n: string) => css.getPropertyValue(n).trim();
+    void api
+      .browserPill(chatId, {
+        x: Math.max(8, pillAt.x),
+        y: Math.max(8, pillAt.y - 42),
+        colors: { bg: v('--raised'), border: v('--line-2'), text: v('--text'), accent: v('--accent'), chip: v('--chip'), faint: v('--faint') },
+        sans: v('--font'),
+        mono: v('--mono'),
+      })
+      .catch(onError);
+  }, [pillKey]); // eslint-disable-line react-hooks/exhaustive-deps
   const unseen = tab?.kind === 'artifact' && !!doc && tab.seenVersion < doc.version;
   const report = props.onShown;
   const shown = useCallback((v: number) => void (doc && report?.(doc, v)), [doc, report]);
@@ -145,6 +206,36 @@ export function DocPanel(props: {
     const t = setTimeout(() => void api.panelSeen(chatId, doc.id).catch(onError), 1500);
     return () => clearTimeout(t);
   }, [chatId, doc, unseen, onError]);
+  // The in-page views (markdown, source, the Files editor) are lit here; frames light it themselves (helper).
+  const flashKey = flashWant ? flashWant.t : 0;
+  useEffect(() => {
+    const w = flashWant;
+    if (!w || (tab?.kind === 'artifact' && (tab.doc.kind === 'html' || tab.doc.kind === 'url')) || tab?.kind === 'browser') return;
+    let tries = 0;
+    let frame = 0;
+    const look = () => {
+      const el = aside.current?.querySelector('[data-qpane]');
+      const ok = el && (tab?.kind !== 'artifact' || w.target.kind !== 'doc' || tab.doc.id === w.target.docId);
+      if (ok && flashPassage(el.querySelector('.cm-content') ?? el, w.passage)) return void paneFlash.done(w, true);
+      if (++tries < 120) frame = requestAnimationFrame(look);
+      else paneFlash.done(w, false);
+    };
+    frame = requestAnimationFrame(look);
+    return () => cancelAnimationFrame(frame);
+  }, [flashKey]); // eslint-disable-line react-hooks/exhaustive-deps
+  // The page in the browser tab: the desktop finds and lights it (#368), once the tab shows that address.
+  const pageUrl = tab?.kind === 'browser' ? tab.tab.url : null;
+  useEffect(() => {
+    const w = flashWant;
+    if (!w || w.target.kind !== 'browser' || tab?.kind !== 'browser' || !pageUrl || pageUrl !== w.target.url) return;
+    api.browserFlash(chatId, w.passage, w.selector).then(
+      (r) => paneFlash.done(w, r.found),
+      (e: unknown) => {
+        paneFlash.done(w, false);
+        onError(e);
+      },
+    );
+  }, [flashKey, pageUrl]); // eslint-disable-line react-hooks/exhaustive-deps
   if (!tab) return null;
   const phone = props.mode === 'full';
   // What a comment is on: the artifact at its version, or the file (#303: its lines).
@@ -155,12 +246,28 @@ export function DocPanel(props: {
       : pageOn && tab.kind === 'browser'
         ? { kind: 'browser', url: tab.tab.url!, title: tab.tab.title }
         : null;
+  const quoteTab: PaneQuoteTab = {
+    target,
+    title: doc ? doc.title : tab.kind === 'browser' ? browserTitle(tab.tab) : fileTitle(tab.kind === 'file' ? tab.path : ''),
+    tab: doc ? doc.kind : tab.kind === 'browser' ? 'browser' : 'file',
+    commenting,
+  };
+  // The page's selection as a quote of this tab (its rect already in this window's px).
+  const pageSel = browserSel && target?.kind === 'browser' && !commenting ? { source: paneSource(quoteTab, target, browserSel.text, browserSel.code, { selector: browserSel.selector }), rect: browserSel.rect } : null;
+  const flashing = flashWant && target && sameTab(flashWant.target, target) ? flashWant : null;
   const mine = target ? comments.list.filter(isComment).filter((c) => draftKey(c.target) === draftKey(target)) : [];
   const comment: PaneComment = {
     on: commenting && !pending,
     marks: [...mine.map((c) => ({ n: c.n, mark: c.mark })), ...(pending ? [{ n: comments.list.length + 1, mark: pending.pick.mark }] : [])],
     onPick: (pick, version) => setPending({ pick, version }),
     onKey: (k) => (k === 'Escape' ? (pending ? setPending(null) : setCommenting(false)) : setCommenting(true)),
+    onSel: (s, version) => {
+      const on = target?.kind === 'doc' ? { ...target, version } : target;
+      setFrameSel(s && on ? { source: paneSource(quoteTab, on, s.text, s.code, { lines: s.lines, selector: s.selector }), rect: s.rect } : null);
+    },
+    onQuoteKey: () => setFrameQ((n) => n + 1),
+    flash: flashing ? { text: flashing.passage, selector: flashing.selector, t: flashing.t } : null,
+    onLit: (found) => flashing && paneFlash.done(flashing, found),
   };
   const mode = phone || full ? 'full' : props.mode;
   const items: PaneTabItem[] = tabs.map((t) =>
@@ -248,6 +355,14 @@ export function DocPanel(props: {
   );
   const commentUi = target && (
     <>
+      <QuoteLayer
+        root={aside}
+        resolve={paneResolve(quoteTab)}
+        comments={comments}
+        chips={false}
+        outside={{ sel: pageSel ?? frameSel, q: frameQ, ownPill: !!pageSel }}
+        onOpen={setQuoting}
+      />
       {commenting && !pending && <CommentHint text={hintFor(doc ? doc.kind : tab.kind === 'browser' ? 'browser' : 'file')} waiting={comments.list.length} onDone={stop} />}
       {pending && (
         <CommentBox
@@ -325,6 +440,7 @@ export function DocPanel(props: {
             blockedAt={blockedAt}
             comment={pageOn ? comment : undefined}
             commenting={commenting}
+            quoting={quoting}
             onError={onError}
           />
         </div>

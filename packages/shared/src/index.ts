@@ -14,7 +14,7 @@ export * from './browser.ts';
 export * from './files.ts';
 export * from './plainText.ts';
 import { TaskFile } from './files.ts';
-import type { BrowserTab } from './browser.ts';
+import type { BrowserSelection, BrowserTab } from './browser.ts';
 import { PaneSees } from './pane.ts';
 import type { Project } from './projects.ts';
 
@@ -1258,7 +1258,9 @@ export type ServerEvent =
   /** A chat's browser tab changed (#298 S6): address, title, loading, error, owner; `blocked`: Master's input was refused (the agent has it). */
   | { type: 'browser.updated'; tab: BrowserTab; blocked?: boolean }
   /** A chat's browser tab was closed. */
-  | { type: 'browser.closed'; chatId: string };
+  | { type: 'browser.closed'; chatId: string }
+  /** #368: the page's text selection changed (null: gone), or Master quoted it (Q on the page, or the pill). */
+  | { type: 'browser.selection'; chatId: string; sel: BrowserSelection | null; quote?: 'key' | 'pill' };
 
 /* ── Voice mode (desktop only): « Hi Atlas », all local (docs/voice-research.md) ─────────────────────── */
 

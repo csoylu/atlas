@@ -65,11 +65,14 @@ async function describe(c: PostComment, d: CommentDeps, n: number): Promise<{ wh
     if (relative(d.workdir, full).split(/[\\/]/).some((p) => p.startsWith('.'))) throw new InvalidError(`comment ${n}: ${c.target.path} is a hidden file: it can't be quoted`);
     if (!existsSync(full)) throw new InvalidError(`comment ${n}: ${c.target.path} does not exist in the agent's workspace`);
     const where = { title: c.target.path.split('/').pop()!, what: `file ${c.target.path}` };
-    if (a.type === 'lines') {
+    // Lines picked in comment mode, or a passage selected in the editor (#368): the lines as they are on disk.
+    const span = a.type === 'lines' ? { from: a.from, to: a.to } : a.type === 'text' && a.lines ? { from: a.lines[0], to: a.lines[1] } : null;
+    if (span) {
       const lines = (await readFile(full, 'utf8')).split('\n');
-      if (a.from > a.to || a.from > lines.length) throw new InvalidError(`comment ${n}: ${c.target.path} has ${lines.length} lines, not ${a.from}–${a.to}`);
-      extra.source = { from: a.from, lines: lines.slice(a.from - 1, a.to).map((l) => d.redact(l)) };
-    } else if (a.type === 'area' && a.box.w >= MIN_SIDE && a.box.h >= MIN_SIDE) {
+      if (span.from > span.to || span.from > lines.length) throw new InvalidError(`comment ${n}: ${c.target.path} has ${lines.length} lines, not ${span.from}–${span.to}`);
+      extra.source = { from: span.from, lines: lines.slice(span.from - 1, span.to).map((l) => d.redact(l)) };
+    }
+    if (a.type === 'area' && a.box.w >= MIN_SIDE && a.box.h >= MIN_SIDE) {
       const buf = await readFile(full);
       if (sniff(buf) || /\.svg$/i.test(full)) await crop(async () => ({ buf: await cropImage(buf, a) }));
     }

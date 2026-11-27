@@ -228,6 +228,8 @@ describe('internet levels (#298 S3)', () => {
       send: async () => null,
       capture: async () => ({ image: '', width: 0, height: 0 }),
       signal() {},
+      pill() {},
+      flash: async () => false,
       clearData: async (partition: string) => void cleared.push(partition),
       on: () => () => {},
     };
