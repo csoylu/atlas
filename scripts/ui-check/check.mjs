@@ -389,6 +389,14 @@ delete SYS_LATEST.next;
 // The Inbox: the mockup's items (2 needing you, 4 updates), on fixture cards. The item on screen is already read, so
 // opening it doesn't try to write.
 const ago = (min) => new Date(Date.now() - min * 60_000).toISOString();
+// The board's card states (#371): working (accent edge, live time), blocked (red border, the reason as footer), a todo
+// waiting on its parent, done (receded), all at once; Done is unfolded by the screen.
+const BOARD_STATE_CARDS = [
+  fixture('s1', 'Outreach wave 1: find a public contact for each of the firms', { number: 9365, status: 'running', priority: 3, statusSince: ago(32) }),
+  fixture('s2', 'Pick the export format for the weekly report', { number: 9366, status: 'blocked', priority: 2, statusSince: ago(90), block: { kind: 'needs_input', reason: 'CSV or Parquet? The dashboard reads both.', options: [], until: null } }),
+  fixture('s3', 'Build 2/4: the landing page on the new template', { number: 9357, status: 'todo', priority: 1, statusSince: ago(240), waiting: 'waiting on #9365 (running)' }),
+  fixture('s4', 'System notifications: plain text, not raw markdown', { number: 9363, status: 'done', priority: 1, statusSince: ago(30) }),
+];
 const INBOX_CARDS = [
   fixture('i1', 'Pick a data source for CEX volumes', {
     number: 9139, assignee: 'atlas', status: 'blocked', originCard: null,
@@ -673,6 +681,8 @@ const SCREENS = [
   { name: 'tab-chats', hash: '#/chats', ready: '.side-list, .app:not(.narrow) .sidebar', then: { js: `if (!document.querySelector('.app.narrow') && /#\\/(chats|more)/.test(location.hash)) throw new Error('a wide window stayed on ' + location.hash + ' (#264: it goes home)'); document.body.dataset.tabOk = '1';`, ready: 'body[data-tab-ok]' }, keys: ['.nav-item', '.side-group', '.tabbar-btn'] },
   { name: 'tab-more', hash: '#/more', ready: '.side-list, .app:not(.narrow) .sidebar', then: { js: `if (!document.querySelector('.app.narrow') && /#\\/(chats|more)/.test(location.hash)) throw new Error('a wide window stayed on ' + location.hash + ' (#264: it goes home)'); document.body.dataset.tabOk = '1';`, ready: 'body[data-tab-ok]' }, keys: ['.nav-item', '.me-name', '.tabbar-btn'] },
   { name: 'board', hash: '#/board', ready: '.board', keys: ['.board .name', '.card-title', '.nav-item'] },
+  { name: 'board-states', hash: '#/board', ready: '.card[data-status=running]', boardStates: true, then: { js: `localStorage.removeItem('atlas.board.folded'); const f = document.querySelector('.column.done.folded .fold'); if (f) f.click(); else if (innerWidth <= 640) [...document.querySelectorAll('.board-chip')].find((c) => c.textContent.includes('Running'))?.click(); await new Promise((r) => setTimeout(r, 150)); const bad = []; if (!document.querySelector('.card[data-status=running] .card-sweep')) bad.push('no sweep on the working card'); if (!document.querySelector('.st-since.live')) bad.push('no live time on the working card'); if (innerWidth > 640 && !document.querySelector('.card[data-status=blocked] .card-foot.needs .card-foot-why')) bad.push('no reason footer on the blocked card'); if (innerWidth > 640 && ![...document.querySelectorAll('.card-foot')].some((f) => f.textContent === 'waits for #9365')) bad.push('no « waits for #9365 » footer'); if (bad.length) throw new Error('card states (#371): ' + bad.join('; ')); document.body.dataset.statesOk = '1';`, ready: 'body[data-states-ok]' }, keys: ['.board .name', '.card-title', '.card-foot', '.st-since'] },
+  { name: 'board-states-done', hash: '#/board', ready: '.card[data-status=running]', boardStates: true, then: { js: `localStorage.removeItem('atlas.board.folded'); document.querySelector('.column.done.folded .fold')?.click(); await new Promise((r) => setTimeout(r, 150)); document.querySelector('.column.done')?.scrollIntoView({ inline: 'end', block: 'nearest' }); if (innerWidth > 640 && !document.querySelector('.card[data-status=done]')) throw new Error('card states (#371): no done card'); document.body.dataset.statesOk = '1';`, ready: 'body[data-states-ok]' }, keys: ['.column.done .card-title', '.board .name'] },
   { name: 'inbox', hash: `#/inbox/${INBOX_CARDS[0].id}`, ready: '.ibx-q', inbox: true, keys: ['.ibx-dh .ibx-title', '.ibx-optt', '.ibx-meta b', '.ni-l2', '.nav-item'] },
   // A task note's link from the chat (#143): #/inbox/task:<id> lands on the task's question, or on a finished task's update.
   { name: 'inbox-task-need', hash: `#/inbox/task:${INBOX_CARDS[0].id}`, ready: '.ibx-q', inbox: true, then: { js: `await new Promise((r) => setTimeout(r, 200)); if (!location.hash.endsWith('/${INBOX_CARDS[0].id}')) throw new Error('task link did not land on the question: ' + location.hash); document.body.dataset.landed = '1';`, ready: 'body[data-landed]' }, keys: ['.ibx-dh .ibx-title'] },
@@ -854,6 +864,7 @@ handlers.set('Fetch.requestPaused', async ({ requestId, request }) => {
     const wsPending = screen?.workspaces && request.method === 'GET' && /^\/api\/projects\/([^/]+)\/pending$/.exec(url.pathname);
     if (wsPending) return await json(await workspacesPending(decodeURIComponent(wsPending[1])));
     if (screen?.projects2 && request.method === 'GET' && url.pathname === '/api/projects') return await json(await projects2());
+    if (screen?.boardStates && request.method === 'GET' && url.pathname === '/api/cards') return await json([...(await get('/cards')), ...BOARD_STATE_CARDS]);
     if (screen?.projects2 && request.method === 'GET' && url.pathname === '/api/cards')
       return await json(inProject2([...(await get('/cards' + url.search)), ...(screen.inbox ? INBOX_CARDS : [])]));
     if (request.method === 'GET' && url.pathname === '/api/cards' && screen?.blocked) return await json((await get('/cards')).map(blockedModal));

@@ -100,7 +100,7 @@ export function Board(props: {
   const columns = columnsFor(view.tab);
   const nFilters = filterCount(view.filter);
   const counts: Record<BoardTab, number> = {
-    all: 0,
+    all: inProject.filter((c) => matches(c, 'all', view.filter)).length,
     needs: inProject.filter((c) => matches(c, 'needs', view.filter)).length,
     running: inProject.filter((c) => matches(c, 'running', view.filter)).length,
   };
@@ -153,11 +153,11 @@ export function Board(props: {
                 type="button"
                 role="tab"
                 aria-selected={view.tab === t.id}
-                className={'tabbtn' + (view.tab === t.id ? ' on' : '')}
+                className={'tabbtn' + (view.tab === t.id ? ' on' : '') + (t.id === 'needs' && counts.needs > 0 ? ' hot' : '')}
                 onClick={() => save({ ...saved, tab: t.id })}
               >
                 {t.label}
-                {t.id !== 'all' && counts[t.id] > 0 && <span className="tab-n">{counts[t.id]}</span>}
+                {counts[t.id] > 0 && <span className="tab-n">{counts[t.id]}</span>}
               </button>
             ))}
           </div>
@@ -327,8 +327,8 @@ export function Board(props: {
 }
 
 function BoardCard({ card: c, open, onOpen, now }: { card: Card; open: boolean; onOpen(id: string): void; now: number }) {
-  const note = <Note card={c} now={now} />;
-  const pills = <PrPills card={c} />;
+  const since = timeInState(c, now);
+  const running = c.status === 'running';
   return (
     <article
       className={'card' + (open ? ' open' : '')}
@@ -340,12 +340,31 @@ function BoardCard({ card: c, open, onOpen, now }: { card: Card; open: boolean; 
       onKeyDown={(e) => e.key === 'Enter' && onOpen(c.id)}
       data-status={c.status}
     >
+      {/* Working (#371): an accent edge with a glint running down it, and the live time in the accent. */}
+      {running && <span className="card-sweep" aria-hidden="true" />}
+      <div className="card-top">
+        <span className="id" title={c.id}>{cardRef(c)}</span>
+        <span className="card-sp" />
+        {since && (
+          <span className={'st-since' + (c.stall ? ' stuck' : running ? ' live' : '')} title={`${STATUS_LABEL[c.status]} for ${since}`}>
+            {running && !c.stall && <i className="live-sq" aria-hidden="true" />}
+            {since}
+          </span>
+        )}
+      </div>
       <span className="card-title">{c.title}</span>
       <div className="card-m">
-        <Marks card={c} now={now} />
+        {c.assignee ? <Avatar id={c.assignee} /> : <span className="avatar-none" title="unassigned" />}
+        <ProjTag id={c.projectId} />
+        <span className="card-sp" />
+        <PriorityMark p={c.priority} bare />
       </div>
-      {cardNote(c, now) && <div className="card-x">{note}</div>}
-      {tilePrs(c).length > 0 && <div className="card-x">{pills}</div>}
+      {tilePrs(c).length > 0 && (
+        <div className="card-x">
+          <PrPills card={c} />
+        </div>
+      )}
+      <Note card={c} now={now} foot />
     </article>
   );
 }
@@ -365,11 +384,27 @@ function Marks({ card: c, now }: { card: Card; now: number }) {
   );
 }
 
-/** The card's one note: « waits for #N », « Needs your answer », why it is stuck (cardNote). GitHub unreadable: orange. */
-function Note({ card: c, now }: { card: Card; now: number }) {
+/**
+ * The card's one note: « waits for #N », « Needs your answer », why it is stuck (cardNote). GitHub unreadable: orange.
+ * On the board it is the card's footer (#371): a blocked task's kind and its reason, on red.
+ */
+function Note({ card: c, now, foot }: { card: Card; now: number; foot?: boolean }) {
   const n = cardNote(c, now);
   if (!n) return null;
   const tone = n.tone === 'muted' && prUnreadable(c) ? 'stuck' : n.tone;
+  if (foot)
+    return (
+      <div className={'card-note card-foot ' + tone} title={n.title}>
+        {tone === 'needs' ? (
+          <>
+            <b>{n.text}</b>
+            {n.title && <span className="card-foot-why">{n.title}</span>}
+          </>
+        ) : (
+          n.text
+        )}
+      </div>
+    );
   return (
     <span className={'card-note ' + tone} title={n.title}>
       {n.text}
