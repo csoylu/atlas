@@ -121,7 +121,9 @@ async function describe(c: PostComment, d: CommentDeps, n: number): Promise<{ wh
     if (!local) extra.noPicture = 'the page is on another site; the coordinates are of the frame as shown';
     else if (isImageAddress(link)) await crop(async () => ({ buf: await cropImage(await readFile(inside(d.filesDir(decodeURIComponent(local[1]!)), decodeURIComponent(local[2]!))), a) }));
     else if (!d.shoot) extra.noPicture = 'pages are not shot here';
-    else await crop(async () => ({ file: await d.shoot!({ page: `/api/files/${local[1]}/${local[2]}`, width: a.of.w, height: a.of.h, region: a.box, workdir: d.workdir }) }));
+    // As the pane shows it (#381): `?pane=1`, so a text file is laid out as the box was measured on (the helper itself
+    // does nothing outside a frame).
+    else await crop(async () => ({ file: await d.shoot!({ page: `/api/files/${local[1]}/${local[2]}?pane=1`, width: a.of.w, height: a.of.h, region: a.box, workdir: d.workdir }) }));
   }
   return { where, extra, picture };
 }
