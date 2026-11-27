@@ -885,6 +885,7 @@ export const CardComposer = forwardRef<
             agentModelId: agent?.modelId ?? null,
             modelId: card.modelId,
             effort: card.effort,
+            agentEffort: agent?.effort ?? null,
             onChange: (p) => void api.updateCard(card.id, p).catch(onError),
           }}
         />

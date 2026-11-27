@@ -142,6 +142,8 @@ export interface PickProps {
   agentModelId: string | null;
   modelId: string | null;
   effort: Effort | null;
+  /** The agent's default effort (#380), sent when `effort` is Auto; null = the model's default. */
+  agentEffort?: Effort | null;
   onChange(patch: { modelId?: string | null; effort?: Effort | null }): void;
 }
 /** `label` in the menu's segments, `long` in the pill (« Fable 5.2 · Medium »). */
@@ -153,6 +155,8 @@ const EFFORTS: { value: Effort | null; label: string; long: string }[] = [
   { value: 'xhigh', label: 'XHigh', long: 'XHigh' },
   { value: 'max', label: 'Max', long: 'Max' },
 ];
+/** An effort's full name (« Medium »), for the pill and the agent's settings. */
+export const effortName = (e: Effort): string => EFFORTS.find((x) => x.value === e)?.long ?? e;
 const SOURCE: Record<string, string> = {
   anthropic: 'Anthropic API',
   claude_plan: 'Claude plan',
@@ -197,7 +201,10 @@ function PickMenu(p: PickProps) {
   const current = picked ? friendlyModel(picked.name) : p.modelId ? 'Deleted model' : own ? friendlyModel(own.name) : "Agent's model";
   // An effort the menu doesn't know (or undefined from an older payload) must not crash the chat: show it as is.
   const effort = p.effort ?? null;
-  const effortLabel = EFFORTS.find((x) => x.value === effort)?.long ?? String(effort);
+  const agentEffort = p.agentEffort ?? null;
+  // Auto sends the agent's default effort when it has one (#380): the pill says which, « Auto (High) ».
+  const effortLabel =
+    effort === null && agentEffort ? `Auto (${effortName(agentEffort)})` : (EFFORTS.find((x) => x.value === effort)?.long ?? String(effort));
   const missing = p.modelId && !p.models.some((m) => m.id === p.modelId);
   const models = [...p.models].sort((a, b) => ORDER.indexOf(a.provider) - ORDER.indexOf(b.provider));
 
@@ -241,7 +248,9 @@ function PickMenu(p: PickProps) {
               </button>
             ))}
           </div>
-          <div className="pick-hint">Higher thinks longer and uses more tokens. Auto = the model's default.</div>
+          <div className="pick-hint">
+            Higher thinks longer and uses more tokens. Auto = {agentEffort ? `the agent's default, ${effortName(agentEffort)}.` : "the model's default."}
+          </div>
         </div>
       )}
     </div>

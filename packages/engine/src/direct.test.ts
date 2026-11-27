@@ -82,6 +82,40 @@ describe('direct chat with an agent', () => {
     expect(await (await fetch(u + `/cards/${chat.id}`, { method: 'PATCH', headers: json, body: JSON.stringify({ modelId: null, effort: null }) })).json()).toMatchObject({ modelId: null, effort: null });
   });
 
+  it("sends the agent's default effort when the chat's is Auto, the chat's pick when set, nothing when both are unset (#380)", async () => {
+    const fake = new FakeProvider([[{ type: 'text', text: 'one' }], [{ type: 'text', text: 'two' }], [{ type: 'text', text: 'three' }]]);
+    engine = await startEngine({ dbFile: ':memory:', dataDir: mkdtempSync(join(tmpdir(), 'atlas-')), port: 0, providers: () => fake });
+    const u = engine.url + '/api';
+    const patchAgent = (body: unknown) => fetch(u + '/agents/atlas', { method: 'PATCH', headers: json, body: JSON.stringify(body) });
+    expect(engine.agents.get('atlas').effort).toBeNull();
+    expect((await patchAgent({ effort: 'extreme' })).status).toBe(400);
+    expect(await (await patchAgent({ effort: 'high' })).json()).toMatchObject({ effort: 'high' });
+
+    const chat = (await (await fetch(u + '/agents/atlas/chats', { method: 'POST' })).json()) as Card;
+    // Its 3rd message would have the model name the chat: the last step takes a fresh chat.
+    const say = async (c: Card, text: string, n: number) => {
+      await fetch(u + `/cards/${c.id}/messages`, { method: 'POST', headers: json, body: JSON.stringify({ text }) });
+      await expect.poll(() => engine!.kanban.messages(c.id).filter((m) => m.author === 'atlas').length, { timeout: 5000 }).toBe(n);
+    };
+    await say(chat, 'first', 1);
+    expect(fake.calls[0]!.effort).toBe('high');
+
+    await fetch(u + `/cards/${chat.id}`, { method: 'PATCH', headers: json, body: JSON.stringify({ effort: 'low' }) });
+    await say(chat, 'second', 2);
+    expect(fake.calls[1]!.effort).toBe('low');
+
+    expect(await (await patchAgent({ effort: null })).json()).toMatchObject({ effort: null });
+    const fresh = (await (await fetch(u + '/agents/atlas/chats', { method: 'POST' })).json()) as Card;
+    await say(fresh, 'third', 1);
+    expect(fake.calls[2]!.effort).toBeUndefined();
+
+    // A new agent: no effort by default, one when given, 400 on an unknown one.
+    const create = (body: object) => fetch(u + '/agents', { method: 'POST', headers: json, body: JSON.stringify({ modelId: engine!.agents.get('atlas').modelId, ...body }) });
+    expect(await (await create({ id: 'plain' })).json()).toMatchObject({ id: 'plain', effort: null });
+    expect(await (await create({ id: 'thinker', effort: 'max' })).json()).toMatchObject({ id: 'thinker', effort: 'max' });
+    expect((await create({ id: 'odd', effort: 'extreme' })).status).toBe(400);
+  });
+
   it('titles a chat with the start of a long first message, cut at a word', () => {
     expect(chatTitle('short')).toBe('short');
     const t = chatTitle('please look at the failing deploy on the staging server and tell me what broke last night');
