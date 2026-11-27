@@ -1,4 +1,4 @@
-import { useEffect, useId, useRef, useState, type ReactNode } from 'react';
+import { useEffect, useId, useState, type ReactNode } from 'react';
 import { rowTime, type RowTone } from './chatRow.ts';
 import type { Meta, RowIcon } from './toolRows.ts';
 
@@ -27,22 +27,21 @@ export function ChatRow(props: {
   defaultOpen?: boolean;
   /** Opens the row when it turns true (a run that just ended on this step). */
   forceOpen?: boolean;
-  /** Open while true, closed again when it turns false (a running command's live tail). */
-  autoOpen?: boolean;
+  /** Under the line, outside the fold (a live « N steps » box's ticker, #382); told whether the row is open. */
+  under?: (open: boolean) => ReactNode;
   className?: string;
   title?: string;
 }) {
-  const [open, setOpen] = useState(!!props.autoOpen || (props.defaultOpen ?? props.forceOpen ?? false));
-  const wasAuto = useRef(props.autoOpen);
-  // Before forceOpen: a step that ends and fails in the same update closes, then opens on the failure.
-  useEffect(() => {
-    if (props.autoOpen) setOpen(true);
-    else if (wasAuto.current) setOpen(false);
-    wasAuto.current = props.autoOpen;
-  }, [props.autoOpen]);
+  // Opening is Master's choice (#382: nothing opens or closes a row by itself), except forceOpen.
+  const [open, setOpen] = useState(props.defaultOpen ?? props.forceOpen ?? false);
   useEffect(() => {
     if (props.forceOpen) setOpen(true);
   }, [props.forceOpen]);
+  // The body stays mounted while it folds shut (160 ms, .chat-row-fold), then goes.
+  const [shown, setShown] = useState(open);
+  useEffect(() => {
+    if (open) setShown(true);
+  }, [open]);
   const id = useId();
   const expandable = props.children !== undefined && props.children !== null && props.children !== false;
   const toggle = () => expandable && setOpen((o) => !o);
@@ -74,9 +73,14 @@ export function ChatRow(props: {
           {expandable ? '›' : ''}
         </span>
       </div>
-      {expandable && open && (
-        <div className="chat-row-body" id={id}>
-          {props.children}
+      {props.under?.(open && expandable)}
+      {expandable && (open || shown) && (
+        <div className="chat-row-fold" inert={!open} onTransitionEnd={(e) => e.target === e.currentTarget && !open && setShown(false)}>
+          <div>
+            <div className="chat-row-body" id={id}>
+              {props.children}
+            </div>
+          </div>
         </div>
       )}
     </div>

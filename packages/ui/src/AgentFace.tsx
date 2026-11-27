@@ -3,8 +3,8 @@ import { tint } from './agentTint.ts';
 
 /**
  * An agent's avatar (#104): its #94 face on a square tile. Since #369 (the #362 redesign) the tile is neutral: the figure
- * in the text colours on a tinted square, no hue and no accent. `live` (the agent is working) adds a thin accent light
- * orbiting the square (styles.css .face.live). The size comes from where it sits. An agent without a drawn face gets
+ * in the text colours on a tinted square, no hue and no accent. `live` (the agent is working) draws the figure in the text
+ * colour (styles.css .face.live; the working mark itself is the row's .live-fly, #382). The size comes from where it sits. An agent without a drawn face gets
  * its initial on the same tile.
  */
 const FACES: Record<string, ReactNode> = {

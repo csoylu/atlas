@@ -1,5 +1,5 @@
 import { useStepWanted } from './quoteFlash.ts';
-import { createContext, useContext, useEffect, useMemo, useState, type ReactNode } from 'react';
+import { createContext, useContext, useEffect, useMemo, useRef, useState, type ReactNode } from 'react';
 import { KIND_WORD, type Message, type ToolCallTiming, type parseDocRef } from '@atlas/shared';
 import { useArtifactState } from './artifacts.ts';
 import { ChatRow, PathObject, RowIconSvg, RowMeta } from './ChatRow.tsx';
@@ -7,7 +7,7 @@ import { isDangerous, todoList, type Artifact } from './cardModal.ts';
 import { endedOnFailure, groupSummary, groupTurn, stepArtifact, type Segment, type Step } from './chatTurn.ts';
 import { CardRefLink, cardDetail, type DetailContext, type TurnCards } from './CardStepDetail.tsx';
 import { teamDetail } from './TeamStepDetail.tsx';
-import { fileDetail, isLiveShell } from './FileStepDetail.tsx';
+import { fileDetail } from './FileStepDetail.tsx';
 import { ImageThumbs } from './Images.tsx';
 import { webDetail } from './WebStepDetail.tsx';
 import { duration, type ToolOutcome } from './toolRows.ts';
@@ -58,7 +58,7 @@ const keyOf = (s: Segment) => (s.kind === 'text' || s.kind === 'group' ? s.key :
 function SegmentView(p: Parameters<typeof Turn>[0] & { s: Segment; now: number; at?: string; failedEnd: Step | null }) {
   const { s } = p;
   if (s.kind === 'text') return <>{p.renderText(s.text, s.key)}</>;
-  if (s.kind === 'group') return <StepsGroup steps={s.steps} timings={p.timings} now={p.now} at={s.steps[0]!.at} failedEnd={p.failedEnd} />;
+  if (s.kind === 'group') return <StepsGroup steps={s.steps} timings={p.timings} now={p.now} at={s.steps[0]!.at} failedEnd={p.failedEnd} live={!!s.live} />;
   const plan = s.kind === 'pin' && s.pin === 'plan';
   const row = <StepRow step={s.step} timing={p.timings.get(s.step.id)} now={p.now} at={s.step.at} defaultOpen={plan} plan={plan} />;
   if (s.kind === 'step') return row;
@@ -103,7 +103,6 @@ export function StepRow({ step, timing, now, at, nested, defaultOpen, forceOpen,
       nested={nested}
       defaultOpen={defaultOpen}
       forceOpen={forceOpen || wantedOpen || undefined}
-      autoOpen={isLiveShell(step)}
       className={'step' + (plan ? ' plan' : '') + (step.kind === 'tool' && isDangerous(step.name, step.input) ? ' danger' : '')}
     >
       {ctx.cardId && step.result?.images?.length ? <ImageThumbs cardId={ctx.cardId} images={step.result.images} /> : null}
@@ -119,20 +118,26 @@ export function StepRow({ step, timing, now, at, nested, defaultOpen, forceOpen,
   );
 }
 
-/** « N steps »: icon stack, the key actions, +/− total, failures, duration; expands to a timeline of step rows. */
-export function StepsGroup({ steps, timings, now, at, failedEnd }: { steps: Step[]; timings: Map<string, ToolCallTiming>; now: number; at: string; failedEnd: Step | null }) {
+/**
+ * « N steps »: icon stack, the key actions, +/− total, failures, duration; expands to a timeline of step rows.
+ * `live` (#382): the turn's trailing calls while the run goes on. The box then stays one steady frame (spinner,
+ * « Working », « N steps », a running timer) and never opens or closes by itself; while closed, the ticker under its
+ * header shows the call running now, or the last one between two calls. When the turn ends the ticker folds once.
+ */
+export function StepsGroup({ steps, timings, now, at, failedEnd, live = false }: { steps: Step[]; timings: Map<string, ToolCallTiming>; now: number; at: string; failedEnd: Step | null; live?: boolean }) {
   const sum = groupSummary(steps);
-  const running = !!sum.running;
   const opensOnFailure = !!failedEnd && steps.includes(failedEnd);
   const wanted = useStepWanted(steps.map((s) => s.id)); // a quote's jump back (#368)
+  const wasLive = useRef(live);
+  if (live) wasLive.current = true;
   const times = steps.flatMap((s) => {
     const t = timings.get(s.id);
     return t ? [t] : [];
   });
   const start = times.length ? Math.min(...times.map((t) => Date.parse(t.startedAt))) : NaN;
-  const end = running ? now : times.length && times.every((t) => t.endedAt) ? Math.max(...times.map((t) => Date.parse(t.endedAt!))) : NaN;
+  const end = live ? now : times.length && times.every((t) => t.endedAt) ? Math.max(...times.map((t) => Date.parse(t.endedAt!))) : NaN;
   const time = duration(end - start);
-  const icon = running ? null : (
+  const icon = live ? null : (
     <span className="row-stack">
       {sum.icons.map((i) => (
         <span key={i} className={'row-stack-ic rowic-' + i}>
@@ -141,17 +146,18 @@ export function StepsGroup({ steps, timings, now, at, failedEnd }: { steps: Step
       ))}
     </span>
   );
+  const tick = sum.running ?? steps.filter((s) => s.kind === 'tool').at(-1) ?? null;
   return (
     <ChatRow
-      className="steps"
+      className={'steps' + (live ? ' live' : '')}
       icon={icon}
-      verb={running ? 'Working' : `${sum.tools} steps`}
-      rest={running ? `${sum.tools} steps · now: ${sum.running!.row.running} ${[sum.running!.row.ref, sum.running!.row.object].filter(Boolean).join(' ')}…` : sum.text}
-      meta={<RowMeta meta={[{ add: sum.add, del: sum.del }, ...(sum.failed ? [{ pill: 'bad' as const, text: `${sum.failed} failed` }] : [])]} time={time} />}
+      verb={live ? 'Working' : `${sum.tools} steps`}
+      rest={live ? `${sum.tools} steps` : sum.text}
+      meta={<RowMeta meta={live ? [] : [{ add: sum.add, del: sum.del }, ...(sum.failed ? [{ pill: 'bad' as const, text: `${sum.failed} failed` }] : [])]} time={time} />}
       at={at}
-      running={running}
+      running={live}
       forceOpen={opensOnFailure || wanted || undefined}
-      autoOpen={steps.some(isLiveShell)}
+      under={wasLive.current && tick ? (open) => <StepsTick step={tick} timing={timings.get(tick.id)} now={now} gone={open || !live} /> : undefined}
     >
       <div className="steps-tl">
         {steps.map((s) => (
@@ -159,6 +165,29 @@ export function StepsGroup({ steps, timings, now, at, failedEnd }: { steps: Step
         ))}
       </div>
     </ChatRow>
+  );
+}
+
+/** The live box's ticker line (#382): the call running now (with a shell's last tail line), or the last one, idle. */
+function StepsTick({ step, timing, now, gone }: { step: Step; timing?: ToolCallTiming; now: number; gone: boolean }) {
+  const running = step.state === 'running';
+  const { row } = step;
+  const object = [row.ref, row.object].filter(Boolean).join(' ');
+  const tail = running && step.name === 'shell' ? (timing?.tail ?? '').trimEnd().split('\n').at(-1) ?? '' : '';
+  return (
+    <div className={'steps-tick' + (running ? '' : ' idle') + (gone ? ' gone' : '')} aria-hidden={gone || undefined}>
+      <div>
+        <div className="chat-row-line">
+          <span className="chat-row-icon">{running ? <span className="chat-row-spin" aria-label="running" /> : <RowIconSvg name={row.icon} />}</span>
+          <span className="chat-row-verb">{running ? row.running : row.verb}</span>
+          {object && <span className={'chat-row-obj' + (row.mono ? ' mono' : '')}>{object}</span>}
+          <span className="tick-tail">{tail}</span>
+          <span className="chat-row-meta">
+            <RowMeta meta={[]} time={elapsed(timing, now, running)} />
+          </span>
+        </div>
+      </div>
+    </div>
   );
 }
 

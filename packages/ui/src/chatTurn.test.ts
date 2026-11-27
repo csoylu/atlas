@@ -73,6 +73,19 @@ describe('groupTurn', () => {
     expect(over.kind === 'group' && over.steps.at(-1)!.state).toBe('cut');
   });
 
+  it('a live turn groups its trailing calls from the first call; a finished turn keeps the 2+ rule (#382)', () => {
+    const one = [msg([text('Looking.'), use('a', 'shell', { command: 'npm test' })])];
+    const live = groupTurn(one, new Map(), { live: true });
+    expect(kinds(live)).toEqual(['text', 'group(1)']);
+    expect(live[1]!.kind === 'group' && live[1]!.live).toBe(true);
+    expect(kinds(groupTurn(one, new Map([['a', ok('exit 0\n')]]), { live: false }))).toEqual(['text', 'step']);
+    // Only the trailing calls: a call that text follows stays a row, and a finished group is not live.
+    const ms = [msg([use('a', 'read_file', {}), text('Now the tests.'), use('b', 'read_file', {}), use('c', 'grep', {}), text('Done.')])];
+    const segs = groupTurn(ms, new Map(), { live: true });
+    expect(kinds(segs)).toEqual(['step', 'text', 'group(2)', 'text']);
+    expect(segs[2]!.kind === 'group' && segs[2]!.live).toBeFalsy();
+  });
+
   it('thinking joins the steps; empty thinking is dropped', () => {
     const ms = [msg([{ type: 'thinking', thinking: 'hmm', signature: 's' }, { type: 'thinking', thinking: ' ', signature: 's' }, use('a', 'read_file', {}), use('b', 'read_file', {})])];
     const g = groupTurn(ms, new Map(), { live: false })[0]!;
