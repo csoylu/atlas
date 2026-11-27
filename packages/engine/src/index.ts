@@ -5,7 +5,7 @@ import { Bus } from './events.ts';
 import { Kanban } from './kanban.ts';
 import { Agents } from './agents.ts';
 import { Models, realProviders, type ProviderFactory } from './models.ts';
-import { Runner, type RunnerOptions } from './runner.ts';
+import { Runner, SHUTDOWN_LIMIT_MS, stuckText, type RunnerOptions } from './runner.ts';
 import { SideEffects } from './sideEffects.ts';
 import { Rewinds } from './rewind.ts';
 import { Slash } from './slash.ts';
@@ -62,6 +62,8 @@ export interface EngineOptions {
   env?: NodeJS.ProcessEnv;
   /** Run lease length (tests shorten it). */
   leaseMs?: number;
+  /** How long each step of stop() may wait before the quit goes on without it (#375; default 10 s, tests shorten it). */
+  stopLimitMs?: number;
   /** Safety ceiling: turns per run before it stops (tests lower it; default MAX_TURNS, loopGuard.ts). */
   maxTurns?: number;
   /** Background memory review after runs (v3); default on. Tests with a scripted provider turn it off. */
@@ -423,36 +425,56 @@ export async function startEngine(opts: EngineOptions): Promise<Engine> {
     stop: async () => {
       // After Update, each step goes to update/quit.log: the helper names the one that hangs (#324).
       const step = (what: string) => updater.quitStep(what);
+      // No step holds the quit for ever (#375): after the limit it is named and the quit goes on. That is safe: what a
+      // step left is resumed or redone at the next start (leased runs, design §6; rule 2).
+      const limit = opts.stopLimitMs ?? SHUTDOWN_LIMIT_MS;
+      const bounded = async (what: string, p: Promise<unknown>) => {
+        let timer: NodeJS.Timeout | undefined;
+        const ended = await Promise.race([p.then(() => true), new Promise<false>((ok) => (timer = setTimeout(() => ok(false), limit)))]);
+        clearTimeout(timer);
+        if (ended) return;
+        const line = `${what}: still not done after ${limit / 1000} s, the quit goes on without it`;
+        console.error(line);
+        step(line);
+      };
       step('stopping the engine: timers, workflows');
       prs.stop();
       reviewFlow.stop();
       updater.stop();
       workflows.stop();
-      await workflows.commandsIdle();
+      await bounded('waiting for the workflow commands', workflows.commandsIdle());
       voice?.stop();
       dispatcher.stop();
       step('waiting for the pull request checks');
-      await prs.idle();
+      await bounded('waiting for the pull request checks', prs.idle());
       step('stopping project clones');
-      await projects.stop();
+      await bounded('stopping project clones', projects.stop());
       step('stopping agent runs and their commands');
-      await runner.shutdown();
+      const stuck = await runner.shutdown(limit);
+      if (stuck.length) {
+        const line = `agent runs still running after ${limit / 1000} s (left to resume at the next start): ${stuck.map(stuckText).join('; ')}`;
+        console.error(line);
+        step(line);
+      }
       review.after = () => {};
       step('waiting for the background memory review');
-      await review.idle; // a background memory review writes to the db: let it finish before closing
+      await bounded('waiting for the background memory review', review.idle); // it writes to the db: let it finish before closing
       step('stopping rewinds');
-      await rewinds.shutdown();
+      await bounded('stopping rewinds', rewinds.shutdown());
       step('stopping the local model server');
-      await local.shutdown();
+      await bounded('stopping the local model server', local.shutdown());
       chatgpt.stop();
       claude.stop();
       step('stopping the network proxy');
-      await network.stop();
+      await bounded('stopping the network proxy', network.stop());
       step('closing the HTTP server');
-      await new Promise<void>((resolve, reject) => {
-        server.closeAllConnections();
-        server.close((err) => (err ? reject(err) : resolve()));
-      });
+      await bounded(
+        'closing the HTTP server',
+        new Promise<void>((resolve, reject) => {
+          server.closeAllConnections();
+          server.close((err) => (err ? reject(err) : resolve()));
+        }),
+      );
       step('closing the database');
       db.close();
       step(QUIT_DONE);
