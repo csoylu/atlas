@@ -131,6 +131,12 @@ test('a passage of a document, a page, a raw text file, a file and a tool row: c
   await expect(pricing.locator('#ce')).toHaveText('editq');
   await expect(page.locator('.qt-box')).toHaveCount(0);
 
+  // Jump back: chip 1 opens the document again and lights its passage.
+  await chips.nth(0).click();
+  await expect(panel.locator('[data-qpane="md"]')).toBeVisible();
+  await expect.poll(() => page.evaluate(() => (CSS as unknown as { highlights: Map<string, unknown> }).highlights.has('qt-flash'))).toBe(true);
+  await page.keyboard.press('Escape');
+
   // 3. The url artifact showing a raw text file: its lines.
   await page.locator('.artifact', { hasText: 'Run log' }).first().click();
   const log = await frameOf(page, 'notes/run.log');
