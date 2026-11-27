@@ -1135,6 +1135,9 @@ const KEYS = (selectors) => `((sels) => {${VISIBLE_RECT}
       if (!text) continue;
       let r, lines = 1, first;
       if (input) r = first = e.getBoundingClientRect();
+      // The chosen option is read inside the select, not in the label above it: the select's box must be whole (#369:
+      // a field cut by the window's bottom edge passed on its label line and OCR read « Lead » for « @atlas »).
+      else if (pick) r = first = pick.getBoundingClientRect();
       else { const rg = document.createRange(); rg.selectNodeContents(e); r = rg.getBoundingClientRect(); const qs = [...rg.getClientRects()]; lines = new Set(qs.map((q) => Math.round(q.top))).size; first = qs.find((q) => q.height > 0) || r; }
       const v = visibleRect(e, r);
       if (v.width < 24 || v.height < 6) continue;

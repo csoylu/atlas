@@ -207,7 +207,7 @@
   font-size: var(--fs-base);
   font-weight: var(--fw-regular);
   line-height: var(--lh-normal);
-  letter-spacing: -0.006em;
+  letter-spacing: -0.003em;
   color: var(--text);
   background: var(--app);
   -webkit-font-smoothing: antialiased;
