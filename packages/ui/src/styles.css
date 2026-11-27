@@ -3670,7 +3670,7 @@ button.cm-sref:hover { border-color: var(--accent); }
 .chat-row.steps.open > .chat-row-line { border-bottom-color: var(--line); }
 .chat-row.steps > .chat-row-line .chat-row-verb { color: var(--faint); }
 .chat-row.steps > .chat-row-body { padding: 0; }
-.steps-tl > .chat-row.nested + .chat-row.nested { border-top: 1px solid var(--line); }
+.steps-tl > .chat-row.nested + .chat-row.nested { box-shadow: inset 0 1px 0 var(--line); } /* a shadow, not a border: the timeline geometry stays (#145) */
 .chat-row.nested > .chat-row-line .chat-row-verb { color: var(--text); font-weight: var(--fw-medium); }
 .chat-row.nested > .chat-row-line .chat-row-obj.mono, .chat-row-meta { font-family: var(--mono); }
 .chat-row.running { box-shadow: inset 2px 0 0 var(--accent-mark); background: linear-gradient(90deg, var(--accent-soft), transparent 70%); }
@@ -3746,3 +3746,5 @@ a.web-hit:hover .web-hit-t { text-decoration: underline; text-underline-offset: 
 .cm-sref { border-color: var(--line); box-shadow: inset 0 1px 0 var(--hi, rgba(255, 255, 255, 0.05)); }
 .cm-sref-pre { background: var(--chip); }
 .cm-box textarea { border-color: color-mix(in srgb, var(--accent-mark) 60%, var(--line-2)); background: var(--chip); }
+.msg.user .text > :first-child { margin-top: 0; }
+.msg.user .text > :last-child { margin-bottom: 0; }
