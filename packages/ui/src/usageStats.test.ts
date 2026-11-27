@@ -15,7 +15,7 @@ const summary: UsageSummary = {
     { modelId: 'gpt', provider: 'chatgpt', today: count(1, 20, 10), week: count(1, 20, 10), month: count(1, 20, 10) },
     { modelId: 'old', provider: 'anthropic', today: count(0, 0, 0), week: count(3, 500, 0), month: count(3, 500, 0) },
   ],
-  total: { calls: 46, input: 2_900_520, output: 177_010, cached: 0 },
+  total: { calls: 46, input: 2_900_520, output: 177_010, cached: 0, cacheWrite: 0 },
 };
 
 describe('usageHeadline', () => {
@@ -32,7 +32,7 @@ describe('usageHeadline', () => {
     expect(dayTotal(summary.perDay[1]!)).toBe(40);
   });
   it('an empty range gives zeros, and a chart scale of 1', () => {
-    expect(usageHeadline({ days: 1, perDay: [day('2026-11-19')], models: [], total: { calls: 0, input: 0, output: 0, cached: 0 } })).toEqual({ today: 0, todayCalls: 0, peak: 0, active: 0, max: 1 });
+    expect(usageHeadline({ days: 1, perDay: [day('2026-11-19')], models: [], total: { calls: 0, input: 0, output: 0, cached: 0, cacheWrite: 0 } })).toEqual({ today: 0, todayCalls: 0, peak: 0, active: 0, max: 1 });
   });
 });
 

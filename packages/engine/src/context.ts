@@ -118,14 +118,74 @@ export function owesTurn(messages: (Message & { contextUpto?: number | null })[]
 type Turn = ModelRequest['messages'][number];
 type Msg = Message & { contextUpto?: number | null };
 
-/** Fraction of the context window the view may use; the rest is left for the answer. */
-export const COMPACT_AT = 0.7;
+/**
+ * Fraction of the context window the view may use; the rest is left for the answer (#376: 0.8, was 0.7, now that the
+ * summary call reads the view from the cache). compactBudget also keeps the answer's room.
+ */
+export const COMPACT_AT = 0.8;
 /** After a compaction the view should be under this fraction (hysteresis: it doesn't happen again every turn). */
 export const COMPACT_TO = 0.5;
 /** Pruning keeps the newest messages worth this fraction of the window whole. */
 export const PRUNE_TAIL = 0.25;
 /** A prune breaks the prompt cache: it is done only if it reclaims at least this fraction of the window. */
 export const PRUNE_MIN = 0.05;
+/** The summary's answer limit, and the room a summary call needs on top of the view (the answer + its instruction). */
+export const SUMMARY_MAX_TOKENS = 4000;
+export const SUMMARY_ROOM = SUMMARY_MAX_TOKENS + 1000;
+
+/**
+ * The view's budget in tokens: COMPACT_AT of the window, but never so much that the answer (the model's maxTokens) or
+ * a summary call (SUMMARY_ROOM) would not fit after it; at least COMPACT_TO of the window (a model whose maxTokens is
+ * over half its window can't have both: its answers are cut by the server). 200k window, 16k answers: 160k.
+ */
+export function compactBudget(model: { contextWindow: number; maxTokens: number }): number {
+  const w = model.contextWindow;
+  return Math.max(Math.floor(w * COMPACT_TO), Math.min(Math.floor(w * COMPACT_AT), w - Math.max(model.maxTokens, SUMMARY_ROOM)));
+}
+
+/** What a summary keeps (both summary calls: the turn's prefix + an instruction, or the rendered text). */
+export const SUMMARY_GUIDE = [
+  'Write what the agent needs to carry on: the goal; what the user asked and decided (their exact words where they matter);',
+  'what was done (files, commands, results, task and artifact ids); what was learned; errors and how they were fixed;',
+  'what remains. Keep identifiers, paths, numbers and URLs exact. Plain text, no preamble.',
+  'Several agents can write in one thread (a builder and its reviewer): say which agent did what.',
+].join(' ');
+
+/** The opening of the summary call's instruction (the request that shares the turn's prefix). */
+export const SUMMARY_ASK = '[Atlas: context compaction]';
+
+/**
+ * The last message of a summary call that repeats the turn's request (#376): the same system, tools and view, so the
+ * provider reads them from the cache, then this. `kept`: the view's last messages that stay as they are (0: the whole
+ * conversation is folded), `first` the opening of the first of them.
+ */
+export function summaryAsk(o: { previous: boolean; kept: number; first: string | null; focus?: string }): string {
+  const what = o.kept
+    ? `every message before the last ${o.kept} of this conversation (they start with « ${o.first ?? ''} »; they stay in your context as they are: leave them out)`
+    : 'the whole conversation';
+  return [
+    `${SUMMARY_ASK} This conversation is getting too long for your context. Do not call any tool and do not go on with the work now:`,
+    `reply with only a summary of ${what}${o.previous ? ', folding the earlier summary at its start into it' : ''}.`,
+    'It replaces those messages: you will continue from it.',
+    SUMMARY_GUIDE,
+    ...(o.focus ? [`The user asked for this summary (/compact) with this focus: ${o.focus}`] : []),
+  ].join(' ');
+}
+
+/** How a view message opens, for summaryAsk: its first text, or its first tool call; at most 160 chars. */
+export function opening(turn: Turn | undefined): string | null {
+  if (!turn) return null;
+  const line = turn.content.flatMap((b) => {
+    if (b.type === 'text' && b.text.trim()) return [b.text.trim()];
+    if (b.type === 'tool_use') return [`→ ${b.name} ${JSON.stringify(b.input)}`];
+    if (b.type === 'tool_result') return [`← ${b.content}`];
+    return [];
+  })[0];
+  if (!line) return null;
+  const flat = line.replace(/\s+/g, ' ');
+  return flat.length > 160 ? `${flat.slice(0, 160)}…` : flat;
+}
+
 export const SUMMARY_LEAD = 'Summary of the earlier part of this conversation (written when it got too long for the context):';
 export const TODO_LEAD = 'Your todo list (todo_write), as last written; the call itself was summarized:';
 const OMITTED_TOOL = (n: number, seq?: number) => `output omitted to fit the context (${n} chars); history_search can read it${seq ? ` (seq ${seq})` : ''}`;

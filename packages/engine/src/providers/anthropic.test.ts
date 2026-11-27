@@ -12,7 +12,7 @@ describe('adaptiveThinking', () => {
 });
 
 describe('withCacheBreakpoints', () => {
-  const cc = { type: 'ephemeral' };
+  const cc = { type: 'ephemeral', ttl: '1h' }; // #376: an hour, agents wait longer than 5 minutes between turns
   const msgs = (): ModelRequest['messages'] => [
     { role: 'user', content: [{ type: 'text', text: 'do it' }] },
     { role: 'assistant', content: [{ type: 'thinking', thinking: 't', signature: 's' }, { type: 'tool_use', id: 'a', name: 'shell', input: {} }] },
@@ -27,6 +27,13 @@ describe('withCacheBreakpoints', () => {
     expect(marked).toEqual(['2.0', '4.1']);
     expect(out[4]!.content[1]!.cache_control).toEqual(cc);
     expect(out[4]!.content[0]).toEqual({ type: 'tool_result', tool_use_id: 'b', content: '1' });
+  });
+
+  it('leaves the last `tail` messages unmarked (the summary call’s instruction)', () => {
+    const asked = [...msgs(), { role: 'user' as const, content: [{ type: 'text' as const, text: 'summarize' }] }];
+    const out = withCacheBreakpoints(asked, 1) as { content: Record<string, unknown>[] }[];
+    const marked = out.flatMap((m, i) => m.content.map((b, j) => (b.cache_control ? `${i}.${j}` : null))).filter(Boolean);
+    expect(marked).toEqual(['2.0', '4.1']); // where the turn put them
   });
 
   it('leaves the caller’s messages untouched', () => {
@@ -48,10 +55,10 @@ describe('withCacheBreakpoints', () => {
 describe('systemBlocks', () => {
   it('marks the stable prefix and leaves the volatile tail unmarked; one plain block without cache', () => {
     expect(systemBlocks({ system: 'ROLE\n# Memory x', cache: { systemStable: 5 } })).toEqual([
-      { type: 'text', text: 'ROLE\n', cache_control: { type: 'ephemeral' } },
+      { type: 'text', text: 'ROLE\n', cache_control: { type: 'ephemeral', ttl: '1h' } },
       { type: 'text', text: '# Memory x' },
     ]);
-    expect(systemBlocks({ system: 'ROLE\n' , cache: { systemStable: 5 } })).toEqual([{ type: 'text', text: 'ROLE\n', cache_control: { type: 'ephemeral' } }]);
+    expect(systemBlocks({ system: 'ROLE\n' , cache: { systemStable: 5 } })).toEqual([{ type: 'text', text: 'ROLE\n', cache_control: { type: 'ephemeral', ttl: '1h' } }]);
     expect(systemBlocks({ system: 'one shot' })).toEqual([{ type: 'text', text: 'one shot' }]);
   });
 });
@@ -144,7 +151,7 @@ describe('web search (server tool)', () => {
     await p.complete({ ...req(history), system: 'summarize' }, () => {}, new AbortController().signal);
     const marks = (body: Record<string, unknown>) => JSON.stringify(body).split('"cache_control"').length - 1;
     expect(bodies[0]!.system).toEqual([
-      { type: 'text', text: 'STABLE\n', cache_control: { type: 'ephemeral' } },
+      { type: 'text', text: 'STABLE\n', cache_control: { type: 'ephemeral', ttl: '1h' } },
       { type: 'text', text: 'TAIL' },
     ]);
     const msgs = bodies[0]!.messages as { content: Record<string, unknown>[] }[];
@@ -157,7 +164,7 @@ describe('web search (server tool)', () => {
     const bad = '{"path":"a.html","content":"<p class="x y">hi</p>","b":1}'; // the SDK's own parser threw on this (#55)
     const fetch = (async () =>
       sse([
-        { type: 'message_start', message: { id: 'm1', type: 'message', role: 'assistant', model: 'claude-x', content: [], stop_reason: null, usage: { input_tokens: 10, output_tokens: 0, cache_read_input_tokens: 5 } } },
+        { type: 'message_start', message: { id: 'm1', type: 'message', role: 'assistant', model: 'claude-x', content: [], stop_reason: null, usage: { input_tokens: 10, output_tokens: 0, cache_read_input_tokens: 5, cache_creation_input_tokens: 3 } } },
         { type: 'content_block_start', index: 0, content_block: { type: 'thinking', thinking: '', signature: '' } },
         { type: 'content_block_delta', index: 0, delta: { type: 'thinking_delta', thinking: 'hmm' } },
         { type: 'content_block_delta', index: 0, delta: { type: 'signature_delta', signature: 'sig' } },
@@ -191,7 +198,7 @@ describe('web search (server tool)', () => {
     // Thinking streams live too, before the text (#80).
     expect(streamed).toEqual(['thinking:hmm', 'text:Writing ', 'text:it.']);
     expect(res.stopReason).toBe('tool_use');
-    expect(res.usage).toEqual({ input: 15, output: 42, cached: 5 });
+    expect(res.usage).toEqual({ input: 18, output: 42, cached: 5, cacheWrite: 3 }); // input = the whole prompt: fresh + read + written
   });
 
   it('a tool call cut at max_tokens keeps its raw arguments and the stop reason max_tokens (#274)', async () => {

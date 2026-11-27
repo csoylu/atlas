@@ -10,6 +10,7 @@ import { realProviders } from './models.ts';
 import { TRIAGE_KICK, WORK_KICK } from './dispatcher.ts';
 import { stopNote } from './loopGuard.ts';
 import { ModelError } from './providers/types.ts';
+import { SUMMARY_ASK } from './context.ts';
 import { until } from '../test/kit/index.ts';
 
 let engine: Engine | undefined;
@@ -202,7 +203,7 @@ describe('a ready task that does not start (#327)', () => {
     const gate = new Promise<void>((r) => (release = r));
     const fake = new FakeProvider([]);
     fake.complete = async (req) => {
-      if (req.system.includes('summar') || !req.tools?.length) {
+      if (JSON.stringify(req.messages.at(-1)).includes(SUMMARY_ASK) || !req.tools?.length) {
         await gate;
         return { content: text('THE SUMMARY'), stopReason: 'end_turn', usage: { input: 1, output: 1 } };
       }
