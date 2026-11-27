@@ -1,0 +1,3 @@
+## Fixed · #366 · The durability (crash) test and one dispatcher test no longer fail by chance in CI, so main's build is green again
+
+Tests only, no change in the app. The crash test's « command step » wrote its marker into the data folder, which the agent sandbox (always on since #316) denies: when every killed engine had been cut off before that step started, the last engine ran it to « exit 0 » with nothing written and the test counted 0 runs. The test engines now run with the sandbox off (as every other engine test does), and the command quotes its path. The dispatcher test « an error on one ready task never keeps the others from starting » now waits for the task's reason instead of reading it the instant the other task is done.

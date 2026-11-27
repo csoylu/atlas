@@ -36,7 +36,7 @@ describe('durability (design §6)', () => {
     for (let i = 0; i < KILLS; i++) await runChild(dbFile, dataDir, marker, origin);
 
     // Final engine: resumes everything once the dead owners' leases expire.
-    const engine = await startEngine({ dbFile, dataDir, port: 0, dispatch: false, leaseMs: LEASE_MS, providers: () => new SlowProvider(marker), env: {}, workflowCommand: { clone: async (_r, dir) => void execSync(`git clone -q "${origin}" "${dir}"`) }, prs: { read: redPr, intervalMs: false }, memoryReview: false, projects: { clone: async (_r, dir) => void mkdirSync(dir, { recursive: true }) } });
+    const engine = await startEngine({ dbFile, dataDir, port: 0, dispatch: false, leaseMs: LEASE_MS, providers: () => new SlowProvider(marker), env: {}, sandbox: { enabled: false }, workflowCommand: { clone: async (_r, dir) => void execSync(`git clone -q "${origin}" "${dir}"`) }, prs: { read: redPr, intervalMs: false }, memoryReview: false, projects: { clone: async (_r, dir) => void mkdirSync(dir, { recursive: true }) } });
     try {
       const cards = engine.kanban.list().filter((c) => c.title.startsWith('crash '));
       expect(cards).toHaveLength(3);
