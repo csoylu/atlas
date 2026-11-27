@@ -14,8 +14,9 @@ type Note = { kind: 'rewound'; result: RewindResult } | { kind: 'undone'; files:
 export type ComposerFill = { text: string; n: number; ifText?: string };
 
 /**
- * Rewind for one chat (card #34): Stop/Esc rewinds the turn being answered, « Rewind to here » asks first, Undo (the
- * note's button, or ⌘Z while the composer holds the text put back) brings it all back. Mounted once per open chat.
+ * Rewind for one chat (card #34): « Rewind to here » asks first, Undo (the note's button, or ⌘Z while the composer holds
+ * the text put back) brings it all back. Stop/Esc only stops the run (#374): the chat and the files stay as they are.
+ * Mounted once per open chat.
  */
 export function useRewind(card: Card, run: Run | null, onError: (e: unknown) => void, o: { globalEsc: boolean }) {
   const running = run?.status === 'running';
@@ -64,14 +65,13 @@ export function useRewind(card: Card, run: Run | null, onError: (e: unknown) => 
     [onError],
   );
 
-  /** Stop, or Esc during a run: rewinds the turn it answers (or just stops a run nobody asked for). */
+  /** Stop, or Esc during a run: the run just stops (#374); what it wrote stays, the chat says « Stopped by you ». */
   const stopTurn = useCallback(
     () =>
       guard('Stopping…', async () => {
-        const r = await api.rewind(card.id);
-        if (r) done(r);
+        await api.stop(card.id);
       }),
-    [card.id, done, guard],
+    [card.id, guard],
   );
 
   const ask = useCallback((seq: number) => void api.rewindPreview(card.id, seq).then(setConfirm, onError), [card.id, onError]);
@@ -79,7 +79,7 @@ export function useRewind(card: Card, run: Run | null, onError: (e: unknown) => 
   const accept = useCallback(() => {
     const p = confirm;
     setConfirm(null);
-    if (p) void guard('Rewinding…', async () => done((await api.rewind(card.id, p.seq))!));
+    if (p) void guard('Rewinding…', async () => done(await api.rewind(card.id, p.seq)));
   }, [card.id, confirm, done, guard]);
 
   const undo = useCallback(() => {
@@ -106,11 +106,11 @@ export function useRewind(card: Card, run: Run | null, onError: (e: unknown) => 
     [last, undo, guard],
   );
 
-  // Direct chats: Esc anywhere in the pane (not in a dialog, not already handled) rewinds a running turn.
+  // Direct chats: Esc anywhere in the pane (not in a dialog, not already handled) stops a running turn.
   useEffect(() => {
     if (!o.globalEsc) return;
     const key = (e: KeyboardEvent) => {
-      if (rewindKey(e, { running, undoable: false, text: '', filled: null, mac: isMac(), inModal: inModal() }) !== 'rewind') return;
+      if (rewindKey(e, { running, undoable: false, text: '', filled: null, mac: isMac(), inModal: inModal() }) !== 'stop') return;
       e.preventDefault();
       void stopTurn();
     };
@@ -135,7 +135,7 @@ export function useRewind(card: Card, run: Run | null, onError: (e: unknown) => 
       const k = rewindKey(e, { running, undoable: !!last, text, filled: last?.text ?? null, mac: isMac(), inModal: inModal() });
       if (!k) return false;
       e.preventDefault();
-      if (k === 'rewind') void stopTurn();
+      if (k === 'stop') void stopTurn();
       else undo();
       return true;
     },
@@ -144,7 +144,7 @@ export function useRewind(card: Card, run: Run | null, onError: (e: unknown) => 
       setLast(null);
       setNote((n) => (n?.kind === 'busy' ? n : null));
     },
-    /** A run that ended because of a rewind says nothing more than the note did. */
+    /** A run that ended because of a « Rewind to here » says nothing more than the note did. */
     hideRun: run?.status === 'stopped' && run.error === REWOUND,
   };
 }

@@ -135,9 +135,10 @@ export const api = {
   toolCalls: (id: string) => call<ToolCallTiming[]>('GET', `/cards/${id}/tool-calls`),
   /** What the chat shows between messages (#66): unfinished runs, rewinds, the context summary point. */
   timeline: (id: string) => call<Timeline>('GET', `/cards/${id}/timeline`),
+  /** Stop/Esc (#374): the run just stops, nothing is rewound. */
   stop: (id: string) => call<{ stopped: boolean }>('POST', `/cards/${id}/stop`),
-  /** Rewind to your message `seq`, or (no seq) the turn the running run answers; null = the run was just stopped. */
-  rewind: (id: string, seq?: number) => call<RewindResult | null>('POST', `/cards/${id}/rewind`, seq ? { seq } : {}),
+  /** « Rewind to here » on your message `seq` (the only way to rewind). */
+  rewind: (id: string, seq: number) => call<RewindResult>('POST', `/cards/${id}/rewind`, { seq }),
   rewindPreview: (id: string, seq: number) => call<RewindPreview>('GET', `/cards/${id}/rewind?seq=${seq}`),
   /** Composer slash commands (#99): /clear, /compact [focus]. A running agent is stopped first. */
   command: (id: string, command: 'clear' | 'compact', arg?: string) =>

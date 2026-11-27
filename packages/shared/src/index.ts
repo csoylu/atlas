@@ -284,7 +284,7 @@ export const Message = z.object({
 });
 export type Message = z.infer<typeof Message>;
 
-/* ── Rewind (Stop/Esc rewinds the turn, « Rewind to here », Undo) ─────────── */
+/* ── Rewind (« Rewind to here », Undo; Stop/Esc only stops, #374) ────────── */
 
 /** A file a rewind puts back: its content restored, recreated (deleted since), or deleted (created since). */
 export interface FileChange {
@@ -324,7 +324,7 @@ export interface RewindResult extends RewindPreview {
   id: string;
   text: string;
 }
-export const RewindRequest = z.object({ seq: z.number().int().positive().optional() });
+export const RewindRequest = z.object({ seq: z.number().int().positive() });
 /** A composer slash command (#99): /clear, or /compact with an optional focus for the summary. */
 export const SlashCommand = z.object({ command: z.enum(['clear', 'compact']), arg: z.string().trim().max(2000).optional() });
 export type SlashCommand = z.infer<typeof SlashCommand>;

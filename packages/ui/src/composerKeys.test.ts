@@ -45,12 +45,12 @@ describe('rewind keys', () => {
   const key = (o: Partial<RewindKeyEvent> = {}): RewindKeyEvent => ({ key: 'Escape', metaKey: false, ctrlKey: false, shiftKey: false, altKey: false, repeat: false, defaultPrevented: false, isComposing: false, ...o });
   const idle = { running: false, undoable: false, text: '', filled: null, mac: true, inModal: false };
 
-  it('Esc rewinds the turn while a run is going, and does nothing on an idle chat', () => {
-    expect(rewindKey(key(), { ...idle, running: true })).toBe('rewind');
+  it('Esc stops a run going on (#374: never a rewind), and does nothing on an idle chat', () => {
+    expect(rewindKey(key(), { ...idle, running: true })).toBe('stop');
     expect(rewindKey(key(), idle)).toBeNull();
   });
 
-  it('never rewinds from inside a modal: Esc there only closes it (card #78)', () => {
+  it('never stops from inside a modal: Esc there only closes it (card #78)', () => {
     expect(rewindKey(key(), { ...idle, running: true, inModal: true })).toBeNull();
     // ⌘Z still undoes a rewind in the card modal's composer.
     expect(rewindKey(key({ key: 'z', metaKey: true }), { ...idle, inModal: true, undoable: true, text: 'x', filled: 'x' })).toBe('undo');

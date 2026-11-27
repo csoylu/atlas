@@ -30,8 +30,8 @@ async function setup(script: ConstructorParameters<typeof FakeProvider>[0], o: {
     expect(r.status).toBe(201);
   };
   const idle = (cardId: string) => expect.poll(() => e.runner.current(cardId), { timeout: 8000 }).toBeNull();
-  const rewind = async (cardId: string, seq?: number) =>
-    (await (await fetch(u + `/cards/${cardId}/rewind`, { method: 'POST', headers: json, body: JSON.stringify(seq ? { seq } : {}) })).json()) as RewindResult | null;
+  const rewind = async (cardId: string, seq: number) =>
+    (await (await fetch(u + `/cards/${cardId}/rewind`, { method: 'POST', headers: json, body: JSON.stringify({ seq }) })).json()) as RewindResult;
   const undo = (id: string) => fetch(u + `/rewinds/${id}/undo`, { method: 'POST' });
   const chat = async () => (await (await fetch(u + '/agents/atlas/chats', { method: 'POST' })).json()) as Card;
   return { fake, e, u, work, dataDir, file, say, idle, rewind, undo, chat };
@@ -97,28 +97,42 @@ describe('rewind', () => {
     expect(buildMessages).toBeTypeOf('function');
   });
 
-  it('Stop during a running tool rewinds the turn: the command is killed, files restored, the text comes back', async () => {
-    const t = await setup([write('echo changed > a.txt && sleep 20')]);
+  it('Stop during a running tool just stops (#374): messages and the partial answer stay, files stay, the command is killed', async () => {
+    const t = await setup([[...text('on it'), ...write('echo changed > a.txt && sleep 20')], text('next answer')]);
     writeFileSync(join(t.work, 'a.txt'), 'orig');
     const c = await t.chat();
     await t.say(c.id, 'change a.txt');
     await expect.poll(() => t.file('a.txt'), { timeout: 8000 }).toBe('changed\n');
-    const r = (await t.rewind(c.id))!;
-    expect(r).toMatchObject({ text: 'change a.txt', filesError: null });
-    expect(t.e.runner.current(c.id)).toBeNull();
-    expect(t.e.runner.runs(c.id)[0]).toMatchObject({ status: 'stopped', error: 'rewound by you' });
-    expect(t.file('a.txt')).toBe('orig');
-    expect(t.e.kanban.messages(c.id)).toEqual([]);
-    // Nothing running: Stop/Esc rewinds nothing.
-    expect(await t.rewind(c.id)).toBeNull();
+    const r = await fetch(t.u + `/cards/${c.id}/stop`, { method: 'POST' });
+    expect(await r.json()).toEqual({ stopped: true });
+    await t.idle(c.id);
+    expect(t.e.runner.runs(c.id)[0]).toMatchObject({ status: 'stopped', error: 'stopped by you' });
+    // The command was killed with the run; its row says so.
+    expect(t.e.db.prepare('SELECT status, output FROM tool_calls').all()).toEqual([{ status: 'error', output: 'interrupted: stopped by you' }]);
+    // Nothing rewound: the user's message and the agent's partial answer stay, the file keeps the change.
+    const ms = t.e.kanban.messages(c.id);
+    expect(userTexts(ms)).toEqual(['change a.txt']);
+    expect(ms.flatMap((m) => m.content).some((b) => b.type === 'text' && b.text === 'on it')).toBe(true);
+    expect(ms.some((m) => m.rewound)).toBe(false);
+    expect(t.e.db.prepare('SELECT COUNT(*) AS n FROM rewinds').get()).toEqual({ n: 0 });
+    expect(t.file('a.txt')).toBe('changed\n');
+    // A direct chat isn't blocked by a stop, and no run starts on its own; the next message gets an answer.
+    expect(t.e.kanban.get(c.id).status).not.toBe('blocked');
+    expect(t.fake.calls).toHaveLength(1);
+    await t.say(c.id, 'go on');
+    await t.idle(c.id);
+    expect(t.e.kanban.messages(c.id).flatMap((m) => m.content).some((b) => b.type === 'text' && b.text === 'next answer')).toBe(true);
+    // A rewind needs a message to rewind to.
+    expect((await fetch(t.u + `/cards/${c.id}/rewind`, { method: 'POST', headers: json, body: '{}' })).status).toBe(400);
   });
 
-  it('Undo after a Stop/Esc rewind puts the agent back to work where it stopped', async () => {
+  it('Undo of « Rewind to here » made during a run puts the agent back to work where it stopped', async () => {
     const t = await setup([write('sleep 20'), text('finished after undo')]);
     const c = await t.chat();
     await t.say(c.id, 'do the long thing');
     await expect.poll(() => t.e.db.prepare("SELECT COUNT(*) AS n FROM tool_calls WHERE status = 'running'").get(), { timeout: 8000 }).toEqual({ n: 1 });
-    const r = (await t.rewind(c.id))!;
+    const r = (await t.rewind(c.id, t.e.kanban.messages(c.id)[0]!.seq))!;
+    expect(t.e.runner.runs(c.id)[0]).toMatchObject({ status: 'stopped', error: 'rewound by you' });
     expect(t.e.kanban.messages(c.id)).toEqual([]);
     const u = (await (await t.undo(r.id)).json()) as { resume: boolean };
     expect(u.resume).toBe(true);
