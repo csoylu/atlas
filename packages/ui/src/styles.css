@@ -3680,7 +3680,8 @@ button.cm-sref:hover { border-color: var(--accent); }
 :root[data-theme='light'] .chat-row.steps.running, :root[data-theme='light'] .chat-row.steps:has(.chat-row.nested.running) { border-color: var(--line-2); }
 
 /* Header: a light runs along the bottom line while the agent works (CardPanel puts the .scan in the header). */
-.screen-head { position: relative; background: color-mix(in srgb, var(--panel) 70%, transparent); backdrop-filter: blur(14px) saturate(1.4); }
+/* backdrop-filter makes the header its own stacking context: z-index keeps its menus over the screen below (#383). */
+.screen-head { position: relative; z-index: 4; background: color-mix(in srgb, var(--panel) 70%, transparent); backdrop-filter: blur(14px) saturate(1.4); }
 .scan { position: absolute; left: 0; right: 0; bottom: -1px; height: 1px; z-index: 1; overflow: hidden; pointer-events: none; }
 .scan::before { content: ''; position: absolute; top: 0; bottom: 0; width: 30%; left: -30%; background: linear-gradient(90deg, transparent, var(--accent-mark), transparent); animation: scan 2.4s cubic-bezier(0.16, 1, 0.3, 1) infinite; }
 @keyframes scan { to { left: 100%; } }
