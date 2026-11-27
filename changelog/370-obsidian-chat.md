@@ -1,0 +1,1 @@
+## Changed · #370 · The chat and the side panel task take the new dark look: your messages on a surface without your name, tool steps in one block with the running step lit, a light along the header while the agent works, keyboard hints in the composer and a glass ⌘K palette.

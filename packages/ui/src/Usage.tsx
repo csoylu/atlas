@@ -79,6 +79,11 @@ export function ComposerMeta(props: { usage: ChatUsage | null; plan: boolean; mo
         </span>
       )}
       <span className="strip-sp" />
+      {props.send && (
+        <span className="composer-keys" aria-hidden="true">
+          <span className="kbd">↵</span> send
+        </span>
+      )}
       {props.attach}
       {props.voice}
       {props.send && (

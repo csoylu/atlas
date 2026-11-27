@@ -3655,3 +3655,96 @@ button.cm-sref:hover { border-color: var(--accent); }
   .face.live::after { background: var(--accent-fill); }
   :root[data-theme='light'] .face.live::after { background: var(--text); }
 }
+
+/* ── Redesign #362 · 2/4 (#370): chat and side panel in the obsidian style (paris's chat CSS, doc_e9ebd9ee) ──────────── */
+/* Messages: Master's on a surface with no name over it; the agent's on the page, under its face and name. */
+.msg .who { font-size: var(--fs-small); font-weight: var(--fw-medium); color: var(--muted); }
+.msg.user .text { padding: 10px 14px; border-color: var(--line); box-shadow: inset 0 1px 0 var(--hi, rgba(255, 255, 255, 0.05)); }
+:root[data-theme='light'] .msg.user .text { box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.9); }
+.msg.user .msg-body { display: flex; flex-direction: column; align-items: flex-end; }
+.msg.user .msg-body > * { max-width: 100%; }
+.msg .md code, .msg .text code { border: 0; background: var(--chip); }
+
+/* Tool steps: one block, hairlines inside, the summary on top. Failures stay red; the running row gets the accent tint. */
+.chat-row.steps { background: color-mix(in srgb, var(--raised) 70%, transparent); border-color: var(--line); }
+.chat-row.steps.open > .chat-row-line { border-bottom-color: var(--line); }
+.chat-row.steps > .chat-row-line .chat-row-verb { color: var(--faint); }
+.chat-row.steps > .chat-row-body { padding: 0; }
+.steps-tl > .chat-row.nested + .chat-row.nested { box-shadow: inset 0 1px 0 var(--line); } /* a shadow, not a border: the timeline geometry stays (#145) */
+.chat-row.nested > .chat-row-line .chat-row-verb { color: var(--text); font-weight: var(--fw-medium); }
+.chat-row.nested > .chat-row-line .chat-row-obj.mono, .chat-row-meta { font-family: var(--mono); }
+.chat-row.running { box-shadow: inset 2px 0 0 var(--accent-mark); background: linear-gradient(90deg, var(--accent-soft), transparent 70%); }
+.chat-row.steps.running, .chat-row.steps:has(.chat-row.nested.running) { border-color: color-mix(in srgb, var(--accent-mark) 35%, var(--line)); }
+.chat-row.steps:has(.chat-row.nested.running) { box-shadow: none; background: color-mix(in srgb, var(--raised) 70%, transparent); }
+:root[data-theme='light'] .chat-row.running { box-shadow: inset 3px 0 0 var(--text); }
+:root[data-theme='light'] .chat-row.steps.running, :root[data-theme='light'] .chat-row.steps:has(.chat-row.nested.running) { border-color: var(--line-2); }
+
+/* Header: a light runs along the bottom line while the agent works (CardPanel puts the .scan in the header). */
+.screen-head { position: relative; background: color-mix(in srgb, var(--panel) 70%, transparent); backdrop-filter: blur(14px) saturate(1.4); }
+.scan { position: absolute; left: 0; right: 0; bottom: -1px; height: 1px; z-index: 1; overflow: hidden; pointer-events: none; }
+.scan::before { content: ''; position: absolute; top: 0; bottom: 0; width: 30%; left: -30%; background: linear-gradient(90deg, transparent, var(--accent-mark), transparent); animation: scan 2.4s cubic-bezier(0.16, 1, 0.3, 1) infinite; }
+@keyframes scan { to { left: 100%; } }
+
+/* Web results: real favicons, one hairline list; the narrow side panel keeps the title and drops the address. */
+.web-results { gap: 0; }
+.web-hit { grid-template-columns: 16px minmax(0, 1fr) auto; align-items: center; gap: 10px; padding: 6px 8px; margin: 0 -8px; }
+.web-fav { grid-row: auto; margin-top: 0; }
+.web-fav.loaded img { filter: saturate(0.85); }
+.web-hit-t { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; overflow-wrap: normal; }
+a.web-hit:hover .web-hit-t { text-decoration: underline; text-underline-offset: 3px; }
+.web-hit-u { font-family: var(--mono); max-width: 260px; }
+.side-doc .web-hit-u { display: none; }
+.side-doc .web-hit { grid-template-columns: 16px minmax(0, 1fr); }
+@media (max-width: 640px) {
+  .web-hit { grid-template-columns: 16px minmax(0, 1fr); }
+  .web-hit-u { display: none; }
+}
+
+/* Composer: a floating command surface; the model is a quiet picker, the keys are hinted. */
+.composer { border-color: var(--line-2); box-shadow: var(--composer-shadow); }
+.composer:focus-within { border-color: color-mix(in srgb, var(--accent-mark) 60%, var(--line-2)); }
+.pick-pill { border-color: transparent; padding: 0 8px; }
+.pick-pill .pick-model { color: var(--text); }
+.pick-pill .pick-effort { color: var(--muted); }
+.composer-hint { position: absolute; top: 12px; right: 14px; display: inline-flex; align-items: center; gap: 6px; font-size: var(--fs-small); line-height: var(--lh-tight); color: var(--faint); pointer-events: none; }
+.composer-keys { flex: none; display: inline-flex; align-items: center; gap: 6px; margin-right: 6px; font-size: var(--fs-small); color: var(--faint); white-space: nowrap; }
+.send-btn { width: 32px; height: 28px; box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.25); }
+@media (max-width: 640px), (hover: none) { .composer-hint, .composer-keys { display: none; } }
+.side-doc .composer-hint, .side-doc .composer-keys { display: none; }
+
+/* ⌘K: the one glass surface. */
+.pal-scrim { background: color-mix(in srgb, var(--app) 55%, transparent); backdrop-filter: blur(3px); }
+.pal {
+  background: color-mix(in srgb, var(--raised) 86%, transparent); backdrop-filter: blur(24px) saturate(1.6); border-color: var(--line-2);
+  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.05), 0 40px 80px -20px rgba(0, 0, 0, 0.7), 0 0 0 1px rgba(0, 0, 0, 0.4);
+  animation: pal-in 180ms cubic-bezier(0.16, 1, 0.3, 1);
+}
+:root[data-theme='light'] .pal { background: rgba(255, 255, 255, 0.94); box-shadow: 0 30px 70px -20px rgba(0, 0, 0, 0.3), 0 0 0 1px rgba(0, 0, 0, 0.06); }
+@keyframes pal-in { from { opacity: 0; transform: translateY(-6px) scale(0.985); } }
+.pal-in { height: 56px; gap: 12px; }
+.pal-ctx { border: 0; background: var(--chip); }
+.pal-op { height: 38px; margin: 0 6px; padding: 0 10px; color: var(--muted); }
+.pal-op .pal-t { color: var(--text); }
+.pal-op.on { background: var(--active); color: var(--text); box-shadow: inset 2px 0 0 var(--accent-mark); }
+.pal-foot { height: 40px; align-items: center; padding: 0 16px; gap: 16px; }
+
+/* Side panel task: the sheet's grid. Tabs underline in the accent, the title at 20, the sections split by hairlines. */
+.sd-tab.on { background: none; box-shadow: inset 0 -2px 0 var(--accent-mark); }
+.sd-head { height: 48px; }
+.cm-title { letter-spacing: -0.02em; }
+.cm-st { border-color: transparent; background: var(--chip); }
+.cm-now { border-color: var(--line); box-shadow: inset 0 1px 0 var(--hi, rgba(255, 255, 255, 0.05)); }
+
+/* The quote UI (#367, #368) in the same tokens: sharp, tinted chips, the accent as the only colour. */
+.qt-pop { border-radius: 0; background: color-mix(in srgb, var(--raised) 86%, transparent); backdrop-filter: blur(16px) saturate(1.4); }
+.qt-pop:hover, .qt-chip:hover, button.cm-sref:hover { border-color: color-mix(in srgb, var(--accent-mark) 60%, var(--line-2)); }
+.qt-pop .icon, .qt-kind .icon { color: var(--accent); }
+.cm-num.qt-n, .qt-flash { border-radius: 0; }
+.cm-box.qt-box.sheet { border-radius: 0; }
+.cm-chip { border: 0; background: var(--chip); padding: 3px 4px; }
+.cm-kind, .cm-lines { background: var(--active); }
+.cm-sref { border-color: var(--line); box-shadow: inset 0 1px 0 var(--hi, rgba(255, 255, 255, 0.05)); }
+.cm-sref-pre { background: var(--chip); }
+.cm-box textarea { border-color: color-mix(in srgb, var(--accent-mark) 60%, var(--line-2)); background: var(--chip); }
+.msg.user .text > :first-child { margin-top: 0; }
+.msg.user .text > :last-child { margin-bottom: 0; }
