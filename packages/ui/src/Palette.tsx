@@ -44,6 +44,8 @@ export function Palette(props: {
   onOpenCard(id: string): void;
   onNewCard(): void;
   onTogglePanel(): void;
+  /** Fold / unfold the sidebar (#397); absent on a narrow window (no sidebar). */
+  onToggleSidebar?: () => void;
   onTheme(t: 'dark' | 'light'): void;
   onHelp(): void;
   onClose(): void;
@@ -134,7 +136,8 @@ export function Palette(props: {
     action('new-card', 'New task', <Icon.plus />, props.onNewCard, 'C', 'create ticket issue');
     action('new-chat', 'Main chat', <Icon.edit />, () => props.go('#/chat/new'), '⌘N');
     for (const a of props.agents) action('new-chat:' + a.id, `Chat with @${a.id}`, <Avatar id={a.id} />, () => props.go('#/chat/' + (a.mainChat ?? a.id)));
-    if (ctx.view === 'chat' && ctx.chatId) action('panel', 'Show / hide documents panel', <Icon.doc />, props.onTogglePanel, '⌘\\', 'side panel toggle');
+    if (ctx.view === 'chat' && ctx.chatId) action('panel', 'Show / hide documents panel', <Icon.doc />, props.onTogglePanel, '⌘⇧\\', 'side panel toggle');
+    if (props.onToggleSidebar) action('sidebar', 'Fold / unfold the sidebar', <Icon.side />, props.onToggleSidebar, '⌘\\', 'collapse expand icons navigation');
     // « Switch to project … » sets the shared project filter (Tasks, Inbox, Library, Workflows).
     if (pinfo.multi) {
       for (const p of pinfo.active)

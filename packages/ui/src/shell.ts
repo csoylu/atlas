@@ -51,3 +51,10 @@ const COLLAPSED = 'atlas.side.collapsed.';
 export const groupCollapsed = (projectId: string) => localStorage.getItem(COLLAPSED + projectId) === '1';
 export const setGroupCollapsed = (projectId: string, on: boolean) =>
   on ? localStorage.setItem(COLLAPSED + projectId, '1') : localStorage.removeItem(COLLAPSED + projectId);
+
+const SIDEBAR = 'atlas.sidebar';
+/** The sidebar folded to its icons (#397), kept across reloads; a wide window only (the narrow one has no sidebar). */
+export const sidebarFolded = () => localStorage.getItem(SIDEBAR) === 'folded';
+export const setSidebarFolded = (on: boolean) => (on ? localStorage.setItem(SIDEBAR, 'folded') : localStorage.removeItem(SIDEBAR));
+/** Where the sidebar shrinks to icons on its own while a side panel is open (a laptop width, #397 shares its rules). */
+export const STRIP = `(min-width: ${NARROW_MAX + 1}px) and (max-width: 1280px)`;

@@ -25,9 +25,16 @@ describe('globalKey', () => {
     expect(at('k', { metaKey: true }, el('TEXTAREA'))).toBe('palette');
     expect(globalKey(key('k', { metaKey: true }), null, { ...idle, blocked: true })?.kind).toBe('palette');
   });
-  it('⌘N new chat and ⌘\\ panel, also while typing; nothing else when blocked', () => {
+  it('⌘N new chat, ⌘\\ sidebar and ⌘⇧\\ panel, also while typing; nothing else when blocked', () => {
     expect(at('n', { metaKey: true }, el('TEXTAREA'))).toBe('newChat');
-    expect(at('\\', { metaKey: true })).toBe('togglePanel');
+    expect(at('\\', { metaKey: true })).toBe('toggleSidebar');
+    expect(at('\\', { ctrlKey: true }, el('TEXTAREA'))).toBe('toggleSidebar');
+    expect(at('\\', { metaKey: true }, el('INPUT'))).toBe('toggleSidebar');
+    expect(at('|', { metaKey: true, shiftKey: true, code: 'Backslash' })).toBe('togglePanel');
+    expect(at('\\', { metaKey: true, shiftKey: true }, el('TEXTAREA'))).toBe('togglePanel');
+    expect(at('\\', { metaKey: true, altKey: true })).toBeNull();
+    expect(at('\\')).toBeNull();
+    expect(globalKey(key('\\', { metaKey: true }), null, { ...idle, blocked: true })).toBeNull();
     expect(globalKey(key('n', { metaKey: true }), null, { ...idle, blocked: true })).toBeNull();
     expect(globalKey(key('c'), null, { ...idle, blocked: true })).toBeNull();
   });

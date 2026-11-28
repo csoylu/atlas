@@ -15,7 +15,7 @@ import type { OpenPane } from './useQuoteSurface.ts';
 import { linkTarget } from '@atlas/shared';
 
 export const LAST_AGENT = 'atlas.chat.agent';
-/** Window event: show / hide the documents panel of the chat on screen (⌘\, the palette). */
+/** Window event: show / hide the documents panel of the chat on screen (⌘⇧\, the palette). */
 export const TOGGLE_PANEL = 'atlas:toggle-panel';
 
 /**
