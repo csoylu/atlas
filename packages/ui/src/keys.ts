@@ -3,7 +3,7 @@
  * Screen-specific keys stay with their screen (Inbox: J/K, E, R, 1–4 in inboxView.ts).
  */
 
-type Key = Pick<KeyboardEvent, 'key' | 'metaKey' | 'ctrlKey' | 'altKey' | 'shiftKey' | 'defaultPrevented' | 'repeat'>;
+type Key = Pick<KeyboardEvent, 'key' | 'code' | 'metaKey' | 'ctrlKey' | 'altKey' | 'shiftKey' | 'defaultPrevented' | 'repeat'>;
 
 /** Somewhere text goes: letters there aren't shortcuts. */
 export function isTyping(target: EventTarget | null): boolean {
@@ -20,6 +20,7 @@ export type GlobalAction =
   | { kind: 'palette' }
   | { kind: 'newChat' }
   | { kind: 'togglePanel' }
+  | { kind: 'toggleSidebar' }
   | { kind: 'help' }
   | { kind: 'newCard' }
   /** G pressed: the next key picks where to go. */
@@ -34,7 +35,7 @@ export const G_WINDOW = 1500;
 /**
  * The shortcut a keydown means, or null. `gAt`: when G was pressed (null if not pending). `blocked`: a modal or the
  * palette has the keyboard, so only ⌘K (toggle the palette) goes through.
- * ⌘K, ⌘N and ⌘\ work while typing (they have a modifier); single letters don't.
+ * ⌘K, ⌘N, ⌘\ and ⌘⇧\ work while typing (they have a modifier, and type nothing); single letters don't.
  */
 export function globalKey(e: Key, target: EventTarget | null, opts: { gAt: number | null; now: number; blocked?: boolean }): GlobalAction | null {
   if (e.defaultPrevented) return null;
@@ -43,7 +44,8 @@ export function globalKey(e: Key, target: EventTarget | null, opts: { gAt: numbe
   if (mod && !e.shiftKey && k === 'k') return { kind: 'palette' };
   if (opts.blocked) return null;
   if (mod && !e.shiftKey && k === 'n') return { kind: 'newChat' };
-  if (mod && !e.shiftKey && e.key === '\\') return { kind: 'togglePanel' };
+  // ⌘\ folds the sidebar (#397); ⌘⇧\ the documents panel. The physical key: with Shift, `key` is « | » on most layouts.
+  if (mod && (e.key === '\\' || e.key === '|' || e.code === 'Backslash')) return { kind: e.shiftKey ? 'togglePanel' : 'toggleSidebar' };
   if (e.metaKey || e.ctrlKey || e.altKey || isTyping(target)) return null;
   if (e.key === '?') return { kind: 'help' };
   if (e.shiftKey) return null;
@@ -69,7 +71,8 @@ export const SHORTCUTS: { group: string; keys: string[]; label: string }[] = [
   { group: 'General', keys: ['?'], label: 'Keyboard shortcuts' },
   { group: 'General', keys: ['C'], label: 'New task' },
   { group: 'General', keys: ['⌘', 'N'], label: 'Main chat' },
-  { group: 'General', keys: ['⌘', '\\'], label: 'Show / hide the documents panel' },
+  { group: 'General', keys: ['⌘', '\\'], label: 'Fold / unfold the sidebar' },
+  { group: 'General', keys: ['⌘', '⇧', '\\'], label: 'Show / hide the documents panel' },
   { group: 'Go to', keys: ['G', 'I'], label: 'Inbox' },
   { group: 'Go to', keys: ['G', 'T'], label: 'Tasks' },
   { group: 'Go to', keys: ['G', 'L'], label: 'Library' },

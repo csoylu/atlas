@@ -36,6 +36,7 @@ export const Icon = {
   restore: svg(<path d="M3 8a5 5 0 1 0 1.5-3.5M3 2.5v2.5h2.5" />, 14),
   code: svg(<path d="M5.5 4.5 2 8l3.5 3.5M10.5 4.5 14 8l-3.5 3.5" />, 14),
   check: svg(<path d="M3.5 8.5l3 3 6-7" />, 14),
+  side: svg(<><rect x="2" y="2.5" width="12" height="11" rx="1" /><path d="M6 2.5v11" /><path d="m11 6.5-1.5 1.5 1.5 1.5" /></>),
   chevDown: svg(<path d="m4 6 4 4 4-4" />, 12),
   ask: svg(<path d="M2.5 3.5h11v7.5H7l-3 2.5v-2.5H2.5z" />, 14),
   clock: svg(<><circle cx="8" cy="8" r="5.5" /><path d="M8 5v3l2 1.5" /></>),

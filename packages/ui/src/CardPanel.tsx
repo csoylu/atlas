@@ -178,7 +178,7 @@ export function CardPanel(props: {
             type="button"
             className="btn doc-reopen"
             onClick={props.onShowDocs}
-            title={'Show the documents panel (⌘\\)' + (props.hiddenLive ? ' · ' + props.hiddenLive : '')}
+            title={'Show the documents panel (⌘⇧\\)' + (props.hiddenLive ? ' · ' + props.hiddenLive : '')}
             aria-label={`Show the documents panel: ${props.hiddenDocs} open${props.hiddenLive ? ', ' + props.hiddenLive : ''}`}
           >
             <Icon.doc /> <span className="doc-reopen-l">Documents · </span>

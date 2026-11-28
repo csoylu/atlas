@@ -33,7 +33,7 @@ import { GO_HASH, globalKey, nextRow } from './keys.ts';
 import { LAST_AGENT, TOGGLE_PANEL } from './ChatView.tsx';
 import { groupCount } from './workflowView.ts';
 import { effectiveFilter, inFilter, ProjDot, ProjTag, ProjectsCtx, projectsInfo, useProjectFilter } from './projects.tsx';
-import { backOf, groupCollapsed, NARROW, setGroupCollapsed, tabOf, type Tab } from './shell.ts';
+import { backOf, groupCollapsed, NARROW, setGroupCollapsed, setSidebarFolded, sidebarFolded, STRIP, tabOf, type Tab } from './shell.ts';
 import { useMedia } from './Inbox.tsx';
 import { ErrorState, Toast } from './Kit.tsx';
 import { StatusMemory, type ToastMsg } from './toast.ts';
@@ -138,6 +138,11 @@ export function App() {
   const [createAsk, setCreateAsk] = useState(0);
   /** One narrow mode (#264): no sidebar, a tab bar at the bottom, back buttons on pushed screens. */
   const narrow = useMedia(NARROW);
+  /** The sidebar folded to its icons (#397, ⌘\ or its footer button); the laptop strip (STRIP) shares its look. */
+  const [folded, setFolded] = useState(sidebarFolded);
+  const strip = useMedia(STRIP);
+  const toggleSidebar = useCallback(() => setFolded((f) => !f), []);
+  useEffect(() => setSidebarFolded(folded), [folded]);
   /** Bumped when a sidebar project group folds or unfolds (the state itself is in localStorage, shell.ts). */
   const [, setFolds] = useState(0);
   const [headSlot, setHeadSlot] = useState<HTMLElement | null>(null);
@@ -336,8 +341,8 @@ export function App() {
     location.replace(withCard('#/inbox' + (key ? '/' + encodeURIComponent(key) : ''), splitHash(location.hash).card));
   }, []);
   // App-wide shortcuts (keys.ts): ⌘K, ⌘N, ⌘\, ?, C, G then B/L/I/S, J/K in lists. The Inbox keeps its own J/K/E/R.
-  const keyState = useRef({ gAt: null as number | null, view: route.view, palette, help });
-  keyState.current = { ...keyState.current, view: route.view, palette, help };
+  const keyState = useRef({ gAt: null as number | null, view: route.view, palette, help, narrow });
+  keyState.current = { ...keyState.current, view: route.view, palette, help, narrow };
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
       const st = keyState.current;
@@ -355,6 +360,10 @@ export function App() {
           break;
         case 'newChat':
           location.hash = '#/chat/new';
+          break;
+        case 'toggleSidebar':
+          if (st.narrow) return; // no sidebar on a narrow window
+          toggleSidebar();
           break;
         case 'togglePanel':
           if (st.view !== 'chat') return;
@@ -740,6 +749,18 @@ export function App() {
       >
         <Icon.gear />
       </button>
+      {!narrow && (
+        <button
+          type="button"
+          className="icon-btn side-toggle"
+          aria-label={folded ? 'Unfold the sidebar' : 'Fold the sidebar'}
+          title={(folded ? 'Unfold the sidebar' : 'Fold the sidebar') + ' (⌘\\)'}
+          aria-pressed={folded}
+          onClick={toggleSidebar}
+        >
+          <Icon.side />
+        </button>
+      )}
     </div>
   );
   const tab = tabOf(route.view);
@@ -753,7 +774,7 @@ export function App() {
 
   return (
     <ProjectsCtx.Provider value={pinfo}>
-    <div className={'app' + (narrow ? ' narrow' : '')}>
+    <div className={'app' + (narrow ? ' narrow' : folded ? ' folded' : strip ? ' strip' : '')}>
       {!narrow && (
         <aside className="sidebar" aria-label="Navigation">
           {navRows()}
@@ -962,6 +983,7 @@ export function App() {
             setCreateAsk((n) => n + 1);
           }}
           onTogglePanel={() => window.dispatchEvent(new Event(TOGGLE_PANEL))}
+          onToggleSidebar={narrow ? undefined : toggleSidebar}
           onTheme={setThemeChoice}
           onHelp={() => setHelp(true)}
           onClose={closePalette}

@@ -1771,18 +1771,32 @@ button.msg-quote:hover { color: var(--text); }
 .cm-doc-title { font-weight: var(--fw-medium); min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .cm-doc-meta { font-size: var(--fs-small); color: var(--faint); font-family: var(--mono); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; min-width: 0; }
 .cm-doc-open { margin-left: auto; flex: none; font-size: var(--fs-small); color: var(--faint); white-space: nowrap; }
-/* With the panel side by side on a laptop (≤1280px), the sidebar shrinks to icons to leave room for both. */
-@media (min-width: 901px) and (max-width: 1280px) {
-  .app:has(.side-doc.side) { --sidebar: 60px; }
-  .app:has(.side-doc.side) .sidebar { padding: 10px 8px 8px; }
-  .electron-mac .app:has(.side-doc.side) .sidebar { padding-top: 40px; }
-  .app:has(.side-doc.side) :is(.nav-item > span:not(.dot-avatar), .nav-kbd, .me-scope, .chat-hist-title, .chat-hist-when, .side-group, .me-name, .nav-item .spin, .nav-item .unread-dot, .chat-hist-item .unread-dot) { display: none; }
-  .app:has(.side-doc.side) :is(.nav-item, .chat-hist-item) { justify-content: center; padding-left: 0; padding-right: 0; }
-  .app:has(.side-doc.side) .side-agents { margin-top: 12px; }
-  .app:has(.side-doc.side) .side-chats { margin-top: 12px; }
-  .app:has(.side-doc.side) .sidebar-foot { flex-direction: column; padding: 8px 0 0; gap: 6px; }
-  .app:has(.side-doc.side) .conn { margin-left: 0; }
-}
+/* The sidebar folded to its icons (#397: the footer's toggle or ⌘\, kept in localStorage), and the same strip on its
+   own with the panel side by side on a laptop (901–1280px, App's .strip). Names, Running and History go; every icon
+   keeps its title tooltip. */
+.app:is(.folded, .strip:has(.side-doc.side)) { --sidebar: 56px; }
+.app { transition: grid-template-columns var(--fast); }
+.app:is(.folded, .strip:has(.side-doc.side)) .sidebar { padding: 10px 8px 8px; align-items: stretch; overflow-x: hidden; }
+.electron-mac .app:is(.folded, .strip:has(.side-doc.side)) .sidebar { padding-top: 40px; }
+.app:is(.folded, .strip:has(.side-doc.side)) :is(.nav-item > span:not(.dot-avatar):not(.nav-count):not(.live-fly):not(.unread-dot), .nav-kbd, .side-group:not(.side-proj), .side-proj-name, .side-proj .icon, .me-name, .me-scope, .side-running, .side-chats, .update-badge-label, .update-badge-v) { display: none; }
+.app:is(.folded, .strip:has(.side-doc.side)) :is(.nav-item, .side-proj) { justify-content: center; padding-left: 0; padding-right: 0; position: relative; }
+/* The Inbox count: a small badge on the icon's corner. */
+.app:is(.folded, .strip:has(.side-doc.side)) .nav-count { position: absolute; top: 1px; right: 2px; margin: 0; min-width: 16px; height: 16px; padding: 0 3px; }
+/* A project: only its colour square (still the button that folds its group), an unread reply on its corner. */
+.app:is(.folded, .strip:has(.side-doc.side)) .side-proj { padding-top: 12px; padding-bottom: 6px; }
+.app:is(.folded, .strip:has(.side-doc.side)) .side-agents:not(:has(.side-proj)) { margin-top: 12px; }
+/* An agent: its face; working (flying squares) or an unread reply (square) on the face's corner. */
+.app:is(.folded, .strip:has(.side-doc.side)) :is(.agent-item, .side-proj) :is(.live-fly, .unread-dot) { position: absolute; top: 4px; right: 4px; margin: 0; }
+.app:is(.folded, .strip:has(.side-doc.side)) .side-proj .unread-dot { top: 8px; right: 10px; }
+/* An update or locked secrets: the badge keeps its dot only. */
+.app:is(.folded, .strip:has(.side-doc.side)) .update-badge { justify-content: center; padding: 0; }
+/* The footer stacked; the toggle last, in the same corner as when open. */
+.app:is(.folded, .strip:has(.side-doc.side)) .sidebar-foot { flex-direction: column; padding: 8px 0 0; gap: 4px; align-items: center; }
+.app:is(.folded, .strip:has(.side-doc.side)) .conn { margin: 4px 0; }
+/* A toast can't fit a 56 px column: it sits just right of the strip, at the bottom. */
+.app:is(.folded, .strip:has(.side-doc.side)) .toast { left: calc(var(--sidebar) + 8px); bottom: 12px; width: 280px; }
+.side-toggle .icon { transition: transform var(--fast); }
+.app.folded .side-toggle .icon { transform: scaleX(-1); }
 
 /* ── Rewind (card #34): « Rewind to here », the note above the composer, the confirm dialog ─────────────────── */
 /* A quiet icon button beside your message, shown on hover (always there, faint, on touch screens). */
@@ -2190,7 +2204,6 @@ button.msg-quote:hover { color: var(--text); }
 .running-item { gap: 10px; }
 .running-item .running-ref { color: var(--faint); font-size: var(--fs-small); flex: none; font-variant-numeric: tabular-nums; letter-spacing: 0; }
 .running-item .running-title { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-@media (min-width: 901px) and (max-width: 1280px) { .app:has(.side-doc.side) .side-running { display: none; } }
 
 /* ── Artifacts (#120, mockup #106 v2): chat card, one-row viewer, Library folders and live tiles.
    Nothing the reader needs is set in --faint (3.5:1 on white in light); text uses --text or --muted (>= 4.5:1). ── */
