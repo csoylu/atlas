@@ -481,16 +481,17 @@ select { padding: 4px 8px; }
   flex: 1; min-height: 0; display: flex; flex-direction: column; overflow: hidden;
   background: var(--panel); border: 0; border-left: 1px solid var(--line); border-radius: 0;
 }
-/* Each screen's header: breadcrumb on the left, the screen's actions on the right (HeaderActions portals them in). */
+/* Each screen's header, one 48 px row (#401): [back] Title or crumb › Title · tabs · spacer · project · tools · primary.
+   App draws the crumb; a screen portals the rest in with HeaderActions. */
 .screen-head {
-  height: 48px; flex: none; display: flex; align-items: center; gap: 8px; padding: 0 12px 0 18px; min-width: 0;
+  height: 48px; flex: none; display: flex; align-items: center; gap: 8px; padding: 0 12px 0 16px; min-width: 0;
   border-bottom: 1px solid var(--line); -webkit-app-region: drag;
 }
 .screen-head button, .screen-head a, .screen-head select { -webkit-app-region: no-drag; }
 .crumb { display: flex; align-items: center; gap: 9px; min-width: 0; color: var(--muted); white-space: nowrap; }
-.crumb .crumb-part { flex: none; display: inline-flex; align-items: center; gap: 9px; }
+.crumb .crumb-part { flex: none; display: inline-flex; align-items: center; gap: 6px; }
 .crumb .crumb-sep { color: var(--faint); flex: none; }
-.crumb h1 { margin: 0; font-size: var(--fs-xl); font-weight: var(--fw-bold); letter-spacing: -0.022em; line-height: var(--lh-tight); color: var(--text); min-width: 0; overflow: hidden; text-overflow: ellipsis; }
+.crumb h1 { margin: 0; font-size: var(--fs-large); font-weight: var(--fw-bold); letter-spacing: -0.01em; line-height: var(--lh-tight); color: var(--text); min-width: 0; overflow: hidden; text-overflow: ellipsis; }
 .crumb-sub { color: var(--faint); font-size: var(--fs-small); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; min-width: 0; font-variant-numeric: tabular-nums; }
 .head-actions { margin-left: auto; display: flex; align-items: center; justify-content: flex-end; gap: 4px; flex: 1 1 auto; min-width: 0; }
 /* A pushed screen's back button (narrow window, #264; the Inbox's item on a phone). */
@@ -511,6 +512,14 @@ main { flex: 1; display: flex; min-height: 0; min-width: 0; position: relative; 
 .board-tabs .tabbtn.hot .tab-n { color: var(--bk-ink); }
 .tab-n { font-size: var(--fs-small); color: var(--faint); font-weight: var(--fw-medium); font-variant-numeric: tabular-nums; }
 .head-sp { flex: 1; min-width: 4px; }
+/* Tabs that may not fit (Memory's kinds, the phone's Library folders, #401): they scroll; the right edge fades while
+   more tabs are hidden there (ScrollTabs sets .more). */
+.view-tabs.scroll {
+  overflow-x: auto; scrollbar-width: none; flex: 0 1 auto; min-width: 0; margin-left: 0;
+}
+.view-tabs.scroll.more { -webkit-mask-image: linear-gradient(90deg, #000 85%, transparent); mask-image: linear-gradient(90deg, #000 85%, transparent); }
+.view-tabs.scroll::-webkit-scrollbar { display: none; }
+.view-tabs.scroll .tabbtn { flex: none; }
 .kbd { font: var(--fw-regular) var(--fs-small) var(--mono); color: var(--faint); border: 0; background: var(--chip); border-radius: 0; padding: 0 5px; line-height: var(--lh-tight); }
 .btn.primary .kbd { color: inherit; border-color: currentColor; }
 .head-menu { position: relative; display: flex; }
@@ -1062,7 +1071,7 @@ button.artifact:hover .art-open { color: var(--accent); }
    edge to edge. Only the shell keys off .narrow; screens keep their own media queries. */
 .app.narrow { grid-template-columns: minmax(0, 1fr); grid-template-rows: minmax(0, 1fr) auto; }
 .narrow .workspace { padding: 0; }
-.narrow .screen-head { padding: 0 6px 0 14px; gap: 4px; }
+.narrow .screen-head { padding: 0 6px 0 16px; gap: 4px; }
 .narrow .screen-head:has(> .head-back) { padding-left: 4px; }
 /* Mac app: no sidebar here, so the header starts at the window's left edge, under the traffic lights (x 14–66). */
 .electron-mac .narrow .screen-head, .electron-mac .narrow .screen-head:has(> .head-back) { padding-left: 72px; }
@@ -1984,15 +1993,6 @@ button.msg-quote:hover { color: var(--text); }
 .art-icon .kind-icon { color: inherit; }
 
 /* ── Settings → Memory (#82/#87, mockup canvas cv_ae0bb676 « mock ») ────────── */
-.mem-bar { flex: none; display: flex; align-items: center; gap: 10px; padding: 8px 12px 8px 16px; border-bottom: 1px solid var(--line); min-width: 0; }
-.mem-chips { display: flex; gap: 6px; min-width: 0; overflow-x: auto; scrollbar-width: none; flex: 1; }
-.mem-chip {
-  flex: none; height: 26px; display: inline-flex; align-items: center; gap: 6px; padding: 0 10px; border: 1px solid var(--line-2);
-  border-radius: 0; background: none; color: var(--muted); font: inherit; font-size: var(--fs-small); font-weight: var(--fw-medium); white-space: nowrap;
-}
-.mem-chip:hover { color: var(--text); background: var(--hover); }
-.mem-chip.on { border-color: var(--accent); color: var(--accent-hi); background: var(--accent-soft); }
-.mem-chip.on .tab-n { color: inherit; }
 .mem-search {
   flex: none; width: 220px; height: 28px; display: flex; align-items: center; gap: 6px; padding: 0 8px; border: 1px solid var(--line-2);
   border-radius: 0; background: var(--raised); color: var(--faint);
@@ -2048,9 +2048,6 @@ button.msg-quote:hover { color: var(--text); }
   .mem-head > :nth-child(4), .mem-row > .mem-when { display: none; }
 }
 @media (max-width: 640px) {
-  .mem-bar { flex-wrap: wrap; padding: 8px 10px; }
-  .mem-search { width: 100%; order: -1; }
-  .mem-chips { flex-basis: 100%; }
   .mem-head { display: none; }
   .mem-row { grid-template-columns: minmax(0, 1fr) auto; grid-template-areas: 'k acts' 't t' 'meta meta'; gap: 4px 8px; padding: 8px 10px; }
   .mem-row > .mem-k { grid-area: k; }
@@ -2378,7 +2375,7 @@ button.msg-quote:hover { color: var(--text); }
 .lib-fold-row { position: relative; display: flex; align-items: center; }
 .lib-fold-row .nav-item { flex: 1; }
 .lib-fold-row .nav-item .tab-n { margin-left: auto; color: var(--muted); }
-.lib-chips .tab-n, .lib-fold-row .nav-item.active .tab-n { color: inherit; }
+.lib-fold-row .nav-item.active .tab-n { color: inherit; }
 .lib-fold-row .lib-more { position: absolute; right: 4px; }
 .lib-fold-row:hover .tab-n, .lib-fold-row:focus-within .tab-n { visibility: hidden; }
 .lib-fold-in { display: flex; align-items: center; gap: 6px; height: 28px; padding: 0 6px; border: 1px solid var(--accent); box-shadow: 0 0 0 3px var(--accent-soft); border-radius: 0; background: var(--raised); }
@@ -2415,13 +2412,12 @@ button.msg-quote:hover { color: var(--text); }
 @media (pointer: coarse) { .lib-more { opacity: 1; } }
 @media (max-width: 640px) {
   .lib-head-search { display: none; }
-  .lib-bar { display: flex; flex-direction: column; gap: 8px; flex: none; padding: 8px 10px; border-bottom: 1px solid var(--line); }
+  .lib-bar { display: flex; flex-direction: column; gap: 8px; flex: none; padding: 8px 16px; border-bottom: 1px solid var(--line); }
   .lib-bar .mem-search { width: 100%; height: 36px; }
   .lib-bar .mem-search input { font-size: var(--fs-large); }
   .lib-split { flex-direction: column; }
   .lib-folders { display: none; }
-  .lib-chips { display: flex; gap: 6px; overflow-x: auto; scrollbar-width: none; }
-  .lib-chips .mem-chip { height: 32px; }
+  .lib-chips { display: flex; }
   .lib-fold { max-width: 96px; }
   .lib-more { width: 36px; height: 36px; }
   .lib-row { height: 44px; padding-right: 4px; }
@@ -3154,7 +3150,7 @@ button.wfl-ghead:hover { color: var(--text); background: var(--hover); }
 /* the project button keeps its text on narrow screens: the project's name is its whole point */
 .head-actions .proj-btn .btn-text { display: inline; }
 .proj-menu { position: relative; }
-.proj-menu .head-pop { left: 0; right: auto; width: 230px; }
+.proj-menu .head-pop { left: auto; right: 0; width: 230px; } /* the picker sits right of the spacer (#401) */
 .pop-row .proj-dot { margin: 0 3px; }
 .proj-menu .pop-row .tab-n { margin-left: auto; }
 .proj-menu .pop-row.on .pop-check { margin-left: 6px; }
@@ -3224,9 +3220,12 @@ button.wfl-ghead:hover { color: var(--text); background: var(--hover); }
   /* phone: the project button takes the title's place on the same row (no extra header) */
   .screen-head:has(.proj-menu) .crumb { display: none; }
   .screen-head:has(.proj-menu) .head-actions { justify-content: flex-start; }
-  .proj-menu .head-pop { left: 0; width: min(240px, calc(100vw - 60px)); }
+  .proj-menu .head-pop { left: 0; right: auto; width: min(240px, calc(100vw - 60px)); }
   .lib-m:has(.proj-tag) .lib-fold { display: none; }
   .proj-btn { max-width: 124px; }
+  .proj-all-more { display: none; }
+  /* the project picker comes first on a phone, where the title gives it its place (#401) */
+  .head-actions > .proj-menu { order: -1; }
   .proj-btn .btn-text { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; min-width: 0; }
   /* Tasks on a phone (#266): the title stays, the project button beside it, the status strip below names the column */
   .app:has(.board-screen) .screen-head:has(.proj-menu) .crumb { display: flex; flex: none; }
@@ -3337,7 +3336,9 @@ button.wfl-ghead:hover { color: var(--text); background: var(--hover); }
 .mem-meta { font-size: var(--fs-small); color: var(--muted); line-height: var(--lh-normal); }
 .mem-meta a { color: var(--accent); }
 .mem-acts .btn.on { color: var(--accent); }
-.memory-page .mem-chips { flex: none; flex-wrap: wrap; overflow: visible; }
+/* Memory's tools in the header (#401): the search shrinks before the tabs scroll. A phone has them in a bar under it. */
+.mem-head-search { width: auto; flex: 0 1 220px; min-width: 140px; }
+.mem-phone-bar { display: flex; flex-direction: column; gap: 8px; min-width: 0; }
 .memory-page .mem-note { border: 0; padding: 0; }
 @media (max-width: 640px) {
   .setb { padding: 14px 12px 32px; }
@@ -3346,10 +3347,8 @@ button.wfl-ghead:hover { color: var(--text); background: var(--hover); }
   .meml .mem-row { grid-template-columns: minmax(0, 1fr); grid-template-areas: none; gap: 6px; }
   .meml .mem-row > * { grid-area: auto; }
   .mem-detail { grid-column: 1; }
-  .memory-page .set-head { flex-wrap: wrap; }
-  .memory-page .set-head .mem-search { width: 100%; order: 9; height: 36px; }
-  .memory-page .set-head .mem-search input { font-size: var(--fs-large); }
-  .memory-page .set-head .head-sp { display: none; }
+  .mem-phone-bar .mem-search { flex: none; width: 100%; height: 36px; }
+  .mem-phone-bar .mem-search input { font-size: var(--fs-large); }
 }
 .setb > .memory-page { flex: none; min-height: auto; }
 .settings-view .agr .agr-open, .settings-view .set-link { color: var(--text); }

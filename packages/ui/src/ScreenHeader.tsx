@@ -1,15 +1,43 @@
-import { createContext, useContext, type ReactNode } from 'react';
+import { createContext, useContext, useEffect, useRef, useState, type ReactNode } from 'react';
 import { createPortal } from 'react-dom';
 
 /**
- * Each screen's 44px header (design §16): App draws the breadcrumb; a screen puts its own actions on the right with
- * <HeaderActions>, portalled into the header's slot, so the header stays one row whatever the screen.
+ * Each screen's 48px header (design §16, #401): one row, [back] Title or crumb › Title · tabs · spacer · project · tools ·
+ * primary. App draws the breadcrumb; a screen puts its tabs and tools in with <HeaderActions>, portalled into the
+ * header's slot, so the header stays one row whatever the screen.
  */
 export const HeaderSlot = createContext<HTMLElement | null>(null);
 
 export function HeaderActions({ children }: { children: ReactNode }) {
   const slot = useContext(HeaderSlot);
   return slot ? createPortal(children, slot) : null;
+}
+
+/**
+ * A row of tabs that may not fit (#401): it scrolls sideways, and its right edge fades while tabs are hidden there.
+ */
+export function ScrollTabs({ label, className, role = 'tablist', children }: { label: string; className?: string; role?: 'tablist' | 'group'; children: ReactNode }) {
+  const ref = useRef<HTMLDivElement>(null);
+  const [more, setMore] = useState(false);
+  useEffect(() => {
+    const el = ref.current;
+    if (!el) return;
+    const check = () => setMore(el.scrollLeft + el.clientWidth < el.scrollWidth - 1);
+    check();
+    const ro = new ResizeObserver(check);
+    ro.observe(el);
+    for (const c of Array.from(el.children)) ro.observe(c);
+    el.addEventListener('scroll', check, { passive: true });
+    return () => {
+      ro.disconnect();
+      el.removeEventListener('scroll', check);
+    };
+  }, [children]);
+  return (
+    <div ref={ref} className={'view-tabs scroll' + (more ? ' more' : '') + (className ? ' ' + className : '')} role={role} aria-label={label}>
+      {children}
+    </div>
+  );
 }
 
 const svg = (d: ReactNode, size = 16) => () => (

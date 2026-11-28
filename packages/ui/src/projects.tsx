@@ -146,7 +146,8 @@ export function ProjectFilterButton(props: {
             ) : (
               <span className="proj-crumb">
                 <Icon.grid />
-                All projects
+                {/* phone: « All » and the grid icon (#401) */}
+                All<span className="proj-all-more"> projects</span>
               </span>
             )}
           </span>

@@ -7,6 +7,7 @@ import { agentSecrets, agoText, cleanName, deleteText, grantees, modelKeyRow, st
 import type { MessageStream } from './useMessages.ts';
 import { effectiveFilter, inFilter, ProjectFilterButton, ProjTag, projectForNew, useProjectFilter, useProjects } from './projects.tsx';
 import { Skeleton } from './Kit.tsx';
+import { HeaderActions } from './ScreenHeader.tsx';
 
 /**
  * Settings → Secrets (#209, mockup #205): agent secrets (API keys, tokens, RPC URLs agents use as $NAME in shell
@@ -63,9 +64,10 @@ export function SecretsPage(props: { agents: Agent[]; cards: Card[]; models: Mod
     <>
       <section className="set-sec first">
         {pinfo.multi && (
-          <div className="set-tools">
+          <HeaderActions>
+            <span className="head-sp" />
             <ProjectFilterButton value={pf} onChange={setPf} globalOnly count={(f) => allMine.filter((s) => inFilter(f, s.project, pinfo, true)).length} />
-          </div>
+          </HeaderActions>
         )}
         <p className="set-lead">
           API keys, tokens and RPC URLs your agents use in shell commands as <code>$NAME</code>. An agent sees only the names it's granted, never a value. Values can be
