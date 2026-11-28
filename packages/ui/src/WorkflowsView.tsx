@@ -107,7 +107,7 @@ function WorkflowList(props: {
         <HeaderActions>
           <span className="head-sp" />
           <ProjectFilterButton value={pf} onChange={setPf} count={(f) => (f === 'archived' ? archived.length : props.workflows.filter((w) => inFilter(f, w.projectId, pinfo, true)).length)} />
-          <button className="btn primary small" onClick={() => props.setCreating(true)}>
+          <button className="btn primary" onClick={() => props.setCreating(true)}>
             New workflow
           </button>
         </HeaderActions>

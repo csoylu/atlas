@@ -75,7 +75,7 @@ function AgentList(props: {
       <HeaderActions>
         <span className="head-sp" />
         {!adding && (
-          <button type="button" className="btn small" onClick={() => setAdding(true)}>
+          <button type="button" className="btn primary" onClick={() => setAdding(true)}>
             <Icon.plus />
             New agent
           </button>

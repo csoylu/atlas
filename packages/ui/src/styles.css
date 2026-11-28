@@ -189,6 +189,11 @@
   --radius-sheet: 0;
   --radius-card: 0;
   --radius-control: 0;
+  /* spacing (#402): one 4-step scale; bars, rows and heads start their text 16 px in */
+  --s1: 4px;
+  --s2: 8px;
+  --s3: 12px;
+  --s4: 16px;
   /* one easing for every hover and state change (#362): fast out, soft landing */
   --ease: cubic-bezier(0.16, 1, 0.3, 1);
   --fast: 160ms var(--ease);
@@ -224,9 +229,10 @@ input::placeholder, textarea::placeholder { color: var(--faint); }
 /* ── Controls ─────────────────────────────────────────────────────────────── */
 /* Buttons (#265, redesign « Components & states »): one set. `btn` is the secondary button; `primary`, `ghost` and
    `danger` (a destructive action: its label ends with « … » and it opens a confirm; `primary danger` is the confirm)
-   modify it; `small` for rows. An icon alone is an `icon-btn`. */
+   modify it; `small` for rows. An icon alone is an `icon-btn`. A control is 28 px in a bar or a row, 32 px in a form's
+   button row (#402); anything only read is a `.tag` (22 px). */
 .btn {
-  height: 30px; padding: 0 12px; border-radius: 0; border: 1px solid var(--line-2); background: var(--raised);
+  height: 28px; padding: 0 var(--s3); border-radius: var(--radius-control); border: 1px solid var(--line-2); background: var(--raised);
   color: var(--text); display: inline-flex; align-items: center; justify-content: center; gap: 6px; flex: none;
   font-size: var(--fs-small); font-weight: var(--fw-medium); line-height: var(--lh-tight); white-space: nowrap; text-decoration: none;
   transition: background var(--fast), border-color var(--fast), color var(--fast), opacity var(--fast), transform var(--fast);
@@ -237,7 +243,7 @@ input::placeholder, textarea::placeholder { color: var(--faint); }
 .btn .icon { color: var(--muted); }
 .btn.open { background: var(--active); }
 .btn.on { border-color: var(--accent); }
-.btn.small { height: 26px; padding: 0 10px; }
+.btn.small { height: 28px; padding: 0 10px; }
 .btn.primary { background: var(--btn-bg); border-color: transparent; color: var(--btn-ink); }
 .btn.primary:hover { background: var(--btn-bg); opacity: 0.88; }
 .btn.primary:disabled { opacity: 0.4; }
@@ -253,7 +259,7 @@ input::placeholder, textarea::placeholder { color: var(--faint); }
 /* ── Shared components (#265, redesign « Components & states »; Kit.tsx) ───────────── */
 /* Status as a chip: its icon and its name. */
 .status-chip {
-  display: inline-flex; align-items: center; gap: 6px; height: 26px; padding: 0 10px; border: 0; background: var(--chip); border-radius: 0;
+  display: inline-flex; align-items: center; gap: 6px; height: 28px; padding: 0 10px; border: 0; background: var(--chip); border-radius: var(--radius-control);
   font-size: var(--fs-small); font-weight: var(--fw-medium); line-height: var(--lh-tight); color: var(--text); white-space: nowrap; flex: none;
 }
 .status-chip.failed { color: var(--neg-ink); }
@@ -484,7 +490,7 @@ select { padding: 4px 8px; }
 /* Each screen's header, one 48 px row (#401): [back] Title or crumb › Title · tabs · spacer · project · tools · primary.
    App draws the crumb; a screen portals the rest in with HeaderActions. */
 .screen-head {
-  height: 48px; flex: none; display: flex; align-items: center; gap: 8px; padding: 0 12px 0 16px; min-width: 0;
+  height: 48px; flex: none; display: flex; align-items: center; gap: var(--s2); padding: 0 var(--s3) 0 var(--s4); min-width: 0;
   border-bottom: 1px solid var(--line); -webkit-app-region: drag;
 }
 .screen-head button, .screen-head a, .screen-head select { -webkit-app-region: no-drag; }
@@ -553,11 +559,11 @@ main { flex: 1; display: flex; min-height: 0; min-width: 0; position: relative; 
 }
 .column.over, .list-group.over { background: var(--accent-soft); box-shadow: inset 0 0 0 1px var(--accent); }
 .col-head {
-  margin: 0; display: flex; align-items: center; gap: 2px; height: 40px; flex: none; padding: 0 8px 0 6px; border-bottom: 1px solid var(--line);
+  margin: 0; display: flex; align-items: center; gap: 2px; height: 40px; flex: none; padding: 0 var(--s2) 0 var(--s2); border-bottom: 1px solid var(--line);
   font-size: var(--fs-base); font-weight: var(--fw-medium); line-height: var(--lh-tight);
 }
 .column .fold {
-  flex: 1; min-width: 0; height: 30px; display: flex; align-items: center; gap: 8px; background: none; border: 0; padding: 0 6px;
+  flex: 1; min-width: 0; height: 30px; display: flex; align-items: center; gap: var(--s2); background: none; border: 0; padding: 0 var(--s2);
   border-radius: 0; text-align: left; color: var(--text); font-weight: var(--fw-medium); transition: background var(--fast);
 }
 .column .fold:hover { background: var(--hover); }
@@ -632,7 +638,7 @@ main { flex: 1; display: flex; min-height: 0; min-width: 0; position: relative; 
 .pr-pill.ok { background: var(--dn-bg); color: var(--dn-ink); } .pr-pill.ok::before { background: var(--dn-dot); }
 .pr-pill.bad { background: var(--neg-bg); color: var(--neg-ink); } .pr-pill.bad::before { background: var(--negative); }
 .pr-pill.warn { background: var(--warn-bg); color: var(--warn-ink); } .pr-pill.warn::before { background: var(--warn-ink); }
-.btn.icon-only { width: 30px; padding: 0; }
+.btn.icon-only { width: 28px; padding: 0; }
 /* List layout: grouped rows with the same marks */
 .board-list { flex: 1; overflow-y: auto; min-height: 0; }
 .board-list-empty { margin: 16px; }
@@ -651,7 +657,6 @@ main { flex: 1; display: flex; min-height: 0; min-width: 0; position: relative; 
 .list-row .card-note { flex: 0 1 auto; max-width: 35%; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .list-row .card-sp { display: none; }
 .list-row .st-since { min-width: 44px; text-align: right; }
-.list-row .proj-tag, .card-m .proj-tag { height: 20px; padding: 0 6px; gap: 5px; border-color: var(--line); color: var(--muted); }
 .avatar-none { width: 16px; height: 16px; border-radius: 0; border: 1px dashed var(--line-2); flex: none; display: inline-block; }
 
 /* New card: a compact Linear-style composer */
@@ -659,7 +664,7 @@ main { flex: 1; display: flex; min-height: 0; min-width: 0; position: relative; 
   width: min(620px, calc(100vw - 32px)); margin-bottom: 18vh; background: var(--raised); border: 1px solid var(--line-2); border-radius: 0;
   box-shadow: var(--float-shadow); display: flex; flex-direction: column; animation: cm-in 0.16s ease;
 }
-.nc-head { display: flex; align-items: center; padding: 10px 10px 0 16px; }
+.nc-head { display: flex; align-items: center; padding: 10px 10px 0 var(--s4); }
 .nc-crumb { font-size: var(--fs-small); color: var(--muted); font-weight: var(--fw-medium); border: 1px solid var(--line-2); border-radius: 0; padding: 1px 6px; line-height: var(--lh-tight); }
 .nc-head .icon-btn { margin-left: auto; }
 .nc-title { background: none; border: 0; outline: none; font-size: var(--fs-large); font-weight: var(--fw-bold); letter-spacing: -0.01em; padding: 10px 16px 4px; }
@@ -909,7 +914,17 @@ button.artifact:hover .art-open { color: var(--accent); }
 .avatar { width: 36px; height: 36px; border-radius: 0; display: grid; place-items: center; font-weight: var(--fw-bold); flex: none; }
 .agent-name { font-weight: var(--fw-bold); font-size: var(--fs-large); }
 .agent-sub { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 3px; min-height: 18px; }
-.badge { display: inline-block; font-size: var(--fs-small); font-weight: var(--fw-medium); line-height: var(--lh-tight); padding: 1px 7px; border-radius: 0; background: var(--raised); color: var(--muted); white-space: nowrap; }
+/* Tag (#402): anything only read (project, #ref, count, type, state) is 22 px, tinted, no border; a control is 28 and
+   bordered. `.badge` and `.proj-tag` are tags; `.badge.ok|bad|warn` and `.st-chip` keep their state colours. */
+.tag, .badge, .proj-tag {
+  display: inline-flex; align-items: center; gap: 6px; height: 22px; padding: 0 var(--s2); border: 0; border-radius: var(--radius-control);
+  background: var(--chip); color: var(--muted); font-size: var(--fs-small); font-weight: var(--fw-medium); line-height: var(--lh-tight);
+  white-space: nowrap; flex: none;
+}
+.tag.mono { font-family: var(--mono); font-weight: var(--fw-regular); }
+.tag .proj-dot, .proj-tag .proj-dot { width: 6px; height: 6px; }
+/* A form's button row: its controls are 32 px, beside the fields (#402). */
+form .actions .btn, .nc-foot .btn, .wf-form-foot .btn, .profile-actions .btn { height: 32px; }
 .badge.bad { background: var(--neg-bg); color: var(--neg-ink); }
 .badge.ok { background: var(--pos-bg); color: var(--pos-ink); }
 .badge.warn { background: var(--warn-bg); color: var(--warn-ink); }
@@ -1071,7 +1086,7 @@ button.artifact:hover .art-open { color: var(--accent); }
    edge to edge. Only the shell keys off .narrow; screens keep their own media queries. */
 .app.narrow { grid-template-columns: minmax(0, 1fr); grid-template-rows: minmax(0, 1fr) auto; }
 .narrow .workspace { padding: 0; }
-.narrow .screen-head { padding: 0 6px 0 16px; gap: 4px; }
+.narrow .screen-head { padding: 0 6px 0 var(--s4); gap: var(--s1); }
 .narrow .screen-head:has(> .head-back) { padding-left: 4px; }
 /* Mac app: no sidebar here, so the header starts at the window's left edge, under the traffic lights (x 14–66). */
 .electron-mac .narrow .screen-head, .electron-mac .narrow .screen-head:has(> .head-back) { padding-left: 72px; }
@@ -1356,7 +1371,7 @@ button.artifact:hover .art-open { color: var(--accent); }
 /* The scrim behind the New task dialog (Board.tsx). */
 .card-scrim { position: fixed; inset: 0; z-index: 40; background: var(--scrim); display: flex; align-items: center; justify-content: center; }
 @keyframes cm-in { from { opacity: 0; transform: translateY(6px); } }
-.cm-head { padding: 8px 10px 8px 16px; min-height: 48px; display: flex; align-items: center; border-bottom: 1px solid var(--line); flex: none; }
+.cm-head { padding: var(--s2) 10px var(--s2) var(--s4); min-height: 48px; display: flex; align-items: center; border-bottom: 1px solid var(--line); flex: none; }
 .cm-row { display: flex; align-items: center; gap: 7px; flex-wrap: wrap; font-size: var(--fs-small); color: var(--muted); }
 /* The sheet's top bar: status, #N, ⋯, × (the title, meta row and « Now » scroll under it with the rest). */
 .cm-head > .cm-row { flex: 1; min-width: 0; flex-wrap: nowrap; }
@@ -1840,7 +1855,7 @@ button.msg-quote:hover { color: var(--text); }
 /* What a rewind undoes and keeps (#138): the dialog and the chat's rewind row. */
 .rw-groups { display: grid; gap: 10px; }
 .rw-group { border: 1px solid var(--rule); border-radius: 0; overflow: hidden; }
-.rw-head { padding: 8px 12px; font-size: var(--fs-small); font-weight: var(--fw-medium); color: var(--text); background: var(--frame); border-bottom: 1px solid var(--rule); }
+.rw-head { padding: var(--s2) var(--s3) var(--s2) var(--s4); font-size: var(--fs-small); font-weight: var(--fw-medium); color: var(--text); background: var(--frame); border-bottom: 1px solid var(--rule); }
 .rw-group ul { list-style: none; margin: 0; padding: 4px 0; }
 .rw-group li { display: flex; gap: 2px 12px; align-items: baseline; padding: 4px 12px; font-size: var(--fs-small); line-height: var(--lh-normal); min-width: 0; }
 .rw-what { flex: 1; min-width: 0; color: var(--text); overflow-wrap: anywhere; }
@@ -2106,7 +2121,7 @@ button.msg-quote:hover { color: var(--text); }
 .pal-foot { flex: none; display: flex; gap: 14px; padding: 8px 16px; border-top: 1px solid var(--line); color: var(--faint); font-size: var(--fs-small); }
 .pal-foot > span { display: inline-flex; align-items: center; gap: 4px; }
 .keys-sheet { width: min(460px, 100%); }
-.keys-head { display: flex; align-items: center; justify-content: space-between; padding: 12px 12px 4px 16px; }
+.keys-head { display: flex; align-items: center; justify-content: space-between; padding: var(--s3) var(--s3) var(--s1) var(--s4); }
 .keys-head h2 { margin: 0; font-size: var(--fs-large); font-weight: var(--fw-bold); }
 .keys-body { overflow-y: auto; padding-bottom: 6px; }
 .keys-row { display: flex; align-items: center; justify-content: space-between; gap: 12px; padding: 5px 16px; }
@@ -2384,7 +2399,8 @@ button.msg-quote:hover { color: var(--text); }
 .lib-more { border: 0; background: none; color: var(--muted); width: 24px; height: 24px; border-radius: 0; padding: 0; display: grid; place-items: center; opacity: 0; flex: none; }
 .lib-row:hover .lib-more, .lib-fold-row:hover .lib-more, .lib-more:focus-visible, .lib-more.open { opacity: 1; }
 .lib-more:hover, .lib-more.open { background: var(--active); color: var(--text); }
-.lib-fold { max-width: 160px; height: 20px; display: inline-flex; align-items: center; gap: 4px; padding: 0 6px; border-radius: 0; border: 1px solid var(--line-2); background: none; color: var(--muted); font-size: var(--fs-small); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; flex: none; }
+/* A document's folder, read only: a tag (#402). */
+.lib-fold { max-width: 160px; height: 22px; display: inline-flex; align-items: center; gap: 4px; padding: 0 var(--s2); border-radius: var(--radius-control); border: 0; background: var(--chip); color: var(--muted); font-size: var(--fs-small); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; flex: none; }
 .lib-fold .icon { width: 12px; height: 12px; flex: none; }
 .lib-snip { color: var(--muted); margin-left: 8px; font-size: var(--fs-small); }
 .lib-snip mark, .lib-t mark { background: var(--accent-soft); color: var(--accent-hi); border-radius: 0; padding: 0 1px; }
@@ -2449,7 +2465,7 @@ a.pop-row[aria-disabled='true'] { opacity: 0.5; pointer-events: none; }
 .lib-pinned { display: inline-grid; place-items: center; margin-right: 6px; color: var(--accent); vertical-align: -2px; }
 .lib-pinned .icon { width: 13px; height: 13px; }
 .lib-m { gap: 12px; color: var(--muted); }
-.lib-row .lib-fold { height: auto; max-width: 160px; padding: 0; border: 0; border-radius: 0; display: block; color: var(--muted); text-align: right; }
+.lib-row .lib-fold { height: auto; max-width: 160px; padding: 0; border: 0; border-radius: 0; background: none; display: block; color: var(--muted); text-align: right; }
 .lib-task { width: 48px; flex: none; text-align: right; }
 .lib-num { border: 0; background: none; padding: 0 2px; border-radius: 0; color: var(--muted); font: inherit; font-variant-numeric: tabular-nums; cursor: pointer; }
 .lib-num:hover { color: var(--text); text-decoration: underline; }
@@ -3140,9 +3156,7 @@ button.wfl-ghead:hover { color: var(--text); background: var(--hover); }
 /* a project's mark: a small rounded square in the project's hue (circles stay for statuses and priorities) */
 .proj-dot { display: inline-block; width: 8px; height: 8px; border-radius: 0; flex: none; background: hsl(var(--ph) 62% 50%); }
 /* Project tag (#265): the project's mark and name; Global (no project) has a globe. Small in dense rows. */
-.proj-tag { display: inline-flex; align-items: center; gap: 6px; height: 22px; padding: 0 8px; border-radius: 0; border: 1px solid var(--line-2); font-size: var(--fs-small); font-weight: var(--fw-regular); color: var(--text); white-space: nowrap; line-height: var(--lh-tight); flex: none; }
 .proj-tag .icon { color: var(--muted); }
-.lib-m .proj-tag, .mem-scope .proj-tag, .model-title .proj-tag, .ni .proj-tag { height: 20px; padding: 0 6px; gap: 5px; border-color: var(--line); color: var(--muted); }
 /* the project filter: one head button, the same on Tasks, Library, Workflows, Memory and Secrets */
 .btn.proj-btn { gap: 6px; }
 .btn.proj-btn svg { color: var(--faint); }
@@ -3163,6 +3177,7 @@ button.wfl-ghead:hover { color: var(--text); background: var(--hover); }
 .prop-pill .proj-dot { margin-left: 4px; }
 /* Settings → Projects */
 .pj-repo { font-family: var(--mono); font-size: var(--fs-small); color: var(--muted); font-weight: var(--fw-regular); overflow-wrap: anywhere; }
+.pj-repo-tag { min-width: 0; max-width: 100%; overflow: hidden; text-overflow: ellipsis; }
 .pj-faces { display: inline-flex; align-items: center; gap: 3px; }
 .pj-faces .dot-avatar, .pj-who .dot-avatar { width: 16px; height: 16px; }
 .pj-faces > span:last-child { margin-left: 3px; }
@@ -3628,7 +3643,7 @@ button.cm-sref:hover { border-color: var(--accent); }
 /* Quotes in a chat (#367, mockup #364). The Quote action: a pill above the start of the selection (fixed, placed by QuoteLayer). */
 .qt-pop {
   position: fixed; z-index: 40; display: inline-flex; align-items: center; gap: 6px; height: 32px; padding: 0 6px 0 10px;
-  border-radius: 999px; background: var(--raised); border: 1px solid var(--line-2); box-shadow: var(--float-shadow); color: var(--text);
+  border-radius: var(--radius-control); background: var(--raised); border: 1px solid var(--line-2); box-shadow: var(--float-shadow); color: var(--text);
   font: var(--fw-medium) var(--fs-small) / var(--lh-tight) var(--font); white-space: nowrap; cursor: pointer;
 }
 .qt-pop:hover { border-color: var(--accent); }
@@ -3640,9 +3655,9 @@ button.cm-sref:hover { border-color: var(--accent); }
 .qt-pop.dock { position: static; height: 40px; padding: 0 16px; font-size: var(--fs-base); pointer-events: auto; }
 /* A passage waiting in the composer as a quote: underlined in its message, with its number. */
 .qt-mark { background: none; color: inherit; text-decoration: underline 2px var(--accent); text-underline-offset: 4px; }
-.cm-num.qt-n { width: 18px; height: 18px; border-radius: 5px; margin-left: 4px; vertical-align: 1px; cursor: pointer; }
+.cm-num.qt-n { width: 18px; height: 18px; border-radius: var(--radius-control); margin-left: 4px; vertical-align: 1px; cursor: pointer; }
 /* Jump back: the passage the clicked quote came from, lit for 2 s. */
-.qt-flash { color: inherit; border-radius: 4px; background: var(--accent-soft); outline: 2px solid var(--accent); outline-offset: 1px; -webkit-box-decoration-break: clone; box-decoration-break: clone; animation: qt-flash 2s ease-out forwards; }
+.qt-flash { color: inherit; border-radius: var(--radius-control); background: var(--accent-soft); outline: 2px solid var(--accent); outline-offset: 1px; -webkit-box-decoration-break: clone; box-decoration-break: clone; animation: qt-flash 2s ease-out forwards; }
 @keyframes qt-flash { 0%, 60% { outline-color: var(--accent); } 100% { outline-color: transparent; } }
 /* #368: the same light on a passage that is not a chat message (a tool row, the description, a document, a file). */
 ::highlight(qt-flash) { background-color: var(--accent-soft); color: var(--text); text-decoration: underline 2px var(--accent); }
@@ -3656,7 +3671,7 @@ button.cm-sref:hover { border-color: var(--accent); }
 .cm-box.qt-box { width: 340px; }
 .cm-box.qt-box.sheet {
   left: 0; right: 0; top: auto; bottom: 0; width: auto; max-width: none; padding: 14px 14px calc(14px + env(safe-area-inset-bottom));
-  border-radius: 14px 14px 0 0; border-width: 1px 0 0; z-index: 70;
+  border-radius: var(--radius-sheet); border-width: 1px 0 0; z-index: 70;
 }
 .qt-box.sheet .btn { min-height: 40px; padding: 0 16px; }
 .qt-box .cm-box-what { color: var(--text); }
@@ -3776,11 +3791,9 @@ a.web-hit:hover .web-hit-t { text-decoration: underline; text-underline-offset: 
 .cm-now { border-color: var(--line); box-shadow: inset 0 1px 0 var(--hi, rgba(255, 255, 255, 0.05)); }
 
 /* The quote UI (#367, #368) in the same tokens: sharp, tinted chips, the accent as the only colour. */
-.qt-pop { border-radius: 0; background: color-mix(in srgb, var(--raised) 86%, transparent); backdrop-filter: blur(16px) saturate(1.4); }
+.qt-pop { background: color-mix(in srgb, var(--raised) 86%, transparent); backdrop-filter: blur(16px) saturate(1.4); }
 .qt-pop:hover, .qt-chip:hover, button.cm-sref:hover { border-color: color-mix(in srgb, var(--accent-mark) 60%, var(--line-2)); }
 .qt-pop .icon, .qt-kind .icon { color: var(--accent); }
-.cm-num.qt-n, .qt-flash { border-radius: 0; }
-.cm-box.qt-box.sheet { border-radius: 0; }
 .cm-chip { border: 0; background: var(--chip); padding: 3px 4px; }
 .cm-kind, .cm-lines { background: var(--active); }
 .cm-sref { border-color: var(--line); box-shadow: inset 0 1px 0 var(--hi, rgba(255, 255, 255, 0.05)); }
