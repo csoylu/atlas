@@ -41,6 +41,7 @@ import {
   withoutNode,
   type Pt,
 } from './workflowView.ts';
+import { EmptyState } from './Kit.tsx';
 
 /**
  * One workflow's canvas (#171, design §9). Edit mode: drag nodes, drag an exit onto a step to wire it, click a link to
@@ -807,7 +808,7 @@ function NodeCard(props: {
       {st && (
         <div className="wf-run">
           <div className="wf-run-now">
-            {st.state === 'working' && <span className="spin" aria-hidden="true" />}
+            {st.state === 'working' && <span className="step-sq" aria-hidden="true" />}
             {st.state === 'couldnt' && last?.couldntRun ? (
               <span className="wf-couldnt">Couldn't run · {last.couldntRun.autoRetry ? 'retrying' : 'waiting for you'}</span>
             ) : (
@@ -852,10 +853,7 @@ function RunsPanel(props: { w: Workflow; g: Graph; runs: WorkflowRun[] | null; r
   if (!runs) return <p className="wf-sum">Loading runs…</p>;
   if (!runs.length)
     return (
-      <p className="wf-sum">
-        No runs yet. Run now starts one
-        {props.w.enabled && props.w.nextRunAt ? `; the trigger fires ${when(props.w.nextRunAt)}` : ''}.
-      </p>
+      <EmptyState title="No runs yet" />
     );
   const open = !!run && (run.state === 'running' || run.state === 'waiting');
   const listed = failedOnly ? runs.filter((r) => r.state === 'failed' || r.state === 'skipped') : runs;
@@ -870,7 +868,7 @@ function RunsPanel(props: { w: Workflow; g: Graph; runs: WorkflowRun[] | null; r
         </button>
       </div>
       <div className="wf-runs">
-        {!listed.length && <p className="wf-sum">No failed or refused run.</p>}
+        {!listed.length && <EmptyState inline title="No failed or refused run" />}
         {listed.map((r) => (
           <button key={r.id} className={r.id === run?.id ? 'on' : ''} aria-current={r.id === run?.id || undefined} onClick={() => props.pick(r.id)}>
             <span className={'st-chip ' + chipClass(r.state)}>{RUN_LABEL[r.state]}</span>

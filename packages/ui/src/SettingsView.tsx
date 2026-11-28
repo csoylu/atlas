@@ -21,7 +21,7 @@ import { useProjects } from './projects.tsx';
 import { ACCENTS, THEMES, useAccent, type ThemeChoice } from './theme.ts';
 import type { MessageStream } from './useMessages.ts';
 import { UpdateAbout } from './UpdateDialog.tsx';
-import { Skeleton } from './Kit.tsx';
+import { EmptyState, Skeleton } from './Kit.tsx';
 
 /**
  * Settings (design §12, redesign #272, remake #307): one header row naming the page, a grouped navigation (Team,
@@ -157,9 +157,7 @@ export function SettingsView(props: {
         </div>
       ))}
       {!groups.length && (
-        <p className="settings-none" role="status">
-          No setting matches « {find.trim()} ».
-        </p>
+        <EmptyState inline className="settings-none" title={`No setting matches « ${find.trim()} »`} />
       )}
     </nav>
   );

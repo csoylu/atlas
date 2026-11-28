@@ -17,7 +17,7 @@ export function UpdateBadge({ status, onOpen }: { status: UpdateStatus | null; o
   const failed = status.phase === 'failed';
   return (
     <button type="button" className={'update-badge' + (failed ? ' failed' : '')} onClick={onOpen} title={`Atlas ${latestOf(status)?.version ?? status.target ?? ''}: see what's new`}>
-      {busy(status) ? <span className="spin" aria-hidden="true" /> : <span className="update-dot" aria-hidden="true" />}
+      {busy(status) ? <span className="step-sq" aria-hidden="true" /> : <span className="update-dot" aria-hidden="true" />}
       <span className="update-badge-label">{label}</span>
       {!busy(status) && latestOf(status) && <span className="update-badge-v num">{latestOf(status)!.version}</span>}
     </button>

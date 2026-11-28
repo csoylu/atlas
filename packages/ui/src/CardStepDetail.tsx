@@ -4,6 +4,7 @@ import { boardGroups, cardLine, cardSub, historyHits, historyMessage, markHits }
 import type { Step } from './chatTurn.ts';
 import { STATUS_LABEL, StatusIcon } from './StatusIcon.tsx';
 import { cardChanges, cardRef } from './toolRows.ts';
+import { EmptyState } from './Kit.tsx';
 
 /** The board around a turn: opens a card by reference ("#58"), finds it for its live status and title. */
 export interface TurnCards {
@@ -114,7 +115,7 @@ export function cardDetail(step: Step, ctx: DetailContext): ReactNode | null {
     case 'task_list': {
       if (out === null) return null;
       const groups = boardGroups(out);
-      if (!groups.length) return <p className="state-empty inline">No cards{str(o.status) ? ` in ${str(o.status)}` : ''}.</p>;
+      if (!groups.length) return <EmptyState inline title={`No cards${str(o.status) ? ` in ${str(o.status)}` : ''}`} />;
       return (
         <div className="step-board">
           {groups.map((g) => (
@@ -155,7 +156,7 @@ export function cardDetail(step: Step, ctx: DetailContext): ReactNode | null {
         );
       }
       const { hits, more } = historyHits(out);
-      if (!hits.length) return <p className="state-empty inline">No message contains “{q}”.</p>;
+      if (!hits.length) return <EmptyState inline title={`No message contains “${q}”`} />;
       return (
         <div className="step-hits">
           {hits.map((h) => (
@@ -167,7 +168,7 @@ export function cardDetail(step: Step, ctx: DetailContext): ReactNode | null {
               </span>
             </div>
           ))}
-          {more > 0 && <p className="state-empty inline">{more} older matches not shown.</p>}
+          {more > 0 && <p className="step-note">{more} older matches not shown.</p>}
         </div>
       );
     }

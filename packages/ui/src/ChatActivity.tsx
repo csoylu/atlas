@@ -178,7 +178,7 @@ function StepsTick({ step, timing, now, gone }: { step: Step; timing?: ToolCallT
     <div className={'steps-tick' + (running ? '' : ' idle') + (gone ? ' gone' : '')} aria-hidden={gone || undefined}>
       <div>
         <div className="chat-row-line">
-          <span className="chat-row-icon">{running ? <span className="chat-row-spin" aria-label="running" /> : <RowIconSvg name={row.icon} />}</span>
+          <span className="chat-row-icon">{running ? <span className="step-sq" role="img" aria-label="running" /> : <RowIconSvg name={row.icon} />}</span>
           <span className="chat-row-verb">{running ? row.running : row.verb}</span>
           {object && <span className={'chat-row-obj' + (row.mono ? ' mono' : '')}>{object}</span>}
           <span className="tick-tail">{tail}</span>

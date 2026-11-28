@@ -1,0 +1,1 @@
+## Changed · #403 · Work in progress now shows one mark per meaning (the agent glyph, the task status icon or a pulsing square), and every empty screen is the same short framed title with at most one button.

@@ -89,7 +89,7 @@ function AgentList(props: {
       {!props.agents ? (
         <Skeleton rows={4} />
       ) : props.agents.length === 0 ? (
-        <EmptyState title="No agent yet">Create one to give it tasks.</EmptyState>
+        <EmptyState title="No agent yet" />
       ) : (
         <div className="set-list agl" role="list" aria-label="Agents">
           {props.agents.map((a) => {
@@ -103,7 +103,7 @@ function AgentList(props: {
                 <div className="agr-main">
                   <a className="agr-open" href={'#/settings/agents/' + encodeURIComponent(a.id)}>
                     @{a.id}
-                    {busy(a.id) && <span className="spin" role="img" aria-label="working" />}
+                    {busy(a.id) && <span className="live-fly" role="img" aria-label="working"><i /><i /><i /><i /></span>}
                   </a>
                   <div className="agr-sub">
                     {roles}
@@ -214,7 +214,7 @@ function AgentPage(props: {
             >
               <AgentFace id={x.id} live={busy} />
               <span>@{x.id}</span>
-              {busy && <span className="live-sq" role="img" aria-label="working" />}
+              {busy && <span className="live-fly" role="img" aria-label="working"><i /><i /><i /><i /></span>}
             </a>
           );
         })}

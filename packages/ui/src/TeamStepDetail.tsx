@@ -2,6 +2,7 @@ import type { ReactNode } from 'react';
 import type { DetailContext } from './CardStepDetail.tsx';
 import { humanTimes, memoryFoot, scheduleCreated, scheduleList, whenText } from './teamRows.ts';
 import type { Step } from './chatTurn.ts';
+import { EmptyState } from './Kit.tsx';
 
 const str = (v: unknown) => (typeof v === 'string' ? v : '');
 
@@ -56,7 +57,7 @@ export function teamDetail(step: Step, ctx: DetailContext): ReactNode | null | u
     case 'schedule_list': {
       if (out === null) return undefined;
       const list = scheduleList(out);
-      if (!list.length) return <p className="state-empty inline">No schedules.</p>;
+      if (!list.length) return <EmptyState inline title="No schedules" />;
       return (
         <div className="step-list">
           {list.map((s) => (

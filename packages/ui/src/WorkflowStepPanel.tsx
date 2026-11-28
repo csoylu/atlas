@@ -47,6 +47,7 @@ import {
   UNIT_MIN,
 } from './workflowView.ts';
 import { BROWSER_TZ, DAYS, KIND_LABEL, cronOf, exitTarget, exitsOf, freeSpot, newNodeId, nodeMeta, nodeTitle, timeDraftOf, triggerOf, when, wire, withoutNode, type Repeat, type TimeDraft } from './workflowView.ts';
+import { EmptyState } from './Kit.tsx';
 
 /** The canvas's right panel in Edit mode: the selected step's settings and exits (#171). */
 
@@ -232,7 +233,7 @@ function FieldPicker({ of, q, setQ, onPick, onClose }: { of: FieldsOf; q: string
       <div className="wf-picker-list" role="listbox">
         {fields.error && <p className="wf-sum bad">{fields.error}</p>}
         {!fields.list && !fields.error && <p className="wf-sum">Loading…</p>}
-        {fields.list && !groups.length && <p className="wf-sum">No field matches.</p>}
+        {fields.list && !groups.length && <EmptyState inline title="No field matches" />}
         {groups.map((g) => (
           <div key={g.label} className="grp">
             <span className="gl">{g.label}</span>
@@ -535,7 +536,7 @@ function TryOnRun({ w, config, labels, onError }: { w: Workflow; config: Extract
     return () => clearTimeout(t);
   }, [run, key]);
   if (!runs) return null;
-  if (!runs.length) return <p className="wf-sum">No run yet to try it on: Run now, then come back.</p>;
+  if (!runs.length) return <EmptyState inline title="No run yet to try it on" />;
   const label = (f: string) => labels?.find((x) => x.field === f)?.label ?? f;
   return (
     <div className="field">

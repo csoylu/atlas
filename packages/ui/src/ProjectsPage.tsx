@@ -6,6 +6,7 @@ import { HeaderActions, Icon } from './ScreenHeader.tsx';
 import { SetRow, SetRows, SetSec } from './SettingsKit.tsx';
 import { ProjDot, useProjectFilter, useProjects } from './projects.tsx';
 import { verdictSteps } from './workflowView.ts';
+import { EmptyState } from './Kit.tsx';
 
 /**
  * Settings → Projects (#217, mockup #212): the list, New project with the live repo check, cloning per member, a
@@ -18,7 +19,17 @@ export function ProjectsPage(props: { rest: string; agents: Agent[]; cards: Card
   const [id, sub] = props.rest.split('/');
   const open = id && id !== 'new' ? all.find((p) => p.id === id) : undefined;
   if (id && id !== 'new') {
-    if (!open) return all.length ? <p className="muted">No project « {id} ». <a href="#/settings/projects">All projects</a></p> : null;
+    if (!open)
+      return all.length ? (
+        <EmptyState
+          title={`No project « ${id} »`}
+          action={
+            <a className="btn" href="#/settings/projects">
+              All projects
+            </a>
+          }
+        />
+      ) : null;
     return <ProjectDetail key={open.id} project={open} focusRepo={sub === 'repo'} {...props} />;
   }
   const active = all.filter((p) => p.status === 'active');
@@ -205,8 +216,8 @@ function CloneList({ p }: { p: Project }) {
 
 function CloneLine({ m }: { m: ProjectMember }) {
   const icon =
-    m.cloneState === 'ready' || m.home ? <Icon.check /> : m.cloneState === 'failed' ? <Icon.x /> : // a spinner sits straight in the row (a wrapping span squeezes it)
-       <span className="spin" aria-label={m.cloneState === 'cloning' ? 'working' : 'waiting'} />;
+    m.cloneState === 'ready' || m.home ? <Icon.check /> : m.cloneState === 'failed' ? <Icon.x /> : // the step square sits straight in the row (a wrapping span squeezes it)
+       <span className="step-sq" role="img" aria-label={m.cloneState === 'cloning' ? 'working' : 'waiting'} />;
   return (
     <div className="pj-cl">
       {m.cloneState === 'cloning' || m.cloneState === 'pending' ? icon : <span className={m.cloneState === 'failed' ? 'pj-bad-ic' : 'pj-ok'}>{icon}</span>}
@@ -281,7 +292,7 @@ function RepoCheckLine({ repo, check, taken }: { repo: string; check: Check; tak
   if (check.state === 'checking' || check.state === 'idle')
     return (
       <div className="pj-check">
-        <span className="spin" aria-label="checking" />
+        <span className="step-sq" role="img" aria-label="checking" />
         <span>Checking {r} with your GitHub login…</span>
       </div>
     );
@@ -594,7 +605,7 @@ function ProjectDetail({ project: p, agents, cards, workflows, focusRepo, onErro
                     </>
                   ) : m.cloneState === 'cloning' ? (
                     <span className="pj-who">
-                      <span className="spin" aria-label="working" />
+                      <span className="step-sq" role="img" aria-label="working" />
                       cloning…{m.cloneProgress != null && ` ${m.cloneProgress}%`}
                     </span>
                   ) : m.cloneState === 'pending' ? (
@@ -604,7 +615,7 @@ function ProjectDetail({ project: p, agents, cards, workflows, focusRepo, onErro
                   )}
                   {run && (
                     <span className="pj-who">
-                      <span className="spin" aria-label="working" />
+                      <span className="live-fly" role="img" aria-label="working"><i /><i /><i /><i /></span>
                       running #{run.number}
                     </span>
                   )}

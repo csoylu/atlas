@@ -184,9 +184,7 @@ export function Inbox(props: {
             {!inbox ? (
               <Skeleton rows={4} className="ibx-loading" />
             ) : !items.length ? (
-              <EmptyState icon={<Icon.inbox />} title={tab === 'needs' ? 'Nothing needs you' : 'All clear'}>
-                {tab === 'needs' ? 'Questions and reviews for you show here.' : 'Updates show here when a task finishes or asks a question.'}
-              </EmptyState>
+              <EmptyState title={tab === 'needs' ? 'Nothing needs you' : 'All clear'} />
             ) : (
               groups.map((g) => (
                 <div key={g.label} role="group" aria-label={g.label}>
@@ -216,7 +214,7 @@ export function Inbox(props: {
               onError={onError}
             />
           ) : (
-            wide && inbox && <EmptyState className="pane-empty">Nothing selected.</EmptyState>
+            wide && inbox && <EmptyState className="pane-empty" title="Nothing selected" />
           )}
         </section>
       </div>

@@ -13,6 +13,7 @@ import { relAgo } from './library.ts';
 import { fileUrl, folderName, isImageUrl, sandboxFor, SANDBOX, useFolders, versionLabel } from './artifacts.ts';
 import { Marks, markdownMarks, markdownPick, PickOverlay, pictureMarks, picturePick, SvgHitLayer, useFrameComments, useSizeTick, type PaneComment, type PictureSpace, type SvgHits } from './CommentLayer.tsx';
 import { boxOf, containRect, svgSpace, type Box } from './comments.ts';
+import { EmptyState } from './Kit.tsx';
 
 /** Where the viewer is: the chat's side panel, the Library, or inside a card / inbox item. */
 export type ViewerMode = 'panel' | 'library' | 'inline';
@@ -688,7 +689,7 @@ const MarkdownText = ({ text, line, afterH1 }: { text: string; line?: number; af
 
 /** A link: the running app or page in a frame, an image fit to the box. */
 function LinkView({ url, title, preview, version, comment }: { url: string; title: string; preview?: boolean; version?: number; comment?: PaneComment }) {
-  if (!url) return <p className="state-empty inline doc-empty">This link has no address.</p>;
+  if (!url) return <EmptyState className="doc-empty" title="This link has no address" />;
   if (comment && !preview) return isImageUrl(url) ? <CommentImage url={url} title={title} version={version ?? 0} comment={comment} /> : <CommentLink url={url} title={title} version={version ?? 0} comment={comment} />;
   if (isImageUrl(url)) return <img className={preview ? 'lib-pv-img' : 'doc-link-img'} src={url} alt={preview ? '' : title} />;
   return <iframe className={preview ? undefined : 'doc-frame'} title={title} sandbox={sandboxFor(url)} src={url} tabIndex={preview ? -1 : undefined} aria-hidden={preview || undefined} loading="lazy" />;

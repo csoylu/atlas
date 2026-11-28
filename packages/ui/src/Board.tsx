@@ -6,7 +6,7 @@ import { HeaderActions, Icon } from './ScreenHeader.tsx';
 import { api } from './api.ts';
 import { effectiveFilter, inFilter, ProjDot, ProjectFilterButton, ProjTag, projectForNew, useProjectFilter, useProjects } from './projects.tsx';
 import { StatusIcon, STATUS_LABEL } from './StatusIcon.tsx';
-import { PriorityMark } from './Kit.tsx';
+import { EmptyState, PriorityMark } from './Kit.tsx';
 import { PRIORITIES, priorityName } from './priority.ts';
 import { Menu, PopRow } from './HeadMenu.tsx';
 import { cardNote, columnsFor, CREATE_IN, filterCount, matches, parseView, phoneColumn, stripColumns, timeInState, type BoardTab } from './boardView.ts';
@@ -304,7 +304,7 @@ export function Board(props: {
               </section>
             );
           })}
-          {shown.length === 0 && <p className="hint board-list-empty">No tasks here.</p>}
+          {shown.length === 0 && <EmptyState className="board-list-empty" title="No tasks here" />}
         </div>
       )}
       {creating && (
@@ -347,7 +347,7 @@ function BoardCard({ card: c, open, onOpen, now }: { card: Card; open: boolean; 
         <span className="card-sp" />
         {since && (
           <span className={'st-since' + (c.stall ? ' stuck' : running ? ' live' : '')} title={`${STATUS_LABEL[c.status]} for ${since}`}>
-            {running && !c.stall && <i className="live-sq" aria-hidden="true" />}
+            {running && !c.stall && <StatusIcon status="running" size={12} title="" />}
             {since}
           </span>
         )}

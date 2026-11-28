@@ -11,6 +11,7 @@ import { Icon } from './ScreenHeader.tsx';
 import { AgentFace } from './AgentFace.tsx';
 import { PickOverlay, Marks, type PaneComment } from './CommentLayer.tsx';
 import { contains, type Box, type PanePick } from './comments.ts';
+import { EmptyState } from './Kit.tsx';
 
 /** Whether this engine has a browser (the desktop app): asked once per page load. */
 let statusOnce: Promise<BrowserStatus> | null = null;
@@ -291,7 +292,7 @@ export function BrowserPane(props: {
       )}
       <div className={'wb-view' + (driving ? ' agent' : '') + (freeze ? ' frozen' : '')} ref={view}>
         {state === 'page' && freeze && <FrozenPage shot={shot} comment={props.commenting ? props.comment : undefined} />}
-        {state === 'empty' && <EmptyState chatId={chatId} agent={agent} onOpen={go} onError={onError} />}
+        {state === 'empty' && <NoPage chatId={chatId} agent={agent} onOpen={go} onError={onError} />}
         {state === 'blocked' && (
           <div className="wb-empty">
             <span className="big">
@@ -331,7 +332,7 @@ export function BrowserPane(props: {
                 <Icon.globe />
               </span>
             ) : (
-              <span className="wb-spin" aria-hidden="true" />
+              <span className="step-sq" aria-hidden="true" />
             )}
             <b>{props.status ? 'The browser runs in the Atlas app' : 'Connecting to the browser…'}</b>
             <p>{props.status ? (props.status.reason ?? 'Open Atlas on your Mac to see this page.') : ''}</p>
@@ -357,7 +358,7 @@ function needsText(why: string): string {
 }
 
 /** No page yet: the address bar is focused; the pages this agent's browser opened lately, one click away. */
-function EmptyState({ chatId, agent, onOpen, onError }: { chatId: string; agent: string | null; onOpen(url: string): void; onError(e: unknown): void }) {
+function NoPage({ chatId, agent, onOpen, onError }: { chatId: string; agent: string | null; onOpen(url: string): void; onError(e: unknown): void }) {
   const [recent, setRecent] = useState<BrowserTab[]>([]);
   useEffect(() => {
     let live = true;
@@ -372,11 +373,7 @@ function EmptyState({ chatId, agent, onOpen, onError }: { chatId: string; agent:
   const list = recentPages(recent, chatId, agent);
   return (
     <div className="wb-empty">
-      <span className="big">
-        <Icon.globe />
-      </span>
-      <b>No page open</b>
-      <p>Type an address above or click a link in the chat.{agent ? ` ${agent} can open pages here too.` : ''}</p>
+      <EmptyState title="No page open" />
       {!!list.length && (
         <div className="wb-recent">
           {list.map((t) => (

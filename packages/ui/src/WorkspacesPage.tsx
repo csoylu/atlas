@@ -6,7 +6,7 @@ import { Icon } from './ScreenHeader.tsx';
 import { SetRow, SetRows, SetSec } from './SettingsKit.tsx';
 import { ProjDot, useProjects } from './projects.tsx';
 import type { MessageStream } from './useMessages.ts';
-import { Skeleton } from './Kit.tsx';
+import { EmptyState, Skeleton } from './Kit.tsx';
 import { allowPatch, commands, effective, gitAccess, LEVEL_LABEL, LEVEL_STATE, LEVELS, levelPatch, pendingFor, projectPending, refusedFor, workspacePath } from './workspaces.ts';
 
 /** How often refusals and pending background commands are read again while the page is open (neither has an event). */
@@ -151,7 +151,7 @@ function ProjectSection(props: {
           }
           stack
         >
-          <HostList hosts={p.allowedHosts} label={`${p.name}'s allowed hosts`} empty="None yet: agents at Allowed hosts reach no host." onChange={(h) => props.onProject({ allowedHosts: h })} />
+          <HostList hosts={p.allowedHosts} label={`${p.name}'s allowed hosts`} empty="No allowed host yet" onChange={(h) => props.onProject({ allowedHosts: h })} />
         </SetRow>
         <SetRow
           label="git access"
@@ -287,7 +287,7 @@ function MemberRow(props: {
         )}
         {m.network === 'hosts' && (
           <SetRow label="Own allowed hosts" help={`Replace the project's list for @${a}. Empty: ${p.name}'s list.`} stack>
-            <HostList hosts={m.allowedHosts ?? []} label={`@${a}'s hosts`} empty={`None: @${a} uses ${p.name}'s list.`} onChange={(h) => props.onMember({ allowedHosts: h.length ? h : null })} />
+            <HostList hosts={m.allowedHosts ?? []} label={`@${a}'s hosts`} empty={`None: @${a} uses ${p.name}'s list`} onChange={(h) => props.onMember({ allowedHosts: h.length ? h : null })} />
           </SetRow>
         )}
         {props.refused.length > 0 && (
@@ -358,7 +358,7 @@ function HostList(props: { hosts: string[]; label: string; empty: string; onChan
           ))}
         </div>
       ) : (
-        <span className="ws-none">{props.empty}</span>
+        <EmptyState inline title={props.empty} />
       )}
       <form
         className="ws-add"

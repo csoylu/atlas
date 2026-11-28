@@ -19,6 +19,7 @@ import { QuoteLayer } from './QuoteLayer.tsx';
 import { paneResolve, paneSource, type PaneQuoteTab } from './paneQuote.ts';
 import { flashPassage, paneFlash, sameTab, usePaneFlash } from './quoteFlash.ts';
 import { browserTitle } from './browserTab.ts';
+import { EmptyState } from './Kit.tsx';
 
 /** A chat's open tabs, live (agents open and close them with panel_open / panel_close). */
 export function usePanelTabs(chatId: string, stream: MessageStream, onError: (e: unknown) => void): PanelTab[] {
@@ -497,7 +498,7 @@ export function DocPanel(props: {
               onError={onError}
             />
           ) : (
-            <div className="wb-note">This chat has no agent: no workspace to show.</div>
+            <EmptyState inline className="pop-empty" title="This chat has no agent" />
           )}
         </div>
         {commentUi}
@@ -620,7 +621,7 @@ function PaneTabs({ items }: { items: PaneTabItem[] }) {
               </span>
             )}
             {t.dot && <span className="sd-dot" title="Changed since you looked" />}
-            {t.live && <span className="wb-live" title={t.live} aria-label={t.live} />}
+            {t.live && <span className="live-fly" role="img" title={t.live} aria-label={t.live}><i /><i /><i /><i /></span>}
           </button>
           <button className={'sd-tab-x' + (t.unsaved ? ' unsaved' : '')} aria-label={`Close ${t.title}${t.unsaved ? ' (unsaved changes)' : ''}`} title={t.unsaved ? 'Unsaved changes' : undefined} onClick={t.onClose}>
             {t.unsaved ? <span className="wb-udot" aria-hidden="true" /> : '×'}
@@ -669,7 +670,7 @@ function TabPicker({ items }: { items: PaneTabItem[] }) {
               {t.icon}
               <span className="pop-t">{t.title}</span>
               {t.dot && <span className="sd-dot" title="Changed since you looked" />}
-              {t.live && <span className="wb-live" title={t.live} aria-label={t.live} />}
+              {t.live && <span className="live-fly" role="img" title={t.live} aria-label={t.live}><i /><i /><i /><i /></span>}
             </button>
             <button type="button" className={'sd-tab-x' + (t.unsaved ? ' unsaved' : '')} aria-label={`Close ${t.title}${t.unsaved ? ' (unsaved changes)' : ''}`} onClick={t.onClose}>
               {t.unsaved ? <span className="wb-udot" aria-hidden="true" /> : '×'}
@@ -770,7 +771,7 @@ function ArtifactPick(props: { chatId: string; projectId: string; open: PanelTab
         onKeyDown={(e) => e.key === 'Enter' && list[0] && pick(list[0])}
       />
       {!docs && <span className="pop-note">Loading…</span>}
-      {docs && !list.length && <span className="pop-note">{q ? 'No artifact matches.' : 'Every artifact of this project is open.'}</span>}
+      {docs && !list.length && <EmptyState inline className="pop-empty" title={q ? 'No artifact matches' : 'Every artifact of this project is open'} />}
       {list.map((d) => (
         <PopItem key={d.id} icon={<KindIcon kind={d.kind} />} sub={KIND_WORD[d.kind]} onClick={() => pick(d)}>
           {d.title}

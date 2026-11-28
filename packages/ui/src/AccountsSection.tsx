@@ -1,6 +1,8 @@
 import { useCallback, useEffect, useState } from 'react';
 import type { Account, RateLimit } from '@atlas/shared';
 import { api } from './api.ts';
+import { EmptyState } from './Kit.tsx';
+import { Icon } from './ScreenHeader.tsx';
 
 /**
  * Anthropic accounts (engine accounts.ts): API keys tried top to bottom. If one is rate-limited, out of credit or
@@ -114,8 +116,7 @@ export function AccountsSection(props: { keyStore: string | null; onChanged(): v
             </div>
           );
         })}
-        {accounts?.length === 0 && <div className="state-empty">No account yet. Claude models can't run until you add one.</div>}
-        <NewAccount keyStore={props.keyStore} onCreated={() => act('new', async () => {})} onError={onError} />
+        <NewAccount empty={accounts?.length === 0} keyStore={props.keyStore} onCreated={() => act('new', async () => {})} onError={onError} />
       </div>
     </section>
   );
@@ -159,10 +160,21 @@ function Bar({ label, r }: { label: string; r: RateLimit | null }) {
   );
 }
 
-function NewAccount(props: { keyStore: string | null; onCreated(): void; onError(e: unknown): void }) {
+function NewAccount(props: { empty: boolean; keyStore: string | null; onCreated(): void; onError(e: unknown): void }) {
   const [open, setOpen] = useState(false);
   const [label, setLabel] = useState('');
   const [value, setValue] = useState('');
+  if (!open && props.empty)
+    return (
+      <EmptyState
+        title="No Anthropic account yet"
+        action={
+          <button type="button" className="btn" onClick={() => setOpen(true)}>
+            <Icon.plus /> Add an Anthropic account
+          </button>
+        }
+      />
+    );
   if (!open)
     return (
       <button className="model-row add" onClick={() => setOpen(true)}>
