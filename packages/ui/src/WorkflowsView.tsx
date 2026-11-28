@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from 'react';
+import { type MouseEvent, useEffect, useMemo, useState } from 'react';
 import { type Agent, type Card, type CreateWorkflow, type TriggerConfig, type Workflow, type WorkflowNode } from '@atlas/shared';
 import { api } from './api.ts';
 import { AgentFace } from './AgentFace.tsx';
@@ -9,6 +9,7 @@ import { WorkflowCanvas } from './WorkflowCanvas.tsx';
 import { EventFields, RunGets, TriggerIcon, TriggerPick } from './WorkflowStepPanel.tsx';
 import { BROWSER_TZ, RUN_LABEL, blankTrigger, chainOf, describeTrigger, listGroup, loopGuardHit, nodeTitle, refOf, relative, runStrip, runTask, STATE_LABEL, TEMPLATES, type ListGroup, type Template, when } from './workflowView.ts';
 import { EmptyState, Skeleton } from './Kit.tsx';
+import { useMedia } from './Inbox.tsx';
 
 /**
  * The Workflows page (#171, replaces Schedules; mockup /api/files/paris/pages/workflows-165.html): the list of workflows
@@ -229,6 +230,9 @@ function ChainStep({ n, nodes }: { n: WorkflowNode; nodes: WorkflowNode[] }) {
   return <span>{nodeTitle(n, nodes)}</span>;
 }
 
+/** The phone layout of the list (#404): the same width as its stacked rows' media query in styles.css. */
+const PHONE = '(max-width: 640px)';
+
 function WorkflowRow(props: { w: Workflow; cards: Card[]; onOpen(): void; onOpenCard(id: string): void; onError(e: unknown): void }) {
   const { w, onError } = props;
   const [busy, setBusy] = useState(false);
@@ -247,8 +251,65 @@ function WorkflowRow(props: { w: Workflow; cards: Card[]; onOpen(): void; onOpen
   const failure = guard ? null : (w.lastError ?? (run?.state === 'failed' ? run.reason : null));
   const needsYou = open && current?.state === 'waiting' && current.cardId ? current : null;
   const strip = runStrip(w.recentRuns ?? []);
+  const phone = useMedia(PHONE);
+  const openRow = (e: MouseEvent) => !(e.target as HTMLElement).closest('button, label, a, input') && props.onOpen();
+  const toggle = group !== 'past' && (
+    <label className={'switch' + (phone ? ' sw' : '')} title={w.enabled ? 'Turn off' : 'Turn on'}>
+      <input type="checkbox" aria-label={w.enabled ? 'Turn off' : 'Turn on'} checked={w.enabled} onChange={(e) => api.updateWorkflow(w.id, { enabled: e.target.checked }).catch(onError)} />
+      <span />
+    </label>
+  );
+  const alerts = (
+    <>
+      {failure && (
+        <div className="wfl-err">
+          <b>{w.lastError ? 'Could not start.' : 'Last run failed.'}</b> {failure}
+        </div>
+      )}
+      {guard && (
+        <div className="wfl-alert bad" role="status">
+          <span>
+            <b>Stopped by the loop guard:</b> {w.lastError!.replace(/^loop guard: /, '')}
+          </span>
+          <button className="small" onClick={() => api.updateWorkflow(w.id, { enabled: true }).catch(onError)}>
+            Turn on again
+          </button>
+        </div>
+      )}
+      {needsYou && currentNode && (
+        <div className="wfl-alert need" role="status">
+          <span>
+            <b>Needs you:</b> {nodeTitle(currentNode, w.nodes)}
+          </span>
+          <button className="small" onClick={() => props.onOpenCard(needsYou.cardId!)}>
+            Review…
+          </button>
+        </div>
+      )}
+    </>
+  );
+  // #404: on a phone a workflow is two lines, the name then trigger · last run · #ref · project; its steps stay in the canvas.
+  if (phone)
+    return (
+      <div className={'wf-row-cp wf-row ' + group} tabIndex={0} onClick={openRow} onKeyDown={(e) => e.key === 'Enter' && e.target === e.currentTarget && props.onOpen()}>
+        <span className="t" title={w.name}>
+          {w.name}
+        </span>
+        {toggle}
+        <span className="m">
+          <span title={run ? new Date(run.startedAt).toLocaleString() : undefined}>
+            {t ? (t.kind === 'manual' ? 'By hand' : describeTrigger(t)) : 'no trigger'}
+            {' · '}
+            {!run ? 'No runs yet' : open && currentNode ? `${current?.state === 'waiting' ? STATE_LABEL.waiting : RUN_LABEL[run.state]}: ${nodeTitle(currentNode, w.nodes)}` : `${RUN_LABEL[run.state]} ${relative(run.startedAt)}`}
+          </span>
+          {task && <span className="tag mono">{refOf(task, props.cards)}</span>}
+          <ProjTag id={w.projectId} global />
+        </span>
+        {(failure || guard || (needsYou && currentNode)) && <div className="x">{alerts}</div>}
+      </div>
+    );
   return (
-    <div className={'wfl-row wf-row ' + group} tabIndex={0} onClick={(e) => !(e.target as HTMLElement).closest('button, label, a, input') && props.onOpen()} onKeyDown={(e) => e.key === 'Enter' && e.target === e.currentTarget && props.onOpen()}>
+    <div className={'wfl-row wf-row ' + group} tabIndex={0} onClick={openRow} onKeyDown={(e) => e.key === 'Enter' && e.target === e.currentTarget && props.onOpen()}>
       <div className="wfl-main">
         <TriggerIcon kind={t?.kind ?? 'manual'} />
         <div className="wfl-mtext">
@@ -280,31 +341,7 @@ function WorkflowRow(props: { w: Workflow; cards: Card[]; onOpen(): void; onOpen
           </span>
           <ProjTag id={w.projectId} global />
         </div>
-        {failure && (
-          <div className="wfl-err">
-            <b>{w.lastError ? 'Could not start.' : 'Last run failed.'}</b> {failure}
-          </div>
-        )}
-        {guard && (
-          <div className="wfl-alert bad" role="status">
-            <span>
-              <b>Stopped by the loop guard:</b> {w.lastError!.replace(/^loop guard: /, '')}
-            </span>
-            <button className="small" onClick={() => api.updateWorkflow(w.id, { enabled: true }).catch(onError)}>
-              Turn on again
-            </button>
-          </div>
-        )}
-        {needsYou && currentNode && (
-          <div className="wfl-alert need" role="status">
-            <span>
-              <b>Needs you:</b> {nodeTitle(currentNode, w.nodes)}
-            </span>
-            <button className="small" onClick={() => props.onOpenCard(needsYou.cardId!)}>
-              Review…
-            </button>
-          </div>
-        )}
+        {alerts}
         </div>
       </div>
       <div className="wfl-runs">
@@ -382,10 +419,7 @@ function WorkflowRow(props: { w: Workflow; cards: Card[]; onOpen(): void; onOpen
             >
               {PLAY}
             </button>
-            <label className="switch" title={w.enabled ? 'Turn off' : 'Turn on'}>
-              <input type="checkbox" aria-label={w.enabled ? 'Turn off' : 'Turn on'} checked={w.enabled} onChange={(e) => api.updateWorkflow(w.id, { enabled: e.target.checked }).catch(onError)} />
-              <span />
-            </label>
+            {toggle}
           </>
         )}
       </div>
