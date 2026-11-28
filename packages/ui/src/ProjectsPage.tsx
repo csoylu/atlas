@@ -29,7 +29,7 @@ export function ProjectsPage(props: { rest: string; agents: Agent[]; cards: Card
       <HeaderActions>
         <span className="head-sp" />
         {!creating && (
-          <button type="button" className="btn primary small" onClick={() => setCreating(true)}>
+          <button type="button" className="btn primary" onClick={() => setCreating(true)}>
             <Icon.plus />
             <span className="btn-text">New project</span>
           </button>
@@ -50,13 +50,8 @@ export function ProjectsPage(props: { rest: string; agents: Agent[]; cards: Card
         {active.map((p) => (
           <ProjectRow key={p.id} project={p} {...props} />
         ))}
-        {creating ? (
-          <NewProject agents={props.agents} onDone={() => setCreating(false)} onError={props.onError} />
-        ) : (
-          <button type="button" className="model-row add" onClick={() => setCreating(true)}>
-            + New project
-          </button>
-        )}
+        {/* « New project » is the header's primary button only (#402): no second one under the list. */}
+        {creating && <NewProject agents={props.agents} onDone={() => setCreating(false)} onError={props.onError} />}
       </div>
       {archived.length > 0 && (
         <>
@@ -113,7 +108,7 @@ function ProjectRow({ project: p, cards, workflows, onError }: { project: Projec
         <div className="model-title">
           <ProjDot hue={p.colour} />
           <b>{p.name}</b>
-          {p.repo && <span className="pj-repo">{p.repo}</span>}
+          {p.repo && <span className="tag mono pj-repo-tag">{p.repo}</span>}
           {archived ? (
             <span className="badge">Archived</span>
           ) : failed.length ? (
@@ -136,8 +131,8 @@ function ProjectRow({ project: p, cards, workflows, onError }: { project: Projec
             <span>no workspace yet</span>
           ) : (
             <>
-              <span>{plural(open, 'open task')}</span>
-              <span>{wfs ? plural(wfs, 'workflow') : 'no workflow yet'}</span>
+              <span className="tag">{plural(open, 'open task')}</span>
+              <span className="tag">{wfs ? plural(wfs, 'workflow') : 'no workflow yet'}</span>
             </>
           )}
         </div>
@@ -148,7 +143,7 @@ function ProjectRow({ project: p, cards, workflows, onError }: { project: Projec
             Restore
           </button>
         )}
-        <button type="button" className="btn ghost" onClick={() => (location.hash = '#/settings/projects/' + encodeURIComponent(p.id))}>
+        <button type="button" className="btn small" onClick={() => (location.hash = '#/settings/projects/' + encodeURIComponent(p.id))}>
           {archived ? 'Open' : 'Edit'}
         </button>
       </div>

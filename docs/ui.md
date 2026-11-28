@@ -16,6 +16,15 @@ Same scale as OpenCode (packages/ui/src/styles/theme.css). Enforced by `packages
   (`--faint` is the floor). Placeholders and disabled text may be lower.
 - **@font-face** only through the fontsource imports in `main.tsx`.
 
+## Tags, controls, spacing (#402)
+- **Tag** (`.tag`, also `.badge` and `.proj-tag`): anything only read (project, #ref, count, type, state) is 22 px,
+  `--chip` fill, no border; `.tag.mono` for a repo or a ref. `.st-chip` and `.badge.ok|bad|warn` keep their state colours.
+- **Control**: anything clicked is bordered, 28 px in a bar or a row (`.btn`, `.btn.small`, `.tabbtn`), 32 px in a form's
+  button row. « New X » is one `.btn.primary` in the screen's header, never a second « + New » tile under a list.
+- **Radius**: `var(--radius-*)` (all 0), never a literal; only the app icon tile is rounded.
+- **Spacing**: `--s1…--s4` (4/8/12/16 px). Bars, rows and heads start their text 16 px in. Move a rule to the tokens when
+  you touch it, file by file.
+
 ## Responsive check (ui-check)
 **Responsive check** (`scripts/ui-check/check.mjs`, macOS: needs Xcode's `swiftc` for the OCR). Opens the built UI
 (`packages/ui/dist`: `npm run build` first) on its own throwaway engine, in headless Chromium, at 1440 / 1100 / 900 / 390 px (390 = phone, touch) on every main screen: chat with
