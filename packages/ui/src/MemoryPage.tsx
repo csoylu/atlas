@@ -190,26 +190,24 @@ export function MemoryPage(props: {
       {!list ? (
         <Skeleton rows={5} />
       ) : !shown.length ? (
-        <EmptyState className="set-list">
-          {list.length || query ? (
-            <p>
-              Nothing matches.{' '}
-              {(query || view.kind !== 'all' || view.status !== 'live' || view.scope) && (
-                <button
-                  className="sd-link"
-                  onClick={() => {
-                    setQ('');
-                    save(DEFAULT_VIEW);
-                  }}
-                >
-                  Clear filters
-                </button>
-              )}
-            </p>
-          ) : (
-            <p>No memories yet. Agents save rules, preferences, facts and task notes with memory_add; they show up here.</p>
-          )}
-        </EmptyState>
+        <EmptyState
+          title={list.length || query ? 'Nothing matches' : 'No memories yet'}
+          action={
+            (list.length > 0 || !!query) &&
+            (query || view.kind !== 'all' || view.status !== 'live' || view.scope) && (
+              <button
+                type="button"
+                className="btn"
+                onClick={() => {
+                  setQ('');
+                  save(DEFAULT_VIEW);
+                }}
+              >
+                Clear filters
+              </button>
+            )
+          }
+        />
       ) : (
         <div className="set-list meml" ref={listRef}>
           {shown.map((m) => (

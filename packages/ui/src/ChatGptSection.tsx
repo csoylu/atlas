@@ -2,6 +2,7 @@ import { useState } from 'react';
 import { CHATGPT_USAGE_URL, type ChatGptStatus } from '@atlas/shared';
 import { api } from './api.ts';
 import { PlanAccountList } from './PlanAccounts.tsx';
+import { EmptyState } from './Kit.tsx';
 
 /**
  * The user's ChatGPT plan (engine chatgpt.ts, OpenAI's « Sign in with ChatGPT » for open-source, locally hosted apps):
@@ -59,7 +60,7 @@ export function ChatGptSection(props: { status: ChatGptStatus | null; onChanged(
         </p>
       </header>
       {!s ? null : !s.available ? (
-        <div className="state-empty">{s.unavailableReason}</div>
+        <EmptyState title={s.unavailableReason} />
       ) : s.accounts.length === 0 ? (
         <div className="model-row plan-card">
           <div className="model-main">

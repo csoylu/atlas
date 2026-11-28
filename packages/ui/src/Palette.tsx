@@ -9,6 +9,7 @@ import { moveSel, rank, sectionOrder, type PaletteItem } from './palette.ts';
 import { SETTINGS_PAGES } from './settingsPages.ts';
 import { SHORTCUTS } from './keys.ts';
 import { ProjDot, ProjTag, useProjectFilter, useProjects } from './projects.tsx';
+import { EmptyState } from './Kit.tsx';
 
 /** A palette row: what it shows and what ↵ does. */
 interface Row extends PaletteItem {
@@ -190,7 +191,7 @@ export function Palette(props: {
           <span className="pal-ctx" title="Where the palette was opened">{ctx.label}</span>
         </div>
         <div className="pal-list" id="pal-list" role="listbox" ref={list}>
-          {!flat.length && <p className="state-empty inline pal-empty">Nothing matches « {query} ».</p>}
+          {!flat.length && <EmptyState inline className="pal-empty" title={`Nothing matches « ${query} »`} />}
           {groups.map((g) => (
             <div key={g.section} role="group" aria-label={g.section}>
               <div className="pal-sec">{g.section}</div>

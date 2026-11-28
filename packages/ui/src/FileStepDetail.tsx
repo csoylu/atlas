@@ -5,6 +5,7 @@ import { ansi, bgLog, bgOutput, diffCount, diffLines, editDiff, fileList, grepGr
 import { duration, splitPath } from './toolRows.ts';
 import { HiddenNote, SecretText } from './SecretMarks.tsx';
 import { hiddenNames } from './secretsView.ts';
+import { EmptyState } from './Kit.tsx';
 
 /**
  * The expanded view of a file or shell tool (#63, mockup pages/chat-activity.html §4): a code view with line numbers,
@@ -20,7 +21,7 @@ export function fileDetail(step: Step, timing?: ToolCallTiming): ReactNode | nul
     case 'read_file': {
       if (out === null) return null;
       const { lines, note } = parseNumbered(out);
-      if (!lines.length) return <p className="state-empty inline">{out.trim() === '(empty file)' ? 'Empty file.' : out}</p>;
+      if (!lines.length) return (out.trim() === '(empty file)' ? <EmptyState inline title="Empty file" /> : <p className="step-note">{out}</p>);
       return (
         <View head={<FileHead path={path} label={`lines ${lines[0]!.n}–${lines.at(-1)!.n}`} />} copy={lines.map((l) => l.text).join('\n')} note={note}>
           <Code lines={lines} />
@@ -35,7 +36,7 @@ export function fileDetail(step: Step, timing?: ToolCallTiming): ReactNode | nul
         const { add, del } = diffCount(d);
         return (
           <View head={<FileHead path={path} label={<Delta add={add} del={del} />} />} copy={content}>
-            {add + del ? <Diff items={hunks(d)} /> : <p className="state-empty inline fv-empty">Same text as before.</p>}
+            {add + del ? <Diff items={hunks(d)} /> : <EmptyState inline className="fv-empty" title="Same text as before" />}
           </View>
         );
       }
@@ -60,7 +61,7 @@ export function fileDetail(step: Step, timing?: ToolCallTiming): ReactNode | nul
     case 'grep': {
       if (out === null) return null;
       const { files, note } = grepGroups(out, o.mode);
-      if (!files.length) return <p className="state-empty inline">No matches.</p>;
+      if (!files.length) return <EmptyState inline title="No matches" />;
       const pattern = str(o.pattern);
       if (o.mode === 'files') return <Files paths={files.map((f) => f.path)} note={note} />;
       return (
@@ -90,7 +91,7 @@ export function fileDetail(step: Step, timing?: ToolCallTiming): ReactNode | nul
     case 'list_files': {
       if (out === null) return null;
       const { paths, note } = fileList(out);
-      if (!paths.length) return <p className="state-empty inline">{step.name === 'glob' ? 'No files.' : 'Empty folder.'}</p>;
+      if (!paths.length) return <EmptyState inline title={step.name === 'glob' ? 'No files' : 'Empty folder'} />;
       return <Files paths={paths} note={note} />;
     }
     case 'shell': {
@@ -130,7 +131,7 @@ export function fileDetail(step: Step, timing?: ToolCallTiming): ReactNode | nul
       return <Terminal text={r.text} head={r.head} note={r.note} />;
     }
     case 'shell_kill':
-      return out === null ? null : <p className="state-empty inline">{out}</p>;
+      return out === null ? null : <p className="step-note">{out}</p>;
   }
   return null;
 }

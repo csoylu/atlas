@@ -18,7 +18,7 @@ import { PRIORITIES, priorityHint, priorityName } from './priority.ts';
 import { CardDocs, TaskDocReader, type DocToRead } from './DocPanel.tsx';
 import { RewindConfirm, RewindNote, useRewind } from './Rewind.tsx';
 import { StatusIcon, STATUS_LABEL } from './StatusIcon.tsx';
-import { PriorityMark } from './Kit.tsx';
+import { EmptyState, PriorityMark } from './Kit.tsx';
 import { ProjTag } from './projects.tsx';
 import { TaskWorkflows } from './WorkflowRunParts.tsx';
 
@@ -312,7 +312,7 @@ export const CardView = forwardRef<HTMLTextAreaElement, CardViewProps & { lead?:
               onError={onError}
               askAt={nowRef}
               comments={quotes}
-              empty={card.assignee ? `Write to @${card.assignee}: it works here and answers live.` : 'Assign an agent, then write to it here.'}
+              empty={card.assignee ? `Write to @${card.assignee}` : 'No agent assigned yet'}
             />
           </div>
         </div>

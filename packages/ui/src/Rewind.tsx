@@ -164,7 +164,7 @@ export function RewindNote({ rw }: { rw: Rewind }) {
   if (n.kind === 'busy')
     return (
       <div className="rewind-note" role="status">
-        <span className="pulse" /> {n.text}
+        <span className="step-sq" aria-hidden="true" /> {n.text}
       </div>
     );
   if (n.kind === 'undone')

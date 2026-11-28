@@ -29,7 +29,7 @@ describe('streaming thinking (#80)', () => {
   it('a thinking-only draft shows the live « Thinking » row, no text yet', () => {
     const html = render([user], [{ kind: 'thinking', text: 'Let me see.', at: AT }]);
     expect(html).toContain('Thinking');
-    expect(html).toContain('chat-row-spin');
+    expect(html).toContain('step-sq');
     expect(html).not.toContain('Hi there.');
   });
 

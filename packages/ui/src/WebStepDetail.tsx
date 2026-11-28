@@ -1,6 +1,7 @@
 import { useState, type ReactNode } from 'react';
 import type { Step } from './chatTurn.ts';
 import { domainLetter, domainOf, failedIcons, faviconSrc, fetchedPage, searchHits, type SearchHit } from './webRows.ts';
+import { EmptyState } from './Kit.tsx';
 
 /** Results shown before « Show all N ». */
 const FIRST = 5;
@@ -17,7 +18,7 @@ export function webDetail(step: Step): ReactNode | null | undefined {
   const out = step.result.content;
   if (step.name === 'web_search') {
     const hits = searchHits(out);
-    return hits.length ? <SearchResults hits={hits} /> : <p className="state-empty inline">No results.</p>;
+    return hits.length ? <SearchResults hits={hits} /> : <EmptyState inline title="No results" />;
   }
   const input = (step.input && typeof step.input === 'object' ? step.input : {}) as { url?: unknown };
   const page = fetchedPage(out, typeof input.url === 'string' ? input.url : '');

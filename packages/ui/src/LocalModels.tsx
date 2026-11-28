@@ -2,7 +2,7 @@ import { useCallback, useEffect, useRef, useState } from 'react';
 import type { Agent, LocalModel, LocalPull, LocalStatus } from '@atlas/shared';
 import { api } from './api.ts';
 import type { MessageStream } from './useMessages.ts';
-import { Skeleton } from './Kit.tsx';
+import { EmptyState, Skeleton } from './Kit.tsx';
 
 /**
  * Settings → Local: the engine runs Ollama on its own machine (engine/src/local.ts). This page asks it to install, start
@@ -237,9 +237,9 @@ function Installed(props: {
   act(key: string, f: () => Promise<unknown>): void;
 }) {
   const { models, busy, act } = props;
-  if (!props.running && !models?.length) return <div className="state-empty">Start the server to see the models on this machine.</div>;
+  if (!props.running && !models?.length) return <EmptyState title="Start the server to see its models" />;
   if (!models) return <Skeleton />;
-  if (!models.length) return <div className="state-empty">No models yet. Download one below.</div>;
+  if (!models.length) return <EmptyState title="No model yet" />;
   return (
     <div className="model-list">
       {models.map((m) => {

@@ -3,6 +3,7 @@ import { CLAUDE_PLAN_SETTINGS, type ClaudePlanSetting, type ClaudePlanStatus } f
 import { api } from './api.ts';
 import { PlanAccountList } from './PlanAccounts.tsx';
 import type { MessageStream } from './useMessages.ts';
+import { EmptyState } from './Kit.tsx';
 
 /** Claude subscription sign-in, accounts and limit status. Its models are added on Settings → Model list (#101). */
 export function ClaudePlanSection(props: { stream: MessageStream; keyStore: string | null; onChanged(): void; onError(e: unknown): void }) {
@@ -58,7 +59,7 @@ export function ClaudePlanSection(props: { stream: MessageStream; keyStore: stri
         </p>
       </header>
       {!s ? null : !s.available ? (
-        <div className="state-empty">{s.unavailableReason}</div>
+        <EmptyState title={s.unavailableReason} />
       ) : (
         <div className="model-list">
           {showSettings ? (

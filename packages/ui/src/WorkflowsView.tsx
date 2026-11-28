@@ -8,6 +8,7 @@ import type { MessageStream } from './useMessages.ts';
 import { WorkflowCanvas } from './WorkflowCanvas.tsx';
 import { EventFields, RunGets, TriggerIcon, TriggerPick } from './WorkflowStepPanel.tsx';
 import { BROWSER_TZ, RUN_LABEL, blankTrigger, chainOf, describeTrigger, listGroup, loopGuardHit, nodeTitle, refOf, relative, runStrip, runTask, STATE_LABEL, TEMPLATES, type ListGroup, type Template, when } from './workflowView.ts';
+import { EmptyState, Skeleton } from './Kit.tsx';
 
 /**
  * The Workflows page (#171, replaces Schedules; mockup /api/files/paris/pages/workflows-165.html): the list of workflows
@@ -33,7 +34,23 @@ export function WorkflowsView(props: {
   const open = target ? workflows.find((w) => w.id === target) : undefined;
 
   if (target) {
-    if (!open) return <div className="agents-view"><div className="state-empty">{workflows.length ? 'This workflow does not exist (deleted?).' : 'Loading…'} <a href="#/workflows">All workflows</a></div></div>;
+    if (!open)
+      return (
+        <div className="agents-view">
+          {workflows.length ? (
+            <EmptyState
+              title="This workflow is not there any more"
+              action={
+                <a className="btn" href="#/workflows">
+                  All workflows
+                </a>
+              }
+            />
+          ) : (
+            <Skeleton rows={3} />
+          )}
+        </div>
+      );
     const [mode, runId] = props.rest.split('/');
     return (
       <WorkflowCanvas
@@ -115,7 +132,7 @@ function WorkflowList(props: {
       <div className="wfl-inner">
         {props.creating && <NewWorkflow project={projectForNew(pf, pinfo)?.id ?? null} agents={props.agents} onCancel={() => props.setCreating(false)} onCreated={props.onCreated} onError={props.onError} />}
         {!props.workflows.length && !props.creating && <EmptyWorkflows agents={props.agents} onCreated={props.onCreated} onScratch={() => props.setCreating(true)} onError={props.onError} />}
-        {props.workflows.length > 0 && !shown.length && !props.creating && <div className="state-empty">No workflow in this project yet.</div>}
+        {props.workflows.length > 0 && !shown.length && !props.creating && <EmptyState title="No workflow in this project yet" />}
         {groups.on.length > 0 && (
           <section className="wfl-group">
             <div className="wfl-ghead">
@@ -291,11 +308,14 @@ function WorkflowRow(props: { w: Workflow; cards: Card[]; onOpen(): void; onOpen
         </div>
       </div>
       <div className="wfl-runs">
-        <div className="wfl-strip" role="img" aria-label={`Last ${w.recentRuns?.length ?? 0} runs`}>
-          {strip.map((s, i) => (
-            <i key={i} className={s ?? ''} title={s ? RUN_LABEL[s] : undefined} />
-          ))}
-        </div>
+        {/* #403: the run bars stay hidden until the first run. */}
+        {!!w.recentRuns?.length && (
+          <div className="wfl-strip" role="img" aria-label={`Last ${w.recentRuns.length} runs`}>
+            {strip.map((s, i) => (
+              <i key={i} className={s ?? ''} title={s ? RUN_LABEL[s] : undefined} />
+            ))}
+          </div>
+        )}
         {run ? (
           <div className="wfl-last">
             <span className={'st ' + run.state}>{open && current?.state === 'waiting' ? STATE_LABEL.waiting : RUN_LABEL[run.state]}</span>
@@ -388,10 +408,14 @@ function EmptyWorkflows(props: { agents: Agent[]; onCreated(w: Workflow): void; 
   };
   return (
     <div className="wfl-empty">
-      <div>
-        <h2>Nothing runs on its own yet</h2>
-        <p>A workflow starts at set times or when you click ▶, gives a task to an agent, and can stop for your OK before the next step. Start from an example and change it, or from scratch.</p>
-      </div>
+      <EmptyState
+        title="Nothing runs on its own yet"
+        action={
+          <button type="button" className="btn" onClick={props.onScratch}>
+            Start from scratch
+          </button>
+        }
+      />
       <div className="wfl-tpls">
         {TEMPLATES.map((tpl) => {
           const g = tpl.build(ids);
@@ -415,12 +439,6 @@ function EmptyWorkflows(props: { agents: Agent[]; onCreated(w: Workflow): void; 
             </button>
           );
         })}
-      </div>
-      <div className="wfl-empty-foot">
-        <button className="btn" onClick={props.onScratch}>
-          Start from scratch
-        </button>
-        <span>Runs missed while Atlas was off happen once when it starts.</span>
       </div>
     </div>
   );

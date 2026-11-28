@@ -11,6 +11,7 @@ import { shortAgo } from './inboxView.ts';
 import { ArtifactPreview, ArtifactViewer, DeleteArtifactDialog, KindIcon } from './Viewer.tsx';
 import { folderName, useFolders } from './artifacts.ts';
 import { clearFilter, filterCount, folderCounts, folderLabel, groupDocs, inFolder, isOldCanvases, LIB_TABS, libraryHref, matches, orderFolders, parseLibView, recentDocs, TYPE_LABEL, type LibFolder, type LibView } from './library.ts';
+import { EmptyState } from './Kit.tsx';
 
 /** The open document as the screen header shows it: « Library › folder › title » and its project tag (#270). */
 export interface LibraryDocHead {
@@ -175,11 +176,15 @@ export function Library(props: {
     if (!docs) return <div className="library loading" />;
     if (!open)
       return (
-        <div className="library state-empty">
-          <p>This artifact is not in the Library any more.</p>
-          <a className="btn" href="#/library">
-            Back to the Library
-          </a>
+        <div className="library">
+          <EmptyState
+            title="This artifact is not in the Library any more"
+            action={
+              <a className="btn" href="#/library">
+                Back to the Library
+              </a>
+            }
+          />
         </div>
       );
     const c = card(open.cardId);
@@ -398,29 +403,31 @@ export function Library(props: {
     body = !results ? null : results.length ? (
       group('results', 'Results', results.map((h) => row(h.doc, h.snippet)))
     ) : (
-      <div className="state-empty">
-        <p>Nothing matches “{query}” in titles or content, in any folder.</p>
-        <button type="button" className="btn" onClick={() => setQ('')}>
-          Clear the search
-        </button>
-      </div>
+      <EmptyState
+        title={`Nothing matches “${query}”`}
+        action={
+          <button type="button" className="btn" onClick={() => setQ('')}>
+            Clear the search
+          </button>
+        }
+      />
     );
   } else if (!inView.length) {
     body = (
-      <div className="state-empty">
-        {!docs.length ? (
-          <p>No artifacts yet. Agents make them with artifact_create (docs, pages, diagrams, links); they show up here.</p>
-        ) : n > 0 && all.length === 0 ? (
-          <p>
-            Nothing matches the filter.{' '}
-            <button className="sd-link" onClick={() => save({ ...view, filter: clearFilter() })}>
+      !docs.length ? (
+        <EmptyState title="No artifacts yet" />
+      ) : n > 0 && all.length === 0 ? (
+        <EmptyState
+          title="Nothing matches the filter"
+          action={
+            <button type="button" className="btn" onClick={() => save({ ...view, filter: clearFilter() })}>
               Clear filters
             </button>
-          </p>
-        ) : (
-          <p>{folder === 'unfiled' ? 'Nothing is unfiled.' : folder === 'all' ? 'Nothing of this type.' : 'This folder is empty. Move an artifact here from its ⋯ menu.'}</p>
-        )}
-      </div>
+          }
+        />
+      ) : (
+        <EmptyState title={folder === 'unfiled' ? 'Nothing is unfiled' : folder === 'all' ? 'Nothing of this type' : 'This folder is empty'} />
+      )
     );
   } else {
     const recent = recentDocs(inView);

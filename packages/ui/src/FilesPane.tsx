@@ -8,6 +8,7 @@ import type { PanelMode } from './docPanel.ts';
 import type { CodeEditorHandle } from './CodeEditor.tsx';
 import { relAgo } from './library.ts';
 import type { PaneComment } from './CommentLayer.tsx';
+import { EmptyState } from './Kit.tsx';
 
 // CodeMirror loads with the first file opened, in its own chunk: the app's main bundle stays as it was.
 const CodeEditor = lazy(() => import('./CodeEditor.tsx'));
@@ -621,7 +622,7 @@ function FileTree(props: {
   const rows = (dir: string): ReactNode => {
     const l = lists.get(dir);
     if (!l) return dir === '' ? <div className="wb-note">Loading…</div> : null;
-    if (dir === '' && !l.entries.length) return <div className="wb-note">The workspace is empty.</div>;
+    if (dir === '' && !l.entries.length) return <EmptyState inline className="pop-empty" title="The workspace is empty" />;
     return l.entries.map(row);
   };
   // A plain function, not a component: a component defined here would remount (and lose focus) on every render.
@@ -685,7 +686,7 @@ function FileTree(props: {
       <div className="wb-rows">
         {found ? (
           <>
-            {!list.length && <div className="wb-note">No file matches.</div>}
+            {!list.length && <EmptyState inline className="pop-empty" title="No file matches" />}
             {list.map((p, i) => {
               const { dir, name } = splitPath(p);
               return (

@@ -3,6 +3,7 @@ import { cardRef, type Card, type RunWorkflow, type TaskWorkflow, type Workflow,
 import { api } from './api.ts';
 import type { MessageStream } from './useMessages.ts';
 import { chipClass, prLabel, refOf, RUN_LABEL, startedBy, STATE_LABEL } from './workflowView.ts';
+import { EmptyState } from './Kit.tsx';
 
 /**
  * Workflows v2 stage 1 (#259, mockup doc_bf5e40e1 « Workflows v2 »): what started a run, « What the run knows », the
@@ -161,7 +162,7 @@ export function RunOnPicker(props: { kind: 'task' | 'pr'; w: Workflow; cards: Ca
             <span className="tx">{x.text}</span>
           </button>
         ))}
-        {!items.length && <p className="wf-sum">{kind === 'task' ? 'No task matches.' : 'No open pull request linked to a task here.'}</p>}
+        {!items.length && <EmptyState inline title={kind === 'task' ? 'No task matches' : 'No open pull request linked to a task here'} />}
       </div>
       <button className="btn ghost small" onClick={() => props.onRun({})}>
         Run without a {kind === 'task' ? 'task' : 'PR'}

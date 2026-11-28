@@ -63,7 +63,7 @@ export function ChatRow(props: {
           }
         }}
       >
-        <span className="chat-row-icon">{props.running ? <span className="chat-row-spin" aria-label="running" /> : props.icon}</span>
+        <span className="chat-row-icon">{props.running ? <span className="step-sq" role="img" aria-label="running" /> : props.icon}</span>
         <span className="chat-row-verb">{props.verb}</span>
         {props.object !== undefined && props.object !== '' && <span className={'chat-row-obj' + (props.mono ? ' mono' : '')}>{props.object}</span>}
         <span className="chat-row-rest">{props.rest}</span>

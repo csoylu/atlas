@@ -34,15 +34,13 @@ export function StatusChip({ status, label, title }: { status: IconStatus; label
 }
 
 /**
- * An empty state says what will appear here and why. `title` is the short line (« Nothing needs you »), the children
- * the explanation; `action` a button under it.
+ * An empty state (#403): one shape everywhere, a dashed frame with a title and at most one action, no description line
+ * (Master: « fewer text is better »). `inline`: the same frame, compact, inside a tool's output or a menu.
  */
-export function EmptyState(props: { icon?: ReactNode; title?: ReactNode; children?: ReactNode; action?: ReactNode; className?: string }) {
+export function EmptyState(props: { title: ReactNode; action?: ReactNode; inline?: boolean; className?: string }) {
   return (
-    <div className={'state-empty' + (props.className ? ' ' + props.className : '')}>
-      {props.icon}
-      {props.title && <b>{props.title}</b>}
-      {props.children && <div className="state-text">{props.children}</div>}
+    <div className={'state-empty' + (props.inline ? ' inline' : '') + (props.className ? ' ' + props.className : '')}>
+      <b>{props.title}</b>
       {props.action}
     </div>
   );

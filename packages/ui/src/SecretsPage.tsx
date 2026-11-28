@@ -6,8 +6,8 @@ import { withCard } from './cardModal.ts';
 import { agentSecrets, agoText, cleanName, deleteText, grantees, modelKeyRow, storeLine, whenText } from './secretsView.ts';
 import type { MessageStream } from './useMessages.ts';
 import { effectiveFilter, inFilter, ProjectFilterButton, ProjTag, projectForNew, useProjectFilter, useProjects } from './projects.tsx';
-import { Skeleton } from './Kit.tsx';
-import { HeaderActions } from './ScreenHeader.tsx';
+import { EmptyState, Skeleton } from './Kit.tsx';
+import { HeaderActions, Icon } from './ScreenHeader.tsx';
 
 /**
  * Settings → Secrets (#209, mockup #205): agent secrets (API keys, tokens, RPC URLs agents use as $NAME in shell
@@ -77,9 +77,16 @@ export function SecretsPage(props: { agents: Agent[]; cards: Card[]; models: Mod
         {locked && <LockedPanel status={status} keys={keys.filter((k) => k.hasValue).map((k) => modelKeyRow(k, accounts, props.models).title)} onError={onError} />}
         <div className="model-list">
           {!mine.length && !adding && (
-            <div className="state-empty">
-              No agent secret yet. {writable ? 'Add one here, or an' : 'An'} agent saves one with its <span className="mono">secret_set</span> tool and it shows up here.
-            </div>
+            <EmptyState
+              title="No agent secret yet"
+              action={
+                writable && (
+                  <button type="button" className="btn" onClick={() => (setOpen(null), setAdding(true))}>
+                    <Icon.plus /> Add a secret
+                  </button>
+                )
+              }
+            />
           )}
           {adding && <SecretForm project={projectForNew(pf, pinfo)?.id ?? null} agents={props.agents} store={list.store} onCancel={() => setAdding(false)} onSaved={() => (setAdding(false), reload())} onError={onError} />}
           {mine.map((s) =>
@@ -158,7 +165,7 @@ export function SecretsPage(props: { agents: Agent[]; cards: Card[]; models: Mod
               </div>
             ),
           )}
-          {writable && !adding && (
+          {writable && !adding && mine.length > 0 && (
             <button className="model-row add" onClick={() => (setOpen(null), setAdding(true))}>
               + Add a secret
             </button>
@@ -175,9 +182,7 @@ export function SecretsPage(props: { agents: Agent[]; cards: Card[]; models: Mod
         </header>
         <div className="model-list">
           {!keys.length && (
-            <div className="state-empty">
-              {status.kind === 'env' ? "This engine reads model keys from its environment: they aren't listed here." : 'No model key stored yet. Add one in API keys or on a model in Model list.'}
-            </div>
+            <EmptyState title={status.kind === 'env' ? 'Model keys come from the engine’s environment' : 'No model key stored yet'} />
           )}
           {keys.map((k) => {
             const row = modelKeyRow(k, accounts, props.models);

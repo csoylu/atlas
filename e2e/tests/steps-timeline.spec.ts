@@ -35,7 +35,7 @@ async function measure(page: Page) {
     const icons = rows.map((row) => {
       const ic = row.querySelector(':scope > .chat-row-line > .chat-row-icon')!;
       const r = ic.getBoundingClientRect();
-      const what = ic.querySelector('svg')?.getAttribute('class') ?? (ic.querySelector('.chat-row-spin') ? 'spinner' : '?');
+      const what = ic.querySelector('svg')?.getAttribute('class') ?? (ic.querySelector('.step-sq') ? 'spinner' : '?');
       return { what, box: { left: r.left, right: r.right, top: r.top, bottom: r.bottom } as Box };
     });
     return { segs, icons };
@@ -99,7 +99,7 @@ test.describe('steps timeline', () => {
             if (!(await group.evaluate((e) => e.classList.contains('open')))) await group.locator('> .chat-row-line').click();
             await expect(page.locator('.steps-tl .chat-row.nested')).toHaveCount(6, { timeout: 2000 });
           }).toPass({ timeout: 15_000 });
-          await expect(page.locator('.steps-tl .chat-row-icon > .chat-row-spin').first()).toBeVisible();
+          await expect(page.locator('.steps-tl .chat-row-icon > .step-sq').first()).toBeVisible();
           await page.waitForTimeout(300); // rows settle (expand transitions)
           check(await measure(page), `${theme} ${width} running`);
           await page.locator('.chat-row.steps').first().screenshot({ path: test.info().outputPath('running.png') }); // zoomed (x3), for the report

@@ -43,6 +43,7 @@ import { parseSlash, slashKey, slashMatches, type SlashName } from './slashComma
 import { SystemRow } from './SystemRow.tsx';
 import { focusSeqFor, groupForSeq } from './memoryView.ts';
 import { NO_DRAFT, addDelta, draftMarkdown, rehypeCaret, useThrottledDraft, type Draft } from './streamDraft.ts';
+import { EmptyState } from './Kit.tsx';
 
 /** The message `?msg=<seq>` in the URL asks this conversation to show (a memory's source link), followed live. */
 function useFocusSeq(cardId: string): number | null {
@@ -234,7 +235,7 @@ export function CardPanel(props: {
           newAfter={props.newAfter}
           comments={props.comments}
           onOpenPane={props.onOpenPane}
-          empty={`Ask @${card.assignee} anything. For work to track, it creates tasks.`}
+          empty={`Ask @${card.assignee} anything`}
         />
       </div>
       <RewindNote rw={rw} />
@@ -463,8 +464,8 @@ export function Activity(props: {
   return (
     <>
       <span ref={listBox} hidden />
-      {messages.length === 0 && !asking && <p className="state-empty center">{props.empty}</p>}
-      {fold > 0 && shown.length === 0 && !draft && !asking && <p className="state-empty center">Context cleared. The agent starts fresh from your next message.</p>}
+      {messages.length === 0 && !asking && <EmptyState className="center" title={props.empty} />}
+      {fold > 0 && shown.length === 0 && !draft && !asking && <EmptyState className="center" title="Context cleared" />}
       {placed.before.map(sysRow)}
       {groups.map((ms, i) => {
         const m = ms[0]!;
@@ -680,7 +681,7 @@ export function RunLine({ run, onStop, stop = true }: { run: Run | null; onStop(
   if (run?.status !== 'running') return null;
   return (
     <div className="run-status running">
-      <span className="pulse" /> @{run.agentId} is working…
+      <span className="live-fly" aria-hidden="true"><i /><i /><i /><i /></span> @{run.agentId} is working…
       {stop && (
         <button className="btn ghost" onClick={onStop}>
           Stop
@@ -830,7 +831,7 @@ export const CardComposer = forwardRef<
         )}
         {slashBusy && (
           <div className="slash-busy" role="status">
-            <span className="pulse" /> {slashBusy}
+            <span className="step-sq" aria-hidden="true" /> {slashBusy}
           </div>
         )}
         <AttachmentStrip a={att} />

@@ -13,6 +13,7 @@ import { useBrowserStatus, useDriving } from './BrowserPane.tsx';
 import { paneFlash } from './quoteFlash.ts';
 import type { OpenPane } from './useQuoteSurface.ts';
 import { linkTarget } from '@atlas/shared';
+import { EmptyState } from './Kit.tsx';
 
 export const LAST_AGENT = 'atlas.chat.agent';
 /** Window event: show / hide the documents panel of the chat on screen (⌘⇧\, the palette). */
@@ -46,7 +47,7 @@ export function ChatView(props: {
 }) {
   const { agents, onError } = props;
   const chat = props.chats.find((c) => c.id === props.target);
-  if (!agents.length) return <div className="state-empty chat-empty">No agents yet. Add one on the Agents page.</div>;
+  if (!agents.length) return <EmptyState className="chat-empty" title="No agent yet" action={<a className="btn" href="#/settings/agents">Add an agent</a>} />;
   if (chat) return <ChatWithPanel key={chat.id} {...props} chat={chat} />;
   if (props.target?.startsWith('c_') && !props.loaded) return <div className="chat-pane loading" />;
   const enabled = agents.filter((a) => a.enabled);
