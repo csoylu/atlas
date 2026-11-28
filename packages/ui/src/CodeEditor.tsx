@@ -163,7 +163,7 @@ const theme = EditorView.theme({
     borderRadius: 'var(--radius-control)',
     fontSize: 'var(--fs-small)',
     outline: 'none',
-    transition: 'border-color 0.12s, box-shadow 0.12s',
+    transition: 'border-color var(--fast), box-shadow var(--fast)',
   },
   '.cm-panel.cm-search .cm-textfield::placeholder': { color: 'var(--faint)' },
   '.cm-panel.cm-search .cm-textfield:focus': {

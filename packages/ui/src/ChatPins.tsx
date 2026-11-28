@@ -116,7 +116,7 @@ function PinView(props: { pin: Pin; now: number; stream: MessageStream; onOpen(i
     armedAt.current = Date.now();
     timer.current = setTimeout(() => {
       setFading(true);
-      timer.current = setTimeout(() => fadeOut.current(), 1200);
+      timer.current = setTimeout(() => fadeOut.current(), 240); // .chat-pin.fading: opacity over --t-3 (240 ms)
     }, Math.max(0, left.current));
   };
   useEffect(() => {

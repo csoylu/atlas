@@ -25,6 +25,15 @@ Same scale as OpenCode (packages/ui/src/styles/theme.css). Enforced by `packages
 - **Spacing**: `--s1…--s4` (4/8/12/16 px). Bars, rows and heads start their text 16 px in. Move a rule to the tokens when
   you touch it, file by file.
 
+## Motion (#405)
+- **Durations**: `--t-1` 120 ms (press), `--t-2` = `--fast` 160 ms (state change, menu, toast), `--t-3` 240 ms (panel,
+  palette, a row landing, progress width), `--t-loop` 1.6 s (every « alive » loop). **Easings**: `--ease` for what
+  arrives or changes, `--ease-io` for loops, `--ease-lin` for progress only. Never a literal (`motion.test.ts`).
+- **Keyframes**: `x-in` (arrives), `x-pulse` (alive), `x-flash` (lit once, lands on the element's own background), plus
+  the ones that draw: `fly`, `fly-flash`, `blink` (caret) and the `lv-*` mark (its own timings). No new keyframe.
+- **Reduce motion**: one rule at the end of `styles.css` stops every animation and transition; a still state must read
+  as the finished one. No local `prefers-reduced-motion` rule.
+
 ## Responsive check (ui-check)
 **Responsive check** (`scripts/ui-check/check.mjs`, macOS: needs Xcode's `swiftc` for the OCR). Opens the built UI
 (`packages/ui/dist`: `npm run build` first) on its own throwaway engine, in headless Chromium, at 1440 / 1100 / 900 / 390 px (390 = phone, touch) on every main screen: chat with

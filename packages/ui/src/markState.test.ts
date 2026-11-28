@@ -22,7 +22,8 @@ describe('the Atlas mark (#310, Living Orb)', () => {
     const frames = [...css.matchAll(/@keyframes lv-[\w-]+ \{(.*)\}/g)].map((m) => m[1]!);
     expect(frames.length).toBeGreaterThanOrEqual(4);
     for (const f of frames) for (const prop of f.matchAll(/([a-z-]+):/g)) expect(['opacity', 'transform']).toContain(prop[1]);
-    expect(css).toMatch(/prefers-reduced-motion: reduce\) \{ \.lv \* \{ animation: none !important; \} \}/);
+    // #405: the one reduce-motion rule stops it with everything else.
+    expect(css).toMatch(/prefers-reduced-motion: reduce\) \{ \*, \*::before, \*::after \{ animation: none !important; transition: none !important; \} \}/);
     expect(css).toContain('.lv-paused, .lv-paused * { animation-play-state: paused !important; }');
   });
 });

@@ -4,7 +4,10 @@
  * Lines are white (dark) or black (light) at 7–15 % alpha, so a line takes the colour of the surface under it. Chips,
  * code and fields are tinted surfaces with no border. One accent, chosen per device in Settings → Appearance (Lime,
  * Signal, Ice, Ultra: the blocks after the themes); in the light theme the accent is a fill, never text on paper: text
- * there takes the accent's dark ink. Blocked stays red whatever the accent. One easing, 160 ms (--fast).
+ * there takes the accent's dark ink. Blocked stays red whatever the accent. Motion (#405): four durations
+ * (--t-1 120 ms press, --t-2 = --fast 160 ms state change, --t-3 240 ms panel or arrival, --t-loop 1.6 s every « alive »
+ * loop), --ease for what arrives or changes, --ease-io for loops, linear only for progress; three shared keyframes
+ * (x-in, x-pulse, x-flash) plus the ones that draw (fly, fly-flash, blink, lv-*); one reduce-motion rule, at the end.
  *
  * Two themes share every rule below and differ only in these tokens: dark (default look) and light.
  * index.html sets data-theme and data-accent before the first paint; src/theme.ts switches them (a stored « gray »
@@ -194,9 +197,15 @@
   --s2: 8px;
   --s3: 12px;
   --s4: 16px;
-  /* one easing for every hover and state change (#362): fast out, soft landing */
+  /* motion (#405): --ease (fast out, soft landing) for what arrives or changes, --ease-io for loops */
   --ease: cubic-bezier(0.16, 1, 0.3, 1);
-  --fast: 160ms var(--ease);
+  --ease-io: cubic-bezier(0.45, 0, 0.55, 1);
+  --ease-lin: linear;
+  --t-1: 120ms; /* press, hover colour */
+  --t-2: 160ms; /* state change, menu, pill, toast, comment box, rewind note */
+  --t-3: 240ms; /* panel, sheet, palette, a report landing, progress width */
+  --t-loop: 1.6s; /* every « alive » loop: pulse, skeleton, glow, naming, flash */
+  --fast: var(--t-2) var(--ease);
   --sidebar: 244px;
   --gap: 16px;
   /* the work-state colours used by status icons and dots */
@@ -238,7 +247,7 @@ input::placeholder, textarea::placeholder { color: var(--faint); }
   transition: background var(--fast), border-color var(--fast), color var(--fast), opacity var(--fast), transform var(--fast);
 }
 .btn:hover { background: var(--active); }
-.btn:active { transform: translateY(1px); }
+.btn:active { transform: translateY(1px); transition-duration: var(--t-1); }
 .btn:disabled { opacity: 0.5; cursor: default; transform: none; }
 .btn .icon { color: var(--muted); }
 .btn.open { background: var(--active); }
@@ -282,11 +291,9 @@ input::placeholder, textarea::placeholder { color: var(--faint); }
 .step-note { margin: 0; color: var(--muted); font-size: var(--fs-small); line-height: var(--lh-normal); }
 /* Loading: skeleton rows, never a spinner over the page. */
 .state-loading { display: flex; flex-direction: column; gap: 10px; padding: 16px; border: 1px solid var(--line); border-radius: 0; }
-.state-loading .sk { height: 12px; border-radius: 0; background: var(--line-2); width: 80%; animation: sk-pulse 1.4s ease-in-out infinite; }
+.state-loading .sk { height: 12px; border-radius: 0; background: var(--line-2); width: 80%; animation: x-pulse var(--t-loop) var(--ease-io) infinite; }
 .state-loading .sk.w1 { width: 60%; }
 .state-loading .sk.w2 { width: 70%; }
-@keyframes sk-pulse { 50% { opacity: 0.5; } }
-@media (prefers-reduced-motion: reduce) { .state-loading .sk { animation: none; } }
 /* Error: what failed, what is safe, what happens next. Stays until dealt with (never a toast). `bar`: one row with its
    action at the end; `inline`: the text alone, under a field. */
 .state-err {
@@ -306,7 +313,7 @@ input::placeholder, textarea::placeholder { color: var(--faint); }
 .toast {
   position: fixed; left: 12px; bottom: 62px; z-index: 60; width: calc(var(--sidebar) - 24px); display: flex; align-items: center; gap: 8px;
   padding: 6px 6px 6px 12px; border: 1px solid var(--line-2); border-radius: 0; background: var(--raised); box-shadow: var(--float-shadow);
-  font-size: var(--fs-small); line-height: var(--lh-tight); color: var(--text); animation: pin-in 0.2s ease;
+  font-size: var(--fs-small); line-height: var(--lh-tight); color: var(--text); animation: x-in var(--t-2) var(--ease) both;
 }
 .toast .status-icon { flex: none; }
 .toast-text { flex: 1; min-width: 0; overflow-wrap: anywhere; font-weight: var(--fw-medium); line-height: var(--lh-normal); }
@@ -361,7 +368,6 @@ select { padding: 4px 8px; }
 @keyframes lv-breath-fast { 0%, 100% { opacity: 0.4; } 50% { opacity: 0.85; } }
 @keyframes lv-spin { to { transform: rotate(360deg); } }
 @keyframes lv-knock { 0%, 100% { transform: scale(1); } 30% { transform: scale(1.35); } 60% { transform: scale(0.9); } }
-@media (prefers-reduced-motion: reduce) { .lv * { animation: none !important; } }
 .icon-btn {
   width: 30px; height: 30px; border-radius: 0; display: grid; place-items: center; padding: 0; flex: none;
   border: 0; background: none; color: var(--muted); transition: background var(--fast), color var(--fast);
@@ -428,27 +434,24 @@ select { padding: 4px 8px; }
 .face.live .line { stroke: var(--text); }
 /* In progress (#403): anything smaller than an agent in flight (a tool row, a workflow step, a clone, an update, a page
    load) is one 8 px square pulsing at 1.6 s. An agent at work is .live-fly; a task's status is its StatusIcon. */
-.step-sq { width: 8px; height: 8px; flex: none; background: var(--accent-mark); animation: x-pulse 1.6s ease-in-out infinite; }
-@keyframes x-pulse { 0%, 100% { opacity: 1; } 50% { opacity: 0.45; } }
-@media (prefers-reduced-motion: reduce) { .step-sq { animation: none; } }
+.step-sq { width: 8px; height: 8px; flex: none; background: var(--accent-mark); animation: x-pulse var(--t-loop) var(--ease-io) infinite; }
 /* Working (#382, sidebar agent rows and Running): four squares fly in, lock together with a flash, fly apart; 3.2 s.
    Reduce motion stops the animation, and the base state is the four squares assembled. */
 .live-fly { position: relative; width: 9px; height: 9px; flex: none; margin-left: auto; color: var(--accent-mark); }
 .running-item .live-fly { margin-left: 0; }
-.live-fly i { position: absolute; width: 4px; height: 4px; background: currentColor; animation: fly 3.2s cubic-bezier(0.34, 1.4, 0.5, 1) infinite; }
+.live-fly i { position: absolute; width: 4px; height: 4px; background: currentColor; animation: fly calc(var(--t-loop) * 2) cubic-bezier(0.34, 1.4, 0.5, 1) infinite; } /* the one overshoot curve */
 .live-fly i:nth-child(1) { left: 0; top: 0; --dx: -7px; --dy: -7px; --r: -90deg; animation-delay: 0s; }
-.live-fly i:nth-child(2) { right: 0; top: 0; --dx: 7px; --dy: -7px; --r: 90deg; animation-delay: 0.2s; }
-.live-fly i:nth-child(3) { right: 0; bottom: 0; --dx: 7px; --dy: 7px; --r: -90deg; animation-delay: 0.4s; }
-.live-fly i:nth-child(4) { left: 0; bottom: 0; --dx: -7px; --dy: 7px; --r: 90deg; animation-delay: 0.6s; }
+.live-fly i:nth-child(2) { right: 0; top: 0; --dx: 7px; --dy: -7px; --r: 90deg; animation-delay: calc(var(--t-loop) / 8); }
+.live-fly i:nth-child(3) { right: 0; bottom: 0; --dx: 7px; --dy: 7px; --r: -90deg; animation-delay: calc(var(--t-loop) / 4); }
+.live-fly i:nth-child(4) { left: 0; bottom: 0; --dx: -7px; --dy: 7px; --r: 90deg; animation-delay: calc(var(--t-loop) * 3 / 8); }
 @keyframes fly {
   0% { transform: translate(var(--dx), var(--dy)) rotate(var(--r)) scale(0.3); opacity: 0; }
   35% { transform: none; opacity: 1; }
   68% { transform: none; opacity: 1; }
   100% { transform: translate(calc(var(--dx) * -0.4), calc(var(--dy) * -0.4)) scale(0.2); opacity: 0; }
 }
-.live-fly::after { content: ''; position: absolute; inset: -2px; box-shadow: 0 0 0 1px currentColor; opacity: 0; animation: fly-flash 3.2s ease-out infinite; animation-delay: 0.6s; }
+.live-fly::after { content: ''; position: absolute; inset: -2px; box-shadow: 0 0 0 1px currentColor; opacity: 0; animation: fly-flash calc(var(--t-loop) * 2) var(--ease) infinite; animation-delay: calc(var(--t-loop) * 3 / 8); }
 @keyframes fly-flash { 0%, 30% { opacity: 0; transform: scale(0.8); } 36% { opacity: 0.7; transform: scale(1); } 55%, 100% { opacity: 0; transform: scale(1.5); } }
-@media (prefers-reduced-motion: reduce) { .live-fly i { opacity: 1; transform: none; } .live-fly::after { opacity: 0; } }
 .crumb .dot-avatar { width: 24px; height: 24px; }
 /* Status chips (#104): no pulse. */
 .st-chip {
@@ -463,8 +466,7 @@ select { padding: 4px 8px; }
 .st-chip.done { background: var(--dn-bg); color: var(--dn-ink); }
 .st-chip.done::before { background: var(--dn-dot); }
 .chat-hist-title { flex: 1; min-width: 0; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
-.chat-naming { color: var(--faint); font-style: italic; animation: chat-naming 1.4s ease-in-out infinite; }
-@keyframes chat-naming { 50% { opacity: 0.45; } }
+.chat-naming { color: var(--faint); font-style: italic; animation: x-pulse var(--t-loop) var(--ease-io) infinite; }
 .chat-hist-when { flex: none; font-size: var(--fs-small); color: var(--faint); font-variant-numeric: tabular-nums; }
 .chat-hist-item.running .chat-hist-when { display: none; }
 @media (max-width: 640px) {
@@ -604,17 +606,14 @@ main { flex: 1; display: flex; min-height: 0; min-width: 0; position: relative; 
 .card-foot.needs { background: var(--bk-bg); border-top-color: transparent; font-weight: var(--fw-regular); }
 .card-foot b { font-weight: var(--fw-medium); }
 .card-foot-why { display: block; color: var(--text); }
-/* Working: an accent edge with a glint running down it, the live time in the accent. Light: the edge is ink. */
+/* Working: an accent edge that pulses (#405: x-pulse, the glint went), the live time in the accent. Light: the edge is ink. */
 .card[data-status='running'] { border-color: var(--line-2); padding-left: 14px; background: linear-gradient(90deg, var(--accent-soft), transparent 70%), var(--raised); }
 .card[data-status='running'] .card-foot { margin-left: -14px; padding-left: 14px; }
-.card-sweep { position: absolute; left: -1px; top: -1px; bottom: -1px; width: 2px; background: var(--accent-fill); overflow: hidden; pointer-events: none; }
-:root[data-theme='light'] .card-sweep { background: var(--text); width: 3px; }
-.card-sweep::after {
-  content: ''; position: absolute; left: 0; right: 0; height: 40%; top: -40%;
-  background: linear-gradient(transparent, #fff, transparent); opacity: 0.8; animation: card-sweep 2.2s ease-in-out infinite;
+.card-sweep {
+  position: absolute; left: -1px; top: -1px; bottom: -1px; width: 2px; background: var(--accent-fill); pointer-events: none;
+  animation: x-pulse var(--t-loop) var(--ease-io) infinite;
 }
-:root[data-theme='light'] .card-sweep::after { background: linear-gradient(transparent, var(--accent-fill), transparent); opacity: 1; }
-@keyframes card-sweep { to { top: 100%; } }
+:root[data-theme='light'] .card-sweep { background: var(--text); width: 3px; }
 .st-since.live { display: inline-flex; align-items: center; gap: 6px; color: var(--accent); font-family: var(--mono); }
 .st-since.live .status-icon { flex: none; }
 :root[data-theme='light'] .st-since.live { background: var(--accent-fill); color: var(--on-accent); padding: 0 6px; }
@@ -624,7 +623,6 @@ main { flex: 1; display: flex; min-height: 0; min-width: 0; position: relative; 
 .card:is([data-status='done'], [data-status='closed'], [data-status='archived']) { background: none; border-color: transparent; }
 .card:is([data-status='done'], [data-status='closed'], [data-status='archived']):hover { border-color: var(--line-2); }
 .card:is([data-status='done'], [data-status='closed'], [data-status='archived']) .card-title { color: var(--muted); }
-@media (prefers-reduced-motion: reduce) { .card-sweep::after { animation: none; display: none; } }
 /* the PR pill: one per PR, its worst state (CI, conflicts, QA) */
 .pr-pill {
   display: inline-flex; align-items: center; gap: 6px; height: 22px; padding: 0 8px; border-radius: 0; font-size: var(--fs-small);
@@ -660,7 +658,7 @@ main { flex: 1; display: flex; min-height: 0; min-width: 0; position: relative; 
 /* New card: a compact Linear-style composer */
 .new-card-modal {
   width: min(620px, calc(100vw - 32px)); margin-bottom: 18vh; background: var(--raised); border: 1px solid var(--line-2); border-radius: 0;
-  box-shadow: var(--float-shadow); display: flex; flex-direction: column; animation: cm-in 0.16s ease;
+  box-shadow: var(--float-shadow); display: flex; flex-direction: column; animation: x-in var(--t-2) var(--ease) both;
 }
 .nc-head { display: flex; align-items: center; padding: 10px 10px 0 var(--s4); }
 .nc-crumb { font-size: var(--fs-small); color: var(--muted); font-weight: var(--fw-medium); border: 1px solid var(--line-2); border-radius: 0; padding: 1px 6px; line-height: var(--lh-tight); }
@@ -699,23 +697,21 @@ main { flex: 1; display: flex; min-height: 0; min-width: 0; position: relative; 
 .chip .x:hover { color: var(--text); }
 .add-link { background: none; border: 1px dashed var(--control); border-radius: 0; padding: 2px 9px; color: var(--muted); max-width: 150px; font-size: var(--fs-small); }
 /* What the card waits on from the user (question, review): the last message of the conversation, highlighted like a
-   card that needs you, with a short glow when it appears. */
-.msg.asking .msg-body { background: var(--warn-bg); border-radius: 0; padding: 10px 14px; animation: ask-glow 1.6s ease-out 2; }
+   card that needs you, lit once when it appears (x-flash ends on the row's own background). */
+.msg.asking .msg-body { background: var(--warn-bg); border-radius: 0; padding: 10px 14px; animation: x-flash var(--t-loop) var(--ease); }
 .msg.asking.capability .msg-body { background: var(--neg-bg); }
 .msg.asking.review .msg-body { background: var(--accent-soft); }
 .msg.asking .ask-kind { color: var(--bk-ink); font-weight: var(--fw-bold); }
 .msg.asking.capability .ask-kind { color: var(--neg-ink); }
 .msg.asking.review .ask-kind { color: var(--accent); }
 .msg.asking .options:empty { display: none; }
-@keyframes ask-glow { 0% { box-shadow: 0 0 0 0 var(--warn-ink); } 70%, 100% { box-shadow: 0 0 0 6px transparent; } }
-@media (prefers-reduced-motion: reduce) { .msg.asking .msg-body { animation: none; } }
 .options { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 10px; }
 .option {
   background: var(--sheet); border: 1px solid var(--control); border-radius: 0; padding: 6px 10px; min-height: 34px;
   text-align: left; color: var(--text); font-size: var(--fs-base); transition: border-color var(--fast), transform var(--fast);
 }
 .option:hover { border-color: var(--text); }
-.option:active { transform: translateY(1px); }
+.option:active { transform: translateY(1px); transition-duration: var(--t-1); }
 .option.recommended { background: var(--primary); color: var(--on-primary); border-color: var(--primary); }
 .option .rec { margin-left: 8px; font-size: var(--fs-small); }
 .waiting-line { padding: 8px 16px; font-size: var(--fs-small); color: var(--muted); border-bottom: 1px solid var(--rule); }
@@ -734,7 +730,7 @@ main { flex: 1; display: flex; min-height: 0; min-width: 0; position: relative; 
 .msg .text { white-space: pre-wrap; line-height: var(--lh-long); font-size: var(--fs-base); overflow-wrap: anywhere; letter-spacing: -0.003em; }
 .msg.user .text { background: var(--raised); border: 1px solid var(--line); padding: 8px 12px; border-radius: 0; }
 /* Streaming reply (#79): the caret is an inline element at the end of the text (streamDraft.ts), in a p, li, cell or code. */
-.text.streaming .caret::after { content: '▍'; animation: blink 1s steps(2) infinite; color: var(--accent); }
+.text.streaming .caret::after { content: '▍'; animation: blink var(--t-loop) steps(2) infinite; color: var(--accent); }
 @keyframes blink { 50% { opacity: 0; } }
 .sys-note { align-self: center; font-size: var(--fs-small); color: var(--faint); background: none; border: 1px solid var(--line); border-radius: 0; padding: 2px 12px; text-align: center; }
 
@@ -1057,7 +1053,7 @@ form .actions .btn, .nc-foot .btn, .wf-form-foot .btn, .profile-actions .btn { h
 .inline-field { display: inline-flex; align-items: center; gap: 8px; }
 .inline-field select { height: 28px; }
 .progress { height: 6px; border-radius: 0; background: var(--active); overflow: hidden; margin: 4px 0 2px; }
-.progress span { display: block; height: 100%; background: var(--accent-mark); border-radius: 0; transition: width 0.4s var(--ease); }
+.progress span { display: block; height: 100%; background: var(--accent-mark); border-radius: 0; transition: width var(--t-3) var(--ease-lin); }
 .pulls { margin-bottom: 12px; }
 .finder-bar { display: flex; gap: 8px; align-items: center; margin-bottom: 12px; }
 .finder-bar input {
@@ -1124,9 +1120,6 @@ form .actions .btn, .nc-foot .btn, .wf-form-foot .btn, .profile-actions .btn { h
   .agent-grid { grid-template-columns: minmax(0, 1fr); }
 
   .composer textarea, .chat-pane .composer textarea { font-size: 16px; /* type-exception: inputs at 16 px on phone (iOS zooms below) */ }
-}
-@media (prefers-reduced-motion: reduce) {
-  *, *::before, *::after { transition-duration: 0.01ms !important; animation-duration: 0.01ms !important; animation-iteration-count: 1 !important; }
 }
 .section-head a { color: var(--accent); }
 
@@ -1370,7 +1363,6 @@ form .actions .btn, .nc-foot .btn, .wf-form-foot .btn, .profile-actions .btn { h
 /* ── The task view (CardView), in the side panel (ThreadPanel, #222) ── */
 /* The scrim behind the New task dialog (Board.tsx). */
 .card-scrim { position: fixed; inset: 0; z-index: 40; background: var(--scrim); display: flex; align-items: center; justify-content: center; }
-@keyframes cm-in { from { opacity: 0; transform: translateY(6px); } }
 .cm-head { padding: var(--s2) 10px var(--s2) var(--s4); min-height: 48px; display: flex; align-items: center; border-bottom: 1px solid var(--line); flex: none; }
 .cm-row { display: flex; align-items: center; gap: 7px; flex-wrap: wrap; font-size: var(--fs-small); color: var(--muted); }
 /* The sheet's top bar: status, #N, ⋯, × (the title, meta row and « Now » scroll under it with the rest). */
@@ -1478,7 +1470,7 @@ div.cm-desc.cut { -webkit-mask-image: linear-gradient(to bottom, #000 65%, trans
 .chat-pin {
   flex: 0 1 auto; min-width: 0; max-width: 240px; height: 28px; display: inline-flex; align-items: center;
   border: 1px solid var(--line-2); border-radius: 0; background: none; color: var(--text); font-size: var(--fs-small);
-  transition: border-color var(--fast), background var(--fast), opacity 1.2s var(--ease); animation: pin-in 0.25s ease;
+  transition: border-color var(--fast), background var(--fast), opacity var(--t-3) var(--ease); animation: x-in var(--t-2) var(--ease) both;
 }
 .chat-pin:hover, .chat-pin:focus-within { border-color: var(--accent); }
 .chat-pin.fading { opacity: 0; }
@@ -1503,7 +1495,6 @@ div.cm-desc.cut { -webkit-mask-image: linear-gradient(to bottom, #000 65%, trans
 button.chat-pin { padding: 0 10px; gap: 6px; flex: none; cursor: pointer; font: inherit; font-size: var(--fs-small); }
 button.chat-pin.open { border-color: var(--accent); }
 .chat-pin-count { display: none !important; }
-@keyframes pin-in { from { opacity: 0; } }
 /* A narrow header (phone, or a chat squeezed by its side panel): one « N tasks » chip instead of the strip. */
 @media (max-width: 1100px) {
   .chat-pins { display: none; }
@@ -1552,12 +1543,8 @@ span.chat-row-ref { cursor: inherit; }
 .chat-row.card-report { flex: none; }
 .chat-row.card-report.done > .chat-row-line .chat-row-icon { color: var(--dn-dot); --st-done: var(--dn-dot); }
 .chat-row.card-report.done .chat-row-verb { display: inline-flex; align-items: center; gap: 8px; }
-/* It arrived live: fades up, the chip settles in (once; never on history load; off with reduced motion). */
-.chat-row.card-report.landed { animation: land-in 400ms ease-out; }
-.chat-row.card-report.landed .st-chip { animation: land-chip 500ms ease-out; }
-@keyframes land-in { from { transform: translateY(4px); opacity: 0; } }
-@keyframes land-chip { 0% { transform: scale(0.8); opacity: 0; } 70% { transform: scale(1.06); } 100% { transform: none; } }
-@media (prefers-reduced-motion: reduce) { .chat-row.card-report.landed, .chat-row.card-report.landed .st-chip { animation: none; } }
+/* It arrived live: fades up (once; never on history load; off with reduced motion). */
+.chat-row.card-report.landed { animation: x-in var(--t-3) var(--ease) both; }
 .chat-row.tone-acc > .chat-row-line .chat-row-icon { color: var(--accent); }
 .chat-row.tone-warn > .chat-row-line .chat-row-icon, .chat-row.tone-warn > .chat-row-line .chat-row-verb { color: var(--warn-ink); }
 .chat-row.tone-bad > .chat-row-line .chat-row-icon, .chat-row.tone-bad > .chat-row-line .chat-row-verb { color: var(--neg-ink); }
@@ -1594,16 +1581,8 @@ a.task-note:focus-visible { outline: 2px solid var(--accent); outline-offset: 1p
   .tn-mt { grid-column: 2 / -1; white-space: normal; }
 }
 .chat-row.danger > .chat-row-line .chat-row-obj { color: var(--neg-ink); }
-/* Running: the step square (#403), shimmering verb, live timer in meta. */
-.chat-row.running > .chat-row-line .chat-row-verb {
-  background: linear-gradient(90deg, var(--muted) 20%, var(--text) 50%, var(--muted) 80%); background-size: 200% 100%;
-  -webkit-background-clip: text; background-clip: text; color: transparent; animation: chat-shimmer 1.8s linear infinite;
-}
-@keyframes chat-shimmer { from { background-position: 200% 0; } to { background-position: 0 0; } }
-@media (prefers-reduced-motion: reduce) {
-  .chat-row.running > .chat-row-line .chat-row-verb { animation: none; }
-  .chat-row.running > .chat-row-line .chat-row-verb { color: var(--text); background: none; }
-}
+/* Running: the step square (#403), a pulsing verb (#405: x-pulse, was a shimmer), live timer in meta. */
+.chat-row.running > .chat-row-line .chat-row-verb { color: var(--text); animation: x-pulse var(--t-loop) var(--ease-io) infinite; }
 /* « N steps »: an icon stack, then a timeline of borderless step rows. */
 .row-stack { display: flex; flex: none; }
 .row-stack-ic { width: 16px; height: 16px; display: grid; place-items: center; margin-left: -4px; background: var(--panel); border-radius: 0; box-shadow: 0 0 0 2px var(--panel); }
@@ -1716,9 +1695,8 @@ a.web-hit:hover { background: var(--hover); }
 .chat-view > .panel.chat-pane { position: relative; }
 .side-doc {
   flex: none; width: clamp(380px, 48%, 760px); display: flex; flex-direction: column; min-width: 0; min-height: 0;
-  border-left: 1px solid var(--rule); background: var(--sheet); animation: sd-in 0.2s ease;
+  border-left: 1px solid var(--rule); background: var(--sheet); animation: x-in var(--t-2) var(--ease) both;
 }
-@keyframes sd-in { from { opacity: 0; transform: translateX(12px); } }
 /* 960px and below: over the chat; phones: the whole sheet. */
 .side-doc.overlay { position: absolute; inset: 0 0 0 auto; width: min(560px, 94%); z-index: 20; box-shadow: var(--float-shadow); border-left-color: var(--border); }
 .side-doc.full { position: absolute; inset: 0; width: 100%; z-index: 20; border: 0; }
@@ -1836,7 +1814,7 @@ button.msg-quote:hover { color: var(--text); }
 .rewind-note {
   display: flex; align-items: center; gap: 8px; margin: 0 auto 8px; padding: 4px 6px 4px 12px; min-height: 36px;
   border: 1px solid var(--border); border-radius: 0; background: var(--raised); color: var(--muted); font-size: var(--fs-small);
-  animation: rewind-in 0.16s ease-out;
+  animation: x-in var(--t-2) var(--ease) both;
 }
 .rewind-note .rewind-icon { color: var(--faint); }
 .rewind-text { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
@@ -1846,8 +1824,6 @@ button.msg-quote:hover { color: var(--text); }
 .rewind-warn { color: var(--warn-ink); }
 .chat-pane .rewind-note { width: calc(100% - 28px); max-width: 780px; }
 .cm-notices .rewind-note { margin: 8px 20px; }
-@keyframes rewind-in { from { opacity: 0; transform: translateY(4px); } }
-@media (prefers-reduced-motion: reduce) { .rewind-note { animation: none; } }
 .rewind-scrim { z-index: 70; }
 .modal.rewind-confirm { width: min(480px, 100%); max-height: calc(100vh - 32px); overflow-y: auto; }
 /* What a rewind undoes and keeps (#138): the dialog and the chat's rewind row. */
@@ -2095,8 +2071,8 @@ button.msg-quote:hover { color: var(--text); }
 }
 
 /* A memory's source message (?msg=<seq>): flashes once when the chat jumps to it */
-.msg.flash { animation: msg-flash 2.4s ease-out; border-radius: 0; }
-@keyframes msg-flash { 0%, 30% { background: var(--accent-soft); box-shadow: 0 0 0 4px var(--accent-soft); } 100% { background: transparent; box-shadow: none; } }
+/* The body is lit (the user's bubble itself, since it has its own surface). */
+.msg.flash .msg-body, .msg.user.flash .text { animation: x-flash var(--t-loop) var(--ease); }
 
 /* ── ⌘K palette and « ? » cheat sheet (design §16 Keyboard, mockup linear.html?screen=palette) ── */
 .pal-scrim { position: fixed; inset: 0; z-index: 80; background: var(--scrim); display: flex; justify-content: center; align-items: flex-start; padding: min(120px, 12vh) 16px 16px; }
@@ -2187,9 +2163,7 @@ button.msg-quote:hover { color: var(--text); }
 :root[data-theme='light'] .fv.term .fv-box { background: #17191c; border-color: transparent; }
 .chat-row-body pre.fv-term { margin: 0; padding: 10px 12px; border: 0; border-radius: 0; background: none; max-height: none; overflow: visible; width: max-content; min-width: 100%; box-sizing: border-box; font: var(--fs-small)/var(--lh-normal) var(--mono); color: #d6d8db; white-space: pre; overflow-wrap: normal; }
 .fv-prompt { color: #6cc0d2; user-select: none; }
-.fv-cursor { color: #7b8088; animation: fv-blink 1s steps(2) infinite; }
-@keyframes fv-blink { 50% { opacity: 0; } }
-@media (prefers-reduced-motion: reduce) { .fv-cursor { animation: none; } }
+.fv-cursor { color: #7b8088; animation: blink var(--t-loop) steps(2) infinite; }
 .ansi-bold { font-weight: var(--fw-bold); }
 .ansi-dim, .ansi-bright-black { color: #858a92; }
 .ansi-red, .ansi-bright-red { color: #f38b8b; }
@@ -2334,7 +2308,7 @@ button.msg-quote:hover { color: var(--text); }
 .wb-empty > b { color: var(--text); font-weight: var(--fw-medium); font-size: var(--fs-large); }
 .wb-empty p { margin: 0; max-width: 340px; line-height: var(--lh-normal); }
 .wb-skel { padding: 20px; display: flex; flex-direction: column; gap: 10px; }
-.wb-skel i { display: block; height: 12px; border-radius: 0; background: var(--hover); animation: sk-pulse 1.4s ease-in-out infinite; }
+.wb-skel i { display: block; height: 12px; border-radius: 0; background: var(--hover); animation: x-pulse var(--t-loop) var(--ease-io) infinite; }
 .wb-img { flex: 1; overflow: auto; display: grid; place-items: center; padding: 16px; position: relative; background: repeating-conic-gradient(var(--hover) 0 25%, transparent 0 50%) 0 0 / 16px 16px; }
 .wb-img .frame { position: relative; }
 .wb-img img { display: block; max-width: 100%; height: auto; border-radius: 0; box-shadow: var(--float-shadow); }
@@ -2356,8 +2330,7 @@ button.msg-quote:hover { color: var(--text); }
 .wb-driver { flex: none; display: flex; align-items: center; gap: 6px; margin-left: 4px; font-size: var(--fs-small); line-height: var(--lh-tight); color: var(--muted); white-space: nowrap; }
 .wb-driver .dot-avatar { width: 18px; height: 18px; flex: none; }
 .wb-driver .you { color: var(--accent); background: var(--accent-soft); border-radius: 0; padding: 2px 8px; font-weight: var(--fw-medium); }
-.wb-progress { position: absolute; left: 0; bottom: -1px; height: 2px; width: 45%; background: var(--accent-mark); z-index: 2; animation: wb-load 1.6s ease-in-out infinite; }
-@keyframes wb-load { 0% { left: 0; width: 10%; } 50% { left: 30%; width: 45%; } 100% { left: 100%; width: 10%; } }
+.wb-progress { position: absolute; left: 0; bottom: -1px; height: 2px; width: 45%; background: var(--accent-mark); z-index: 2; animation: x-pulse var(--t-loop) var(--ease-io) infinite; }
 .wb-strip.acc { background: var(--accent-soft); color: var(--text); }
 .wb-strip > .dot-avatar { flex: none; width: 18px; height: 18px; }
 .wb-view { position: relative; flex: 1; min-height: 0; background: var(--sheet); overflow: hidden; }
@@ -2590,7 +2563,7 @@ a.pop-row[aria-disabled='true'] { opacity: 0.5; pointer-events: none; }
 .modal p.update-fine, .update-fine { font-size: var(--fs-small); color: var(--faint); line-height: var(--lh-normal); }
 .update-progress { display: flex; align-items: center; gap: 12px; font-size: var(--fs-small); color: var(--muted); }
 .update-bar { flex: 1; height: 6px; border-radius: 0; background: var(--active); overflow: hidden; }
-.update-bar > div { height: 100%; background: var(--accent-mark); transition: width 0.3s var(--ease); }
+.update-bar > div { height: 100%; background: var(--accent-mark); transition: width var(--t-3) var(--ease-lin); }
 .update-actions { display: flex; justify-content: flex-end; gap: 8px; margin-top: 4px; }
 .modal .update-actions .primary { margin-top: 0; align-self: auto; }
 .update-about { display: flex; flex-wrap: wrap; align-items: center; gap: 6px 12px; }
@@ -3657,9 +3630,8 @@ button.cm-sref:hover { border-color: var(--accent); }
 /* A passage waiting in the composer as a quote: underlined in its message, with its number. */
 .qt-mark { background: none; color: inherit; text-decoration: underline 2px var(--accent); text-underline-offset: 4px; }
 .cm-num.qt-n { width: 18px; height: 18px; border-radius: var(--radius-control); margin-left: 4px; vertical-align: 1px; cursor: pointer; }
-/* Jump back: the passage the clicked quote came from, lit for 2 s. */
-.qt-flash { color: inherit; border-radius: var(--radius-control); background: var(--accent-soft); outline: 2px solid var(--accent); outline-offset: 1px; -webkit-box-decoration-break: clone; box-decoration-break: clone; animation: qt-flash 2s ease-out forwards; }
-@keyframes qt-flash { 0%, 60% { outline-color: var(--accent); } 100% { outline-color: transparent; } }
+/* Jump back: the passage the clicked quote came from, lit once (x-flash). */
+.qt-flash { color: inherit; border-radius: var(--radius-control); background: none; -webkit-box-decoration-break: clone; box-decoration-break: clone; animation: x-flash var(--t-loop) var(--ease); }
 /* #368: the same light on a passage that is not a chat message (a tool row, the description, a document, a file). */
 ::highlight(qt-flash) { background-color: var(--accent-soft); color: var(--text); text-decoration: underline 2px var(--accent); }
 .step-q { display: contents; }
@@ -3694,10 +3666,6 @@ button.cm-sref:hover { border-color: var(--accent); }
 .new-line { display: flex; align-items: center; gap: 10px; margin: 4px 0 16px; color: var(--accent); font-size: var(--fs-small); font-weight: var(--fw-medium); line-height: var(--lh-tight); }
 .new-line::before { content: ''; flex: 1; height: 1px; background: var(--accent-mark); }
 
-/* « Reduce motion » (#369): every animation and transition stops. */
-@media (prefers-reduced-motion: reduce) {
-  *, *::before, *::after { animation: none !important; transition: none !important; }
-}
 
 /* ── Redesign #362 · 2/4 (#370): chat and side panel in the obsidian style (paris's chat CSS, doc_e9ebd9ee) ──────────── */
 /* Messages: Master's on a surface with no name over it; the agent's on the page, under its face and name. */
@@ -3734,12 +3702,11 @@ button.cm-sref:hover { border-color: var(--accent); }
 .steps-tick .chat-row-obj { flex: 0 1 auto; max-width: 55%; }
 .steps-tick.idle .chat-row-verb { color: var(--muted); font-weight: var(--fw-regular); }
 
-/* Header: a light runs along the bottom line while the agent works (CardPanel puts the .scan in the header). */
+/* Header: the bottom line pulses in the accent while the agent works (CardPanel puts the .scan in the header). */
 /* backdrop-filter makes the header its own stacking context: z-index keeps its menus over the screen below (#383). */
 .screen-head { position: relative; z-index: 4; background: color-mix(in srgb, var(--panel) 70%, transparent); backdrop-filter: blur(14px) saturate(1.4); }
 .scan { position: absolute; left: 0; right: 0; bottom: -1px; height: 1px; z-index: 1; overflow: hidden; pointer-events: none; }
-.scan::before { content: ''; position: absolute; top: 0; bottom: 0; width: 30%; left: -30%; background: linear-gradient(90deg, transparent, var(--accent-mark), transparent); animation: scan 2.4s cubic-bezier(0.16, 1, 0.3, 1) infinite; }
-@keyframes scan { to { left: 100%; } }
+.scan { background: var(--accent-mark); animation: x-pulse var(--t-loop) var(--ease-io) infinite; }
 
 /* Web results: real favicons, one hairline list; the narrow side panel keeps the title and drops the address. */
 .web-results { gap: 0; }
@@ -3773,10 +3740,9 @@ a.web-hit:hover .web-hit-t { text-decoration: underline; text-underline-offset: 
 .pal {
   background: color-mix(in srgb, var(--raised) 86%, transparent); backdrop-filter: blur(24px) saturate(1.6); border-color: var(--line-2);
   box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.05), 0 40px 80px -20px rgba(0, 0, 0, 0.7), 0 0 0 1px rgba(0, 0, 0, 0.4);
-  animation: pal-in 180ms cubic-bezier(0.16, 1, 0.3, 1);
+  animation: x-in var(--t-3) var(--ease) both;
 }
 :root[data-theme='light'] .pal { background: rgba(255, 255, 255, 0.94); box-shadow: 0 30px 70px -20px rgba(0, 0, 0, 0.3), 0 0 0 1px rgba(0, 0, 0, 0.06); }
-@keyframes pal-in { from { opacity: 0; transform: translateY(-6px) scale(0.985); } }
 .pal-in { height: 56px; gap: 12px; }
 .pal-ctx { border: 0; background: var(--chip); }
 .pal-op { height: 38px; margin: 0 6px; padding: 0 10px; color: var(--muted); }
@@ -3802,3 +3768,13 @@ a.web-hit:hover .web-hit-t { text-decoration: underline; text-underline-offset: 
 .cm-box textarea { border-color: color-mix(in srgb, var(--accent-mark) 60%, var(--line-2)); background: var(--chip); }
 .msg.user .text > :first-child { margin-top: 0; }
 .msg.user .text > :last-child { margin-bottom: 0; }
+
+/* ── Motion (#405): the three shared keyframes and the one reduce-motion rule ── */
+/* x-in: what arrives (a menu, a toast, a panel, a report). x-pulse: anything alive (skeleton, a step, a running verb, a
+   load). x-flash: a passage lit once; no end frame, so it lands on the element's own background. */
+@keyframes x-in { from { opacity: 0; transform: translateY(4px); } }
+@keyframes x-pulse { 0%, 100% { opacity: 1; } 50% { opacity: 0.45; } }
+@keyframes x-flash { 0%, 40% { background-color: var(--accent-soft); } }
+/* « Reduce motion »: every animation and transition stops; each still state is the finished one (the agent's four
+   squares assembled, the mark at rest). */
+@media (prefers-reduced-motion: reduce) { *, *::before, *::after { animation: none !important; transition: none !important; } }
