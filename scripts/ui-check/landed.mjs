@@ -1,5 +1,6 @@
 // The .landed animation (#104/#112): a finished-task report plays it only when it arrives live (WebSocket
 // message.appended), never when the history loads or the page is reloaded, and never with prefers-reduced-motion.
+// Since #405 it is the shared x-in (the report row has no status chip since #271: its icon says Done).
 //
 //   node scripts/ui-check/landed.mjs [--ui packages/ui/dist] [--port N]
 //
@@ -92,10 +93,10 @@ async function open(reduced) {
 }
 // The report is fed through the app's own WebSocket handler (a MessageEvent on the socket), so it takes the live path.
 const feed = (m) => evaluate(`(() => { const s = __ws.find((x) => x.readyState === 1); s.dispatchEvent(new MessageEvent('message', { data: JSON.stringify({ type: 'message.appended', message: ${JSON.stringify(m)} }) })); return true; })()`);
-const state = (id) => evaluate(`(() => { const rows = [...document.querySelectorAll('.chat-row.card-report')]; const r = rows.find((x) => x.textContent.includes(${JSON.stringify(id)})); if (!r) return null; const c = r.querySelector('.st-chip'); return { landed: r.classList.contains('landed'), row: getComputedStyle(r).animationName, chip: c ? getComputedStyle(c).animationName : null, chipText: c?.textContent }; })()`);
+const state = (id) => evaluate(`(() => { const rows = [...document.querySelectorAll('.chat-row.card-report')]; const r = rows.find((x) => x.textContent.includes(${JSON.stringify(id)})); if (!r) return null; return { landed: r.classList.contains('landed'), row: getComputedStyle(r).animationName, done: r.classList.contains('done') && !!r.querySelector('.chat-row-icon svg') }; })()`);
 const history = () => evaluate(`[...document.querySelectorAll('.chat-row.card-report')].map((r) => ({ landed: r.classList.contains('landed'), row: getComputedStyle(r).animationName }))`);
 
-// 1. A live report: .landed, both animations running, Done chip.
+// 1. A live report: .landed, its x-in running (#405), drawn as Done.
 await open(false);
 const before = await history();
 check(before.every((h) => !h.landed && h.row === 'none'), `history load: ${before.length} report(s), none animated`);
@@ -104,16 +105,16 @@ await feed(m1);
 await sleep(100);
 const s1 = await state('#91');
 check(!!s1, 'live report is shown');
-check(s1?.landed === true && s1.row === 'land-in' && s1.chip === 'land-chip', `live report animates (${JSON.stringify(s1)})`);
-check(s1?.chipText === 'Done', 'live report carries the Done chip');
+check(s1?.landed === true && s1.row === 'x-in', `live report animates (${JSON.stringify(s1)})`);
+check(s1?.done === true, 'live report is drawn as Done (its status icon)');
 await sleep(700);
 const s1b = await state('#91');
-check(s1b?.row === 'land-in' || s1b?.row === 'none', 'animation is a one-shot (no loop): ' + JSON.stringify(s1b));
+check(s1b?.row === 'x-in' || s1b?.row === 'none', 'animation is a one-shot (no loop): ' + JSON.stringify(s1b));
 const iter = await evaluate(`getComputedStyle(document.querySelector('.chat-row.card-report.landed')).animationIterationCount`);
 check(iter === '1', 'animation-iteration-count is 1 (' + iter + ')');
 
 // 1b. It does not replay when later messages arrive (the row must not remount): count animationstart on the report.
-await evaluate(`window.__starts = 0; document.addEventListener('animationstart', (e) => { if (e.animationName === 'land-in') window.__starts++; }, true);`);
+await evaluate(`window.__starts = 0; document.addEventListener('animationstart', (e) => { if (e.animationName === 'x-in' && e.target.classList?.contains('card-report')) window.__starts++; }, true);`);
 await feed({ id: 'm_landed_a' + Date.now(), conversationId: chat.conversationId, seq: 2e6 + 50, role: 'assistant', author: chat.assignee ?? 'atlas', content: [{ type: 'text', text: 'Next message.' }], at: new Date().toISOString() });
 await feed(REPORT(3));
 await sleep(600);
@@ -130,5 +131,5 @@ await open(true);
 await feed(REPORT(2));
 await sleep(100);
 const s2 = await state('#92');
-check(!!s2 && s2.row === 'none' && s2.chip === 'none', `prefers-reduced-motion: no animation (${JSON.stringify(s2)})`);
+check(!!s2 && s2.row === 'none', `prefers-reduced-motion: no animation (${JSON.stringify(s2)})`);
 done(fails.length ? 1 : 0);
