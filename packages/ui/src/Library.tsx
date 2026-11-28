@@ -2,7 +2,7 @@ import { useCallback, useEffect, useRef, useState, type ReactNode } from 'react'
 import { cardRef, USER, type Card, type Doc, type DocHit, type Folder } from '@atlas/shared';
 import { api } from './api.ts';
 import type { MessageStream } from './useMessages.ts';
-import { HeaderActions, Icon } from './ScreenHeader.tsx';
+import { HeaderActions, Icon, ScrollTabs } from './ScreenHeader.tsx';
 import { effectiveFilter, inFilter, ProjectFilterButton, ProjTag, projectForNew, useProjectFilter, useProjects } from './projects.tsx';
 import { Menu, PopButton, PopItem, PopRow } from './HeadMenu.tsx';
 import { Avatar } from './Board.tsx';
@@ -465,7 +465,7 @@ export function Library(props: {
     f && editing === f.id ? (
       nameInput(f)
     ) : (
-      <button key={id} type="button" className={'mem-chip' + (!query && folder === id ? ' on' : '')} onClick={() => pick(id)}>
+      <button key={id} type="button" className={'tabbtn' + (!query && folder === id ? ' on' : '')} aria-pressed={!query && folder === id} onClick={() => pick(id)}>
         {name} <span className="tab-n">{counts.get(id) ?? 0}</span>
       </button>
     );
@@ -473,9 +473,9 @@ export function Library(props: {
   return (
     <div className="library">
       <HeaderActions>
-        <ProjectFilterButton value={pf} onChange={setPf} count={(f) => (docs ?? []).filter((d) => inFilter(f, d.projectId, pinfo)).length} />
         {typeTabs('view-tabs lib-tabs-head')}
         <span className="head-sp" />
+        <ProjectFilterButton value={pf} onChange={setPf} count={(f) => (docs ?? []).filter((d) => inFilter(f, d.projectId, pinfo)).length} />
         {searchBox('lib-head-search')}
         <button
           type="button"
@@ -558,19 +558,19 @@ export function Library(props: {
       </HeaderActions>
       <div className="lib-bar">
         {(searching || query) && searchBox('')}
-        <div className="lib-chips" aria-label="Folders">
+        <ScrollTabs className="lib-chips" role="group" label="Folders">
           {chip('all', 'All')}
           {chip('unfiled', 'Unfiled')}
           {shownFolders.map((f) => chip(f.id, folderLabel(f), f))}
           {editing === 'new' ? (
             nameInput(null)
           ) : (
-            <button type="button" className="mem-chip" title="New folder" aria-label="New folder" onClick={() => setEditing('new')}>
+            <button type="button" className="tabbtn" title="New folder" aria-label="New folder" onClick={() => setEditing('new')}>
               <Icon.plus />
             </button>
           )}
-          {current && !query && folderMenu(current, 'mem-chip')}
-        </div>
+          {current && !query && folderMenu(current, 'tabbtn')}
+        </ScrollTabs>
       </div>
       <div className="lib-split">
         <nav className="lib-folders" aria-label="Folders">

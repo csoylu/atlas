@@ -144,7 +144,6 @@ export function Board(props: {
   return (
     <div className={'board-screen ' + view.layout}>
       <HeaderActions>
-        <ProjectFilterButton value={pf} onChange={setPf} count={(f) => (f === 'archived' ? archivedCards.length : props.cards.filter((c) => inFilter(f, c.projectId, pinfo)).length)} />
         {!phone && (
           <div className="view-tabs board-tabs" role="tablist" aria-label="Tasks">
             {TABS.map((t) => (
@@ -163,6 +162,7 @@ export function Board(props: {
           </div>
         )}
         <span className="head-sp" />
+        <ProjectFilterButton value={pf} onChange={setPf} count={(f) => (f === 'archived' ? archivedCards.length : props.cards.filter((c) => inFilter(f, c.projectId, pinfo)).length)} />
         <Menu
           open={menu}
           onOpen={setMenu}

@@ -1,11 +1,12 @@
-import { useCallback, useEffect, useRef, useState } from 'react';
+import { useCallback, useEffect, useRef, useState, type ReactNode } from 'react';
 import { cardRef, MEMORY_BUDGET, MEMORY_BUDGET_GLOBAL, MEMORY_REVIEW_EVERY as REVIEW_EVERY, MEMORY_TEXT_MAX, type Agent, type Card, type Memory, type MemoryKind, type Model, type Settings } from '@atlas/shared';
 import { api } from './api.ts';
 import type { MessageStream } from './useMessages.ts';
-import { Icon } from './ScreenHeader.tsx';
+import { HeaderActions, Icon, ScrollTabs } from './ScreenHeader.tsx';
+import { useMedia } from './Inbox.tsx';
 import { EmptyState, Skeleton } from './Kit.tsx';
 import { friendlyModel } from './modelNames.ts';
-import { effectiveFilter, inFilter, ProjectFilterButton, ProjTag, useProjectFilter, useProjects } from './projects.tsx';
+import { effectiveFilter, inFilter, ProjDot, ProjTag, useProjectFilter, useProjects, type ProjectFilter } from './projects.tsx';
 import { Menu, PopRow } from './HeadMenu.tsx';
 import { Avatar } from './Board.tsx';
 import { StatusIcon } from './StatusIcon.tsx';
@@ -58,7 +59,6 @@ export function MemoryPage(props: {
   const [q, setQ] = useState('');
   const [query, setQuery] = useState('');
   const [list, setList] = useState<Memory[] | null>(null);
-  const [menu, setMenu] = useState(false);
   const [budget, setBudget] = useState<{ used: number; limit: number } | null>(null);
 
   // Typing searches after a short pause.
@@ -100,7 +100,7 @@ export function MemoryPage(props: {
 
   const pinfo = useProjects();
   const [pfRaw, setPf] = useProjectFilter();
-  const pf = effectiveFilter(pfRaw, pinfo, true);
+  const pf = effectiveFilter(pfRaw, pinfo);
   const inProj = (list ?? []).filter((m) => inFilter(pf, m.projectId, pinfo, true));
   const status: MemStatus = focused ? (focused.status === 'archived' ? 'archived' : 'live') : view.status;
   const kind = focused ? 'all' : view.kind;
@@ -119,10 +119,26 @@ export function MemoryPage(props: {
 
   const setKind = (k: MemView['kind']) => save({ ...view, kind: k, status: 'live' });
   const setStatus = (s: MemStatus) => save({ ...view, kind: 'all', status: view.status === s ? 'live' : s });
-  const chip = (on: boolean, label: string, n: number, onClick: () => void, title?: string) => (
-    <button type="button" className={'mem-chip' + (on ? ' on' : '')} aria-pressed={on} title={title} onClick={onClick}>
+  const tab = (on: boolean, label: string, n: number, onClick: () => void, title?: string) => (
+    <button key={label} type="button" role="tab" className={'tabbtn' + (on ? ' on' : '')} aria-selected={on} title={title} onClick={onClick}>
       {label} <span className="tab-n">{n}</span>
     </button>
+  );
+  // One header row (#401): the kind and status tabs, the project and scope picker, the search. A phone puts the
+  // search and the tabs in a bar under the header.
+  const phone = useMedia('(max-width: 640px)');
+  const tabs = (
+    <ScrollTabs className="mem-tabs" label="Kind and status">
+      {KIND_CHIPS.map((k) => tab(!focused && view.status === 'live' && view.kind === k.id, k.label, counts[k.id], () => setKind(k.id)))}
+      {tab(!focused && view.status === 'stale', 'Stale', counts.stale, () => setStatus('stale'), 'Task notes of a task that is done or closed: out of recall')}
+      {tab(status === 'archived', 'Archived', counts.archived, () => setStatus('archived'), 'Forgotten memories: never deleted, restore them here')}
+    </ScrollTabs>
+  );
+  const search = (
+    <label className="mem-search mem-head-search">
+      <Icon.search />
+      <input type="search" value={q} placeholder="Search memory…" aria-label="Search memory" onChange={(e) => setQ(e.target.value)} />
+    </label>
   );
 
   const reviewModel = props.settings ? props.models.find((m) => m.id === props.settings!.memoryReviewModel) : undefined;
@@ -130,46 +146,29 @@ export function MemoryPage(props: {
 
   return (
     <section className="set-page memory-page">
-      <div className="set-head set-tools">
-        <ProjectFilterButton value={pf} onChange={setPf} globalOnly count={(f) => (list ?? []).filter((m) => m.status !== 'archived' && inFilter(f, m.projectId, pinfo, true)).length} />
-        <Menu
-          open={menu}
-          onOpen={setMenu}
-          title="Filter by scope: global, shared in a project, or one agent's own"
-          label={
-            <>
-              <Icon.filter />
-              <span className="btn-text">{view.scope ? scopeLabel(view.scope) : 'Scope'}</span>
-              {view.scope && <span className="tab-n">1</span>}
-            </>
-          }
-        >
-          <div className="pop-k">Scope</div>
-          <PopRow on={view.scope === null} onClick={() => (save({ ...view, scope: null }), setMenu(false))}>
-            Every scope
-          </PopRow>
-          {scopes.map((s) => (
-            <PopRow key={s} on={view.scope === s} onClick={() => (save({ ...view, scope: s }), setMenu(false))}>
-              {s === 'shared' || s === 'global' ? <Icon.memory /> : <Avatar id={s.slice('agent:'.length)} />}
-              {s === 'shared' ? 'Shared in a project' : s === 'global' ? 'Global (yours, every project)' : scopeLabel(s)}
-            </PopRow>
-          ))}
-        </Menu>
+      <HeaderActions>
+        {!phone && tabs}
         <span className="head-sp" />
-        <label className="mem-search">
-          <Icon.search />
-          <input type="search" value={q} placeholder="Search memory…" aria-label="Search memory" onChange={(e) => setQ(e.target.value)} />
-        </label>
-      </div>
+        <MemoryPicker
+          pf={pf}
+          onProject={setPf}
+          scope={view.scope}
+          onScope={(scope) => save({ ...view, scope })}
+          scopes={scopes}
+          count={(f) => (list ?? []).filter((m) => m.status !== 'archived' && inFilter(f, m.projectId, pinfo, true)).length}
+        />
+        {!phone && search}
+      </HeaderActions>
+      {phone && (
+        <div className="mem-phone-bar">
+          {search}
+          {tabs}
+        </div>
+      )}
       <p className="set-lead">
         What every agent keeps. Rules, preferences and pinned memories are always in its instructions (up to {MEMORY_BUDGET} characters per agent in a
         project: global + the project's + its own, global at most {MEMORY_BUDGET_GLOBAL}); facts and task notes are recalled when a conversation matches them.
       </p>
-      <div className="mem-chips" role="group" aria-label="Kind and status">
-        {KIND_CHIPS.map((k) => chip(!focused && view.status === 'live' && view.kind === k.id, k.label, counts[k.id], () => setKind(k.id)))}
-        {chip(!focused && view.status === 'stale', 'Stale', counts.stale, () => setStatus('stale'), 'Task notes of a task that is done or closed: out of recall')}
-        {chip(status === 'archived', 'Archived', counts.archived, () => setStatus('archived'), 'Forgotten memories: never deleted, restore them here')}
-      </div>
       {(budget || focused) && (
         <div className="mem-note">
           {focused ? (
@@ -399,5 +398,100 @@ function MemoryRow(props: { m: Memory; focused: boolean; cards: Card[]; chats: C
         </div>
       )}
     </div>
+  );
+}
+
+/**
+ * Memory's one picker (#401): the project and the scope (Global, Shared in a project, one agent's own) in one menu, in
+ * the header's project place. The scope was a second button; « Global only » is the Global scope now.
+ */
+function MemoryPicker(props: {
+  pf: ProjectFilter;
+  onProject(f: ProjectFilter): void;
+  scope: string | null;
+  onScope(scope: string | null): void;
+  scopes: string[];
+  count(f: ProjectFilter): number;
+}) {
+  const info = useProjects();
+  const [open, setOpen] = useState(false);
+  const cur = info.byId(props.pf);
+  const pick = (f: () => void) => () => (f(), setOpen(false));
+  const scopeName = (s: string) => (s === 'global' ? 'Global' : s === 'shared' ? 'Shared' : scopeLabel(s));
+  const project = cur ? (
+    <>
+      <ProjDot hue={cur.colour} />
+      {cur.name}
+    </>
+  ) : props.pf === 'archived' ? (
+    'Archived'
+  ) : info.multi ? (
+    <>
+      <Icon.grid />
+      All<span className="proj-all-more"> projects</span>
+    </>
+  ) : null;
+  const label = project && props.scope ? (
+    <>
+      {project} · {scopeName(props.scope)}
+    </>
+  ) : (
+    (project ?? (
+      <>
+        <Icon.grid />
+        {props.scope ? scopeName(props.scope) : <>All<span className="proj-all-more"> scopes</span></>}
+      </>
+    ))
+  );
+  const projectRow = (f: ProjectFilter, body: ReactNode) => (
+    <PopRow key={f} on={props.pf === f} onClick={pick(() => props.onProject(f))}>
+      {body}
+      <span className="tab-n">{props.count(f)}</span>
+    </PopRow>
+  );
+  return (
+    <Menu
+      className="proj-menu mem-picker"
+      btnClass="proj-btn ghost"
+      open={open}
+      onOpen={setOpen}
+      title="Project and scope: global, shared in a project, or one agent's own"
+      label={
+        <>
+          <span className="btn-text proj-btn-text">
+            <span className="proj-crumb">{label}</span>
+          </span>
+          <Icon.chevDown />
+        </>
+      }
+    >
+      {info.multi && (
+        <>
+          <div className="pop-k">Project</div>
+          {projectRow('all', <span>All projects</span>)}
+          {info.active.map((p) =>
+            projectRow(
+              p.id,
+              <>
+                <ProjDot hue={p.colour} />
+                <span>{p.name}</span>
+              </>,
+            ),
+          )}
+          {projectRow('archived', <span>Archived</span>)}
+          <div className="pop-sep" />
+        </>
+      )}
+      <div className="pop-k">Scope</div>
+      <PopRow on={props.scope === null} onClick={pick(() => props.onScope(null))}>
+        All scopes
+      </PopRow>
+      {props.scopes.map((s) => (
+        <PopRow key={s} on={props.scope === s} onClick={pick(() => props.onScope(s))}>
+          {s === 'shared' || s === 'global' ? <Icon.memory /> : <Avatar id={s.slice('agent:'.length)} />}
+          {s === 'shared' ? 'Shared in a project' : s === 'global' ? 'Global (yours, every project)' : scopeLabel(s)}
+        </PopRow>
+      ))}
+    </Menu>
   );
 }
